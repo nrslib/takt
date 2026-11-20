@@ -1,4 +1,4 @@
-import type { Goal, GoalAnswerInput, GoalQuestion } from '../../infra/goals/schema.js';
+import type { Goal, GoalAnswerInput, GoalQuestion, ManagerGoalSummary } from '../../infra/goals/schema.js';
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
@@ -14,6 +14,7 @@ export type ConversationCommand =
   | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean }
   | { kind: 'approve_summary'; revision: number; conversationId: string; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number; conversationId: string }
+  | { kind: 'propose_summary'; conversationId: string; repositoryDirectory?: string; summary: ManagerGoalSummary }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
       source?: 'tui' | 'slack' }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal' | 'delete_goal'; goalId: string }

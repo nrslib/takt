@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   approveTaktGoalRegistration,
+  createTaktGoalRegistrationProposal,
   getTaktGoalRegistrationProposal,
   listTaktGoalRegistrationProposals,
   rejectTaktGoalRegistration,
@@ -505,4 +506,43 @@ describe('when the MCP server is limited to a project root', () => {
     expect(doubles.read).not.toHaveBeenCalled();
     expect(doubles.submit).toHaveBeenCalledOnce();
   });
+});
+
+it('creates a pending registration proposal through a propose_summary command', async () => {
+  acceptSubmission();
+  doubles.read.mockResolvedValue({ record: recordFixture(repositoryAssignment, { revision, repositoryDirectory: cwd, summary }) });
+
+  const pending = createTaktGoalRegistrationProposal({ cwd, summary }, {}, signal);
+  await vi.waitFor(() => expect(emit).toBeDefined());
+  emit!({ kind: 'result', operationId, result: { kind: 'notice', message: 'Goal proposal created.' } });
+  const result = await pending;
+
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(doubles.constructClient.mock.calls[0]![0]).toEqual(repositoryAssignment);
+  const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
+  expect(command).toEqual({ kind: 'propose_summary', conversationId: ownerConversationId, repositoryDirectory: cwd, summary });
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    proposal: { revision, conversationId: ownerConversationId, repositoryDirectory: cwd },
+  });
+});
+
+it('returns the conversation error when a registration proposal is already pending', async () => {
+  acceptSubmission();
+
+  const pending = createTaktGoalRegistrationProposal({ cwd, summary }, {}, signal);
+  await vi.waitFor(() => expect(emit).toBeDefined());
+  emit!({ kind: 'result', operationId, result: { kind: 'error', code: 'proposal_pending', message: 'A goal proposal is already pending.' } });
+  const result = await pending;
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toContain('proposal_pending');
+});
+
+it('refuses to create a registration proposal for a repository outside the MCP scope', async () => {
+  doubles.withinRoot.mockReturnValue(false);
+
+  const result = await createTaktGoalRegistrationProposal({ cwd, summary }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(doubles.submit).not.toHaveBeenCalled();
 });

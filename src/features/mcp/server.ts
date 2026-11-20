@@ -35,6 +35,7 @@ import {
   getGoalRegistrationProposalInputSchema,
   approveGoalRegistrationInputSchema,
   rejectGoalRegistrationInputSchema,
+  createGoalRegistrationProposalInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -67,7 +68,7 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { answerTaktGoalQuestion, askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
-import { approveTaktGoalRegistration, getTaktGoalRegistrationProposal, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
+import { approveTaktGoalRegistration, createTaktGoalRegistrationProposal, getTaktGoalRegistrationProposal, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -445,6 +446,15 @@ export function createTaktMcpServer(
         inputSchema: rejectGoalRegistrationInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal registration rejection failed', (deps) => rejectTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
+    );
+    server.registerTool(
+      'takt_create_goal_registration_proposal',
+      {
+        title: 'Create a goal registration proposal',
+        description: 'Create the pending goal registration proposal of the current manager conversation from the given summary, with the same handling as a proposal the manager presents for registration. Only one proposal can be pending at a time; when one is already pending this returns an error, so read it with takt_list_goal_registration_proposals and dismiss it with takt_reject_goal_registration before creating another. Returns the created proposal revision, conversationId, repositoryDirectory and field list. Approve it with takt_approve_goal_registration or dismiss it with takt_reject_goal_registration.',
+        inputSchema: createGoalRegistrationProposalInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal registration proposal creation failed', (deps) => createTaktGoalRegistrationProposal(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
     );
   }
 

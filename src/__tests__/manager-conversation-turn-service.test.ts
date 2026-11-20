@@ -413,6 +413,32 @@ it('returns a system notice after dismissing a registration proposal without inv
   expect(f.execute).not.toHaveBeenCalled();
 });
 
+it('stores a proposed registration summary as the pending proposal without invoking AI', async () => {
+  const f = fixture();
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'notice', message: getLabel('manager.conversation.proposed', 'en'),
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: f.input.state.revision,
+      pending: { revision: f.input.state.revision, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('refuses to create a registration proposal while another proposal is pending', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId,
+      summary: { objective: 'another goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'proposal_pending' } });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
 it('clears only the session ID and interrupted message on /clear without invoking AI', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',

@@ -170,10 +170,14 @@ export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentit
   revision: goalRegistrationRevisionSchema,
   ...goalRegistrationOwnerSchema,
 });
+export const createGoalRegistrationProposalInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  summary: GoalSummarySchema.describe('Contents of the goal registration proposal to create, in the same shape as the summary a manager presents for registration: objective, outOfScope, acceptanceCriteria (at least one), constraints, optional specifications (gherkin, quint, alloy), and optional startBranch and integrationBranch.'),
+});
 export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
 export type GetGoalRegistrationProposalInput = z.infer<typeof getGoalRegistrationProposalInputSchema>;
 export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;
 export type RejectGoalRegistrationInput = z.infer<typeof rejectGoalRegistrationInputSchema>;
+export type CreateGoalRegistrationProposalInput = z.infer<typeof createGoalRegistrationProposalInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();

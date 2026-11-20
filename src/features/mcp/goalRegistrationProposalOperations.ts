@@ -14,6 +14,7 @@ import { goalValuePage, selectGoalValue } from './goalResponse.js';
 import { pagedResult } from './response.js';
 import type {
   ApproveGoalRegistrationInput,
+  CreateGoalRegistrationProposalInput,
   GetGoalRegistrationProposalInput,
   ListGoalRegistrationProposalsInput,
   RejectGoalRegistrationInput,
@@ -114,7 +115,7 @@ async function resolveOwnedRegistration(
 }
 
 async function submitRegistrationCommand(
-  command: Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' }>,
+  command: Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' | 'propose_summary' }>,
   identity: ManagerAssignmentIdentity, signal: AbortSignal,
 ): Promise<OperationResult> {
   signal.throwIfAborted();
@@ -185,4 +186,25 @@ export async function rejectTaktGoalRegistration(
     if (result.kind !== 'notice') throw new Error(`Unexpected goal registration dismissal result: ${result.kind}`);
     return jsonResult({ revision: input.revision, notice: result.message });
   } catch (error) { return errorResult('Goal registration rejection failed', error); }
+}
+
+export async function createTaktGoalRegistrationProposal(
+  input: CreateGoalRegistrationProposalInput, deps: McpOperationDependencies, signal: AbortSignal,
+): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const owner = await resolveRegistrationOwner(input.cwd);
+    const repositoryDirectory = await resolveGitRepositoryDirectory(input.cwd);
+    if (!isPathAllowedByMcpRoot(repositoryDirectory, deps.allowedProjectRoot)) {
+      throw new Error(`The goal registration proposal targets a repository outside the allowed project root: ${repositoryDirectory}`);
+    }
+    const result = await submitRegistrationCommand(
+      { kind: 'propose_summary', conversationId: owner.conversationId, repositoryDirectory, summary: input.summary },
+      owner.identity, signal);
+    if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
+    if (result.kind !== 'notice') throw new Error(`Unexpected goal registration proposal creation result: ${result.kind}`);
+    const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
+    if (pending === null) throw new Error('The goal registration proposal was accepted but no pending proposal could be read back');
+    return jsonResult({ proposal: { ...proposalIdentity(owner, pending), fields: proposalFields(pending.summary) } });
+  } catch (error) { return errorResult('Goal registration proposal creation failed', error); }
 }
