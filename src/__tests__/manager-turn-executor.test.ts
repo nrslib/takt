@@ -8,6 +8,7 @@ import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import { MAX_PROCESS_PROGRESS_BYTES } from '../core/daemon/processProtocol.js';
 import type { Provider } from '../infra/providers/types.js';
 import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
+import { expandImageAttachmentPlaceholders } from '../infra/providers/imageAttachmentPrompt.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -22,6 +23,56 @@ function fixture() {
 }
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
+
+it.each([true, false])('delivers manager images according to native capability %s', async (supportsNativeImageInput) => {
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(success);
+  const executor = createManagerTurnExecutor('/repository', {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined,
+      provider: makeProvider({ supportsNativeImageInput, setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const imageAttachments = [{ placeholder: '[Image #2]', path: '/repository/.takt/manager-images/conversation/image-2.png' }];
+  const input = { ...fixture().input, prompt: 'Inspect [Image #2]', imageAttachments };
+
+  await executor.execute(input);
+
+  expect(call).toHaveBeenCalledOnce();
+  const [prompt, options] = call.mock.calls[0]!;
+  if (supportsNativeImageInput) {
+    expect(options.imageAttachments).toEqual(imageAttachments);
+  } else {
+    expect(options.imageAttachments ?? []).toEqual([]);
+    expect(prompt).toBe(expandImageAttachmentPlaceholders(input.prompt, imageAttachments));
+  }
+  expect(options.cwd).toBe('/repository');
+});
+
+it.each([true, false])('retains the same manager images during session recovery with native capability %s', async (supportsNativeImageInput) => {
+  const call = vi.fn<ProviderAgent['call']>()
+    .mockRejectedValueOnce(new Error('Prompt is too long')).mockResolvedValueOnce(success);
+  const executor = createManagerTurnExecutor('/repository', {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined,
+      provider: makeProvider({ supportsNativeImageInput, setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const imageAttachments = [{ placeholder: '[Image #1]', path: '/repository/.takt/manager-images/conversation/image-1.png' }];
+  const invalidateSession = vi.fn(async () => {});
+  const input = { ...fixture().input, prompt: 'Inspect [Image #1]', imageAttachments,
+    recovery: { context: 'Saved business context', invalidateSession } };
+
+  await executor.execute(input);
+
+  expect(call).toHaveBeenCalledTimes(2);
+  expect(invalidateSession).toHaveBeenCalledOnce();
+  expect(call.mock.calls.map(([, options]) => options.sessionId)).toEqual(['prior-session', undefined]);
+  for (const [prompt, options] of call.mock.calls) {
+    if (supportsNativeImageInput) expect(options.imageAttachments).toEqual(imageAttachments);
+    else {
+      expect(options.imageAttachments ?? []).toEqual([]);
+      expect(prompt).toContain(expandImageAttachmentPlaceholders(input.prompt, imageAttachments));
+    }
+  }
+});
 
 it('adds the progress notes guidance without changing the manager prompt that requires goal work-log records', () => {
   const setup = vi.fn<Provider['setup']>(() => ({ call: vi.fn<ProviderAgent['call']>() }));

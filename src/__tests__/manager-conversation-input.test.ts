@@ -11,6 +11,8 @@ const key: Key = { upArrow: false, downArrow: false, leftArrow: false, rightArro
 function fixture() {
   hooks.input.mockClear(); hooks.paste.mockClear();
   const options: Parameters<typeof useManagerInput>[0] = {
+    images: { paste: { routeInput: vi.fn(() => false), flushPending: vi.fn(), captureClipboard: vi.fn() },
+      hasPending: () => false, defer: (action) => action(), ids: () => [], stop: async () => {} },
     exiting: { current: false }, active: { current: true }, registering: { current: false }, savingAnswer: { current: null }, editorRef: { current: createEditorState('answer') },
     edit: vi.fn(), submit: vi.fn(), abortTurn: vi.fn(), onExit: vi.fn(), browseTools: vi.fn(), contentWidth: 80, canApprove: true,
     abortConfirmation: { abortTarget: null, setAbortTarget: vi.fn(), handleInput: vi.fn() },

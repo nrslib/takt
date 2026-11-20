@@ -26,6 +26,8 @@ const OPENER = ']';
 
 function describeOutcome(outcome: ImagePasteOutcome): string {
   switch (outcome.kind) {
+    case 'error':
+      return `error(rest=${outcome.rest})`;
     case 'none':
       return 'none';
     case 'pending':
@@ -138,6 +140,73 @@ describe('inline image paste reassembly', () => {
 
     expect(steps[1]).toBe(`passthrough(]${oversized})`);
     expect(buffer.held).toBe('');
+  });
+
+  it('rejects interrupted manager image payloads without releasing held base64 into the draft', () => {
+    let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    result = consumeImagePasteInput(result.buffer, '1337;File=inline=1:AAAA', true);
+    expect(result.outcome).toEqual({ kind: 'pending' });
+    result = consumeImagePasteInput(result.buffer, '', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: '', consumed: false } });
+    expect(consumeImagePasteInput(result.buffer, 'next', true).outcome).toEqual({ kind: 'none' });
+  });
+
+  it('preserves multiline trailing text after a valid manager image in the same event', () => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const result = consumeImagePasteInput(first.buffer, IMAGE_PAYLOAD + 'tail\nend', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'image',
+      image: { mimeType: 'image/png', data: IMAGE_BYTES }, rest: 'tail\nend' } });
+  });
+
+  it('rejects a manager image containing a newline without returning its header or payload', () => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const result = consumeImagePasteInput(first.buffer, '1337;File=inline=1:AAAA\nBBBB\x07tail', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail', consumed: true } });
+  });
+
+  it('reports an invalid manager image without returning its payload and preserves following text', () => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const payload = `1337;File=inline=1;size=4:${Buffer.from('text').toString('base64')}\x07tail`;
+    const result = consumeImagePasteInput(first.buffer, payload, true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
+  });
+
+  it('discards the remainder of an oversized manager image until its terminator without dropping trailing text', () => {
+    let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    result = consumeImagePasteInput(result.buffer, `1337;File=inline=1:${'A'.repeat(MAX_PENDING_INLINE_IMAGE_CHARS)}`, true);
+    expect(result.outcome).toEqual({ kind: 'error', rest: '' });
+    result = consumeImagePasteInput(result.buffer, 'continued payload', true);
+    expect(result.outcome).toEqual({ kind: 'pending' });
+    result = consumeImagePasteInput(result.buffer, '\x07tail', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'passthrough', text: 'tail', consumed: true } });
+  });
+
+  it.each(['\\', '\\tail\nend'])('restores the stripped manager ST terminator and preserves %j', (ending) => {
+    let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    result = consumeImagePasteInput(result.buffer, IMAGE_PAYLOAD.slice(0, -1), true);
+    expect(result.outcome.kind).toBe('pending');
+    result = consumeImagePasteInput(result.buffer, ending, true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'image',
+      image: { mimeType: 'image/png', data: IMAGE_BYTES }, rest: ending.slice(1) } });
+  });
+
+  it('rejects invalid ST image bytes while retaining trailing text', () => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const result = consumeImagePasteInput(first.buffer, '1337;File=inline=1;size=4:dGV4dA==\\tail', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
+  });
+
+  it('ends oversized manager image discard at ST without losing trailing text', () => {
+    let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    result = consumeImagePasteInput(result.buffer, `1337;File=inline=1:${'A'.repeat(MAX_PENDING_INLINE_IMAGE_CHARS)}`, true);
+    expect(result.outcome).toEqual({ kind: 'error', rest: '' });
+    result = consumeImagePasteInput(result.buffer, '\\tail', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'passthrough', text: 'tail', consumed: true } });
+  });
+
+  it('keeps the default TUI classification of stripped ST unchanged', () => {
+    const result = feed([OPENER, IMAGE_PAYLOAD.slice(0, -1), '\\']);
+    expect(result.steps).toEqual(['pending', 'pending', 'pending']);
   });
 
   it('should hold nothing once an image has been read', () => {

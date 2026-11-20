@@ -45,6 +45,7 @@ type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 type ReadGoalPullRequestStatus = typeof defaultReadGoalPullRequestStatus;
 
 export interface McpOperationDependencies {
+  managerImageSource?: { root: string; conversationId: string };
   managerWorkflows?: readonly ManagerWorkflow[];
   turnOperationId?: string;
   readOnly?: boolean;

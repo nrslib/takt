@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { createImageAttachmentCollection, type ImageAttachmentStoreOptions } from '../../shared/utils/imageAttachmentStore.js';
+export type { ImageAttachmentStoreOptions } from '../../shared/utils/imageAttachmentStore.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ImageAttachmentReference, StoredImageAttachment } from '../../shared/types/image-attachments.js';
@@ -27,53 +29,7 @@ export interface ImageAttachmentCleanupOwner {
   cleanupAttachments?: () => void;
 }
 
-export interface ImageAttachmentStoreOptions {
-  tmpRoot: string;
-  sessionId: string;
-  initialAttachments?: readonly InteractiveImageAttachment[];
-  initialAttachmentIndex?: number;
-}
-
 const PRIVATE_FILE_MODE = 0o600;
-
-function extensionForMimeType(mimeType: string): string {
-  switch (mimeType) {
-    case 'image/png':
-      return 'png';
-    case 'image/jpeg':
-      return 'jpg';
-    case 'image/gif':
-      return 'gif';
-    case 'image/webp':
-      return 'webp';
-    default:
-      throw new Error(`Unsupported pasted image type: ${mimeType}`);
-  }
-}
-
-function validateImageAttachmentSessionId(sessionId: string): void {
-  if (sessionId.length === 0) {
-    throw new Error('Image attachment sessionId is required.');
-  }
-  if (
-    sessionId === '.'
-    || sessionId === '..'
-    || sessionId.includes('/')
-    || sessionId.includes('\\')
-    || path.isAbsolute(sessionId)
-    || path.win32.isAbsolute(sessionId)
-  ) {
-    throw new Error('Image attachment sessionId must be a single path segment.');
-  }
-}
-
-function resolveInitialAttachmentIndex(attachments: readonly InteractiveImageAttachment[]): number {
-  return attachments.reduce((maxIndex, attachment) => {
-    const placeholderIndex = /\[Image #(\d+)\]/.exec(attachment.placeholder)?.[1];
-    const fileNameIndex = /^image-(\d+)\.[A-Za-z0-9]+$/.exec(attachment.fileName)?.[1];
-    return Math.max(maxIndex, Number(placeholderIndex ?? 0), Number(fileNameIndex ?? 0));
-  }, 0);
-}
 
 export function cleanupImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
   try {
@@ -162,62 +118,14 @@ export function buildInteractiveResultWithAttachments(
     : resultWithAttachments;
 }
 
-export function createImageAttachmentStore(
-  options: ImageAttachmentStoreOptions,
-): ImageAttachmentStore {
-  if (options.tmpRoot.length === 0) {
-    throw new Error('Image attachment tmpRoot is required.');
-  }
-  validateImageAttachmentSessionId(options.sessionId);
-
-  let attachments: InteractiveImageAttachment[] = options.initialAttachments
-    ? [...options.initialAttachments]
-    : [];
-  let nextAttachmentIndex = Math.max(
-    options.initialAttachmentIndex ?? 0,
-    resolveInitialAttachmentIndex(attachments),
-  );
+export function createImageAttachmentStore(options: ImageAttachmentStoreOptions): ImageAttachmentStore {
   const sessionDir = path.join(options.tmpRoot, options.sessionId);
-  const attachmentDir = path.join(sessionDir, 'attachments');
-
-  let sealed = false;
-
-  return {
-    async saveImage(data: Buffer, mimeType: string): Promise<InteractiveImageAttachment> {
-      if (sealed) {
-        throw new Error('Image attachment store is sealed; the run already ended.');
-      }
-      // Numbered past whatever the run already carries: a revision that starts
-      // with attachments must not hand out a placeholder one of them owns.
-      const index = nextAttachmentIndex + 1;
-      nextAttachmentIndex = index;
-      const fileName = `image-${index}.${extensionForMimeType(mimeType)}`;
-      const tempPath = path.join(attachmentDir, fileName);
-      const attachment: InteractiveImageAttachment = {
-        placeholder: `[Image #${index}]`,
-        tempPath,
-        fileName,
-      };
-
-      ensurePrivateDirectory(sessionDir);
-      ensurePrivateDirectory(attachmentDir);
-      writeNewPrivateFileWithMode(tempPath, data, PRIVATE_FILE_MODE);
-      attachments = [...attachments, attachment];
-      return attachment;
-    },
-
-    listAttachments(): InteractiveImageAttachment[] {
-      return [...attachments];
-    },
-
-    cleanup(): void {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
-    },
-
-    seal(): void {
-      sealed = true;
-    },
-  };
+  const collection = createImageAttachmentCollection(options, (attachment, data) => {
+    ensurePrivateDirectory(sessionDir);
+    ensurePrivateDirectory(path.dirname(attachment.tempPath));
+    writeNewPrivateFileWithMode(attachment.tempPath, data, PRIVATE_FILE_MODE);
+  });
+  return { ...collection, cleanup() { fs.rmSync(sessionDir, { recursive: true, force: true }); } };
 }
 
 /**

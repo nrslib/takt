@@ -12,6 +12,8 @@ import {
   IssueEnqueueCancelledError,
   prepareTaskSpecDirectory,
   type PrepareEnqueuedTaskSpec,
+  type PreparedEnqueuedTaskSpec,
+  type EnqueuedTaskPublicationScope,
   type SaveEnqueuedTaskFileOptions,
 } from './enqueueService.js';
 
@@ -53,6 +55,7 @@ export async function saveEnqueuedTaskFile(
   options?: SaveEnqueuedTaskFileOptions,
   prepareTaskSpec: PrepareEnqueuedTaskSpec = prepareTaskSpecDirectory,
   abortSignal?: AbortSignal,
+  publicationScope?: EnqueuedTaskPublicationScope,
 ): Promise<{ taskName: string; tasksFile: string }> {
   throwIfTaskSaveAborted(abortSignal);
   const runner = new TaskRunner(cwd);
@@ -64,24 +67,28 @@ export async function saveEnqueuedTaskFile(
   const slug = await summarizeTaskName(taskContent, { cwd });
   throwIfTaskSaveAborted(abortSignal);
   const summary = firstLine(taskContent);
-  const preparedSpec = prepareTaskSpec(cwd, taskContent);
-  let created;
-  try {
-    throwIfTaskSaveAborted(abortSignal);
-    created = runner.addTask(taskContent, {
-      ...config,
-      task_dir: preparedSpec.taskDirRelative,
-      slug,
-      summary,
-      deduplicateActiveTargets: options?.deduplicateActiveTargets,
-    });
-  } catch (error) {
-    cleanupTaskSpecDirectory(preparedSpec.taskDir);
-    throw error;
-  }
-  const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
-  log.info('Task created', { taskName: created.name, tasksFile, config });
-  return { taskName: created.name, tasksFile };
+  const publish = (preparedSpec: PreparedEnqueuedTaskSpec) => {
+    let created;
+    try {
+      throwIfTaskSaveAborted(abortSignal);
+      created = runner.addTask(taskContent, {
+        ...config,
+        task_dir: preparedSpec.taskDirRelative,
+        slug,
+        summary,
+        deduplicateActiveTargets: options?.deduplicateActiveTargets,
+      });
+    } catch (error) {
+      cleanupTaskSpecDirectory(preparedSpec.taskDir);
+      throw error;
+    }
+    const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
+    log.info('Task created', { taskName: created.name, tasksFile, config });
+    return { taskName: created.name, tasksFile };
+  };
+  return publicationScope === undefined
+    ? publish(prepareTaskSpec(cwd, taskContent))
+    : publicationScope(publish);
 }
 
 function throwIfTaskSaveAborted(abortSignal: AbortSignal | undefined): void {

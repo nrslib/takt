@@ -37,13 +37,23 @@ export type PrepareEnqueuedTaskSpec = (
   taskContent: string,
 ) => PreparedEnqueuedTaskSpec;
 
+export type SavedEnqueuedTaskFile = {
+  taskName: string;
+  tasksFile: string;
+};
+
+export type EnqueuedTaskPublicationScope = (
+  publish: (prepared: PreparedEnqueuedTaskSpec) => SavedEnqueuedTaskFile,
+) => Promise<SavedEnqueuedTaskFile>;
+
 export type SaveEnqueuedTaskFile = (
   cwd: string,
   taskContent: string,
   options?: SaveEnqueuedTaskFileOptions,
   prepareTaskSpec?: PrepareEnqueuedTaskSpec,
   abortSignal?: AbortSignal,
-) => Promise<{ taskName: string; tasksFile: string }>;
+  publicationScope?: EnqueuedTaskPublicationScope,
+) => Promise<SavedEnqueuedTaskFile>;
 
 export type CreateEnqueueIssueFromTaskResult = (
   task: string,

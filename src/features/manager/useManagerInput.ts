@@ -1,4 +1,5 @@
 import { useInput, usePaste, type Key } from 'ink';
+import type { useManagerImages } from './useManagerImages.js';
 import type { RefObject } from 'react';
 import { applyEditorKey, commitEditorInput, replaceEditorText, type EditorState } from '../tui/editorState.js';
 import type { useSlashCompletion } from '../tui/useSlashCompletion.js';
@@ -14,8 +15,9 @@ export const MAKE_GOAL_COMMAND = '/make-goal';
 export function useManagerInput({
   exiting, active, registering, savingAnswer, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, confirmGoalOperation, saveAnswer, register, onInputUnavailable,
-  openMenu, slashCompletion, epicsOpen, openEpics, handleEpicInput, browseTools,
+  openMenu, slashCompletion, epicsOpen, openEpics, handleEpicInput, browseTools, images,
 }: {
+  images: ReturnType<typeof useManagerImages>;
   exiting: RefObject<boolean>;
   active: RefObject<boolean>;
   registering: RefObject<boolean>;
@@ -63,15 +65,25 @@ export function useManagerInput({
     if (answerTarget !== null) questionAnswer.switchToFreeText();
     editDraft(applyEditorKey(editorRef.current, { kind, text }));
   };
-  usePaste((text) => insertText(text, 'paste'));
-  useInput((input, key) => {
+  const pasteText = (text: string): void => {
+    if (images.hasPending()) { images.defer(() => pasteText(text)); return; }
+    images.paste.flushPending();
+    insertText(text, 'paste');
+  };
+  usePaste(pasteText);
+  const handleInput = (input: string, key: Key): void => {
     if (exiting.current) return;
     if (key.ctrl && input === 'c') {
       exiting.current = true;
       onExit();
       return;
     }
+    if (images.hasPending()) { images.defer(() => handleInput(input, key)); return; }
     if (savingAnswer.current) return;
+    if (answerTarget === null && selection.selection === null && abortTarget === null && !epicsOpen) {
+      if (images.paste.routeInput(input, key)) return;
+      if (key.ctrl && input === 'v') { images.paste.captureClipboard(); return; }
+    }
     if (key.ctrl && input === 't') {
       openEpics();
       return;
@@ -142,5 +154,6 @@ export function useManagerInput({
       if (editKey.kind === 'insert') insertText(editKey.text);
       else editDraft(applyEditorKey(editorRef.current, editKey));
     }
-  });
+  };
+  useInput(handleInput);
 }

@@ -143,6 +143,10 @@ export function attachConversationConnection(socket: Socket, service: Conversati
       } else {
         if (!owned.has(request.params.attachmentId)) throw new ConversationError('unavailable_attachment');
         switch (request.method) {
+          case 'prepare_image': {
+            response(await service.prepareImage(request.params));
+            break;
+          }
           case 'submit': {
             const result = await service.submit({ ...request.params, requestId: request.requestId });
             response(result);

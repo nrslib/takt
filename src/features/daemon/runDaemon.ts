@@ -21,6 +21,7 @@ import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js'
 import { installDaemonErrorLog, reportDaemonError } from '../../infra/daemon/diagnostics.js';
 import { DaemonLogger } from '../../infra/daemon/logger.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import { ManagerImageAttachments, managerImageDirectory } from '../manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../manager/daemonConversationPort.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
 import { createDaemonSlackPorts, type SlackRepositoryConfig } from './slackPorts.js';
@@ -58,6 +59,7 @@ export async function startDaemon(options: {
   const slackReady = new Promise<typeof slack>((resolve) => { resolveSlack = resolve; });
   let watchers: ReturnType<typeof startDaemonWatchers> | undefined;
   let idleCheck: WatchLoop | undefined;
+  let imageCleanup: WatchLoop | undefined;
   let waitCommandCheck: WatchLoop | undefined;
   let patrols: WatchLoop | undefined;
   let epicWatcher: WatchLoop | undefined;
@@ -93,11 +95,11 @@ export async function startDaemon(options: {
   };
   const resources = { async close() {
     await startupFinished;
-    const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
+    const results = await Promise.allSettled([closeResource(imageCleanup), closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
       closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
     const delivery = await Promise.allSettled([closeResource(conversations)]);
-    input.close();
-    const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+    const images = await Promise.allSettled([(async () => { await input.close(); await cleanupImages(); })()]);
+    const errors = [...results, ...delivery, ...images].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
     if (errors.length > 0) throw new AggregateError(errors, 'Cannot close daemon resources');
   } };
   const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
@@ -114,11 +116,20 @@ export async function startDaemon(options: {
     }, 1000);
     storageRetry.unref();
   } });
-  const input = createDaemonConversationInput({ ingress: dispatcher, async resolveAssignment(selected) {
+  const images = new ManagerImageAttachments(eventStore);
+  const input = createDaemonConversationInput({ ingress: dispatcher, configDirectory: directory,
+    images, onImageCleanupError: reportDaemonError, async resolveAssignment(selected) {
     const assignment = await routing.resolve(selected);
     await conversations.ensure(assignment);
     return assignment;
   } });
+  const cleanupImages = async (): Promise<void> => {
+    for await (const record of store.iterate()) {
+      if (record.assignment.kind === 'daemon') continue;
+      const root = await managerImageDirectory(record.assignment, directory);
+      await images.cleanup(root, record.id, input.connectedImageOwners(record.id));
+    }
+  };
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     stopping = true; clearTimeout(storageRetry);
@@ -155,6 +166,8 @@ export async function startDaemon(options: {
     const restored = await eventStore.restore();
     options.signal.throwIfAborted();
     await dispatcher.restore(restored.lastAcceptedSequence, restored.pending);
+    await cleanupImages();
+    imageCleanup = startWatchLoop(5000, cleanupImages, reportDaemonError);
     const global = await globalDaemonConfiguration(directory);
     const repositories: SlackRepositoryConfig[] = [];
     for (const route of await routing.routes()) {

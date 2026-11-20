@@ -12,6 +12,7 @@ export interface TurnIdentity {
 }
 
 export interface ConversationSession {
+  imageAttachmentIds?: string[];
   provider: string;
   model: string | null;
   sessionId: string | null;
@@ -28,6 +29,7 @@ export interface ConversationTurnState {
   pending: ConversationRecord['pending'];
   approval: ConversationRecord['approval'];
   interruptedMessage?: string | null;
+  interruptedImageAttachmentIds?: string[];
 }
 
 /** 同じ operationId の再反映は、版の検証より先に保存済みの結果を返す。 */
@@ -38,6 +40,7 @@ export interface ConversationChange {
   proposal?: { revision: number; pending: ConversationRecord['pending'] };
   approval?: ConversationRecord['approval'];
   interruptedMessage?: string | null;
+  interruptedImageAttachmentIds?: string[];
 }
 
 export interface TurnStart {

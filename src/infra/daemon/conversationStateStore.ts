@@ -23,10 +23,11 @@ const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const receiptChange = z.object({
   operationId: id, expectedVersion: version,
   session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(),
-    agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
+    imageAttachmentIds: z.array(z.uuid()).optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessageDigest: messageDigest.nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
   || value.interruptedMessageDigest !== undefined);
 const receipt = z.union([
@@ -97,10 +98,12 @@ export class ConversationStateStore {
     const { record } = stored;
     return { version: stored.metadata.version, assignment: record.assignment,
       session: { provider: record.provider, model: record.model, sessionId: record.sessionId,
+        ...(record.sessionImageAttachmentIds === undefined ? {} : { imageAttachmentIds: record.sessionImageAttachmentIds }),
         ...(record.contextKey === undefined ? {} : { contextKey: record.contextKey }),
         ...(record.agentOverrides === undefined ? {} : { agentOverrides: record.agentOverrides }) },
       revision: record.revision, pending: record.pending, approval: record.approval,
-      ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }) };
+      ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }),
+      ...(record.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: record.interruptedImageAttachmentIds }) };
   }
 
   async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
@@ -208,10 +211,12 @@ export class ConversationStateStore {
         if (change.expectedVersion !== stored.metadata.version) return { kind: 'error', code: 'version_conflict', message: 'Conversation version changed' };
         const checked = ConversationRecordSchema.safeParse({ ...stored.record,
           ...(change.session === undefined ? {} : { provider: change.session.provider, model: change.session.model, sessionId: change.session.sessionId,
-            contextKey: change.session.contextKey, agentOverrides: change.session.agentOverrides }),
+            contextKey: change.session.contextKey, agentOverrides: change.session.agentOverrides,
+            sessionImageAttachmentIds: change.session.imageAttachmentIds }),
           ...(change.proposal === undefined ? {} : { revision: change.proposal.revision, pending: change.proposal.pending }),
           ...(change.approval === undefined ? {} : { approval: change.approval }),
           ...(change.interruptedMessage === undefined ? {} : { interruptedMessage: change.interruptedMessage }),
+          ...(change.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: change.interruptedImageAttachmentIds }),
         });
         if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
         const nextVersion = stored.metadata.version + 1;

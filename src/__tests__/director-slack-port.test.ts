@@ -13,7 +13,7 @@ const endpoint = { teamId: 'T1', channelId: 'C0DIR', userId: 'U0AAA', parentTs: 
 function fixture() {
   const read: SnapshotRead = { transferId: 'read', conversationId: id, revision: 0, stateSequence: 0, operationId: null,
     mode: 'initial', items: (async function* () {})(), complete: vi.fn(), cancel: vi.fn() };
-  const input = { open: vi.fn<ConversationInput['open']>(), submit: vi.fn<ConversationInput['submit']>(),
+  const input = { prepareImage: vi.fn<ConversationInput['prepareImage']>().mockRejectedValue(new Error('Images are not supported by director')), open: vi.fn<ConversationInput['open']>(), submit: vi.fn<ConversationInput['submit']>(),
     snapshot: vi.fn<ConversationInput['snapshot']>(), detach: vi.fn<ConversationInput['detach']>() };
   input.open.mockResolvedValue({ attachmentId: 'attachment', read });
   input.submit.mockResolvedValue({ kind: 'accepted', operationId: 'operation' });

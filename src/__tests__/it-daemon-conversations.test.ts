@@ -19,7 +19,12 @@ import { stripVTControlCharacters } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { conversationId } from '../infra/conversations/identity.js';
+import { ConversationImageStore } from '../infra/conversations/imageAttachments.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { removeManagerRepository } from '../features/manager/workspaceOperations.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 
@@ -120,6 +125,158 @@ it('executes provider calls in a conversation child and saves its result in the 
     expect(fixture.readObservations().filter(({ event, pid }) => event === 'provider_start' && pid === tui.child.pid)).toEqual([]);
     await tui.exit();
   } finally { await fixture.cleanup(); }
+});
+
+it('keeps queued image associations, bytes and numbering through TUI detach and a real daemon restart without replay', async () => {
+  const fixture = managerDaemonFixture('en', ['Image turn completed', 'Image turn completed', 'Image turn completed']);
+  const png = (number: number) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(`image-${number}`)]);
+  const id = conversationId({ kind: 'repository', repositoryDirectory: fixture.repository });
+  const images = new ConversationImageStore(fixture.repository, id);
+  const paste = async (tui: ManagerTuiProcess, number: number) => {
+    tui.key(`Message ${number} `);
+    tui.key('\x1b]');
+    const payload = `1337;File=inline=1:${png(number).toString('base64')}\x07`;
+    tui.key(payload.slice(0, 25)); tui.key(payload.slice(25));
+    await waitForManager(tui, `Message ${number} [Image #${number}]`);
+    tui.key('\r');
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, kind }) => event === 'submit_result' && kind === 'accepted')).toHaveLength(number), { timeout: 30000 });
+  };
+  try {
+    const first = await fixture.start(fixture.repository, undefined); await first.ready();
+    await paste(first, 1);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(1), { timeout: 30000 });
+    await paste(first, 2); await paste(first, 3);
+    const saved = (await images.read()).images;
+    expect(saved).toHaveLength(3);
+    const expected = saved.map((image, index) => ({ id: image.id, path: images.path(image.fileName),
+      digest: createHash('sha256').update(png(index + 1)).digest('hex') }));
+    await first.exit();
+    for (const [index, image] of expected.entries()) expect(readFileSync(image.path)).toEqual(png(index + 1));
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    await lifecycle.stopDaemon();
+    fixture.release();
+    const second = await fixture.start(fixture.repository, undefined); await second.ready();
+    expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toHaveLength(2), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager').map(({ images }) => images))
+      .toEqual([[expected[0]], [expected[1], expected[0]], [expected[2]]]);
+    for (const [index, image] of expected.entries()) expect(readFileSync(image.path)).toEqual(png(index + 1));
+    await paste(second, 4);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toHaveLength(3), { timeout: 30000 });
+    const fourth = (await images.read()).images[3]!;
+    expect(fourth.placeholder).toBe('[Image #4]');
+    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start').at(-1)?.images).toEqual([
+      { id: fourth.id, path: images.path(fourth.fileName), digest: createHash('sha256').update(png(4)).digest('hex') },
+    ]);
+    await second.exit();
+    const third = await fixture.start(fixture.repository, undefined); await third.ready(null);
+    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(4);
+    await third.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('delivers a queued workspace image from the same private path after removing its first repository and restarting the daemon', async () => {
+  const fixture = managerDaemonFixture('en', ['Workspace image completed', 'Later text completed']);
+  const secondRepository = fixture.createRepository(join(fixture.directory, 'second-repository'));
+  const workspace = await createWorkspace({ globalConfigDirectory: fixture.directory, name: 'Image workspace',
+    repositoryDirectories: [fixture.repository, secondRepository] });
+  const assignment = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const id = conversationId(assignment);
+  const images = new ConversationImageStore(join(fixture.directory, 'workspaces', workspace.id), id);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const calls = () => fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+  try {
+    const first = await fixture.start(fixture.repository, undefined); await first.ready(null);
+    await submitManagerText(first, 'Keep this turn running');
+    await vi.waitFor(() => expect(calls()).toHaveLength(1), { timeout: 30000 });
+    first.key(`Queued inspection \x1b]1337;File=inline=1:${png.toString('base64')}\x07`);
+    await waitForManager(first, 'Queued inspection [Image #1]'); first.key('\r');
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, kind }) => event === 'submit_result' && kind === 'accepted')).toHaveLength(2), { timeout: 30000 });
+    const saved = (await images.read()).images;
+    expect(saved).toHaveLength(1);
+    const image = saved[0]!;
+    const expected = { id: image.id, path: images.path(image.fileName), digest: createHash('sha256').update(png).digest('hex') };
+    const queued = [];
+    for await (const entry of (await new FileEventStore(fixture.directory).restore()).pending) {
+      if (entry.state === 'queued' && entry.event.conversationId === id) queued.push(entry.event.event);
+    }
+    expect(queued).toEqual([{ kind: 'human_command', command: { kind: 'message', text: 'Queued inspection [Image #1]', imageAttachmentIds: [image.id] },
+      speaker: expect.any(Object), agentOverrides: { provider: 'mock' } }]);
+    first.key(`\x1b]1337;File=inline=1:${png.toString('base64')}\x07`);
+    await waitForManager(first, '[Image #2]');
+    const unused = (await images.read()).images[1]!;
+    const updated = await removeManagerRepository({ ...assignment, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories }, fixture.repository, fixture.directory);
+    expect(updated.repositoryDirectories).toEqual([secondRepository]);
+    await first.exit();
+    await vi.waitFor(() => expect(() => readFileSync(images.path(unused.fileName))).toThrow(), { timeout: 10000 });
+    expect((await images.read()).images).toEqual(saved);
+    expect(readFileSync(expected.path)).toEqual(png);
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    await lifecycle.stopDaemon(); fixture.release();
+    const second = await fixture.start(secondRepository, undefined); await second.ready();
+    expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
+    await waitForManager(second, 'Workspace image completed');
+    await second.ready(null);
+    expect(calls().map(({ images }) => images)).toEqual([[], [expected]]);
+    expect((await images.read()).images).toEqual(saved);
+    expect(readFileSync(expected.path)).toEqual(png);
+    await submitManagerText(second, 'Unrelated text');
+    await waitForManager(second, 'Later text completed'); await second.ready(null);
+    expect(calls().map(({ images }) => images)).toEqual([[], [expected], []]);
+    await second.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
+});
+
+it('restores an interrupted image turn after daemon restart and clears its references before later messages', async () => {
+  const fixture = managerDaemonFixture('en', ['Resumed image completed', 'Later text completed']);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const id = conversationId({ kind: 'repository', repositoryDirectory: fixture.repository });
+  const images = new ConversationImageStore(fixture.repository, id);
+  const calls = () => fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+  try {
+    const first = await fixture.start(fixture.repository, undefined); await first.ready(null);
+    first.key(`Inspect \x1b]1337;File=inline=1:${png.toString('base64')}\x07`);
+    await waitForManager(first, 'Inspect [Image #1]');
+    first.key('\r');
+    await vi.waitFor(() => expect(calls()).toHaveLength(1), { timeout: 30000 });
+    const image = (await images.read()).images[0]!;
+    const expected = { id: image.id, path: images.path(image.fileName), digest: createHash('sha256').update(png).digest('hex') };
+    expect(calls()[0]!.images).toEqual([expected]);
+    const operationId = (await fixture.state())!.turn!.operationId;
+    await first.ready(operationId);
+    first.key('\x1b[27u');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ turn: null, running: null,
+      interruptedMessage: 'Inspect [Image #1]', interruptedImageAttachmentIds: [image.id] }), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event }) => event === 'provider_complete')).toEqual([]);
+    await first.exit();
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    await lifecycle.stopDaemon();
+    expect((await new ConversationStateStore(fixture.directory).read(id))?.record).toMatchObject({
+      interruptedMessage: 'Inspect [Image #1]', interruptedImageAttachmentIds: [image.id],
+    });
+    expect(readFileSync(expected.path)).toEqual(png);
+
+    const second = await fixture.start(fixture.repository, undefined); await second.ready(null);
+    expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
+    expect(await fixture.state()).toMatchObject({ interruptedMessage: 'Inspect [Image #1]', interruptedImageAttachmentIds: [image.id] });
+    expect(calls()).toHaveLength(1);
+    fixture.release();
+    await submitManagerText(second, 'Continue the interrupted inspection');
+    await waitForManager(second, 'Resumed image completed');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ turn: null, running: null,
+      interruptedMessage: null, interruptedImageAttachmentIds: [] }), { timeout: 30000 });
+    expect(calls().map(({ images }) => images)).toEqual([[expected], [expected]]);
+    expect((await new ConversationStateStore(fixture.directory).read(id))?.record).toMatchObject({
+      interruptedMessage: null, interruptedImageAttachmentIds: [],
+    });
+
+    await submitManagerText(second, 'An unrelated text-only request');
+    await waitForManager(second, 'Later text completed');
+    await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
+    expect(calls().map(({ images }) => images)).toEqual([[expected], [expected], []]);
+    expect(readFileSync(expected.path)).toEqual(png);
+    await second.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
 });
 
 it.each(['ja', 'en'] as const)('delivers descriptions and ordered text from the real turn child without replaying or saving text (%s)', async (lang) => {

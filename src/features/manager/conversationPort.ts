@@ -1,3 +1,4 @@
+import type { ManagerImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { Goal, GoalAnswerInput, GoalQuestion } from '../../infra/goals/schema.js';
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
@@ -11,7 +12,7 @@ import type { ToolActivityTurnState, ToolActivityEntry } from '../../shared/tool
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
 export type ConversationCommand =
-  | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean }
+  | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean; imageAttachmentIds?: string[] }
   | { kind: 'approve_summary'; revision: number; conversationId: string; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number; conversationId: string }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
@@ -85,6 +86,7 @@ export interface ConversationOpen {
 export interface ConversationInput {
   open(input: ConversationOpen, delivery: ConversationDelivery, enqueueSnapshot?: (read: SnapshotRead, attachmentId: string) => void): Promise<{ attachmentId: string; read: SnapshotRead }>;
   submit(input: { attachmentId: string; requestId: string; speaker: ConversationActor; command: ConversationCommand }): Promise<Submission>;
+  prepareImage(input: { attachmentId: string; sourcePath: string }): Promise<ManagerImageAttachmentReference>;
   snapshot(attachmentId: string, options?: { enqueueSnapshot?: (read: SnapshotRead) => void }): Promise<SnapshotRead>;
   detach(attachmentId: string): void;
 }

@@ -54,7 +54,7 @@ it.each(['ja', 'en'] as const)('displays a goal-less permission notice in %s dur
   const client = { getSnapshot: () => snapshot, subscribe: () => () => {},
     onOutput: (listener: (output: Exclude<PortOutput, { kind: 'snapshot' }>) => void) => {
       listeners.add(listener); return () => { listeners.delete(listener); };
-    }, submit, refresh: async () => {}, close: () => {},
+    }, submit, getImageDirectory: async (): Promise<never> => { throw new Error('No image configured'); }, prepareImage: async (_sourcePath: string): Promise<never> => { throw new Error('No image configured'); }, refresh: async () => {}, close: () => {},
   };
   const app = render(createElement(ManagerView, {
     cwd: '/fixture/manager', lang: language, client, assignment: { kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, initialDiagnostics: [], onExit: vi.fn(),
