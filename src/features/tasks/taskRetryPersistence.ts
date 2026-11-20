@@ -64,8 +64,11 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
     }
   };
   assertWorktree();
+  const preflightTask = options.runtimeAssignment === undefined || options.task.data === undefined
+    ? options.task
+    : { ...options.task, data: { ...options.task.data, runtime_assignment: options.runtimeAssignment } };
   await checkQueuedTaskProviders(options.projectDir,
-    options.freshStart ? { ...options.task, kind: 'pending' } : options.task,
+    options.freshStart ? { ...preflightTask, kind: 'pending' } : preflightTask,
     {}, terminalProviderConfirmation(), undefined, {
       workflow: options.workflow,
       worktreePath: options.worktreePath,
