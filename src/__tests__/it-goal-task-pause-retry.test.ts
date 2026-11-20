@@ -3,7 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify } from 'yaml';
@@ -42,13 +42,21 @@ const sandboxProbeOutput = 'takt-sandbox-probe-ok';
 const unavailableSandbox: SandboxResult = {
   status: 71, signal: null, stdout: '', stderr: 'sandbox-exec: sandbox_apply: Operation not permitted\n',
 };
+const outputlessSandbox: SandboxResult = {
+  status: 0, signal: null, stdout: '',
+  stderr: 'WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/takt-goal-pause-retry-fixture/sandbox-home"))\n',
+};
 
 function sandboxUnavailableReason(result: SandboxResult): string | undefined {
   // Observed when Codex's Seatbelt sandbox is started inside another Seatbelt sandbox.
-  // Unknown failures, including Linux failures, remain errors until their cause is established.
   if (result.error === undefined && result.signal === null && result.status === 71 && result.stdout === ''
     && result.stderr.trim() === unavailableSandbox.stderr.trim()) {
     return result.stderr.trim();
+  }
+  // A probe independent of image access must execute before image failures can be meaningful.
+  if (result.error === undefined && result.signal === null && result.status === 0
+    && result.stdout.trim() !== sandboxProbeOutput) {
+    return 'Sandbox probe did not produce the expected output';
   }
   return undefined;
 }
@@ -116,8 +124,22 @@ describe('sandbox subprocess diagnostics', () => {
       .toContain(unavailableSandbox.stderr.trim());
   });
 
+  it.each(['', ' \n', 'unexpected probe output'].flatMap((stdout) =>
+    ['', outputlessSandbox.stderr].map((stderr) => ({ stdout, stderr }))))(
+    'recognizes a zero-exit probe with invalid output as unavailable and preserves diagnostics: %j', ({ stdout, stderr }) => {
+      const probe = result({ stdout, stderr });
+      const reason = sandboxUnavailableReason(probe);
+      expect(reason).toEqual(expect.any(String));
+      expect(reason).not.toBe('');
+      const diagnostic = expectSandboxImageRead(probe, undefined, expected, 'image read');
+      expect(diagnostic).toContain(reason);
+      expect(diagnostic).toContain('status=0');
+      expect(diagnostic).toContain(`stderr=${JSON.stringify(stderr)}`);
+    });
+
   it.each([
-    { status: 0, stdout: '' },
+    { status: 0, signal: 'SIGTERM' as const, stdout: '', stderr: outputlessSandbox.stderr },
+    { status: 0, error: new Error('spawn failed'), stdout: '', stderr: outputlessSandbox.stderr },
     { status: 1, stdout: '', stderr: 'EPERM: image read denied' },
     { status: 71, stdout: '', stderr: 'unknown sandbox failure' },
     { status: 71, stdout: sandboxProbeOutput, stderr: unavailableSandbox.stderr },
@@ -129,8 +151,17 @@ describe('sandbox subprocess diagnostics', () => {
     expect(() => expectSandboxImageRead(probe, undefined, expected, 'image read')).toThrow();
   });
 
-  it('requires the image digest after a successful independent sandbox probe', () => {
-    expect(expectSandboxImageRead(result({ stdout: sandboxProbeOutput }), result({}), expected, 'image read')).toBeUndefined();
+  it.each([sandboxProbeOutput, `${sandboxProbeOutput}\n`])(
+    'requires the image digest after a successful independent sandbox probe with output %j', (stdout) => {
+      const probe = result({ stdout, stderr: outputlessSandbox.stderr });
+      expect(sandboxUnavailableReason(probe)).toBeUndefined();
+      expect(expectSandboxImageRead(probe, result({}), expected, 'image read')).toBeUndefined();
+    });
+
+  it('does not treat an empty image result after a successful probe as sandbox unavailability', () => {
+    const probe = result({ stdout: sandboxProbeOutput });
+    expect(() => expectSandboxImageRead(probe, outputlessSandbox, expected, 'image read'))
+      .toThrow(/sandbox image read.*"status":0.*"stdout":""/u);
   });
 
   it('does not treat an image read failure after a successful probe as sandbox unavailability', () => {
@@ -145,9 +176,11 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
   let cwd: string;
   let client: Client;
   let server: ReturnType<typeof createTaktMcpServer>;
+  let sandboxHomes: Set<string>;
   const taskDir = '.takt/tasks/paused-task';
 
   beforeEach(async () => {
+    sandboxHomes = new Set();
     root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-pause-retry-')));
     cwd = join(root, 'project');
     const globalDirectory = join(root, 'global');
@@ -179,17 +212,27 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     await client.connect(a);
   });
 
-  afterEach(async () => {
-    await client?.close();
-    await server?.close();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    resetScenario();
-    invalidateGlobalConfigCache();
-    invalidateAllResolvedConfigCache();
-    rmSync(root, { recursive: true, force: true });
-  });
+  async function cleanup() {
+    try {
+      await client?.close();
+      await server?.close();
+    } finally {
+      try {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        resetScenario();
+        invalidateGlobalConfigCache();
+        invalidateAllResolvedConfigCache();
+        rmSync(root, { recursive: true, force: true });
+      } finally {
+        for (const home of sandboxHomes) rmSync(home, { recursive: true, force: true });
+        for (const home of sandboxHomes) expect(existsSync(home), `sandbox home must be removed: ${home}`).toBe(false);
+      }
+    }
+  }
+
+  afterEach(cleanup);
 
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('selected screenshot')]);
 
@@ -231,6 +274,7 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
   }
 
   function observeWorkflowReads(sandbox: boolean, probeOverride?: SandboxResult) {
+    let home: string | undefined;
     const reads: { cwd: string; order: string; imagePath?: string; bytes?: Buffer; sandboxProbe?: SandboxResult; sandboxResult?: SandboxResult; options: ProviderCallOptions }[] = [];
     const setup = MockProvider.prototype.setup;
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
@@ -246,8 +290,12 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
         let sandboxProbe: SandboxResult | undefined;
         let sandboxResult: SandboxResult | undefined;
         if (sandbox && imagePath !== undefined) {
-          const home = join(root, 'sandbox-home');
-          mkdirSync(home, { recursive: true });
+          if (home === undefined) {
+            // Codex release builds refuse helper aliases when CODEX_HOME is under the OS temporary directory.
+            home = mkdtempSync(join(homedir(), '.takt-goal-pause-retry-sandbox-'));
+            sandboxHomes.add(home);
+          }
+          const sandboxHome = realpathSync(home);
           const script = `const fs = require('node:fs'); const crypto = require('node:crypto');
             const data = fs.readFileSync(process.argv[1]);
             try { fs.writeFileSync('sandbox-write-must-fail', 'x'); process.exit(2); }
@@ -257,9 +305,12 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
           const args = ['sandbox', '-c', 'sandbox_mode="read-only"', '--', process.execPath, '-e'];
           const processOptions = {
             cwd: options.cwd,
-            env: { PATH: [...runtime.pathDirs, process.env.PATH ?? ''].join(delimiter), HOME: home, CODEX_HOME: home },
+            env: { PATH: [...runtime.pathDirs, process.env.PATH ?? ''].join(delimiter), HOME: sandboxHome, CODEX_HOME: sandboxHome },
             encoding: 'utf8' as const, stdio: 'pipe' as const, timeout: 15000,
           };
+          expect(processOptions.env.CODEX_HOME).toBe(sandboxHome);
+          expect(relative(realpathSync(tmpdir()), realpathSync(processOptions.env.CODEX_HOME)),
+            `sandbox CODEX_HOME must be outside tmpdir: ${processOptions.env.CODEX_HOME}`).toMatch(/^\.\.(?:[/\\]|$)/u);
           sandboxProbe = probeOverride ?? spawnSync(runtime.executablePath,
             [...args, `process.stdout.write(${JSON.stringify(sandboxProbeOutput)})`], processOptions);
           if (sandboxProbe.error === undefined && sandboxProbe.signal === null && sandboxProbe.status === 0
@@ -285,15 +336,19 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     return new TaskStore(cwd).read().tasks.find((saved) => saved.name === task.name)!;
   }
 
-  it.each(['real sandbox', 'unavailable sandbox'] as const)(
-    'reads only the selected manager image from a private clone copy in a read-only sandbox through retry and requeue (%s)', async (mode) => {
+  it.each([
+    { mode: 'real sandbox', probeOverride: undefined },
+    { mode: 'unavailable sandbox', probeOverride: unavailableSandbox },
+    { mode: 'zero-exit outputless sandbox', probeOverride: outputlessSandbox },
+  ])(
+    'reads only the selected manager image from a private clone copy in a read-only sandbox through retry and requeue ($mode)', async ({ probeOverride }) => {
     const f = await prepareManagerImage();
     execFileSync('git', ['check-ignore', '--', relative(cwd, f.image.path)], { cwd, stdio: 'pipe' });
     const anotherSource = await createSessionImageAttachmentStore(cwd).saveImage(Buffer.concat([png, Buffer.from('other')]), 'image/png');
     const another = await f.images.prepare(cwd, f.id, f.owner, anotherSource.tempPath);
     const task = `# Inspect screen\n\nInspect image: \`${f.image.path}\``;
     const saved = await enqueueImageTask(task, 'Inspect selected screen');
-    const reads = observeWorkflowReads(true, mode === 'unavailable sandbox' ? unavailableSandbox : undefined);
+    const reads = observeWorkflowReads(true, probeOverride);
     const warn = vi.spyOn(console, 'warn');
     let clone: string | undefined;
 
@@ -316,8 +371,11 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
       if (reason !== undefined) {
         console.warn(`[takt] sandbox unavailable; clone image read verified (${action}): ${reason}`);
       }
-      if (mode === 'unavailable sandbox') {
-        expect(reason).toContain(unavailableSandbox.stderr.trim());
+      if (probeOverride !== undefined) {
+        expect(read?.sandboxResult).toBeUndefined();
+        expect(reason).toEqual(expect.any(String));
+        expect(reason).toContain(`status=${probeOverride.status}`);
+        expect(reason).toContain(`stderr=${JSON.stringify(probeOverride.stderr)}`);
         expect(warn).toHaveBeenLastCalledWith(expect.stringContaining(reason!));
       }
       expect(read?.options.imageAttachments).toBeUndefined();
@@ -347,6 +405,27 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     expect(existsSync(f.image.path)).toBe(false);
     expect(existsSync(canonical)).toBe(false);
     for (const read of reads) expect(existsSync(read.imagePath!)).toBe(false);
+    expect(sandboxHomes.size).toBe(1);
+    for (const home of sandboxHomes) {
+      expect(relative(realpathSync(tmpdir()), realpathSync(home)), `sandbox home must be outside tmpdir: ${home}`)
+        .toMatch(/^\.\.(?:[/\\]|$)/u);
+    }
+  });
+
+  it('removes sandbox homes even when client cleanup fails', async () => {
+    const f = await prepareManagerImage();
+    await enqueueImageTask(`Inspect image: \`${f.image.path}\``, 'Inspect image before cleanup failure');
+    observeWorkflowReads(true, outputlessSandbox);
+    await executeEnqueuedTask();
+    const homes = [...sandboxHomes];
+    expect(homes).toHaveLength(1);
+    expect(existsSync(homes[0]!)).toBe(true);
+    const failure = new Error('Injected client cleanup failure');
+    vi.spyOn(client, 'close').mockRejectedValueOnce(failure);
+
+    await expect(cleanup()).rejects.toBe(failure);
+
+    for (const home of homes) expect(existsSync(home)).toBe(false);
   });
 
   it('distinguishes same-named images from repository and workspace stores while reusing identical selections', async () => {
