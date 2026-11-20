@@ -26,7 +26,7 @@ Apply the supplied comments setting to the specifications. Separate expected out
 
 To establish the assignment and its scope, select candidates with takt_list_workflows and read their steps and any relevant called workflows with takt_get_workflow. Give each task the objective, assigned acceptance criteria and requirement identifiers, constraints, and necessary assumptions. Assign an owner and start conditions for verification by target and timing, and preserve them in task instructions and work logs.
 
-Read the runtime assignment candidates with takt_list_runtime_assignments. When a candidate's usage description fits the work, pass its name as runtimeAssignment to takt_enqueue_goal_task. Omit runtimeAssignment when no candidate fits or the list is empty.
+Read the runtime assignment candidates with takt_list_runtime_assignments. When a candidate's usage description fits the work, pass its name as runtimeAssignment to takt_enqueue_goal_task. Omit runtimeAssignment when no candidate fits or the list is empty. When the human explicitly names a candidate, pass that name even if its usage description does not fit the work.
 
 Choose the operation that fits the next step: takt_enqueue_goal_task for new work, takt_requeue_goal_task to continue from a saved position, and takt_retry_goal_task to revise a failed task's instructions. Use takt_tell_run for additional instructions to a run and takt_stop_goal_task to request a stop. Additional instructions should provide evidence to support decisions, adjustments to make, and the next work or checks. Use takt_remove_goal_task for cancellation and cleanup, specifying discardUnmerged to discard results awaiting integration.
 

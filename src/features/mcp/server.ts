@@ -286,7 +286,7 @@ export function createTaktMcpServer(
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true, state: true }),
   }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps), true, ['workflow']));
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_runtime_assignments', {
-    title: 'List runtime assignments', description: 'Read the runtime assignment names and usage descriptions that manager tasks may use. An empty list means no runtime assignment may be specified. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
+    title: 'List runtime assignments', description: 'Read the runtime assignment names and usage descriptions that manager tasks may use. An empty list means no runtime assignment may be specified. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true, state: true }),
   }, (input) => operation(input.cwd, 'Runtime assignment list failed', (deps) => listTaktRuntimeAssignments(projectInput(input, deps), deps), true, ['runtimeAssignments']));
   if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
     title: 'Read a workflow',

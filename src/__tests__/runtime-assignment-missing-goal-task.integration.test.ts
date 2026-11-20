@@ -151,7 +151,6 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
     expect(tasks.map((info) => info.name)).toEqual([task]);
     const state = runner.listTaskStateItems().find((item) => item.name === task);
     expect(state?.status).toBe('running');
-    expect(state?.status).toBe('running');
     expect(state?.runSlug ?? '').not.toMatch(/^setup-/u);
     expect(save).not.toHaveBeenCalled();
   });
