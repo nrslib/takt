@@ -3,19 +3,22 @@
 ## 依存関係のセットアップ
 
 ルートの依存関係をインストールした後、リポジトリのルートで次を実行する。
-初回セットアップ時と、eval 用 SDK の指定バージョンの更新時に必要となる。
+既存の eval 用 SDK を更新するときや、eval 用 SDK を明示的に配置するときに実行する。
 
 ```sh
 npm run eval:prompts:setup
 ```
 
-promptfoo 0.125.1 の `openai:codex-sdk` は `@openai/codex-sdk@^0.156.1` を要求する。
-設定ファイルのディレクトリから SDK を探索するため、このコマンドは互換版 0.156.1 を
-`eval/node_modules/` にインストールする。ルートの TAKT 用 SDK 0.164.0 は維持する。
+promptfoo 0.126.0 の `openai:codex-sdk` は `@openai/codex-sdk@>=0.156.1 <0.170.0` を要求する。
+このコマンドはルートの TAKT 用 SDK と同じ 0.164.0 を `eval/node_modules/` にインストールする。
+同梱の Codex CLI 0.164.0 は、採点者に指定する `gpt-6.1-sol` を利用できる。
+設定ファイルのディレクトリから親へ SDK を探索するため、`eval/node_modules/` がなければ
+ルートの SDK を利用でき、追加インストールは不要。ただし、以前 setup した 0.156.1 が残っている場合は
+そちらが優先されるため、このコマンドで更新する。
 `--no-save --package-lock=false` により `eval/package.json` と `eval/package-lock.json` は作らず、バージョンは上記
 npm script で固定する。生成される `node_modules/` はコミットしない。
 `eval/package.json` は置かず、ルートの ESM 設定と `#faceted-prompting` の import 定義を継承する。
-promptfoo の SDK 要求範囲が変わった場合は、npm script の固定バージョンを合わせて更新する。
+SDK 更新時は、promptfoo の SDK 要求範囲を確認し、npm script の固定バージョンをルートとそろえる。
 
 ## TAKT でファセット改修を進める
 
@@ -60,8 +63,8 @@ node eval/scripts/compare-facets.mjs \
 出力先は新しい `.tmp/` または `eval/.results/` 配下を指定する。既存の出力先は上書きしない。
 追跡ファイルの現在の内容（未コミット変更を含む）、未追跡の `eval/` 入力、明示した追加ファセット、
 ビルド済み `dist/` を `input-workspace/` に写し、ルートの `node_modules/` と、存在する場合は
-`eval/node_modules/` をシンボリックリンクで共有する。`eval/node_modules/` がなくても比較は開始するが、
-`openai:codex-sdk` を使う場合は事前に `npm run eval:prompts:setup` を実行する。
+`eval/node_modules/` をシンボリックリンクで共有する。`eval/node_modules/` がない場合はルートの SDK を使う。
+以前の eval 用 SDK が残っている場合は、事前に `npm run eval:prompts:setup` で更新する。
 未追跡の eval 入力は無視設定の対象外だけを含める。入力コピーの作成中は編集とビルドを止め、
 使う新しいケースを `eval/` に置く。コピー後の実行で元の作業ツリーのファイルを書き換えることはない。
 
