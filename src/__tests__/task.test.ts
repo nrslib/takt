@@ -1241,15 +1241,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
   });
 
-  it('should filter ordinary work before reading content in goal-only preflight', () => {
-    writeTasksFile(testDir, [
-      createPendingRecord({ name: 'ordinary', content: undefined, content_file: 'missing-ordinary-content.txt' }),
-      createPendingRecord({ name: 'goal-work', goal_id: '00000000-0000-4000-8000-000000000001', content: 'Goal work' }),
-    ]);
-
-    expect(runner.listTasksForProviderPreflight(true).map((task) => task.name)).toEqual(['goal-work']);
-    expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
-  });
 
   it('should list task state without resolving content_file', () => {
     const contentRoot = mkdtempSync(join(tmpdir(), 'takt-task-content-'));

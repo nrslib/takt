@@ -57,11 +57,11 @@ export async function checkQueuedTaskProviders(cwd: string, task: TaskInfo | Tas
   }
 }
 
-export async function checkPendingTaskProviders(taskRunner: TaskRunner, cwd: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, checkedTasks: readonly TaskInfo[], signal?: AbortSignal, goalTasksOnly = false): Promise<void> {
+export async function checkPendingTaskProviders(taskRunner: TaskRunner, cwd: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, checkedTasks: readonly TaskInfo[], signal?: AbortSignal): Promise<void> {
   const checked = new Map(checkedTasks.map((task) => [task.name, JSON.stringify(task)]));
   while (true) {
     signal?.throwIfAborted();
-    const pending = taskRunner.listTasksForProviderPreflight(goalTasksOnly);
+    const pending = taskRunner.listTasksForProviderPreflight();
     const unchecked = pending.filter((task) => checked.get(task.name) !== JSON.stringify(task));
     if (unchecked.length === 0) return;
     for (const task of unchecked) {

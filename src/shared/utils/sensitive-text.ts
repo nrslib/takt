@@ -1,3 +1,5 @@
+import { redactExecutionSecrets, getExecutionSecrets } from './execution-secrets.js';
+
 export const REDACTED_VALUE = '[REDACTED]';
 
 const SENSITIVE_KEY_CHAR_PATTERN = String.raw`[A-Za-z0-9_.-]`;
@@ -168,7 +170,7 @@ function redactHttpHeaders(text: string): string {
   return parts.join('');
 }
 
-export function sanitizeSensitiveText(text: string): string {
+export function sanitizeSensitiveText(text: string, executionSecrets: readonly string[] = getExecutionSecrets()): string {
   if (!text) return text;
   const sanitized = text
     .replace(PEM_PRIVATE_KEY_REGEX, REDACTED_VALUE)
@@ -177,7 +179,7 @@ export function sanitizeSensitiveText(text: string): string {
       return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
     })
     .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
-  return redactHttpHeaders(sanitized)
+  const redacted = redactHttpHeaders(sanitized)
     .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_USER_SPACE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_SHORT_USER_COMPACT_REGEX, `$1$2${REDACTED_VALUE}`)
@@ -187,6 +189,7 @@ export function sanitizeSensitiveText(text: string): string {
     .replace(SENSITIVE_OPTION_VALUE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(SENSITIVE_QUERY_VALUE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(KNOWN_TOKEN_REGEX, REDACTED_VALUE);
+  return redactExecutionSecrets(redacted, executionSecrets);
 }
 
 export function isSensitiveKeyName(key: string): boolean {
@@ -194,6 +197,7 @@ export function isSensitiveKeyName(key: string): boolean {
 }
 
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
+  for (const value of getExecutionSecrets()) values.add(value);
   addMatches(text, PEM_PRIVATE_KEY_REGEX, 0, values);
   for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
     const quotedValue = match[2]!;

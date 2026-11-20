@@ -15,6 +15,12 @@ interface RuntimeProviderInvocation {
 }
 
 let invocation: RuntimeProviderInvocation | undefined;
+let suppliedRuntime: ResolvedRuntimeProviderFileWithOrigins | undefined;
+
+/** Only used in the isolated task process; all runtime lookups use this fixed input. */
+export function setExecutionRuntimeProviderConfiguration(configuration: ResolvedRuntimeProviderFileWithOrigins): void {
+  suppliedRuntime = structuredClone(configuration);
+}
 
 export function prepareRuntimeAssignmentInvocation(
   projectCwd: string,
@@ -64,6 +70,7 @@ export function getInvocationRuntimeFilePath(): string | undefined {
 export function resolveInvocationRuntimeProviderFileWithOrigins(
   paths: RuntimeProviderPaths,
 ): ResolvedRuntimeProviderFileWithOrigins {
+  if (suppliedRuntime !== undefined) return structuredClone(suppliedRuntime);
   if (invocation === undefined) {
     return resolveRuntimeProviderFileWithOrigins(paths);
   }

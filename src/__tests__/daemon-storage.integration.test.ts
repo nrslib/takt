@@ -708,6 +708,24 @@ describe('private asynchronous I/O and existing files', () => {
     expect(await readDaemonOwner(directory)).toBeUndefined();
   });
 
+  it('preserves the resident startup flag when registering and reading the daemon owner', async () => {
+    const directory = await resolveDaemonConfigDirectory(await root());
+    const owner = { pid: process.pid, identity: { startTime: 'darwin-start-v2:1234' }, version: 'test', cliPath: '/cli', resident: true };
+
+    expect(await registerDaemonOwner(directory, owner, io())).toBe(true);
+    expect(await readDaemonOwner(directory)).toEqual(owner);
+  });
+
+  it('roundtrips resident owner metadata through IPC storage', async () => {
+    const directory = await resolveDaemonConfigDirectory(await root());
+    const owner = { pid: process.pid, identity: { startTime: 'darwin-start-v2:1234' }, version: 'test', cliPath: '/cli', resident: true };
+    const state = { protocolVersion: 1 as const, endpoint: conversationIpcEndpoint(directory, process.platform, 501), capability: 'a'.repeat(64), owner };
+
+    await writeDaemonIpcState(directory, state);
+
+    expect(await readDaemonIpcState(directory)).toEqual(state);
+  });
+
   it('persists log writes before close and rejects writes after close', async () => {
     const directory = await root();
     const logger = new DaemonLogger(directory);

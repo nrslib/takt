@@ -13,6 +13,7 @@ import { readDaemonOwner, isDaemonOwnerRunning, writeDaemonOwner } from '../infr
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { packageVersion } from '../shared/package-info.js';
+import { expectDaemonSurvivesIdle, managerDaemonFixture, submitManagerText, waitForManager } from './helpers/manager-daemon-tui.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { getEpic } from '../infra/epics/index.js';
@@ -25,6 +26,107 @@ import { completedEpicGoal, epicRecord, verificationResultFor, verificationRunId
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 const io = () => ({ signal: new AbortController().signal, timeoutMs: 5000 });
 afterEach(async () => { await lifecycle.stopDaemon(); });
+
+it('prints a description of --resident in the real daemon CLI help', async () => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const result = await fixture.runCli(['daemon', '--help']);
+    expect(result.code).toBe(0);
+    expect(result.output).toMatch(/--resident\s+\S[^\n]*(?:running|alive|idle|常駐|自動終了)/iu);
+  } finally { await fixture.cleanup(); }
+});
+
+it.each(['stop command', 'SIGTERM'] as const)('keeps an idle resident daemon alive and shuts it down with %s', async (instruction) => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(true);
+    expect(owner).toMatchObject({ resident: true });
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    if (instruction === 'stop command') {
+      expect((await fixture.runCli(['daemon', 'stop'])).code).toBe(0);
+    } else process.kill(owner.pid, 'SIGTERM');
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 30000 });
+  } finally { await fixture.cleanup(); }
+});
+
+it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('exits a mismatching manager with update instructions and preserves the resident daemon: %j', async (difference) => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(true);
+    const recorded = { ...owner, ...difference };
+    // 実際の daemon を置き換えず、起動元が読む記録にだけ不一致を作る。
+    await writeDaemonOwner(fixture.directory, recorded);
+
+    const result = await fixture.runCli(['manager']);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toMatch(/resident/iu);
+    expect(result.output).toContain(difference.version ?? difference.cliPath);
+    expect(result.output).toContain('takt daemon stop');
+    expect(result.output).toContain('takt daemon --resident');
+    expect(result.output.indexOf('takt daemon stop')).toBeLessThan(result.output.indexOf('takt daemon --resident'));
+    await expectDaemonSurvivesIdle(fixture.directory, recorded);
+    expect((await readDaemonIpcState(fixture.directory))?.owner).toEqual(owner);
+    expect(await isConversationIpcReady(fixture.directory, owner)).toBe(true);
+  } finally { await fixture.cleanup(); }
+});
+
+it('automatically stops a manually started daemon without --resident when there is no work', async () => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(false);
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
+
+it.each([true, false])('preserves the running daemon and TUI after duplicate startup with resident=%s', async (resident) => {
+  const fixture = managerDaemonFixture('en', ['The existing daemon still responds']);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    expect(owner).toBeDefined();
+    expect(owner.resident).not.toBe(true);
+    const ipc = await readDaemonIpcState(fixture.directory);
+    expect(ipc?.owner).toEqual(owner);
+
+    const result = await fixture.runCli(['daemon', ...(resident ? ['--resident'] : [])]);
+
+    if (resident) {
+      expect(result.code).not.toBeNull();
+      expect(result.code).not.toBe(0);
+      expect(result.output).toMatch(/already running/iu);
+      expect(result.output).toContain('takt daemon stop');
+      expect(result.output).toContain('takt daemon --resident');
+      expect(result.output.indexOf('takt daemon stop')).toBeLessThan(result.output.indexOf('takt daemon --resident'));
+    } else expect(result.code).toBe(0);
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+    expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
+    expect(await readDaemonIpcState(fixture.directory)).toEqual(ipc);
+    await submitManagerText(tui, 'Continue using this daemon after the duplicate startup');
+    await waitForManager(tui, 'The existing daemon still responds');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+
+    await tui.exit();
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
 
 it('starts the dedicated daemon entry, confirms authenticated IPC, reuses the owner and stops it', async () => {
   await lifecycle.ensureDaemon();

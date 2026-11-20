@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { daemonEntryPath, ensureDaemon, stopDaemon } from '../features/daemon/lifecycle.js';
+import { daemonEntryPath, ensureDaemon, runDaemonForeground, stopDaemon } from '../features/daemon/lifecycle.js';
 import type { DaemonOwner } from '../infra/daemon/owner.js';
 import { packageVersion } from '../shared/package-info.js';
 
@@ -48,6 +48,61 @@ it('reuses the running daemon with the current version and CLI path', async () =
   await ensureDaemon();
   expect(doubles.spawn).not.toHaveBeenCalled();
   expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, owner);
+});
+
+it.each([true, false])('passes the resident startup choice to the foreground daemon child: %s', async (resident) => {
+  const previousExitCode = process.exitCode;
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => child.emit('close', 0, null));
+    return child;
+  });
+  try {
+    await runDaemonForeground(resident);
+
+    expect(doubles.spawn).toHaveBeenCalledExactlyOnceWith(process.execPath,
+      [daemonEntryPath(), ...(resident ? ['--resident'] : [])],
+      expect.objectContaining({ stdio: 'inherit', shell: false }));
+    expect(process.exitCode).toBe(0);
+  } finally { process.exitCode = previousExitCode; }
+});
+
+it('hands off the existing resident daemon connection when version and CLI path match', async () => {
+  const resident = { ...owner, resident: true };
+  doubles.read.mockReturnValue(resident);
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+  const connection = await ensureDaemon({ retainConnection: true });
+
+  expect(connection).toBe(socket);
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, resident);
+  expect(socket.destroy).not.toHaveBeenCalled();
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  connection.destroy();
+});
+
+it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('rejects a differing resident owner without stopping or replacing it: %j', async (difference) => {
+  const resident = { ...owner, ...difference, pid: 1234, resident: true };
+  doubles.read.mockReturnValue(resident);
+  let running = true;
+  doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== resident.pid || running);
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => { running = false; return true; });
+
+  const failure = await ensureDaemon().then(() => undefined, (error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
+  const message = (failure as Error).message;
+  expect(message).toMatch(/resident/iu);
+  expect(message).toContain(difference.version ?? difference.cliPath);
+  expect(message).toContain(difference.version === undefined ? owner.cliPath : packageVersion);
+  expect(message).toContain('takt daemon stop');
+  expect(message).toContain('takt daemon --resident');
+  expect(message.indexOf('takt daemon stop')).toBeLessThan(message.indexOf('takt daemon --resident'));
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.ready).not.toHaveBeenCalled();
 });
 
 it('waits for authenticated IPC readiness even when the matching owner is already running', async () => {

@@ -36,6 +36,12 @@ import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } f
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
 import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
+import { TaskDispatcher } from './taskDispatcher.js';
+import { BuiltinWorkerAdapter } from '../../infra/worker-pool/builtinWorkerAdapter.js';
+import { BuiltinProjectHost } from '../../infra/worker-pool/projectHost.js';
+import { readProjectRegistry } from '../../infra/config/global/projectRegistry.js';
+import { RemoteWorkerRuntime } from '../workerPool/remoteWorkerRuntime.js';
+import { createWorkerServer } from '../../infra/worker-pool/remoteTransport.js';
 
 class DaemonCleanupError extends AggregateError {}
 
@@ -60,6 +66,11 @@ export async function startDaemon(options: {
   let idleCheck: WatchLoop | undefined;
   let waitCommandCheck: WatchLoop | undefined;
   let patrols: WatchLoop | undefined;
+  let taskPool: DaemonResources | undefined;
+  let taskLoop: WatchLoop | undefined;
+  let tasks: TaskDispatcher | undefined;
+  let remoteWorkers: RemoteWorkerRuntime | undefined;
+  let workerServer: Awaited<ReturnType<typeof createWorkerServer>> | undefined;
   let epicWatcher: WatchLoop | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
@@ -94,7 +105,7 @@ export async function startDaemon(options: {
   const resources = { async close() {
     await startupFinished;
     const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
-      closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
+      closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc), closeResource(taskPool)]);
     const delivery = await Promise.allSettled([closeResource(conversations)]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
@@ -156,6 +167,33 @@ export async function startDaemon(options: {
     options.signal.throwIfAborted();
     await dispatcher.restore(restored.lastAcceptedSequence, restored.pending);
     const global = await globalDaemonConfiguration(directory);
+    tasks = new TaskDispatcher({ workers: [new BuiltinWorkerAdapter({ name: 'builtin', kind: 'builtin',
+      concurrency: global.daemon?.builtin_worker?.concurrency })],
+      async projects() {
+        const registry = await readProjectRegistry(directory);
+        return registry.projects.filter((project) => project.available && project.managerUsed === true).map((project) => project.canonicalDirectory);
+      },
+      factory: { create: (cwd, finished) => new BuiltinProjectHost(cwd, directory, finished, global.daemon?.remote_worker !== undefined) },
+      wake: () => taskLoop?.wake(), onError: reportDaemonError,
+    });
+    const pool = tasks;
+    taskPool = { async close() {
+      const failures: unknown[] = [];
+      for (const resource of [taskLoop, workerServer, remoteWorkers, pool]) {
+        try { await resource?.close(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length > 0) throw new AggregateError(failures, 'Worker pool shutdown failed');
+    } };
+    if (global.daemon?.remote_worker !== undefined) {
+      remoteWorkers = new RemoteWorkerRuntime({ directory, dispatcher: pool, version: options.owner.version, now: Date.now,
+        credentials: global.daemon.remote_worker.credentials });
+      await remoteWorkers.restore();
+      workerServer = await createWorkerServer({ ...global.daemon.remote_worker, runtime: remoteWorkers, onError: reportDaemonError });
+    }
+    taskLoop = startWatchLoop(1_000, async () => {
+      if (remoteWorkers === undefined) await pool.dispatch();
+      else await remoteWorkers.check();
+    }, reportDaemonError);
     const repositories: SlackRepositoryConfig[] = [];
     for (const route of await routing.routes()) {
       const assignment = routeAssignment(route);
@@ -193,6 +231,7 @@ export async function startDaemon(options: {
     watchers = startDaemonWatchers({ source: watchSource,
       processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
       async filesChanged(change) {
+        taskLoop?.wake();
         if (change.target.kind === 'inbox') await receiveInboxChange(change, files, conversations, dispatcher);
         else {
           for (const assignment of await routing.assignments()) await conversations.ensure(assignment);
@@ -209,7 +248,8 @@ export async function startDaemon(options: {
     resolveSlack(slack);
     options.signal.throwIfAborted();
     waitCommandCheck = startWatchLoop(5000, () => waitCommands.check(), reportDaemonError);
-    const idle = (): boolean => !stopping && !slack?.listening && input.attachmentCount === 0
+    const idle = (): boolean => !stopping && options.owner.resident !== true && !slack?.listening && input.attachmentCount === 0 && tasks?.activeTaskCount === 0
+      && (remoteWorkers?.connectionCount ?? 0) === 0
       && ipc?.initializingCount === 0 && !dispatcher.hasPendingEvents && !waitCommands.hasWork;
     // 起動元が接続する猶予は旧 daemon と同じ500msにする。
     const idleAfter = Date.now() + 500;
@@ -220,7 +260,8 @@ export async function startDaemon(options: {
       // 確認中に接続が成立すると、切断済みでも保存内容が変わっている可能性がある。
       if (!await watchSource.hasWork(files) && idle() && input.attachmentGeneration === attachmentGeneration) void close().catch(reportDaemonError);
     }, reportDaemonError);
-    return { dispatcher, input, conversations, watchers, stopped, close };
+    return { dispatcher, input, conversations, watchers, stopped, close,
+      ...(workerServer === undefined ? {} : { workerPort: workerServer.port }) };
   } catch (error) {
     resolveSlack(undefined);
     finishStartup();
@@ -229,7 +270,7 @@ export async function startDaemon(options: {
   } finally { finishStartup(); options.signal.removeEventListener('abort', stopDuringStartup); }
 }
 
-export async function runDaemon(): Promise<void> {
+export async function runDaemon(resident = false): Promise<void> {
   const directory = await resolveDaemonConfigDirectory(process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt'));
   const io = { signal: new AbortController().signal, timeoutMs: 5000 };
   const identity = await readProcessOwner(process.pid, io);
@@ -238,8 +279,13 @@ export async function runDaemon(): Promise<void> {
   if (content === undefined) throw new Error('Missing package metadata');
   const metadata = JSON.parse(content.toString('utf8')) as { version: string };
   const owner: DaemonOwner = { pid: process.pid, identity: { startTime: identity.startTime }, version: metadata.version,
-    cliPath: fileURLToPath(new URL('../../app/daemon/index.js', import.meta.url)) };
-  if (!await registerDaemonOwner(directory, owner, io)) return;
+    cliPath: fileURLToPath(new URL('../../app/daemon/index.js', import.meta.url)), ...(resident ? { resident: true } : {}) };
+  if (!await registerDaemonOwner(directory, owner, io)) {
+    if (resident) {
+      throw new Error('A daemon is already running; resident startup was not performed. Run "takt daemon stop", then start it with "takt daemon --resident".');
+    }
+    return;
+  }
   const appToken = process.env.TAKT_SLACK_APP_TOKEN;
   const botToken = process.env.TAKT_SLACK_BOT_TOKEN;
   delete process.env.TAKT_SLACK_APP_TOKEN;

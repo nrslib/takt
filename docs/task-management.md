@@ -164,6 +164,8 @@ MCP clients can enqueue tasks, inspect task/run state, and send additional instr
 
 ### Parallel Execution (Concurrency)
 
+This section covers parallel execution on one machine. To distribute manager goal tasks automatically executed by the daemon across machines, see the [worker pool deployment guide](./worker-pool.md). `takt run`, `takt watch`, and interactive mode do not require worker registration or a resident daemon.
+
 Both `takt run` and `takt watch` use the same worker pool and run sequentially by default (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
 
 ```yaml

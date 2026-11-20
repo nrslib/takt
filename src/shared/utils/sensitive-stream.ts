@@ -19,8 +19,8 @@ function maskingRanges(text: string, values: BoundedSensitiveValues): SensitiveR
 export interface SensitiveTextStreamRedactor {
   /** 渡された秘密値と、出力の中で見つかった秘密値。 */
   readonly sensitiveValues: BoundedSensitiveValues;
-  write(text: string, source: unknown): string;
-  flush(source: unknown): string;
+  write(text: string, source: unknown, substringValues?: readonly string[]): string;
+  flush(source: unknown, substringValues?: readonly string[]): string;
   /** まだ確定していない末尾を、マスクして返す。 */
   preview(source: unknown): string;
 }
@@ -165,8 +165,8 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
   const mask = (commit: SensitiveTextCommit): string => maskSensitiveRanges(commit.text, commit.ranges);
   return {
     sensitiveValues: buffer.sensitiveValues,
-    write: (text, source) => mask(buffer.write(text, source)),
-    flush: (source) => mask(buffer.flush(source)),
+    write: (text, source, substringValues) => mask(buffer.write(text, source, substringValues)),
+    flush: (source, substringValues) => mask(buffer.flush(source, substringValues)),
     preview: (source) => buffer.preview(source),
   };
 }

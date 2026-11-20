@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getTaktGoal, getTaktRun, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { randomUUID } from 'node:crypto';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 import * as fsPromises from 'node:fs/promises';
-import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
 import { createTaktGoal } from '../features/mcp/goalOperations.js';
 import { TaskRunner, type TaskState } from '../infra/task/index.js';
 import * as goalGit from '../infra/goals/git-command.js';
@@ -18,6 +20,9 @@ vi.mock('node:fs/promises', async (original) => ({
 }));
 
 const goalDoubles = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
+const runDoubles = vi.hoisted(() => ({ read: vi.fn(), ownership: vi.fn() }));
+vi.mock('../features/interactive/runSessionReader.js', () => ({ loadRunSessionPage: runDoubles.read }));
+vi.mock('../features/tasks/taskStateWorktreeOwnership.js', () => ({ assertTaskStateWorktreeOwnership: runDoubles.ownership }));
 vi.mock('../infra/goals/store.js', () => ({
   GoalStore: class {
     async list(project?: (goal: Goal) => unknown) {
@@ -77,6 +82,60 @@ describe('MCP task goal integration', () => {
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns the execution worker name from the running task', async () => {
+    const running = { ...task({ kind: 'running', status: 'running', completion: undefined }),
+      executionId: 'execution-a', workerName: 'builtin' };
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([running]);
+    expect((await list()).tasks).toEqual([expect.objectContaining({
+      name: running.name, status: 'running', executionId: 'execution-a', workerName: 'builtin',
+    })]);
+  });
+
+  it('reads the same remote run from the daemon through connection loss and failure', () => {
+    const assignment = RemoteAssignmentSchema.parse({ projectId: cwd, taskName: 'remote-task', workerId: 'w1', workerName: 'w1',
+      registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'remote-pull',
+      originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'takt/remote-task',
+      leaseExpiresAt: 60_000, lastAcknowledgedLogSequence: 1, controlSequence: 0,
+      workLocation: '/worker-only/clone', retryReservation: false });
+    let remote = task({ name: assignment.taskName, kind: 'running', status: 'running', completion: undefined,
+      remoteAssignment: assignment, executionId: assignment.executionId, runSlug: 'remote-run',
+      workerName: 'w1', worktreePath: '/worker-only/clone' });
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockImplementation(() => [remote]);
+    runDoubles.ownership.mockImplementation(() => { throw new Error('Worker clone is unavailable on daemon'); });
+    runDoubles.read.mockImplementation((runCwd: string) => {
+      if (runCwd !== cwd) throw new Error('Run must be read from daemon');
+      return { currentStep: 'implement', logs: ['first'], reports: ['saved report'] };
+    });
+
+    for (const phase of ['running', 'disconnected', 'failed'] as const) {
+      if (phase === 'disconnected') remote = { ...remote, remoteAssignment: { ...assignment, leaseExpiresAt: 0 } };
+      if (phase === 'failed') remote = { ...remote, kind: 'failed', status: 'failed', failure: { error: 'Connection lost' } };
+      const result = getTaktRun({ cwd, runSlug: 'remote-run' });
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ runSlug: 'remote-run',
+        currentStep: 'implement', logs: ['first'], reports: ['saved report'] });
+      expect(runDoubles.read).toHaveBeenLastCalledWith(cwd, 'remote-run', expect.objectContaining({ liveInterventionProjectCwd: cwd }));
+    }
+    expect(runDoubles.ownership).not.toHaveBeenCalled();
+  });
+
+  it('keeps clone ownership validation before reading a local run', () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ runSlug: 'local-run', worktreePath: '/local/clone' })]);
+    runDoubles.ownership.mockImplementation(() => { throw new Error('Invalid local clone owner'); });
+    expect(getTaktRun({ cwd, runSlug: 'local-run' }).isError).toBe(true);
+    expect(runDoubles.ownership).toHaveBeenCalledOnce();
+    expect(runDoubles.read).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('returns the waiting reason without changing pending status for mergeTask=%s', async (mergeTask) => {
+    const pending = { ...task({ kind: 'pending', status: 'pending', completion: undefined, mergeTask }),
+      waitingReason: 'No executable worker is available' };
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([pending]);
+    expect((await list()).tasks).toEqual([expect.objectContaining({
+      name: pending.name, status: 'pending', waitingReason: pending.waitingReason,
+    })]);
+  });
 
   it('returns integrated for a completion commit reachable from the goal branch', async () => {
     const output = await list();

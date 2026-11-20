@@ -6,10 +6,11 @@ import { FileAsyncLock } from './lock.js';
 import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { observeProcess } from './process.js';
 
-const DaemonOwnerSchema = z.object({
+export const DaemonOwnerSchema = z.object({
   pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   identity: z.object({ startTime: z.string().min(1) }).strict(),
   version: z.string().min(1), cliPath: z.string().min(1),
+  resident: z.boolean().optional(),
 }).strict();
 export type DaemonOwner = z.infer<typeof DaemonOwnerSchema>;
 const ownerPath = (directory: string): string => join(directory, 'daemon.json');

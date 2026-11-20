@@ -4,9 +4,12 @@ import { GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { hasUnpublishedPrWork, isGoalCommitIncluded, resolveGoalBranchSha } from '../../infra/goals/git-command.js';
 import { TaskRunner } from '../../infra/task/runner.js';
+import { TaskDeletionService } from '../../infra/task/taskDeletionService.js';
+import { TaskStore } from '../../infra/task/store.js';
 import { lstatIfExists } from '../../shared/utils/pathBoundary.js';
 import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
 import { deleteTaskResources } from '../tasks/list/taskDeleteActions.js';
+import { deleteBranch } from '../tasks/list/taskBranchLifecycleActions.js';
 import { goalWrite } from './goalWrite.js';
 import type { McpOperationDependencies } from './operations.js';
 import type { RemoveGoalTaskInput } from './goalTaskRemovalSchemas.js';
@@ -48,7 +51,12 @@ export function removeTaktGoalTask(input: RemoveGoalTaskInput, deps: McpOperatio
     signal.throwIfAborted();
     const task = runner.listAllTaskItems().find((item) => item.name === input.taskName);
     if (task === undefined || task.kind !== target.status) throw new Error('Task is not available for removal');
-    if (!deleteTaskResources(task, { quiet: true, requireCleanupSuccess: true })) throw new Error('Task branch cleanup failed');
+    if (task.remoteAssignment !== undefined) {
+      await new TaskDeletionService(new TaskStore(input.cwd)).deleteRemoteTask(task.name, task.kind, signal, () => {
+        if (task.branch !== undefined && !deleteBranch(input.cwd, { ...task, worktreePath: undefined },
+          { quiet: true, requireCleanupSuccess: true, resume: true })) throw new Error('Task branch cleanup failed');
+      });
+    } else if (!deleteTaskResources(task, { quiet: true, requireCleanupSuccess: true })) throw new Error('Task branch cleanup failed');
     await store.update(goal.id, (current) => appendGoalWorkLog(current, workLog));
     return result;
   }, 'Goal task removal failed', 'remove');

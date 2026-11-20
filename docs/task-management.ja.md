@@ -164,6 +164,8 @@ MCP client はタスクの enqueue、task/run 状態の確認、実行中 clone 
 
 ### 並列実行（Concurrency）
 
+ここで扱うのは1台のマシンでの並列実行です。daemon が自動実行する manager のゴールタスクを別マシンへ分ける場合は [worker pool 導入ガイド](./worker-pool.ja.md)を参照してください。`takt run`、`takt watch`、対話モードに worker 登録や常駐 daemon は不要です。
+
 `takt run` と `takt watch` は同じワーカープールを使用し、デフォルトでは逐次実行します（`concurrency: 1`）。`~/.takt/config.yaml` で並列実行を設定できます。
 
 ```yaml

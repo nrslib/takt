@@ -205,7 +205,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
 | `notification_sound` | boolean | `true` | Enable notification sounds |
 | `notification_sound_events` | object | - | Per-event notification sound toggles |
-| `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` / `takt watch` |
+| `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` / `takt watch`; per-project limit for daemon goal tasks |
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` | Adds Alloy/Quint guidance and expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction and does not reduce formal specification coverage, requirement coverage, or syntax/correctness guidance. `model_check_timeout_seconds` is the limit in seconds for `quint verify` and the Alloy Analyzer during `/verify` (an integer from 1 to 86,400, default 900); the 60-second limit for `parse`/`typecheck`/`run` is unchanged. Project and global object fields are resolved independently, with project values taking precedence. `true` and `false` are used without prompting; on a TTY, `"Y/n"` and `"y/N"` ask once per conversation session with Yes or No as the default; without a TTY, the default answer is used without consuming standard input. Gherkin guidance applies only to development and implementation tasks. The manager also uses this setting without prompting: `true`/`"Y/n"` include both notations, and `false`/`"y/N"` omit them. `/verify` is also available in manager conversations in TUI and Slack. |
@@ -264,6 +264,54 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
 Codex, Claude SDK, claude-headless, and Copilot retry transient HTTP 429 failures with the same provider up to eight times, waiting 1, 2, 4, 8, 16, 30, 30, and 30 seconds. Codex, Claude SDK, claude-headless, Copilot, and OpenCode do not automatically retry a 429 after observing a tool execution event, so workspace operations are not repeated. OpenCode shares its attempt budget with other transient failures and retries up to twice (three attempts total), waiting 250ms and 500ms. A successful retry completes normally. Explicit usage, credit, or spend-cap exhaustion proceeds immediately to `rate_limit_fallback.switch_chain`; persistent throttling proceeds there after the retry budget is consumed. Exhaustion takes precedence when both occur in the same failure. A Copilot `session.error` reporting monthly quota exhaustion (`statusCode` 402, `errorType: quota`, or `errorCode: quota_exceeded`) is also treated as exhaustion and proceeds immediately to `rate_limit_fallback.switch_chain` without retrying. Without a fallback provider, execution aborts as before. There are no retry configuration keys, and existing retry conditions for other failures remain unchanged.
+
+## daemon worker pool
+
+`daemon` is available only in global `~/.takt/config.yaml`, or `config.yaml` under `TAKT_CONFIG_DIR` when set. Do not place it in project configuration. See the [worker pool guide](./worker-pool.md) for deployment steps.
+
+```yaml
+daemon:
+  builtin_worker:
+    concurrency: 1
+  remote_worker:
+    host: 127.0.0.1
+    port: 54322
+    credentials:
+      git: ${WORKER_GIT_TOKEN}
+      gh: ${WORKER_GH_TOKEN}
+      providers:
+        openai: ${WORKER_OPENAI_KEY}
+```
+
+| Field | Values and behavior |
+|-------|---------------------|
+| `daemon.builtin_worker.concurrency` | Nonnegative safe integer. Shared builtin worker limit across all projects. If omitted, no shared limit is imposed; each project's `concurrency` applies. A value of 0 disables builtin execution |
+| `daemon.remote_worker.host` | Listening address; required when `remote_worker` is configured |
+| `daemon.remote_worker.port` | Required integer from 0 to 65535. A value of 0 lets the OS choose an available port; a fixed front end normally uses a fixed port |
+| `daemon.remote_worker.credentials.git` | Environment reference for a Git token, used by the task subprocess's Git credential helper |
+| `daemon.remote_worker.credentials.gh` | Environment reference for a gh token, delivered as `GH_TOKEN` and `GITHUB_TOKEN` in the task subprocess |
+| `daemon.remote_worker.credentials.providers` | Environment references for provider credentials listed below |
+
+Omitting `remote_worker` disables the network listener. An explicit builtin limit never overrides the project's `concurrency` limit. PR merge tasks and tasks without origin run only on builtin and cannot progress with a builtin limit of 0. Inspect registered worker names and limits with `takt worker list` on the daemon machine; manage registrations through the [worker CLI](./cli-reference.md#worker). There is no YAML setting for editing the registration list directly.
+
+Credential values accept only `${ENV_NAME}` references, not plaintext secrets. References resolve in the daemon's environment. Empty, unset, or larger-than-8192-byte values cause delivery to fail. Unconfigured environment variables are not automatically distributed.
+
+| `providers` key | Task subprocess variable |
+|-----------------|--------------------------|
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` |
+| `google` | `GOOGLE_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `kiro` | `KIRO_API_KEY` |
+| `opencode` | `OPENCODE_API_KEY` |
+| `cursor` | `CURSOR_API_KEY` |
+
+Delivered values overlay each task subprocess's environment and apply to the corresponding TAKT provider credential settings. Explicitly delivered values take precedence over existing worker credentials; undistributed entries use existing worker authentication. The worker process and other concurrent tasks' environments are unchanged. The connection token is separate from task authentication and is not passed to task subprocesses. Git tokens are not embedded in origin URLs or saved Git configuration; the helper uses them for requests matching the assigned origin's protocol and host.
+
+Daemon settings are read at startup. After changing them, stop with `takt daemon stop` and start again. For source environment variable changes, update the service environment and restart as well. Removing a registration does not revoke distributed Git tokens; revoke them on GitHub when necessary.
 
 ## Caccia Review Loop
 
@@ -415,7 +463,7 @@ The project's `.takt/config.yaml` can override many global settings, including `
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `caccia` | object | disabled | CodeRabbit review-loop settings; see [Caccia Review Loop](#caccia-review-loop) |
 | `draft_pr` | boolean | `false` (from global) | Create the auto-created PR as a draft |
-| `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` / `takt watch` |
+| `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` / `takt watch`; this project's limit for daemon goal tasks |
 | `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run` / `takt watch`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
@@ -647,7 +695,19 @@ takt manager
 
 `TAKT_SLACK_APP_TOKEN` is the App-Level Token with `connections:write`; `TAKT_SLACK_BOT_TOKEN` is the bot token. After reading them, the daemon removes both variables from its environment so provider and tool subprocesses do not inherit them. `takt manager` and `takt director` start the dedicated daemon when needed. After changing tokens or Slack settings, stop it with `takt daemon stop` and start it again.
 
-The daemon stays running regardless of pending work or Slack connectivity, until `takt daemon stop` or a signal stops it. TUI admission and observation continue without Slack configuration or tokens. If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
+The daemon does not exit automatically while Slack reception is active or when started with `takt daemon --resident`. Stop it with `takt daemon stop` or a signal such as SIGTERM. Slack configuration or tokens alone do not keep it running; reception must actually be active.
+
+With an ordinary startup and no active Slack reception, the daemon exits automatically once all of the following are absent:
+
+- TUI connections and conversation connections being initialized
+- Remote worker connections and tasks running in the worker pool
+- Pending or running events, unfinished wait requests, and delivery of their results
+- Unfinished goals in the monitored projects: goals whose `status` is not `completed` and whose `executionStatus` is not `aborted`
+- Inbox JSON events, `pending` or `running` tasks, and undelivered inquiry answers
+
+The daemon waits for project inspection to finish and checks the conditions again. It also stays running when a goal cannot be read and its completion cannot be confirmed. TUI admission and observation are available while the daemon is running, even without Slack configuration or tokens. See the [CLI reference](./cli-reference.md#manager-experimental) for resident startup.
+
+If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
 
 ### Conversations and inquiries
 

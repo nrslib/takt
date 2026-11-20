@@ -89,6 +89,8 @@ export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
 export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskRecord): TaskInfo {
   const content = resolveTaskContent(projectDir, task);
   return {
+    workerName: task.worker_name,
+    waitingReason: task.waiting_reason,
     filePath: tasksFile,
     name: task.name,
     slug: task.slug,
@@ -155,6 +157,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    remoteAssignment: task.remote_assignment,
     executionId: task.execution_id,
     goalId: task.goal_id,
     name: task.name,
@@ -198,6 +201,10 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    remoteArtifacts: task.remote_artifacts,
+    remoteAssignment: task.remote_assignment,
+    workerName: task.worker_name,
+    waitingReason: task.waiting_reason,
     executionId: task.execution_id,
     ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),

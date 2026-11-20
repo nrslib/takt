@@ -40,6 +40,11 @@ export interface PrMergeTaskInput {
 
 export class TaskClaimLockAcquisitionError extends Error {}
 
+export type TaskClaimResult =
+  | { kind: 'claimed'; task: TaskInfo }
+  | { kind: 'failed'; task: TaskState }
+  | { kind: 'declined' };
+
 function formatGoalList(items: readonly string[]): string {
   return items.map((item) => `- ${item.replace(/\r?\n/g, '\n  ')}`).join('\n');
 }
@@ -239,18 +244,75 @@ export class TaskLifecycleService {
   }
 
   claimNextTasks(count: number): TaskInfo[] {
+    return this.claimPendingTasks(count).claimed;
+  }
+
+  claimTask(taskName: string, workerName: string): TaskClaimResult {
+    const result = this.claimPendingTasks(1, { taskName, workerName });
+    if (result.claimed[0] !== undefined) return { kind: 'claimed', task: result.claimed[0] };
+    if (result.failed[0] !== undefined) return { kind: 'failed', task: result.failed[0] };
+    return { kind: 'declined' };
+  }
+
+  failUnreadableGoalTask(taskName: string): TaskState | undefined {
+    let failed = false;
+    const saved = withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
+      const tasks = current.tasks.map((task) => {
+        if (task.name !== taskName || task.status !== 'pending' || task.deletion !== undefined || task.goal_id === undefined) return task;
+        let goal: Goal;
+        try { goal = new GoalStore(this.projectDir).getSync(task.goal_id); }
+        catch (error) {
+          this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+          return task;
+        }
+        if (isGoalPaused(goal) || goal.executionStatus === 'aborted') return task;
+        try { resolveTaskContent(this.projectDir, task); return task; }
+        catch (error) { failed = true; return this.buildUnreadableGoalTask(task, error); }
+      });
+      return failed ? { tasks } : undefined;
+    }));
+    return failed ? toTaskState(this.tasksFile, saved.tasks.find((task) => task.name === taskName)!) : undefined;
+  }
+
+  private buildUnreadableGoalTask(task: TaskRecord, error: unknown, record = task): TaskRecord {
+    const reason = sanitizeSensitiveText(getErrorMessage(error));
+    return buildTerminalTaskRecord(record, {
+      status: 'failed', started_at: record.started_at ?? nowIso(), completed_at: nowIso(), owner_pid: null,
+      failure: { error: reason }, run_slug: `setup-${randomUUID()}`,
+      completion: { success: false, interrupted: false, workflowResult: 'error', branch: task.branch,
+        failureReason: reason, shaUnavailableReason: 'Workflow execution did not start' },
+    }, this.readTerminalRetryMetadata(task));
+  }
+
+  setPendingWaitingReason(taskNames: readonly string[], reason: string | undefined): void {
+    const selected = new Set(taskNames);
+    this.store.update((current) => {
+      let changed = false;
+      const tasks = current.tasks.map((task) => {
+        if (task.status !== 'pending' || task.deletion !== undefined || task.goal_id === undefined
+          || !selected.has(task.name) || task.waiting_reason === reason) return task;
+        changed = true;
+        return { ...task, waiting_reason: reason };
+      });
+      return changed ? { tasks } : undefined;
+    });
+  }
+
+  private claimPendingTasks(count: number, selection?: { taskName: string; workerName: string }): { claimed: TaskInfo[]; failed: TaskState[] } {
     if (count <= 0) {
-      return [];
+      return { claimed: [], failed: [] };
     }
 
     const claimed: TaskInfo[] = [];
+    const failed = new Set<string>();
 
-    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
+    const saved = withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
       let remaining = count;
       const goalStore = new GoalStore(this.projectDir);
       const blockedByGoal = new Map<string, boolean>();
       const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
+        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined && task.remote_assignment === undefined
+          && (selection === undefined || selection.taskName === task.name)
           && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
           if (task.goal_id !== undefined) {
             try {
@@ -266,23 +328,14 @@ export class TaskLifecycleService {
               return task;
             }
           }
-          const next = buildClaimedTaskRecord(task);
+          const next = { ...buildClaimedTaskRecord(task), worker_name: selection?.workerName, waiting_reason: undefined };
           let info: TaskInfo;
           try {
             info = toTaskInfo(this.projectDir, this.tasksFile, next);
           } catch (error) {
             if (task.goal_id === undefined) throw error;
-            const reason = sanitizeSensitiveText(getErrorMessage(error));
-            return buildTerminalTaskRecord(next, {
-              status: 'failed', completed_at: nowIso(), owner_pid: null,
-              failure: { error: reason },
-              run_slug: `setup-${randomUUID()}`,
-              completion: {
-                success: false, interrupted: false, workflowResult: 'error',
-                branch: task.branch, failureReason: reason,
-                shaUnavailableReason: 'Workflow execution did not start',
-              },
-            }, this.readTerminalRetryMetadata(task));
+            failed.add(task.name);
+            return this.buildUnreadableGoalTask(task, error, next);
           }
           claimed.push(info);
           remaining--;
@@ -300,12 +353,18 @@ export class TaskLifecycleService {
       },
     }));
 
-    return claimed;
+    return { claimed, failed: saved.tasks.filter((task) => failed.has(task.name)).map((task) => toTaskState(this.tasksFile, task)) };
   }
 
   invalidatePendingGoalTasks(goalId: string): void {
     withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
       tasks: current.tasks.map((task) => {
+        if (task.goal_id === goalId && task.status !== 'running' && task.remote_assignment !== undefined) {
+          const released = { ...task, remote_assignment: { ...task.remote_assignment, retryReservation: false } };
+          return task.status !== 'pending' ? released : buildTerminalTaskRecord(released, {
+            status: 'failed', owner_pid: null, failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+          });
+        }
         if (task.status !== 'pending' || task.goal_id !== goalId) return task;
         return buildTerminalTaskRecord(task, {
           status: 'failed', owner_pid: null,
@@ -409,10 +468,14 @@ export class TaskLifecycleService {
       if (task.goal_id !== goalId) throw new Error('Task does not belong to this goal');
       if (task.execution_id !== executionId) throw new Error('Task executionId does not match the saved execution');
       if (task.status !== 'running') throw new Error(`Task is not running: ${task.status}`);
-      if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
+      if (task.remote_assignment !== undefined) {
+        if (task.remote_assignment.executionId !== executionId || task.remote_assignment.leaseExpiresAt <= Date.now()) {
+          throw new Error('Remote task execution has ended or its lease has expired');
+        }
+      } else if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
         throw new Error('Task execution has ended: its owner is not alive');
       }
-      if (task.owner_start_time != null) {
+      if (task.remote_assignment === undefined && task.owner_start_time != null && task.owner_pid != null) {
         const ownerIdentity = getTaskProcessIdentity(task.owner_pid);
         if (ownerIdentity === undefined) {
           throw new Error('Cannot verify task execution owner: current owner start time is unavailable');
@@ -621,6 +684,7 @@ export class TaskLifecycleService {
   }
 
   private isRunningTaskStale(task: TaskRecord): boolean {
+    if (task.remote_assignment !== undefined) return false;
     return isStaleRunningTask(task.owner_pid ?? undefined, task.owner_start_time ?? undefined);
   }
 }
