@@ -1,6 +1,11 @@
 import type { ManagerRuntimeAssignmentsConfig } from '../../core/models/config-types.js';
 import { getGlobalConfigDir, getProjectConfigDir } from '../../infra/config/paths.js';
 import { resolveInvocationRuntimeProviderFileWithOrigins } from '../../infra/config/runtime-provider/invocation.js';
+import {
+  resolveRuntimeProviderFileWithOrigins,
+  RuntimeAssignmentSelectionError,
+  type ResolvedRuntimeProviderFileWithOrigins,
+} from '../../infra/config/runtime-provider/loader.js';
 
 export interface ManagerRuntimeAssignment {
   name: string;
@@ -19,10 +24,21 @@ export function resolveManagerRuntimeAssignmentSelection(
   if (entries.size === 0) {
     return { runtimeAssignments: [], missingRuntimeAssignments: [] };
   }
-  const defined = resolveInvocationRuntimeProviderFileWithOrigins({
+  const paths = {
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(cwd),
-  }).runtimeFile?.provider?.assignments ?? {};
+  };
+  let resolved: ResolvedRuntimeProviderFileWithOrigins;
+  try {
+    resolved = resolveInvocationRuntimeProviderFileWithOrigins(paths);
+  } catch (error) {
+    if (!(error instanceof RuntimeAssignmentSelectionError)) throw error;
+    // The invocation's selection does not have to exist in this repository.
+    // Enumerating the candidates only needs the defined names, so resolve
+    // this repository's own runtime file without the invocation's selection.
+    resolved = resolveRuntimeProviderFileWithOrigins(paths);
+  }
+  const defined = resolved.runtimeFile?.provider?.assignments ?? {};
   const runtimeAssignments: ManagerRuntimeAssignment[] = [];
   const missingRuntimeAssignments: string[] = [];
   for (const [name, usageDescription] of entries) {
