@@ -1,7 +1,7 @@
 import { getLabel } from '../../shared/i18n/index.js';
 import { normalizeErrorReason } from '../../shared/utils/errorReason.js';
 
-export type ConversationErrorCode = 'queue_full' | 'message_too_large' | 'stale_summary' | 'invalid_assignment' | 'unavailable_attachment'
+export type ConversationErrorCode = 'queue_full' | 'message_too_large' | 'stale_summary' | 'proposal_pending' | 'invalid_assignment' | 'unavailable_attachment'
   | 'registration_recovery' | 'storage_error' | 'shutting_down' | 'invalid_input' | 'operation_failed';
 
 export class ConversationError extends Error {
