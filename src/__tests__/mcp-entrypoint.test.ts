@@ -1054,9 +1054,9 @@ describe('MCP package entrypoint', () => {
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_get_goal',
-        'takt_get_goal_registration_proposal',
+        'takt_get_goal_proposal',
         'takt_get_run',
-        'takt_list_goal_registration_proposals',
+        'takt_list_goal_proposals',
         'takt_list_goals',
         'takt_list_tasks',
       ]);

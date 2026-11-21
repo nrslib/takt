@@ -3,8 +3,8 @@ import { z } from 'zod/v4';
 import {
   getWorkflowInputSchema, askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
-  listGoalRegistrationProposalsInputSchema, approveGoalRegistrationInputSchema, rejectGoalRegistrationInputSchema,
-  getGoalRegistrationProposalInputSchema,
+  listGoalProposalsInputSchema, approveGoalProposalInputSchema, rejectGoalProposalInputSchema,
+  getGoalProposalInputSchema,
   updateGoalBranchesInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
@@ -216,47 +216,47 @@ describe('MCP inquiry inputs', () => {
 });
 
 
-describe('MCP goal registration proposal inputs', () => {
+describe('MCP goal proposal inputs', () => {
   const revision = 3;
   const conversationId = 'manager-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
-  it('reads registration proposals with only a project path', () => {
-    expect(listGoalRegistrationProposalsInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
-    expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
-    expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: 'repo' }).success).toBe(false);
+  it('reads goal proposals with only a project path', () => {
+    expect(listGoalProposalsInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
+    expect(listGoalProposalsInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+    expect(listGoalProposalsInputSchema.safeParse({ cwd: 'repo' }).success).toBe(false);
   });
 
-  it('reads a registration proposal by owner conversation and an optional proposal field path', () => {
-    expect(getGoalRegistrationProposalInputSchema.parse({ cwd: '/repo', conversationId })).toEqual({ cwd: '/repo', conversationId });
+  it('reads a goal proposal by owner conversation and an optional proposal field path', () => {
+    expect(getGoalProposalInputSchema.parse({ cwd: '/repo', conversationId })).toEqual({ cwd: '/repo', conversationId });
     for (const path of ['summary.objective', 'summary.acceptanceCriteria.0', 'summary.specifications.gherkin', 'summary.startBranch']) {
-      expect(getGoalRegistrationProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path, textOffset: 4096, maxBytes: 4096 }).success, path).toBe(true);
+      expect(getGoalProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path, textOffset: 4096, maxBytes: 4096 }).success, path).toBe(true);
     }
     for (const path of ['repositoryDirectory', 'summary', 'summary.objective.0', 'summary.unknown']) {
-      expect(getGoalRegistrationProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path }).success, path).toBe(false);
+      expect(getGoalProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path }).success, path).toBe(false);
     }
-    expect(getGoalRegistrationProposalInputSchema.safeParse({ cwd: '/repo' }).success).toBe(false);
+    expect(getGoalProposalInputSchema.safeParse({ cwd: '/repo' }).success).toBe(false);
   });
 
-  it('approves and rejects a registration proposal by project path, revision and owner conversation', () => {
-    expect(approveGoalRegistrationInputSchema.parse({ cwd: '/repo', revision, conversationId }))
+  it('approves and rejects a goal proposal by project path, revision and owner conversation', () => {
+    expect(approveGoalProposalInputSchema.parse({ cwd: '/repo', revision, conversationId }))
       .toEqual({ cwd: '/repo', revision, conversationId });
-    expect(rejectGoalRegistrationInputSchema.parse({ cwd: '/repo', revision, conversationId }))
+    expect(rejectGoalProposalInputSchema.parse({ cwd: '/repo', revision, conversationId }))
       .toEqual({ cwd: '/repo', revision, conversationId });
   });
 
   it('requires the owner conversation identifier on approvals and rejections', () => {
-    expect(approveGoalRegistrationInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
-    expect(rejectGoalRegistrationInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+    expect(approveGoalProposalInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+    expect(rejectGoalProposalInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
   });
 
   it.each([0, -1, 1.5, '3', Number.MAX_SAFE_INTEGER + 1])('rejects a registration revision of %s', (invalid) => {
-    expect(approveGoalRegistrationInputSchema.safeParse({ cwd: '/repo', revision: invalid, conversationId }).success).toBe(false);
-    expect(rejectGoalRegistrationInputSchema.safeParse({ cwd: '/repo', revision: invalid, conversationId }).success).toBe(false);
+    expect(approveGoalProposalInputSchema.safeParse({ cwd: '/repo', revision: invalid, conversationId }).success).toBe(false);
+    expect(rejectGoalProposalInputSchema.safeParse({ cwd: '/repo', revision: invalid, conversationId }).success).toBe(false);
   });
 
-  it('exposes no pending-requirement or reason fields on the registration proposal tools', () => {
-    const approve = z.toJSONSchema(approveGoalRegistrationInputSchema, { io: 'input' });
-    const reject = z.toJSONSchema(rejectGoalRegistrationInputSchema, { io: 'input' });
+  it('exposes no pending-requirement or reason fields on the goal proposal tools', () => {
+    const approve = z.toJSONSchema(approveGoalProposalInputSchema, { io: 'input' });
+    const reject = z.toJSONSchema(rejectGoalProposalInputSchema, { io: 'input' });
     for (const schema of [approve, reject]) {
       expect(schema.required?.slice().sort()).toEqual(['conversationId', 'cwd', 'revision']);
       expect(schema.additionalProperties).toBe(false);
