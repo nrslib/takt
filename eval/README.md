@@ -811,8 +811,7 @@ rubric and independent fixture behavior tests are outside the model's isolated
 working directory. `npm run eval:prompts:contracts` verifies the fixture's actual
 retry behavior, shared finding-policy composition for both roles, and disposition
 parsing with Markdown decoration and conflicting-label rejection. These are individual agent evaluations with seeded reports,
-not an end-to-end review loop. See [the experiment record](experiments/review-proof-boundary.md)
-for baseline conditions and the limits of comparative claims.
+not an end-to-end review loop.
 
 `fix-verification-applicable-inputs` は完了検証7ケース、再計画3ケース、レビュー裁定4ケースを、隔離したfixtureと現在のファセットで評価します。`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。レビュー裁定A1〜A4だけの評価は `npm run eval:prompts:review-adjudication-applicable-inputs` で実行できます。専用verifierの状態・経路を測る `fix-verifier-family-boundary`、`fix-verifier-state-closure`、`fix-verifier-state-routing` と複数モデル比較の設定も登録されています。これらは各stepの評価であり、修正ループ全体の収束は測りません。
 
@@ -1127,8 +1126,6 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 
-実装報告の計画受け渡しに関する日英比較は [評価記録](results/implementation-report-source-agnostic.md) を参照。任意名の計画で固定名の原文を要求する英語の失敗は初版candidateで再現しなかったが、総合合格数は34/36から34/36で、既存fixtureの直接証拠に対する採点境界の揺れが残る。独立レビュー後に追加した混在表のheldoutケースは、この初版比較に含まれない。
-
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with
 `npm run eval:prompts:coding`.
@@ -1394,8 +1391,6 @@ not proof that the implementation agent generated the defect.
 Use `npm run eval:prompts:db-pagination:contracts` for deterministic checks only.
 For a repeated model comparison, run the full script with `-- --repeat 3` and
 preserve the prepared snapshots and output JSON before editing facets.
-See [the recorded experiment](results/db-pagination.md) for stage-specific
-results and the limits of the reproduced adjudication failure.
 
 ### Resource boundaries
 
@@ -1412,7 +1407,7 @@ without turning necessary full scans into truncation requests.
 
 Record baseline and post-change runs separately. These are additional domain
 coverage for the architecture facets; a baseline pass is not a newly reproduced
-failure. See `results/resource-boundary.md` for the recorded comparison.
+failure.
 
 ### General procedure
 
@@ -1639,27 +1634,15 @@ combined with `--yolo` or `--auto`. It uses an empty skills directory and resolv
 Claude uses the explicit local tool list with `dontAsk`. All fixture projects
 are outside the repository. The fixture checks are small local checks, not the
 repository's full build or test gates. Japanese instructions are used for these
-two action cases. See the [evaluation record](results/development-loop-handoffs.md)
-for outcomes and the boundary between measured behavior and historical evidence.
+two action cases.
 
 ### 実装レポートの入力引き継ぎ RED / GREEN
 
 現在の再現経路は `scripts/report-phase-handoff-v3.mjs` と
-`cases/report-phase-handoff-v3.json` を使う。旧版0/18、初回候補17/18、出典保持修正後18/18を
-[制御されたv3比較記録](results/report-phase-handoff-v3/README.md)に保存した。
-保存結果は811f当時のharnessによる測定である。独立レビュー後にTODO分類と新規freezeの
-依存関係ガードを修正したが、保存結果を再生成・再採点していない。当時の事前dependency snapshotは不明。
-報告工程の禁止と実装工程の可否（可能/不可/不明）の曖昧さは、基準を別に固定した
-[独立follow-up](results/report-feasibility/README.md)で測った。既存v3を再採点する追加metricではない。
-follow-upは`cases/report-feasibility.json`と`scripts/report-feasibility.mjs`を明示実行する独立経路で、
-defaultのcostly model evalには含めない。baselineの原機械集計は5/6、root/writerの別立て原文監査は
-対象の意味上の違反を未確認とした。追加production修正・候補測定は行わず、raw結果を保持している。
-再現コマンドと固定条件はリンク先に記録した。
-測定後の現行harnessはfresh違反をinfraに分類し、grader参照の合成handoffと実P1応答を分ける。
-この修正は保存結果で未使用・モデル効果未実測である。当時のfollow-up harnessはGit `622d627cf`、
-元v3 harnessはGit `811f3e4e`で本文を照合できる。
-future v3/follow-upのnpm設定固定と未対応readerのinfra分類も測定後の修正であり、保存結果では未使用。
-全54件のP2応答と18件の実P1応答、採点理由・実trace/context hash・選択した成功receiptを公開している。
+`cases/report-phase-handoff-v3.json` を使う。
+報告工程の禁止と実装工程の可否（可能/不可/不明）は、`cases/report-feasibility.json` と
+`scripts/report-feasibility.mjs` で別に評価する。この経路は明示的に実行するもので、
+既定の有料モデル評価には含めない。
 
 要求変更・撤回の保持、任意名レポートのIDなし義務と出典、失敗/環境阻害/未知の区別、実P1から
 ツールなしP2への証拠保持を3ケースで測る。A/Bは合成された固定P1要約、Cは既知の正常precision
@@ -1689,17 +1672,13 @@ node eval/scripts/report-phase-handoff-v3.mjs red eval/.results/report-phase-han
 ```
 
 全RED応答と意味上の失敗を確認して`red-confirmed.json`にsummaryHashを保存した後、固定した候補を
-captureしてGREENを実行する。確認手順と再測定でREDを継承した根拠はv3記録にある。
+captureしてGREENを実行する。
 
 ```bash
 node eval/scripts/report-phase-handoff-v3.mjs capture-candidate \
   811f3e4ec1d3a0f97782855f727197e72d90bf7c eval/.results/report-phase-handoff-v3-rerun
 node eval/scripts/report-phase-handoff-v3.mjs green eval/.results/report-phase-handoff-v3-rerun
 ```
-
-v1/v2は[探索的な履歴](results/report-phase-handoff/README.md)として保持する。事後の採点訂正に加え、
-B義務の照合文脈不足と比較ラベル露出が独立レビューで判明しており、確定した改善測定としては使わない。
-元のharness・入力・結果は上書きしていない。
 
 The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
 Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed
@@ -1770,9 +1749,7 @@ reuses the fixed interactive input-request cases from
 `cases/development-loop-input-boundaries.yaml`. Its provider JSON Schema accepts
 candidate 6 for implementation; the shared scorer still rejects that
 interactive-only candidate in headless mode.
-The local contract validates the actual provider schema before scoring. The
-focused Codex SDK check and its saved schema responses are documented in
-[the evaluation record](results/development-loop-handoffs.md#構造化providerの入力要求候補).
+The local contract validates the actual provider schema before scoring.
 
 Fixed cases can set `interactive: true` to include the production user-input
 candidate. The prompt builder and scorer use the same mode; the expected

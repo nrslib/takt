@@ -1101,7 +1101,9 @@ provider_profiles:
 2. 全局 `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. 项目 `provider_profiles.<provider>.default_permission_mode`
 4. 全局 `provider_profiles.<provider>.default_permission_mode`
-5. step `required_permission_mode`（作为最低下限）
+5. step `required_permission_mode`（指定最低所需权限）
+
+step 的 `required_permission_mode` 指定最低所需权限。如果 provider profile 解析出的模式低于所需模式，则使用所需模式。例如，step 要求 `edit` 而 profile 解析为 `readonly` 时，实际使用 `edit`。
 
 每个 provider 都有 builtin `default_permission_mode: edit`；如果项目和全局 profile 都没有设置，最终模式就是 `edit`，再根据 step 的 `required_permission_mode` 提高。
 
@@ -1652,7 +1654,7 @@ takt update           # 仅更新已安装且版本不匹配的提供者
 takt update codex     # 仅更新指定提供者
 ```
 
-交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+交互入口在执行前确认所需安装并显示容量估算。拒绝安装缺失的 SDK 时不会开始执行；对话会说明安装方法，然后返回输入。拒绝更新时会警告并继续使用完整的旧版本；如果该版本运行失败，TAKT 会说明更新方法。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
 
 容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
 

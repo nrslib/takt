@@ -299,7 +299,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt merge` | workflow で PR のレビュー・修正・マージを行います |
 | `takt install <provider>` | SDK 経由 provider の SDK をインストールします |
-| `takt update` | インストール済みの provider SDK を TAKT が固定した版に更新します |
+| `takt update` | インストール済みの provider SDK を TAKT が指定する固定バージョンに更新します |
 | `takt eject` | ビルトインの workflow/facet をコピーしてカスタマイズできます |
 | `takt workflow init` | カスタム workflow のひな形を作成します |
 | `takt workflow doctor` | カスタム workflow の定義を静的検証します |

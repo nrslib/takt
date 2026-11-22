@@ -1449,7 +1449,7 @@ Pi permission modes are SDK active-tool allowlists, not an operating-system sand
 
 ### Configuration
 
-Provider profiles can be set at both global and project levels:
+Provider profiles can be defined in both global and project configuration:
 
 ```yaml
 # ~/.takt/config.yaml (global) or .takt/config.yaml (project)
@@ -1472,9 +1472,9 @@ Permission mode is resolved in the following order (first match wins):
 2. **Global** `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. **Project** `provider_profiles.<provider>.default_permission_mode`
 4. **Global** `provider_profiles.<provider>.default_permission_mode`
-5. **Step** `required_permission_mode` (acts as a minimum floor)
+5. **Step** `required_permission_mode` (sets the minimum required permission)
 
-The `required_permission_mode` on a step sets the minimum floor. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a step requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
+The `required_permission_mode` on a step sets the minimum required permission. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a step requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
 
 Every provider also has a builtin `default_permission_mode: edit` that always participates in this resolution. When neither project nor global `provider_profiles` set a value, the effective mode is therefore `edit` (raised when the step's `required_permission_mode` demands more).
 
@@ -2112,7 +2112,7 @@ takt update           # Update installed providers with version drift only
 takt update codex     # Update the selected provider only
 ```
 
-Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+Interactive entry points confirm required installations and approximate disk space before execution. Declining to install a missing SDK prevents execution; conversations explain how to install it and return to input. Declining an update keeps the intact older SDK with a warning; if that version fails, TAKT explains how to update it. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
 
 Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
 

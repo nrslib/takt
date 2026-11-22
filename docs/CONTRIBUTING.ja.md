@@ -26,8 +26,6 @@ Nix flakes を使う場合は`nix develop` でこのプロジェクト用の Nod
 nix develop
 ```
 
-リリース前にローカルで `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run check:release` を実行し、更新された `package-lock.json` と `flake.nix` をコミットしてください。この指定でリリースチェックに含まれる重い結合テストの全件実行が許可されます。最初の工程の `sync:nix-deps` は npm 10.9.4 で lock を更新し、その lock を `npm ci` でインストールして `npmDepsHash` を再計算します（Nix が必要です）。これにより Nix ビルドとリリースチェックで同じ依存を使えます。
-
 ## 貢献の流れ
 
 Issue とあわせた PR の提出を特に歓迎します。バグ修正や小さな改善は、メンテナーの返信や議論の完了を待たずに PR を提出していただいて構いません。
@@ -54,7 +52,7 @@ npm run test:e2e:smoke
 
 `npm test` は高速なユニットテストを実行します。DeepSeek の型契約ステップでは `managed/deepseek-harness` をインストールし、製品側の SDK 境界型と実 managed SDK の適合を確認します。通常の build はこの managed インストールを必要としません。実装を終えたら `npm run test:it` で軽い結合テストも確認してください。結合テストを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体で実行します。重い結合テストを変更した場合は、PR を提出する前に `npm test -- <test-file>` で対象ファイルも実行してください。`npm run test:opencode-probe` は OpenCode のプロンプトを使ったスモークテストです。
 
-GitHub Actions ではプルリクエスト時に重い結合テストを全件実行します。ローカルでは対象ファイルを指定してください。ローカルで意図的に全件実行する場合は `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy` を使います。リリースチェックでは依存同期、ビルド、npm 10、11、12 による pack 済みパッケージのグローバルインストール確認、実際の npm レジストリを使った全 managed provider の `takt install` 確認、lint、ユニットテスト、結合テスト、E2E を実行します。
+GitHub Actions ではプルリクエスト時に重い結合テストを全件実行します。ローカルでは対象ファイルを指定してください。ローカルで意図的に全件実行する場合は `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy` を使います。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 
@@ -98,8 +96,8 @@ npm run build
 npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
 ```
 
-小さな implement 1走を現行の指示組み立てで実行し、完走とツールエラー数を確認する。PR の必須ゲートではない（実プロバイダのコストがかかるため）。
+現行の指示組み立てを使って小さな implement タスクを1回実行し、最後まで実行できることとツールエラー数を確認する。実プロバイダのコストがかかるため、PR の必須チェックにはしない。
 
 ## ライセンス
 
-貢献いただいたコードは MIT ライセンスの下でライセンスされることに同意したものとみなされます。
+コードを提供した場合、そのコードに MIT ライセンスを適用することに同意したものとみなされます。

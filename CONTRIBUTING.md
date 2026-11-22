@@ -26,8 +26,6 @@ If you use Nix flakes, `nix develop` opens a shell with the project Node.js runt
 nix develop
 ```
 
-Before a release, run `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run check:release` locally and commit any updates to `package-lock.json` and `flake.nix`. The opt-in covers the full Heavy IT gate included in the release check. The first step, `sync:nix-deps`, updates the lock with npm 10.9.4, installs it with `npm ci`, and recomputes `npmDepsHash` (requires Nix). This keeps the Nix build and release checks on the same dependencies.
-
 ## How to Contribute
 
 PRs that accompany an issue are especially welcome. For bug fixes and small improvements, feel free to submit a PR without waiting for a maintainer response or for discussion to conclude.
@@ -54,7 +52,7 @@ npm run test:e2e:smoke
 
 `npm test` runs the fast unit tests. Its DeepSeek type-contract step installs `managed/deepseek-harness` and checks the product-owned SDK boundary against the real managed SDK; the normal build does not require this managed installation. After implementation, run `npm run test:it` for light integration coverage. If you add or change an integration test, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` separately. For a changed heavy integration test, also run its file with `npm test -- <test-file>` before submitting the PR. `npm run test:opencode-probe` checks the OpenCode prompts.
 
-GitHub Actions pull requests run the full Heavy IT gate. To run Heavy IT locally, specify the test files. To intentionally run the full suite locally, use `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy`. The release check also runs dependency sync, build, a packed global install check with npm 10, 11, and 12, a `takt install` check of every managed provider against the real npm registry, lint, unit, integration, and E2E checks.
+GitHub Actions pull requests run the full Heavy IT gate. To run Heavy IT locally, specify the test files. To intentionally run the full suite locally, use `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy`.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 
@@ -98,7 +96,7 @@ npm run build
 npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
 ```
 
-This runs one small `implement` pass with the current instruction assembly and checks that it completes, along with the tool error count. It is not a required PR gate (real-provider runs cost money).
+Run one small `implement` task with the current instruction assembly, check that it completes, and check the tool error count. This is not a required PR check because real-provider runs cost money.
 
 ## License
 

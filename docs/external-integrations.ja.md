@@ -34,4 +34,4 @@ TAKT には2つの MCP 設定モードがあります。
 - workflow の `mcp_servers` ポリシー → `mcp.targets`
 - step の `mcp_servers` マップ → `mcp.targets.steps`
 
-runtime MCP モードでは、workflow から MCP server の command、URL、header、env を指定できません。これらは `runtime.yaml` の `mcp` セクションが所有します。スキーマ、実効 server 解決、provider 別 transport 対応、移行の詳細は [Configuration > Runtime MCP 設定](./configuration.ja.md#runtimeyaml-の-runtime-mcp-設定) を参照してください。
+runtime MCP モードでは、workflow から MCP server の command、URL、header、env を指定できません。これらは `runtime.yaml` の `mcp` セクションで定義します。スキーマ、実効 server 解決、provider 別 transport 対応、移行の詳細は [Configuration > Runtime MCP 設定](./configuration.ja.md#runtimeyaml-の-runtime-mcp-設定) を参照してください。

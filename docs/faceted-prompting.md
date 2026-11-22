@@ -12,7 +12,7 @@ As multi-agent systems grow complex, prompts become monolithic. A single prompt 
 
 ## The Idea
 
-Apply **Separation of Concerns** — a foundational software engineering principle — to prompt design.
+Apply the foundational software engineering principle of Separation of Concerns to prompt design.
 
 Instead of one monolithic prompt per agent, decompose it into independent, reusable files organized by *what concern they address*. Then compose them declaratively per workflow step.
 
@@ -318,7 +318,7 @@ Independent files are assembled into a single prompt at runtime. Change a file's
 
 - **Policy** captures rules and standards that apply across different tasks. A "coding policy" (naming conventions, error handling rules, prohibitions) applies whether the agent is implementing a feature or fixing a bug. Policies define *what to uphold* — prohibitions, quality standards (REJECT/APPROVE criteria), and priorities. They are *cross-cutting concerns* that constrain work regardless of what the work is.
 
-- **Knowledge** captures reference information that agents consult as premises for their judgment. An architecture document is relevant to both the planner and the reviewer. Separating knowledge from instructions prevents duplication and keeps instructions focused on procedures. Knowledge is descriptive ("this is how the domain works"), while prescriptive rules ("you must do this") belong in Policy.
+- **Knowledge** contains reference information that agents consult as premises for their judgment. An architecture document is relevant to both the planner and the reviewer. Separating knowledge from instructions prevents duplication and keeps instructions focused on procedures. Knowledge is descriptive ("this is how the domain works"), while prescriptive rules ("you must do this") belong in Policy.
 
 - **Output Contract** captures output structure independently of the work itself. The same review format can be used by an architecture reviewer and a security reviewer. Separating it allows format changes without touching agent behavior.
 

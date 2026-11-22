@@ -32,7 +32,7 @@ git commit -m "initial commit"
 
 TAKT はタスク実行時にブランチや作業用ディレクトリを扱うため、少なくとも 1 つのコミットがある状態から始めるのが安全です。
 
-TAKT を未インストールの場合は `npm install -g takt` でインストールし、provider の CLI（Claude Code など）または API キーを用意しておきます。
+TAKT をまだインストールしていない場合は `npm install -g takt` でインストールし、provider の CLI（Claude Code など）または API キーを用意しておきます。
 
 TAKT を起動します。
 

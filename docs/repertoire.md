@@ -136,10 +136,13 @@ project, user, and builtin provider-options directories. Workflow YAML may
 reference the capability preset, but provider/model/options remain in
 `runtime.yaml` (or the retained legacy config layers).
 
-Capability preset resolution fails fast as a configuration error when a preset
-or path cannot be resolved, a scoped ref points to an unavailable repertoire
-package, the target YAML is invalid or is not a provider-options object, the
-extends chain is circular, or the removed `$ref` key is used. Relative paths
+Capability preset resolution stops immediately with a configuration error when
+a preset or path cannot be resolved, or a scoped ref points to an unavailable
+repertoire package. The same applies when the target YAML is invalid or is not
+a provider-options object, the extends chain is circular, or the removed `$ref`
+key is used.
+
+Relative paths
 are resolved from the workflow file and must stay inside the workflow
 directory after symlink resolution; absolute paths and paths whose real target
 escapes that directory are rejected.

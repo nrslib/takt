@@ -1430,7 +1430,7 @@ Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox 
 
 ### 設定方法
 
-Provider プロファイルはグローバルレベルとプロジェクトレベルの両方で設定できます。
+Provider プロファイルはグローバル設定とプロジェクト設定の両方で定義できます。
 
 ```yaml
 # ~/.takt/config.yaml（グローバル）または .takt/config.yaml（プロジェクト）
@@ -1453,9 +1453,9 @@ provider_profiles:
 2. **グローバル** `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. **プロジェクト** `provider_profiles.<provider>.default_permission_mode`
 4. **グローバル** `provider_profiles.<provider>.default_permission_mode`
-5. **Step** `required_permission_mode`（最低限の下限として機能）
+5. **Step** `required_permission_mode`（最低限必要な権限を指定）
 
-step の `required_permission_mode` は最低限の下限を設定します。provider プロファイルから解決されたモードが要求モードよりも低い場合、要求モードが使用されます。たとえば、step が `edit` を要求しているがプロファイルが `readonly` に解決される場合、実効モードは `edit` になります。
+step の `required_permission_mode` は最低限必要な権限を設定します。provider プロファイルから解決されたモードが要求モードよりも低い場合、要求モードが使用されます。たとえば、step が `edit` を要求しているがプロファイルが `readonly` に解決される場合、実効モードは `edit` になります。
 
 すべての provider には組み込みの `default_permission_mode: edit` があり、この解決に常に参加します。project と global のどちらの `provider_profiles` も未設定の場合、実効モードは `edit` です（step の `required_permission_mode` がより高いモードを要求する場合は引き上げられます）。
 
@@ -2077,7 +2077,7 @@ takt update           # 導入済みで固定版と異なる対象だけを更�
 takt update codex     # 指定対象だけを更新
 ```
 
-端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の導入を拒否すると実行は開始しません。会話ではinstall案内を表示して入力へ戻ります。正常な旧版の更新を拒否した場合は警告して続行し、その版で失敗した場合にupdate案内を添えます。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
+端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の SDK のインストールを拒否すると、実行は開始しません。会話ではインストール方法を案内して入力へ戻ります。正常に導入済みの古いバージョンの更新を拒否した場合は、警告してそのまま続行し、そのバージョンで失敗した場合に更新方法を案内します。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
 
 容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
 

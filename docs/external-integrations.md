@@ -34,4 +34,4 @@ The two modes must not be mixed. When an active `mcp` section in `runtime.yaml` 
 - workflow `mcp_servers` policy → `mcp.targets`
 - step `mcp_servers` map → `mcp.targets.steps`
 
-In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env. Define them in the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.
