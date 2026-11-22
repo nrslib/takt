@@ -761,7 +761,7 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 `workflow_call` step では provider、model、provider options、routing の override は指定できません。子 workflow は親で解決済みの runtime コンテキストを継承します。provider target、profile、options、routing は `runtime.yaml` で設定してください。
 
-`max_steps` はルート workflow で定義し、すべての子孫で共有する実行回数の上限です。`workflow_call` は制御ノードなので実行回数を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。呼び出しの経過は、invocation 番号と完全な call stack を含む session log と trace から引き続き確認できます。
+`max_steps` はルート workflow で定義し、すべての子孫で共有する実行回数の上限です。`workflow_call` は制御ノードなので実行回数を消費せず、自身の provider / model も選択しません。ルート workflow と子孫 workflow の実行可能な step が iteration を消費します。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。呼び出しの経過は、invocation 番号と完全な call stack を含む session log と trace から引き続き確認できます。
 
 `workflow_call` step にはfacet 参照ではない実行コンテキストを scalar の `vars` として指定することもできます。文字列、有限数、真偽値が nested workflow call の子孫まで継承され、下位の呼び出しが同じ key を宣言した場合はその値で上書きされます。agent の instruction facet では `{var:name}` で参照します。値がない場合は `unspecified` になるため、instruction 側で安全な fallback を明示できます。
 

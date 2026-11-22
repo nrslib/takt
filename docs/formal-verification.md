@@ -17,7 +17,7 @@ Two artifacts are downloaded automatically on first use.
 | Apalache | Fetched by Quint on the first `quint verify` | `~/.quint/` (override with `QUINT_HOME`) |
 | Alloy Analyzer 6.2.0 JAR | Fetched by TAKT on the first Alloy verification; SHA-256 is checked | `.takt/cache/alloy/6.2.0/alloy.jar` inside the project |
 
-TLC, which is used for temporal properties, is part of the Apalache distribution, so no separate TLC install is needed. The downloads happen once and require network access; later `/verify` runs work offline.
+TLC, which is used for temporal properties, is part of the Apalache distribution, so no separate TLC install is needed. The first download of each artifact requires network access. `/verify` works offline once the artifacts for every checker you intend to use have been downloaded. Verifying only Quint does not download the Alloy JAR.
 
 To use Alloy without network access, point the `TAKT_ALLOY_JAR` environment variable at an Alloy JAR you already have. Relative paths are resolved from the project directory.
 
@@ -45,7 +45,7 @@ For a Quint block, TAKT runs the stages in order, and a stage that does not pass
 2. `typecheck` checks types and effects.
 3. `run` simulates one sample for up to 20 steps. It runs only when a main module with `init` and `step` actions is found and the selected verification targets live in that module.
 4. If the main module contains `run` declarations, `quint test` checks those scenarios after simulation succeeds.
-5. Once all preceding stages pass, `quint verify` runs with a bound of 20 steps if Java 17 or later is available. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space.
+5. Once all preceding stages pass, `quint verify` runs if Java 17 or later is available. The default Apalache backend checks up to 20 steps. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space without a 20-step bound.
 
 For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `run` and `check` command in the specification is executed, including models with only `run` commands.
 

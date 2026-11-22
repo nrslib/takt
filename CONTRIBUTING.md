@@ -87,16 +87,9 @@ Comment commands consume paid AI API credits, so access is limited. `/review` re
 - ESLint for linting
 - Prefer simple, readable code over clever solutions
 
-## Canary runs for instruction / facet changes
+## Checking instruction / facet changes
 
-Changes to prompt assembly, including `InstructionBuilder` and `builtins/{lang}/facets/instructions`, can destabilize tool calling on weaker models in ways unit tests do not catch. For such changes, we recommend a canary run: try a small task against a real provider.
-
-```bash
-npm run build
-npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
-```
-
-Run one small `implement` task with the current instruction assembly, check that it completes, and check the tool error count. This is not a required PR check because real-provider runs cost money.
+Changes to prompt assembly, including `InstructionBuilder` and `builtins/{lang}/facets/instructions`, can destabilize tool calling on weaker models in ways unit tests do not catch. We recommend trying one small `implement` task with the changed prompts against a real provider. Check that it completes and check the tool error count. This is not a required PR check because real-provider runs cost money.
 
 ## License
 

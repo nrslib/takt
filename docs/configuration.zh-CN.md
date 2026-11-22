@@ -1411,15 +1411,16 @@ provider_profiles:
 
 ### 权限解析优先级
 
-权限解析顺序（先匹配者优先）：
+先按以下顺序从 provider profile 中选择模式，使用首个匹配的设置：
 
 1. 项目 `provider_profiles.<provider>.step_permission_overrides.<step>`
 2. 全局 `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. 项目 `provider_profiles.<provider>.default_permission_mode`
 4. 全局 `provider_profiles.<provider>.default_permission_mode`
-5. step `required_permission_mode`（指定最低所需权限）
 
-step 的 `required_permission_mode` 指定最低所需权限。如果 provider profile 解析出的模式低于所需模式，则使用所需模式。例如，step 要求 `edit` 而 profile 解析为 `readonly` 时，实际使用 `edit`。
+然后始终将 step 的 `required_permission_mode` 作为下限。如果选中的 profile 模式低于所需模式，就提高到所需模式。例如，step 要求 `edit` 而 profile 解析为 `readonly` 时，实际使用 `edit`。
+
+如果无法从 profile 中选出模式，就使用 step 的 `required_permission_mode`；如果也未指定该值，则使用 `readonly`。
 
 每个 provider 都有 builtin `default_permission_mode: edit`；如果项目和全局 profile 都没有设置，最终模式就是 `edit`，再根据 step 的 `required_permission_mode` 提高。
 

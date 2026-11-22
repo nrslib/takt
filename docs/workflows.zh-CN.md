@@ -617,7 +617,7 @@ Team Leader agent 在运行时将任务分解成独立子部分，并把每部�
 
 子 workflow 可以通过 `subworkflow.params` 声明参数，父级用 `args` 传值。`workflow_call` 规则只能使用 `COMPLETE`、`ABORT` 或子 workflow 在 `subworkflow.returns` 中声明的 semantic return label。子 step 使用 `return:` 结束子 workflow，父级再按该 label 路由。
 
-`workflow_call` 不接受 provider、model、provider-options 或 routing override；子 workflow 继承父级已经解析的 runtime context，provider target/profile/options/routing 必须在 `runtime.yaml` 配置。`max_steps` 由根 workflow 拥有并在所有后代之间共享，workflow_call 本身不消耗预算。
+`workflow_call` 不接受 provider、model、provider-options 或 routing override；子 workflow 继承父级已经解析的 runtime context，provider target/profile/options/routing 必须在 `runtime.yaml` 配置。`max_steps` 由根 workflow 拥有并在所有后代之间共享。`workflow_call` 本身不消耗预算，根 workflow 和后代 workflow 中的可执行 step 都会消耗迭代次数。例如，`plan → workflow_call(implement → review) → supervise` 消耗4次迭代，将 `implement` 和 `review` 提取为可调用 workflow 后，无需增加 `max_steps`。嵌套调用也遵循同一规则。
 
 可调用 workflow 还可以通过 `vars` 传递非 facet 的执行上下文；agent instruction 用 `{var:name}` 读取。嵌套调用会继承字符串、有限数字和布尔值，重新声明同名 key 时覆盖父值；缺失值会渲染为 `unspecified`，instruction 可以据此显式定义安全 fallback。`workflow_call` 是 control node，不是 agent step。
 

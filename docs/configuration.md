@@ -1523,15 +1523,16 @@ provider_profiles:
 
 ### Permission Resolution Priority
 
-Permission mode is resolved in the following order (first match wins):
+First, select a mode from provider profiles in the following order, using the first matching setting:
 
 1. **Project** `provider_profiles.<provider>.step_permission_overrides.<step>`
 2. **Global** `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. **Project** `provider_profiles.<provider>.default_permission_mode`
 4. **Global** `provider_profiles.<provider>.default_permission_mode`
-5. **Step** `required_permission_mode` (sets the minimum required permission)
 
-The `required_permission_mode` on a step sets the minimum required permission. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a step requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
+Then always apply the step's `required_permission_mode` as a minimum. If the selected profile mode is lower than the required mode, raise it to the required mode. For example, if a step requires `edit` and the profile resolves to `readonly`, the effective mode is `edit`.
+
+If no mode can be selected from profiles, use the step's `required_permission_mode`, or `readonly` if that is also unspecified.
 
 Every provider also has a builtin `default_permission_mode: edit` that always participates in this resolution. When neither project nor global `provider_profiles` set a value, the effective mode is therefore `edit` (raised when the step's `required_permission_mode` demands more).
 

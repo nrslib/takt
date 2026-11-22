@@ -314,7 +314,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
 At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
 
-Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
+Deletion targets the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. For clone tasks, it also targets the branch with the same name in the original repository using `git branch -d`. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed. See [Task Management](./docs/task-management.md) for branch-retention conditions and other details.
 
 ```bash
 # Preview matching tasks, then delete them after checking the list
@@ -382,8 +382,10 @@ language: en        # en or ja
 ```
 
 Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
-files under `.takt/runs/<run>/`. Resume and requeue preserve the applicable run
-state and reports.
+files under `.takt/runs/<run>/`. Resuming partway through a workflow uses the saved
+results and reports for the selected position. Requeueing from the beginning does
+not resume the previous execution state. See [Task Management](./docs/task-management.md)
+for the details of what is inherited.
 
 To select providers or models for individual steps, configure auto routing. Run `takt telemetry enable` to record routing decisions locally. See the [Configuration Guide](./docs/configuration.md) for details.
 

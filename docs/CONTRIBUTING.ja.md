@@ -87,16 +87,9 @@ CodeRabbit が PR をレビューした場合は、各コメントを確認し�
 - ESLint によるリンティング
 - 巧妙なコードより、シンプルで読みやすいコードを優先
 
-## Instruction / facet 変更時の canary
+## Instruction / facet 変更の動作確認
 
-`InstructionBuilder` や `builtins/{lang}/facets/instructions` など、プロンプトの組み立てに影響する箇所を変更すると、能力の低いモデルでツール呼び出しが不安定になることがあります。ユニットテストだけでは検出できないため、変更時には実プロバイダで小さなタスクを試す canary 実行をおすすめします。
-
-```bash
-npm run build
-npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
-```
-
-現在のプロンプトの組み立て方で小さな `implement` タスクを1回実行し、完了できるか、ツールエラーが何件あるかを確認してください。実プロバイダの費用がかかるため、PR の必須チェックには含めません。
+`InstructionBuilder` や `builtins/{lang}/facets/instructions` など、プロンプトの組み立てに影響する箇所を変更すると、能力の低いモデルでツール呼び出しが不安定になることがあります。ユニットテストだけでは検出できないため、変更したプロンプトで小さな `implement` タスクを1回、実プロバイダで試すことをおすすめします。完了できるか、ツールエラーが何件あるかを確認してください。実プロバイダの費用がかかるため、PR の必須チェックには含めません。
 
 ## ライセンス
 

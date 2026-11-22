@@ -1503,15 +1503,16 @@ provider_profiles:
 
 ### パーミッション解決の優先順位
 
-パーミッションモードは次の順序で解決されます（最初にマッチしたものが適用）。
+まず、provider プロファイルから次の順序でモードを選びます。最初に見つかった設定を使います。
 
 1. **プロジェクト** `provider_profiles.<provider>.step_permission_overrides.<step>`
 2. **グローバル** `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. **プロジェクト** `provider_profiles.<provider>.default_permission_mode`
 4. **グローバル** `provider_profiles.<provider>.default_permission_mode`
-5. **Step** `required_permission_mode`（最低限必要な権限を指定）
 
-step の `required_permission_mode` は最低限必要な権限を設定します。provider プロファイルから解決されたモードが要求モードよりも低い場合、要求モードが使用されます。たとえば、step が `edit` を要求しているがプロファイルが `readonly` に解決される場合、実効モードは `edit` になります。
+選んだモードには step の `required_permission_mode` を必ず下限として適用します。プロファイルのモードが要求モードより低い場合は、要求モードに引き上げます。たとえば、step が `edit` を要求し、プロファイルが `readonly` に解決される場合、実効モードは `edit` になります。
+
+プロファイルからモードを選べない場合は、step の `required_permission_mode` を使います。その指定もなければ `readonly` です。
 
 すべての provider で、組み込みの `default_permission_mode: edit` が常に解決対象になります。project と global のどちらの `provider_profiles` も未設定の場合、実効モードは `edit` です。step の `required_permission_mode` がより高いモードを要求する場合は引き上げられます。
 

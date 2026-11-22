@@ -179,4 +179,4 @@ persona_providers:
   ai-antipattern-reviewer: claude   # Keep reviewers on Claude
 ```
 
-This configuration applies globally to all workflows. Any step using the specified persona will be routed to the corresponding provider, regardless of which workflow is being executed.
+In legacy mode, this configuration applies to all workflows. A step using the specified persona runs with the corresponding provider unless a higher-priority setting, such as `provider_routing`, overrides it.

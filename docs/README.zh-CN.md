@@ -312,7 +312,7 @@ manager 是实验性功能，行为、设置和保存的数据格式可能随时
 
 必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
 
-删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。对于 clone 任务，原仓库中的同名分支也会成为 `git branch -d` 的删除对象。如果 Git 因尚未合并等原因拒绝删除，则保留该分支并显示警告，clone 和任务记录仍会删除。保留分支的条件等详情请参阅[任务管理](./task-management.zh-CN.md)。
 
 ```bash
 # 先确认匹配列表，再执行删除
@@ -422,7 +422,7 @@ auto_routing:
 
 旧版模式中，没有 workflow-step 上下文的操作使用具体的顶层 provider/model；Assistant 对话不走 auto routing。自动路由决策只在本地以 NDJSON 写入 `.takt/events/`，可通过 `telemetry.routing_decisions` 或 `takt telemetry status|enable|disable` 查看和控制，TAKT 不会上传这些决策。
 
-运行元数据、session、trace、report 等运行产物仍以普通文件保存在 `.takt/runs/<run>/` 下。
+运行元数据、session、trace、report 等运行产物仍以普通文件保存在 `.takt/runs/<run>/` 下。从 workflow 中途恢复时，会使用所选位置对应的已保存结果和报告。Requeue 选择从头执行时，不会恢复之前的执行状态。继承内容的详情请参阅[任务管理](./task-management.zh-CN.md)。
 
 更完整的配置、provider profile、model 解析和 `runtime.yaml` 说明请参阅[配置指南](./configuration.zh-CN.md)。
 

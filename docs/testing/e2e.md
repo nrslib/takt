@@ -243,7 +243,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - ロック所有者の実行中の記録を確認してから後発 CLI を起動し、非ゼロ終了と、キューが変化しないことを確認する。
     - キューが空の run が正常終了した後と、watch を SIGKILL で終了した後に、次の実行がロックを取得できることを確認する。
-    - 同じ watch に SIGINT を送った後、所有者が停止中となり、実行中タスクの保存完了までロックが保持されることを確認する。
+    - SIGINT の確認用に pending タスクを用意して、新しい watch を起動する。タスクが実行中になったことを確認してから SIGINT を送り、所有者が停止中となり、実行中タスクの保存完了までロックが保持されることを確認する。
     - SIGINT 単発・連打・タイムアウトで解放後に再取得できることを確認する。
     - watch 保持中に非 Issue 入力の `takt add` を実行し、保存と読み取りが成功することを確認する。
 - Run interrupted task cleanup and high-priority run flows（`e2e/specs/run-recovery.e2e.ts`）

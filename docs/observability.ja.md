@@ -64,7 +64,7 @@ TAKT は `observability.enabled: true` の場合に、次のカウンターを�
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
-可観測性機能が有効なら、TAKT はワークフローの完了時または中断時に `TraceQL discovery:` ブロックを出力します。この検索情報は `.takt/runs/<run>/meta.json` の `observability.traceDiscovery` にも保存され、後から実行記録を探すために使えます。生成するクエリには常に `takt.run.id` を含め、タスクや Git のメタデータに応じて `takt.task.pr_number`、`takt.task.issue_number`、`takt.git.branch` のフィルターを追加します。
+可観測性機能が有効なら、TAKT はワークフローの完了時または中断時に `TraceQL discovery:` ブロックを出力します。この検索情報は `.takt/runs/<run>/meta.json` の `observability.traceDiscovery` にも保存され、後から実行記録を探すために使えます。`takt.run.id` で絞るクエリを生成し、タスクや Git のメタデータがあれば、`takt.task.pr_number`、`takt.task.issue_number`、`takt.git.branch` で絞るクエリもそれぞれ別に生成します。PR 番号などのクエリには run ID の条件がないため、同じ PR の別の実行も一致します。
 
 CLI 出力例:
 
@@ -92,7 +92,9 @@ OTLP で送信するには、共通のエンドポイントの指定が必要で
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | トレースの送信先を個別に指定します。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | メトリクスの送信先を個別に指定します。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 
-TAKT が値を解決・検証するのは、この3種類のエンドポイントだけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、そのまま OpenTelemetry SDK に渡します。子プロセスには機密情報を含まない変数だけを渡し、認証情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）は除外します。
+TAKT が値を解決・検証するのは、この3種類のエンドポイントだけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、そのまま OpenTelemetry SDK に渡します。
+
+command gate から起動する子プロセスには、認証情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）を除外して渡します。プロバイダーの起動にはこの除外を行わない経路があり、Devin・Kiro・Codex にはこれらの変数も渡ります。
 
 OTLP の送信先は `http` または `https` の絶対 URL で指定してください。トレースやメトリクスの送信先だけを個別に設定し、共通のエンドポイントを設定していない場合は、ローカルのエクスポーターだけを使います。共通のエンドポイントを設定すると、個別の送信先も実行開始前に検証します。起動後にコレクターが停止するなどして送信に失敗しても、ワークフローの実行は妨げません。
 
