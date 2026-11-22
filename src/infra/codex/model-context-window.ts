@@ -9,7 +9,6 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { resolveWindowsPowerShellExecutablePath } from '../../shared/utils/executable-path.js';
 
 const log = createLogger('codex-model-context');
-const execFileAsync = promisify(execFile);
 
 function positiveInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -53,7 +52,7 @@ async function readConfigWindow(path: string): Promise<{ window: number | null; 
 
 async function windowsSystemConfigPath(): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await promisify(execFile)(
       resolveWindowsPowerShellExecutablePath(),
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
         '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); '
