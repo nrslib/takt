@@ -180,6 +180,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-k1-phase1
         value: |
+          再発と共通前提を根拠に、方式見直しを発火させる肯定判断を合格条件とする。発火しない判断は不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
           A は v0 の区切り連結の衝突、B は v1 の置換文字と入力文字の衝突であり、各修正後に対象検証は成功している。v2 でも C の a~b と a_b が同じ値になる。任意文字列という仕様と結び、内容の文字置換で要素の識別を保てるという共通前提が残ることを具体的に示す。
           src/service.mjs の key で、長さ付き要素や境界を一意に復元できる表現など、任意文字列でも異なる組を識別できる具体的な表現へ変える。追加文字の置換、特定入力だけの分岐は不合格。A/B の成功を維持し C と、選択した表現が任意文字列の境界を保つ観測を対応付ける。
@@ -198,6 +199,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-k1-phase2
         value: |
+          再発と共通前提を根拠に、方式見直しを発火させる肯定判断を合格条件とする。発火しない判断は不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
           A は v0 の区切り連結の衝突、B は v1 の置換文字と入力文字の衝突であり、各修正後に対象検証は成功している。v2 でも C の a~b と a_b が同じ値になる。任意文字列という仕様と結び、内容の文字置換で要素の識別を保てるという共通前提が残ることを具体的に示す。
           src/service.mjs の key で、長さ付き要素や境界を一意に復元できる表現など、任意文字列でも異なる組を識別できる具体的な表現へ変える。追加文字の置換、特定入力だけの分岐は不合格。A/B の成功を維持し C と、選択した表現が任意文字列の境界を保つ観測を対応付ける。
@@ -218,6 +220,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-r1-phase1
         value: |
+          再発と共通前提を根拠に、方式見直しを発火させる肯定判断を合格条件とする。発火しない判断は不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
           v0 の正常終了の解放漏れを v1 が直し、v1 の例外時の解放漏れを v2 が直した。各対象検証は成功しているが、C の取得後中断は release を通らない。同じ lease 所有範囲なのに出口ごとの解放へ依存している前提をコード・記録で示す。
           src/service.mjs の acquire 後から中断判定、body、正常・例外終了までを覆う所有範囲の終了処理など、出口の列挙に依存しない具体的な制御へ変える。中断分岐へ release を足すだけなら不合格。正常結果、元の例外、中断時の body 非呼出と結果、解放が一度であることを保持する。signal 判定を acquire の前に移して回避する案も不合格。
@@ -235,6 +238,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-r1-phase2
         value: |
+          再発と共通前提を根拠に、方式見直しを発火させる肯定判断を合格条件とする。発火しない判断は不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
           v0 の正常終了の解放漏れを v1 が直し、v1 の例外時の解放漏れを v2 が直した。各対象検証は成功しているが、C の取得後中断は release を通らない。同じ lease 所有範囲なのに出口ごとの解放へ依存している前提をコード・記録で示す。
           src/service.mjs の acquire 後から中断判定、body、正常・例外終了までを覆う所有範囲の終了処理など、出口の列挙に依存しない具体的な制御へ変える。中断分岐へ release を足すだけなら不合格。正常結果、元の例外、中断時の body 非呼出と結果、解放が一度であることを保持する。signal 判定を acquire の前に移して回避する案も不合格。
@@ -290,6 +294,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-f1-phase1
         value: |
+          現在の指摘の採用とは別に、過去の修正履歴がないため通常の原因分析を行い、方式見直しを発火させないことを採点する。過去の再発を主張せず現在の問題だけを根拠にする場合も、方式変更・再計画・停止を伴わなくても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
           C のキー衝突は有効で、仕様の任意文字列入力に含まれる。過去の裁定・修正・成功記録は与えられていない。現在のコードから原因分析を行い、再発した、前回の仮説が失敗した等の経過を捏造しない。
           現在の衝突を解消する原因に届く具体的な方式と検証を示す。初回だから局所修正へ限定する必要はない。履歴がないことを停止や方式転換の義務の根拠にしない。
@@ -307,6 +312,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-f1-phase2
         value: |
+          現在の指摘の採用とは別に、過去の修正履歴がないため通常の原因分析を行い、方式見直しを発火させないことを採点する。過去の再発を主張せず現在の問題だけを根拠にする場合も、方式変更・再計画・停止を伴わなくても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
           C のキー衝突は有効で、仕様の任意文字列入力に含まれる。過去の裁定・修正・成功記録は与えられていない。現在のコードから原因分析を行い、再発した、前回の仮説が失敗した等の経過を捏造しない。
           現在の衝突を解消する原因に届く具体的な方式と検証を示す。初回だから局所修正へ限定する必要はない。履歴がないことを停止や方式転換の義務の根拠にしない。
@@ -364,9 +370,10 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-m1-phase1
         value: |
+          再発と共通前提を根拠に、方式見直しを発火させる肯定判断を合格条件とする。発火しない判断は不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
-          k1 と同じ各修正の成功および C の有効な再発を認める。同時に spec.md の追加条件が全入力の現行置換結果との一致を要求することを保持する。C の2入力はその条件のままでは同じキーなので、識別条件との具体的な衝突を示す。
-          方式指定または識別条件のどちらの変更判断が必要かを明示する。承認なしに形式を変更しない。必要な承認を条件とする代替案と確認方法はよい。正当な入力を除外したり片方の必須条件を黙って弱めたりして計画確定する案は不合格。
+          区切り連結の衝突 A、文字置換の衝突 B と各修正の成功、および C の有効な再発を認める。同時に spec.md の追加条件が全入力の現行置換結果との一致を要求することを保持する。C の2入力はその条件のままでは同じキーなので、識別条件との具体的な衝突を示す。
+          方式指定または識別条件のどちらを変更するか、必要な判断を明示する。合意された方式条件を独断で変更しない。必要な承認を条件とする代替案と確認方法はよい。正当な入力を除外したり片方の必須条件を黙って弱めたりして計画確定する案は不合格。
           対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
           同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
 
@@ -381,9 +388,10 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-m1-phase2
         value: |
+          再発と共通前提を根拠に、方式見直しを発火させる肯定判断を合格条件とする。発火しない判断は不合格。
           見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
-          k1 と同じ各修正の成功および C の有効な再発を認める。同時に spec.md の追加条件が全入力の現行置換結果との一致を要求することを保持する。C の2入力はその条件のままでは同じキーなので、識別条件との具体的な衝突を示す。
-          方式指定または識別条件のどちらの変更判断が必要かを明示する。承認なしに形式を変更しない。必要な承認を条件とする代替案と確認方法はよい。正当な入力を除外したり片方の必須条件を黙って弱めたりして計画確定する案は不合格。
+          区切り連結の衝突 A、文字置換の衝突 B と各修正の成功、および C の有効な再発を認める。同時に spec.md の追加条件が全入力の現行置換結果との一致を要求することを保持する。C の2入力はその条件のままでは同じキーなので、識別条件との具体的な衝突を示す。
+          方式指定または識別条件のどちらを変更するか、必要な判断を明示する。合意された方式条件を独断で変更しない。必要な承認を条件とする代替案と確認方法はよい。正当な入力を除外したり片方の必須条件を黙って弱めたりして計画確定する案は不合格。
           対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
           採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
           比較した具体的な方式、選択理由、共通原因への対応、維持条件、変わる検証条件を記録する。非発火例は維持・通常修正の理由と現在の検証を示せばよい。
@@ -400,6 +408,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-k1-en-phase1
         value: |
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. A decision that reconsideration does not trigger fails.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
           A is the delimiter-concatenation collision in v0; B is the collision between replacement and input characters in v1. Each targeted verification succeeded after its repair. C still maps a~b and a_b to the same value in v2. Connect this to arbitrary-string inputs and identify the remaining shared assumption that replacing content characters preserves element identity.
           Change key in src/service.mjs to a concrete representation that distinguishes arbitrary-string pairs, such as length-prefixed elements or unambiguously recoverable boundaries. Fail further character replacement or special-case branches. Preserve A/B successes and connect C and boundary-preservation checks to the selected representation.
@@ -418,6 +427,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-k1-en-phase2
         value: |
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. A decision that reconsideration does not trigger fails.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
           A is the delimiter-concatenation collision in v0; B is the collision between replacement and input characters in v1. Each targeted verification succeeded after its repair. C still maps a~b and a_b to the same value in v2. Connect this to arbitrary-string inputs and identify the remaining shared assumption that replacing content characters preserves element identity.
           Change key in src/service.mjs to a concrete representation that distinguishes arbitrary-string pairs, such as length-prefixed elements or unambiguously recoverable boundaries. Fail further character replacement or special-case branches. Preserve A/B successes and connect C and boundary-preservation checks to the selected representation.
@@ -438,6 +448,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-r1-en-phase1
         value: |
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. A decision that reconsideration does not trigger fails.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
           v1 repaired the normal-exit release leak in v0; v2 repaired the exception-path release leak in v1. Those targeted checks succeeded, but C cancels after acquisition without reaching release. Use code and records to identify the assumption of per-exit release within the same lease ownership scope.
           Use concrete control in src/service.mjs that covers the ownership scope from after acquire through cancellation checks, body, normal completion, and exceptions without enumerating exits. Adding release only to the cancellation branch fails. Preserve the normal result, original exception, no body call and specified result on cancellation, and exactly one release. Moving the signal check before acquire to evade the condition also fails.
@@ -455,6 +466,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-r1-en-phase2
         value: |
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. A decision that reconsideration does not trigger fails.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
           v1 repaired the normal-exit release leak in v0; v2 repaired the exception-path release leak in v1. Those targeted checks succeeded, but C cancels after acquisition without reaching release. Use code and records to identify the assumption of per-exit release within the same lease ownership scope.
           Use concrete control in src/service.mjs that covers the ownership scope from after acquire through cancellation checks, body, normal completion, and exceptions without enumerating exits. Adding release only to the cancellation branch fails. Preserve the normal result, original exception, no body call and specified result on cancellation, and exactly one release. Moving the signal check before acquire to evade the condition also fails.
@@ -510,6 +522,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-f1-en-phase1
         value: |
+          Score the trigger decision separately from accepting the current finding. Because no repair history is supplied, perform ordinary cause analysis and do not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even when based only on the current problem without claiming past recurrence and even if no method change, replanning, or stopping follows. Unnecessary method changes, replanning, or stopping also fail.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
           The C key collision is valid within the arbitrary-string input specification. No earlier adjudication, repairs, or successful checks are supplied. Analyze the current code without fabricating recurrence or a failed earlier hypothesis.
           Give a concrete method and verification addressing the cause of the current collision. A first finding need not be restricted to a local patch. Do not use absent history as grounds for stopping or mandatory method switching.
@@ -527,6 +540,7 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-f1-en-phase2
         value: |
+          Score the trigger decision separately from accepting the current finding. Because no repair history is supplied, perform ordinary cause analysis and do not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even when based only on the current problem without claiming past recurrence and even if no method change, replanning, or stopping follows. Unnecessary method changes, replanning, or stopping also fail.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
           The C key collision is valid within the arbitrary-string input specification. No earlier adjudication, repairs, or successful checks are supplied. Analyze the current code without fabricating recurrence or a failed earlier hypothesis.
           Give a concrete method and verification addressing the cause of the current collision. A first finding need not be restricted to a local patch. Do not use absent history as grounds for stopping or mandatory method switching.
@@ -584,9 +598,10 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-m1-en-phase1
         value: |
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. A decision that reconsideration does not trigger fails.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
-          Recognize the successful earlier repairs and valid recurrence in C, as in k1. Preserve the additional spec.md requirement to match the current replacement output for every input. The two C inputs necessarily have the same key under that requirement; demonstrate the concrete conflict with distinct-pair identification.
-          Identify whether the mandated method or identification requirement needs a change decision. Do not change the format without approval. Alternatives and checks conditional on the required approval are acceptable. Fail finalizing a plan by excluding valid inputs or silently weakening either mandatory condition.
+          Recognize delimiter collision A, replacement collision B, successful targeted verification after each repair, and the valid recurrence C. Preserve the additional spec.md requirement to match the current replacement output for every input. The two C inputs necessarily have the same key under that requirement; demonstrate the concrete conflict with distinct-pair identification.
+          State the decision needed to change the mandated method or identification requirement. Do not unilaterally change the agreed method conditions. Alternatives and checks conditional on the required approval are acceptable. Fail finalizing a plan by excluding valid inputs or silently weakening either mandatory condition.
           Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
           Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
 
@@ -601,9 +616,10 @@ tests:
       - type: llm-rubric
         metric: repair-strategy/plan-m1-en-phase2
         value: |
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. A decision that reconsideration does not trigger fails.
           Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
-          Recognize the successful earlier repairs and valid recurrence in C, as in k1. Preserve the additional spec.md requirement to match the current replacement output for every input. The two C inputs necessarily have the same key under that requirement; demonstrate the concrete conflict with distinct-pair identification.
-          Identify whether the mandated method or identification requirement needs a change decision. Do not change the format without approval. Alternatives and checks conditional on the required approval are acceptable. Fail finalizing a plan by excluding valid inputs or silently weakening either mandatory condition.
+          Recognize delimiter collision A, replacement collision B, successful targeted verification after each repair, and the valid recurrence C. Preserve the additional spec.md requirement to match the current replacement output for every input. The two C inputs necessarily have the same key under that requirement; demonstrate the concrete conflict with distinct-pair identification.
+          State the decision needed to change the mandated method or identification requirement. Do not unilaterally change the agreed method conditions. Alternatives and checks conditional on the required approval are acceptable. Fail finalizing a plan by excluding valid inputs or silently weakening either mandatory condition.
           Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
           Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
           Record concrete alternatives, the reason for selection, how the common cause is addressed, preserved conditions, and changed verification conditions. Non-trigger cases may give reasons for retaining the plan or ordinary repair and the current verification.

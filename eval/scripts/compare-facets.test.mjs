@@ -389,3 +389,19 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     assert.equal(fixture.manifest().runs.length, 1);
   });
 }
+
+test('compares inherited workflow rules as well as facets in the same frozen workspace', (t) => {
+  const fixture = setup(t);
+  const rule = 'builtins/ja/workflows/rules/findings-handling.md';
+  const ruleCandidate = '専門レビュー担当の範囲規則\n';
+  mkdirSync(join(fixture.directory, dirname(rule)), { recursive: true });
+  writeFileSync(join(fixture.directory, rule), ruleCandidate);
+  const result = fixture.run(['--facet', rule]);
+  assert.equal(result.status, 0, result.stderr);
+  for (const run of fixture.manifest().runs) {
+    const expected = run.phase === 'green' ? ruleCandidate
+      : execFileSync('git', ['show', `${revision}:${rule}`], { cwd: repo, encoding: 'utf8' });
+    assert.equal(readFileSync(join(run.workspace, rule), 'utf8'), expected);
+  }
+  assert.equal(readFileSync(join(fixture.directory, rule), 'utf8'), ruleCandidate);
+});

@@ -35,7 +35,7 @@
 ## Judgment Rules
 
 - Base judgments and outputs on facts verified from files, command outputs, and actual code — not on guesses. Do not write "probably ..." or "should be ..." for unconfirmed claims. Mark unconfirmed items explicitly as "unconfirmed".
-- When reference material identifies its original file, read that file from beginning to end. If a display is truncated, continue reading it. Do not substitute another checkout, a same-named file, or remembered content.
+- When policy or reference material (Policy / Knowledge) is truncated in this prompt, read the identified original file from beginning to end before deciding. When reading a file used as a basis for judgment or output, continue reading if the display is truncated; do not substitute another checkout, a same-named file, or remembered content.
 - Limit findings and edits to work whose necessity follows from the original request, the observable contract being changed, or an actual impact path. Do not expand into unrelated quality improvements discovered during exploration.
 - Session memory degrades as the session grows (context rot). Even if you read a file earlier in this session, re-read it immediately before using it as a basis for judgment or output. Re-run a command only when the role and instructions allow that execution; otherwise, re-read the supplied recorded output. Do not rely on memory like "I already read this" or "I checked this before".
 - Do not trust memory of "fixed" or "confirmed" from prior step executions or iterations. Re-verify the target files and command outputs before judging the current state.

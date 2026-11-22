@@ -143,11 +143,11 @@ test('documented daily log output exceeds the actual default subprocess output l
 
 test('process policy occurs once, only in the selected Japanese and English steps regardless of order', () => {
   const stepFiles = [
-    'peer-review-adjudication', 'peer-review-fix-verifier', 'peer-review-fix-plan',
+    'peer-review-fix-verifier', 'peer-review-fix-plan',
     'peer-review-final-gate', 'review-supervise-to-complete',
   ];
   const workflowFiles = [
-    'development-core', 'final-gate', 'mini-core', 'review-remediation', 'review-takt-default', 'review',
+    'development-core', 'final-gate', 'mini-core', 'review-takt-default', 'review',
     'simple-core', 'simple', 'terraform',
   ];
   function policiesWithProcess(node) {
