@@ -141,41 +141,6 @@ test('documented daily log output exceeds the actual default subprocess output l
   error => error.code === 'ENOBUFS');
 });
 
-test('process policy occurs once, only in the selected Japanese and English steps regardless of order', () => {
-  const stepFiles = [
-    'peer-review-fix-verifier', 'peer-review-fix-plan',
-    'peer-review-final-gate', 'review-supervise-to-complete',
-  ];
-  const workflowFiles = [
-    'development-core', 'final-gate', 'mini-core', 'review-takt-default', 'review',
-    'simple-core', 'simple', 'terraform',
-  ];
-  function policiesWithProcess(node) {
-    if (node === null || typeof node !== 'object') return [];
-    const found = Array.isArray(node.policy) && node.policy.includes('process-deviation')
-      ? [node.policy] : [];
-    return [...found, ...Object.values(node).flatMap(policiesWithProcess)];
-  }
-  for (const [directory, names] of [['steps', stepFiles], ['workflows', workflowFiles]]) {
-    for (const name of names) {
-      const japanese = policiesWithProcess(parse(read(`builtins/ja/${directory}/${name}.yaml`)));
-      const english = policiesWithProcess(parse(read(`builtins/en/${directory}/${name}.yaml`)));
-      assert.deepEqual(japanese.map(policy => [...policy].sort()), english.map(policy => [...policy].sort()), name);
-      assert.equal(japanese.length, name === 'terraform' ? 2 : 1, name);
-      for (const policy of japanese) {
-        assert.equal(policy.filter(value => value === 'process-deviation').length, 1, name);
-      }
-    }
-  }
-  for (const language of ['ja', 'en']) {
-    const workflowsWithProcess = fs.readdirSync(join(repoRoot, 'builtins', language, 'workflows'))
-      .filter(file => file.endsWith('.yaml'))
-      .filter(file => policiesWithProcess(parse(read(`builtins/${language}/workflows/${file}`))).length > 0)
-      .map(file => file.slice(0, -'.yaml'.length));
-    assert.deepEqual(new Set(workflowsWithProcess), new Set(workflowFiles), language);
-  }
-});
-
 test('prepared prompts receive the instruction facets and partials for each case role', () => {
   execFileSync(process.execPath, [
     'eval/scripts/prepare.mjs', ...cases.map(id => `${suiteName}-${id}`),

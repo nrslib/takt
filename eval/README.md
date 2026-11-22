@@ -800,7 +800,7 @@ testing directive (`testing-proof-new-behavior`). Run them explicitly with
 They use Luna Max, an exact disposition assertion, and a semantic rubric. The
 rubric and independent fixture behavior tests are outside the model's isolated
 working directory. `npm run eval:prompts:contracts` verifies the fixture's actual
-retry behavior, shared finding-policy composition for both roles, and disposition
+retry behavior, snapshot isolation, testing-review input composition, and disposition
 parsing with Markdown decoration and conflicting-label rejection. These are individual agent evaluations with seeded reports,
 not an end-to-end review loop.
 

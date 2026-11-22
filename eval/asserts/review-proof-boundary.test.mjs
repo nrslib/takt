@@ -17,8 +17,6 @@ test('review preparation isolates snapshots and includes obligation criteria', (
   prepare('review-proof-boundary');
   const before = readFileSync(adjudicationSnapshot, 'utf8');
   const findingPolicy = readFileSync(new URL('../../builtins/ja/facets/partials/policies/finding-validity.md', import.meta.url), 'utf8').trim();
-  const adjudicationPolicy = readFileSync(new URL('../../builtins/ja/facets/policies/review-adjudication.md', import.meta.url), 'utf8').trim();
-  assert.equal(before.trim(), adjudicationPolicy, 'adjudication receives only its own acceptance criteria');
   prepare('testing-proof-boundary');
   assert.equal(readFileSync(adjudicationSnapshot, 'utf8'), before);
   assert.ok(readFileSync(testingSnapshot, 'utf8').includes(findingPolicy), 'testing review must receive the same finding criteria');

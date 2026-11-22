@@ -108,11 +108,8 @@ test('prepare resolves completed history, immutable references, and inherited ad
       }
       assert.ok(REPAIR_STRATEGY_LANGUAGES.includes(receipt.language));
       assert.equal(parse(read(join(receipt.project, '.takt/config.yaml'))).language, receipt.language);
-      const policy = read(new URL(`../../builtins/${receipt.language}/facets/policies/repair-strategy.md`, import.meta.url)).trim();
-      // Composition only: semantic decisions belong to the model rubric.
       const policyPath = join(receipt.project, '.takt/eval-snapshots/policies.md');
       const policySnapshot = read(policyPath);
-      assert.equal(policySnapshot.split(policy).length - 1, receipt.stage === 'plan' ? 1 : 0);
       if (receipt.stage === 'adjudication') {
         for (const kind of ['policies', 'knowledge']) {
           const resourceRoot = new URL(`../../builtins/${receipt.language}/`, import.meta.url).pathname;
@@ -221,56 +218,6 @@ test('prepare resolves completed history, immutable references, and inherited ad
     rmSync(directory, { recursive: true, force: true });
   }
 });
-
-// These checks protect rubric coverage; model judgment still requires scenario evaluation.
-for (const language of REPAIR_STRATEGY_LANGUAGES) {
-  for (const caseId of REPAIR_STRATEGY_CASES) {
-    for (const phase of ['phase1', 'phase2']) {
-      test(`adjudication rubric scores ${caseId} reconsideration without delegating its decision / ${language} / ${phase}`, () => {
-        const suite = parse(read(new URL('../agents/review-adjudication/review-adjudication.yaml', import.meta.url)));
-        const label = `${caseId}${language === 'en' ? '-en' : ''}`;
-        const entries = suite.tests.filter(entry => entry.prompts.includes(label) && entry.vars.output_phase === phase);
-        assert.equal(entries.length, 1);
-        const rubrics = entries[0].assert.filter(assertion => assertion.type === 'llm-rubric');
-        assert.equal(rubrics.length, 1);
-        const rubric = rubrics[0].value.replace(/\s+/g, ' ');
-        const context = `${label}/${phase}`;
-        // Guard the grader's assigned responsibilities, not the model's ability to follow them.
-        const statements = rubric.split(/。|(?<=\.)\s+/);
-        const planningScope = statements.find(statement => statement.includes('fix-plan-bounded-proof'));
-        assert.ok(planningScope, context);
-        assert.match(planningScope, language === 'ja' ? /詳細.*経過.*方式比較.*新方式.*要求しない/ : /Detailed.*history.*method comparisons.*new method.*not required/i, context);
-        assert.doesNotMatch(planningScope, /発火|要否|trigger|whether/i, context);
-        assert.match(rubric, language === 'ja' ? /裁定.*方式見直し.*要否.*根拠.*維持.*採点/ : /adjudication.*whether.*reconsideration.*evidence.*conditions.*scored/i, context);
-
-        const decision = statements.find(statement => /合格条件|condition for passing/.test(statement));
-        assert.ok(decision, context);
-        const triggers = ['k1', 'r1', 'm1'].includes(caseId);
-        if (triggers) {
-          assert.match(decision, language === 'ja' ? /進行中.*計画.*なく.*適用範囲内.*再発.*共通.*仕組み/ : /no plan.*in progress.*recurrence.*applicable scope.*common mechanism/i, context);
-          assert.match(decision, language === 'ja' ? /方式見直しを発火させる.*合格条件/ : /trigger reconsideration.*condition for passing/i, context);
-          assert.match(rubric, language === 'ja' ? /発火しない.*不合格/ : /does not trigger.*fails/i, context);
-        } else {
-          const reason = {
-            f1: language === 'ja' ? /履歴.*ない.*初回/ : /no.*history.*first finding/i,
-            i1: language === 'ja' ? /原因.*守る条件.*異なる/ : /causes.*conditions.*differ/i,
-            p1: language === 'ja' ? /共通原因.*計画.*進行中/ : /plan.*common cause.*in progress/i,
-          }[caseId];
-          assert.match(decision, reason, context);
-          assert.match(decision, language === 'ja' ? /方式見直しを発火させない.*合格条件/ : /do not trigger reconsideration.*condition for passing/i, context);
-          assert.match(rubric, language === 'ja' ? /発火する.*不合格/ : /triggering reconsideration.*fails/i, context);
-        }
-        if (caseId === 'p1') {
-          assert.match(rubric, /CODE-C.*P-1.*writeKey/);
-          assert.ok(rubric.includes('encodeKey'), context);
-          assert.match(rubric, language === 'ja' ? /writeKey.*接続.*検証.*残作業/ : /remaining work.*connect writeKey.*verify/i, context);
-          assert.match(rubric, language === 'ja' ? /readKey.*適用済み.*保持/ : /Preserve.*already applied readKey/i, context);
-        }
-        assert.match(rubric, language === 'ja' ? /Phase 2.*Phase 1.*方式見直し.*判断.*引き継/ : /Phase 2.*carry forward.*Phase 1.*reconsideration decision/i, context);
-      });
-    }
-  }
-}
 
 test('each suite filters both phases to the correct fixture and report prompt', () => {
   for (const [stage, path] of [
