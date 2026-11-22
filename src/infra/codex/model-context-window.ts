@@ -1,11 +1,15 @@
+import { execFile } from 'node:child_process';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { parse } from 'smol-toml';
 import type { ContextWindowLimits } from '../providers/context-window.js';
 import { resolveCodexHomeDirectory } from './home.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { resolveWindowsPowerShellExecutablePath } from '../../shared/utils/executable-path.js';
 
 const log = createLogger('codex-model-context');
+const execFileAsync = promisify(execFile);
 
 function positiveInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -27,20 +31,39 @@ function projectConfigPaths(cwd: string): string[] {
   return paths;
 }
 
-async function readConfigWindow(path: string): Promise<number | null | undefined> {
+async function readConfigWindow(path: string): Promise<{ window: number | null; customCatalog: boolean } | undefined> {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { window: null, customCatalog: false };
     log.debug('Codex config unavailable for context window selection', { error: getErrorMessage(error) });
     return undefined;
   }
   try {
-    const value = parse(raw, { unsafeKeyBehaviour: 'throw' }).model_context_window;
-    return value === undefined ? null : positiveInteger(value);
+    const config = parse(raw, { unsafeKeyBehaviour: 'throw' });
+    const value = config.model_context_window;
+    if (value !== undefined && positiveInteger(value) === undefined) return undefined;
+    return { window: value === undefined ? null : positiveInteger(value)!, customCatalog: config.model_catalog_json !== undefined };
   } catch (error) {
     log.debug('Codex config could not be parsed for context window selection', { error: getErrorMessage(error) });
+    return undefined;
+  }
+}
+
+async function windowsSystemConfigPath(): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      resolveWindowsPowerShellExecutablePath(),
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); '
+        + '[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)'],
+      { timeout: 5_000, maxBuffer: 4096, windowsHide: true },
+    );
+    const directory = stdout.trim();
+    return join(directory === '' ? 'C:\\ProgramData' : directory, 'OpenAI', 'Codex', 'config.toml');
+  } catch (error) {
+    log.debug('Codex Windows system config path unavailable', { error: getErrorMessage(error) });
     return undefined;
   }
 }
@@ -52,15 +75,17 @@ async function configuredWindow(
 ): Promise<number | null | undefined> {
   if (profile !== undefined && !/^[A-Za-z0-9_-]+$/.test(profile)) return undefined;
   let selected: number | null = null;
+  const systemPath = process.platform === 'win32' ? await windowsSystemConfigPath() : '/etc/codex/config.toml';
+  if (systemPath === undefined) return undefined;
   const knownLayers = [
-    ...(process.platform === 'win32' ? [] : ['/etc/codex/config.toml']),
+    systemPath,
     join(home, 'config.toml'),
     ...(profile === undefined ? [] : [join(home, `${profile}.config.toml`)]),
   ];
   for (const path of knownLayers) {
     const value = await readConfigWindow(path);
-    if (value === undefined) return undefined;
-    if (value !== null) selected = value;
+    if (value === undefined || value.customCatalog) return undefined;
+    if (value.window !== null) selected = value.window;
   }
   const basePath = resolve(join(home, 'config.toml'));
   let canonicalBasePath: string | undefined;
@@ -81,7 +106,7 @@ async function configuredWindow(
       }
     }
     const value = await readConfigWindow(path);
-    if (value === undefined || value !== null) return undefined;
+    if (value === undefined || value.customCatalog || value.window !== null) return undefined;
   }
   return selected;
 }

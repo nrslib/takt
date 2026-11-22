@@ -100,6 +100,9 @@ describe('runtime context_window', () => {
     const catalogOnly = await readCodexModelContextWindow('synthetic-model', environment, project);
     expect(selectContextWindow('auto', catalogOnly, prompt).override).toBe(500_000);
 
+    writeFileSync(join(home, 'config.toml'), 'model_catalog_json = "/custom/catalog.json"\n');
+    expect(await readCodexModelContextWindow('synthetic-model', environment, project)).toBeUndefined();
+
     writeFileSync(join(home, 'config.toml'), '# model_context_window = 900000\nmodel_context_window = 600_000\n');
     const base = await readCodexModelContextWindow('synthetic-model', environment, project);
     expect(base?.default).toBe(600_000);

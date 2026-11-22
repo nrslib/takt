@@ -328,8 +328,16 @@ export class AgentRunner {
       selection = selectContextWindow(effectiveSetting, limits, fixedTexts);
       if (options.sessionId !== undefined && effectiveSetting === 'auto' && selection.reason !== 'unknown') {
         const previous = contextWindowSessions.get(contextWindowSessionKey(providerName, options, options.sessionId));
-        if (previous !== undefined && (previous.override ?? previous.stages[0]?.size ?? 0)
-          > (selection.override ?? selection.stages[0]?.size ?? 0)) selection = previous;
+        const previousSize = previous?.stages[previous.stageIndex]?.size;
+        if (previousSize !== undefined && previousSize > selection.stages[selection.stageIndex]!.size) {
+          const stageIndex = selection.stages.findIndex((stage) => stage.size >= previousSize);
+          const boundedIndex = stageIndex === -1 ? selection.stages.length - 1 : stageIndex;
+          selection = {
+            ...selection,
+            stageIndex: boundedIndex,
+            ...(boundedIndex === 0 ? {} : { override: selection.stages[boundedIndex]!.size }),
+          };
+        }
       }
       log.info('Context window selection', {
         provider: providerName,
@@ -358,18 +366,19 @@ export class AgentRunner {
     };
     const recoverFromCompaction = agent.recoverFromCompaction;
     if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
-      let compacted = false;
+      let compactionSessionId: string | undefined;
       const observedOptions = {
         ...selectedOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
           recorder?.observe(event);
-          if (event.type === 'context_compacted') compacted = true;
+          if (event.type === 'context_compacted') compactionSessionId = event.data.sessionId;
           options.onStream?.(event);
         },
       };
       const response = await agent.call(task, observedOptions);
       recorder?.finish(response);
-      recordSelection(response.sessionId ?? options.sessionId, compacted);
+      const responseSessionId = response.sessionId ?? options.sessionId;
+      recordSelection(responseSessionId, compactionSessionId !== undefined && compactionSessionId === responseSessionId);
       return response;
     }
 
@@ -409,7 +418,9 @@ export class AgentRunner {
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
-      recordSelection(responseSessionId, compactionDetected && compactionMatchesResponse);
+      const compactionMatchesPromotion = compactionSessionId !== undefined
+        && compactionSessionId === responseSessionId;
+      recordSelection(responseSessionId, compactionDetected && compactionMatchesPromotion);
       if (selection?.override !== undefined) {
         currentOptions = { ...currentOptions, contextWindow: selection.override };
       }

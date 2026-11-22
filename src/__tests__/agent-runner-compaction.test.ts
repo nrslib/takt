@@ -130,6 +130,62 @@ describe('AgentRunner compaction recovery', () => {
     ]);
   });
 
+  it('bounds a promoted session to the current native maximum', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length <= 2) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-shrinking' } });
+      }
+      return makeResponse('completed', 'window-shrinking');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 500_000 });
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-shrinking',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-shrinking',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', options);
+    expect(windows).toEqual([undefined, 500_000, 500_000]);
+  });
+
+  it('does not promote a new response session from a foreign compaction event', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'refused-session' } });
+      }
+      return makeResponse('completed', 'new-session');
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'refused-session',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-foreign',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', { ...options, sessionId: 'new-session' });
+    expect(windows).toEqual([undefined, undefined]);
+  });
+
   it('does not reuse a promoted override when the current native default is unknown', async () => {
     const windows: Array<number | undefined> = [];
     const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {

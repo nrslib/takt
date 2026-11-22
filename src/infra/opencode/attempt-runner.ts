@@ -1193,6 +1193,7 @@ export class OpenCodeAttemptRunner {
       executionContext,
       options.externalDirectoryAllowlist,
       options.contextWindow,
+      options.cwd,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();

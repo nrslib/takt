@@ -9,7 +9,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
 import { cleanupPendingModelSelectionSessions } from './model-selection-session-cleanup.js';
 import { startOpenCodeServer } from './server-process.js';
-import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from './runtime.js';
+import { openCodeRuntimeSelection, resolveOpenCodeRuntime, type OpenCodeRuntime } from './runtime.js';
 import { buildV2ServerConfig } from './v2-config.js';
 import { buildOpenCodeV1ExternalDirectoryPermissions, normalizeOpenCodeExternalDirectories } from './external-directories.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
@@ -18,6 +18,7 @@ import type { OpenCodeExecutionContext } from './execution-context.js';
 
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
+const OPENCODE_MODEL_METADATA_TIMEOUT_MS = 10_000;
 const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
@@ -72,6 +73,7 @@ export interface AcquiredOpenCodeClient {
 const sharedServers = new Map<string, SharedServerEntry>();
 const ownedSharedServers = new Set<SharedServer>();
 const pendingServerInitializations = new Set<Promise<SharedServer>>();
+const pendingV1ModelProbes = new Set<Promise<number>>();
 const serverStopFailures = new Set<Error>();
 let forcedShutdownRequested = false;
 let forcedShutdownPromise: Promise<void> | undefined;
@@ -92,10 +94,13 @@ function buildSharedServerKey(
   skillsEnabled: boolean,
   externalDirectoryAllowlist: readonly string[],
   contextWindow: number | undefined,
+  directory: string | undefined,
+  outputLimit: number | undefined,
 ): string {
   const runtime = openCodeRuntimeSelection();
   return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
     ...(runtime.generation === 'v2' ? [skillsEnabled] : []), externalDirectoryAllowlist, contextWindow,
+    ...(runtime.generation === 'v1' && contextWindow !== undefined ? [directory, outputLimit] : []),
   ]);
 }
 
@@ -152,6 +157,123 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+function buildV1ServerConfig(
+  runtime: OpenCodeRuntime,
+  model: string | undefined,
+  apiKey: string | undefined,
+  serverConfig: Record<string, unknown> | undefined,
+  externalDirectoryAllowlist: readonly string[],
+  contextWindow?: number,
+  outputLimit?: number,
+): Record<string, unknown> {
+  const v1ProviderConfig: Record<string, unknown> = {
+    ...(apiKey === undefined ? {} : { opencode: { options: { apiKey } } }),
+  };
+  if (model !== undefined && contextWindow !== undefined) {
+    if (outputLimit === undefined) throw new Error('OpenCode v1 output limit is required for a numeric context window');
+    const contextModel = parseProviderModel(model, 'OpenCode model');
+    const existing = v1ProviderConfig[contextModel.providerID] as Record<string, unknown> | undefined;
+    v1ProviderConfig[contextModel.providerID] = {
+      ...existing,
+      models: { [contextModel.modelID]: { limit: { context: contextWindow, output: outputLimit } } },
+    };
+  }
+  return {
+    ...(model === undefined ? {} : { model, small_model: model }),
+    plugin: [
+      pluginPath('coerce-tool-args.js'),
+      ...(versionAllowsListToolShim(runtime.version) ? [pluginPath('list-tool.js')] : []),
+    ],
+    permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
+    ...(Object.keys(v1ProviderConfig).length === 0 ? {} : { provider: v1ProviderConfig }),
+    agent: {
+      [TAKT_AGENT]: {
+        prompt: loadTemplate('opencode_agent_prompt', 'en', {
+          listFilesMethod: 'runs bash ls to list files in the directory',
+        }),
+        tools: { task: false },
+      },
+      [TAKT_AGENT_REVIEW]: {
+        prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
+          listFilesMethod: 'uses read tool on the directory to list files',
+        }),
+        tools: { task: false },
+      },
+      [TAKT_AGENT_REPORT]: { prompt: loadTemplate('opencode_report_agent_prompt', 'en') },
+      [TAKT_AGENT_READ]: {
+        prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
+        tools: { task: false },
+      },
+    },
+    ...(serverConfig === undefined ? {} : { mcp: serverConfig as NonNullable<Config['mcp']> }),
+  };
+}
+
+async function probeV1ModelOutputLimit(
+  runtime: OpenCodeRuntime,
+  model: string,
+  directory: string,
+  apiKey: string | undefined,
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+  serverConfig: Record<string, unknown> | undefined,
+  externalDirectoryAllowlist: readonly string[],
+  abortSignal: AbortSignal | undefined,
+): Promise<number> {
+  const parsed = parseProviderModel(model, 'OpenCode model');
+  abortSignal?.throwIfAborted();
+  const probe = await startOpenCodeServer({
+    runtime,
+    port: await getFreePort(),
+    timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
+    ...(childProcessEnv === undefined ? {} : { childProcessEnv }),
+    config: buildV1ServerConfig(runtime, model, apiKey, serverConfig, externalDirectoryAllowlist),
+  });
+  let outputLimit: number | undefined;
+  let lookupError: unknown;
+  try {
+    abortSignal?.throwIfAborted();
+    if (probe.client.getModelOutputLimit === undefined) throw new Error('OpenCode v1 provider metadata lookup is unavailable');
+    const timeoutSignal = AbortSignal.timeout(OPENCODE_MODEL_METADATA_TIMEOUT_MS);
+    const requestSignal = AbortSignal.any([
+      ...(abortSignal === undefined ? [] : [abortSignal]),
+      timeoutSignal,
+    ]);
+    outputLimit = await new Promise<number>((resolve, reject) => {
+      const onAbort = (): void => {
+        requestSignal.removeEventListener('abort', onAbort);
+        reject(timeoutSignal.aborted
+          ? new Error('OpenCode v1 provider metadata lookup timed out', { cause: timeoutSignal.reason })
+          : requestSignal.reason);
+      };
+      if (requestSignal.aborted) {
+        onAbort();
+        return;
+      }
+      requestSignal.addEventListener('abort', onAbort, { once: true });
+      void Promise.resolve().then(() => {
+        requestSignal.throwIfAborted();
+        return probe.client.getModelOutputLimit!({ directory, ...parsed }, { signal: requestSignal });
+      }).then(
+        (value) => { requestSignal.removeEventListener('abort', onAbort); resolve(value); },
+        (error: unknown) => { requestSignal.removeEventListener('abort', onAbort); reject(error); },
+      );
+    });
+    abortSignal?.throwIfAborted();
+  } catch (error) {
+    lookupError = error;
+  }
+  try {
+    await probe.close();
+  } catch (closeError) {
+    if (lookupError !== undefined) {
+      throw new AggregateError([lookupError, closeError], 'OpenCode v1 output lookup and probe shutdown failed');
+    }
+    throw closeError;
+  }
+  if (lookupError !== undefined) throw lookupError;
+  return outputLimit!;
+}
+
 async function createSharedServer(
   key: string,
   model: string | undefined,
@@ -161,23 +283,10 @@ async function createSharedServer(
   skillsEnabled: boolean,
   externalDirectoryAllowlist: readonly string[],
   contextWindow: number | undefined,
+  outputLimit: number | undefined,
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
-  const registerListToolShim = runtime.generation === 'v1' && versionAllowsListToolShim(runtime.version);
-  const contextModel = model !== undefined && contextWindow !== undefined
-    ? parseProviderModel(model, 'OpenCode model')
-    : undefined;
-  const v1ProviderConfig: Record<string, unknown> = {
-    ...(apiKey === undefined ? {} : { opencode: { options: { apiKey } } }),
-  };
-  if (contextModel !== undefined) {
-    const existing = v1ProviderConfig[contextModel.providerID] as Record<string, unknown> | undefined;
-    v1ProviderConfig[contextModel.providerID] = {
-      ...existing,
-      models: { [contextModel.modelID]: { limit: { context: contextWindow } } },
-    };
-  }
   const openCodeServer = await startOpenCodeServer({
     runtime,
     ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
@@ -186,39 +295,7 @@ async function createSharedServer(
     ...(childProcessEnv === undefined ? {} : { childProcessEnv }),
     config: runtime.generation === 'v2' ? buildV2ServerConfig(
       model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist, contextWindow,
-    ) : {
-      ...(model === undefined ? {} : { model, small_model: model }),
-      plugin: [
-        pluginPath('coerce-tool-args.js'),
-        ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
-      ],
-      permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
-      ...(Object.keys(v1ProviderConfig).length === 0 ? {} : { provider: v1ProviderConfig }),
-      agent: {
-        [TAKT_AGENT]: {
-          prompt: loadTemplate('opencode_agent_prompt', 'en', {
-            listFilesMethod: 'runs bash ls to list files in the directory',
-          }),
-          tools: { task: false },
-        },
-        [TAKT_AGENT_REVIEW]: {
-          prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
-            listFilesMethod: 'uses read tool on the directory to list files',
-          }),
-          tools: { task: false },
-        },
-        [TAKT_AGENT_REPORT]: {
-          prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
-        },
-        [TAKT_AGENT_READ]: {
-          prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
-          tools: { task: false },
-        },
-      },
-      ...(serverConfig !== undefined
-        ? { mcp: serverConfig as NonNullable<Config['mcp']> }
-        : {}),
-    },
+    ) : buildV1ServerConfig(runtime, model, apiKey, serverConfig, externalDirectoryAllowlist, contextWindow, outputLimit),
   });
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -269,13 +346,37 @@ export async function acquireOpenCodeClient(
   executionContext?: OpenCodeExecutionContext,
   externalDirectoryAllowlist?: readonly string[],
   contextWindow?: number,
+  directory?: string,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
   const normalizedExternalDirectories = normalizeOpenCodeExternalDirectories(externalDirectoryAllowlist);
+  let outputLimit: number | undefined;
+  if (openCodeRuntimeSelection().generation === 'v1' && contextWindow !== undefined) {
+    if (model === undefined || directory === undefined) {
+      throw new Error('OpenCode v1 numeric context window requires a model and project directory');
+    }
+    const runtime = await resolveOpenCodeRuntime(abortSignal);
+    throwIfForcedShutdownRequested();
+    const probePromise = probeV1ModelOutputLimit(
+      runtime, model, directory, apiKey, childProcessEnv,
+      preparedMcp?.serverConfig, normalizedExternalDirectories, abortSignal,
+    ).catch((error: unknown) => {
+      recordServerStopFailures(error);
+      throw error;
+    });
+    pendingV1ModelProbes.add(probePromise);
+    try {
+      outputLimit = await probePromise;
+    } finally {
+      pendingV1ModelProbes.delete(probePromise);
+    }
+  }
+  throwIfAborted(abortSignal);
+  throwIfForcedShutdownRequested();
   const key = buildSharedServerKey(
     model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled,
-    normalizedExternalDirectories, contextWindow,
+    normalizedExternalDirectories, contextWindow, directory, outputLimit,
   );
   const entry = getSharedServerEntry(key, normalizedExternalDirectories);
   const sessionKey = sessionId ?? '';
@@ -293,7 +394,7 @@ export async function acquireOpenCodeClient(
 
   const initPromise = createSharedServer(
     key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled,
-    normalizedExternalDirectories, contextWindow,
+    normalizedExternalDirectories, contextWindow, outputLimit,
   )
     .then((server) => {
       entry.server = server;
@@ -458,6 +559,7 @@ export function prepareSharedServerPoolForForcedShutdown(): Promise<void> {
     }
 
     resetSharedServerPool();
+    await Promise.allSettled([...pendingV1ModelProbes]);
     await Promise.allSettled([...pendingServerInitializations]);
 
     const stopResults = await Promise.allSettled(

@@ -112,6 +112,7 @@
     "src/__tests__/codex-compaction.test.ts",
     "src/__tests__/codex-interactive-session-recovery.integration.test.ts",
     "src/__tests__/codex-mcp-list.test.ts",
+    "src/__tests__/codex-model-context-windows.test.ts",
     "src/__tests__/codex-spawn-guard.test.ts",
     "src/__tests__/codex-structured-output.test.ts",
     "src/__tests__/commandMatcher.test.ts",
