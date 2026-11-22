@@ -6,6 +6,7 @@ import { McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { createOpenCodeMcpAdapter } from '../infra/providers/mcp/opencode.js';
 import { acquireOpenCodeClient, resetSharedServerPool } from '../infra/opencode/server-pool.js';
+import { readOpenCodeModelContextWindow } from '../infra/opencode/model-context-window.js';
 import { startOpenCodeServer } from '../infra/opencode/server-process.js';
 import type { ManagedOpenCodeTransport } from '../infra/opencode/transport.js';
 
@@ -166,6 +167,48 @@ describe.each(['v1', 'v2'] as const)('OpenCode %s MCP pool identity', (generatio
       }
     } finally {
       b.release();
+    }
+  });
+
+  it('isolates different context windows while retaining the model and native settings', async () => {
+    const a = await acquireOpenCodeClient(
+      'opencode/model', undefined, undefined, undefined, 'same-session', undefined, false, undefined, undefined, 300_000,
+    );
+    a.release();
+    const b = await acquireOpenCodeClient(
+      'opencode/model', undefined, undefined, undefined, 'same-session', undefined, false, undefined, undefined, 500_000,
+    );
+    try {
+      expect(b.client).not.toBe(a.client);
+      expect(startOpenCodeServer).toHaveBeenCalledTimes(2);
+      const first = vi.mocked(startOpenCodeServer).mock.calls[0]![0].config;
+      const second = vi.mocked(startOpenCodeServer).mock.calls[1]![0].config;
+      if (generation === 'v1') {
+        expect(first).toMatchObject({ model: 'opencode/model', provider: { opencode: { models: { model: { limit: { context: 300_000 } } } } } });
+        expect(second).toMatchObject({ model: 'opencode/model', provider: { opencode: { models: { model: { limit: { context: 500_000 } } } } } });
+      } else {
+        expect(first).toMatchObject({ model: 'opencode/model', providers: { opencode: { models: { model: { limit: { context: 300_000 } } } } } });
+        expect(second).toMatchObject({ model: 'opencode/model', providers: { opencode: { models: { model: { limit: { context: 500_000 } } } } } });
+      }
+    } finally {
+      b.release();
+    }
+  });
+
+  it('does not start an extra server for auto limits with prepared MCP', async () => {
+    const prepared = await prepare({ Authorization: 'Bearer ${env:PROJECT_A_TOKEN}' });
+    try {
+      expect(await readOpenCodeModelContextWindow({
+        cwd: '/test/project', model: 'opencode/model', preparedMcp: prepared,
+      })).toBeUndefined();
+      expect(startOpenCodeServer).not.toHaveBeenCalled();
+      const acquired = await acquireOpenCodeClient(
+        'opencode/model', undefined, undefined, undefined, 'same-session', prepared,
+      );
+      acquired.release();
+      expect(startOpenCodeServer).toHaveBeenCalledOnce();
+    } finally {
+      await prepared.dispose();
     }
   });
 });

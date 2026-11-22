@@ -134,6 +134,7 @@
     "src/__tests__/config-path-collision.test.ts",
     "src/__tests__/config-project-local-priority.test.ts",
     "src/__tests__/config.test.ts",
+    "src/__tests__/context-window.test.ts",
     "src/__tests__/conversation-frames.test.ts",
     "src/__tests__/conversation-plan.test.ts",
     "src/__tests__/conversation-schema.test.ts",

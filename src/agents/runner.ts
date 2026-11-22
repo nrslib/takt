@@ -43,11 +43,22 @@ import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-as
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
 import { startProgressNotes } from '../infra/progress-notes/session.js';
 import type { StreamEvent } from '../shared/types/provider.js';
+import {
+  promoteContextWindow,
+  selectContextWindow,
+  type ContextWindowSelection,
+} from '../infra/providers/context-window.js';
+import type { Provider } from '../infra/providers/types.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
 const MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS = 3;
+const contextWindowSessions = new Map<string, ContextWindowSelection>();
+
+function contextWindowSessionKey(provider: ProviderType, options: ProviderCallOptions, sessionId: string): string {
+  return JSON.stringify([provider, options.cwd, options.model, sessionId]);
+}
 
 function withCompactionUsage(response: AgentResponse, usages: readonly (ProviderUsageSnapshot | undefined)[]): AgentResponse {
   if (usages.length === 1) return response;
@@ -286,25 +297,85 @@ export class AgentRunner {
     agent: ProviderAgent,
     task: string,
     options: ProviderCallOptions,
-    recorder: RunAgentOptions['progressNotesRecorder'],
+    runOptions: RunAgentOptions,
+    providerName: ProviderType,
+    provider: Provider,
+    systemPrompt: string,
   ): Promise<AgentResponse> {
+    const recorder = runOptions.progressNotesRecorder;
+    const setting = providerName === 'codex'
+      ? options.providerOptions?.codex?.contextWindow
+      : providerName === 'opencode'
+        ? options.providerOptions?.opencode?.contextWindow
+        : undefined;
+    let selection: ContextWindowSelection | undefined;
+    if (providerName === 'codex' || providerName === 'opencode') {
+      const effectiveSetting = setting ?? 'auto';
+      let limits;
+      if (effectiveSetting === 'auto') {
+        try {
+          limits = await provider.getContextWindowLimits?.(options);
+        } catch (error) {
+          log.debug('Context window metadata unavailable', { provider: providerName, model: options.model, error: getErrorMessage(error) });
+        }
+      }
+      const fixedTexts = [
+        systemPrompt,
+        task,
+        ...(options.outputSchema === undefined ? [] : [JSON.stringify(options.outputSchema)]),
+        ...(runOptions.requiredReferenceContents ?? []),
+      ];
+      selection = selectContextWindow(effectiveSetting, limits, fixedTexts);
+      if (options.sessionId !== undefined && effectiveSetting === 'auto' && selection.reason !== 'unknown') {
+        const previous = contextWindowSessions.get(contextWindowSessionKey(providerName, options, options.sessionId));
+        if (previous !== undefined && (previous.override ?? previous.stages[0]?.size ?? 0)
+          > (selection.override ?? selection.stages[0]?.size ?? 0)) selection = previous;
+      }
+      log.info('Context window selection', {
+        provider: providerName,
+        model: options.model,
+        setting: effectiveSetting,
+        fixedTokens: selection.fixedTokens,
+        requiredTokens: selection.requiredTokens,
+        selected: selection.override ?? selection.stages[0]?.size,
+        effectiveCapacity: selection.stages[selection.stageIndex]?.effectiveSize,
+        reason: selection.reason,
+      });
+    }
+    const selectedOptions = selection?.override === undefined ? options : { ...options, contextWindow: selection.override };
+    const recordSelection = (sessionId: string | undefined, compacted: boolean): void => {
+      if (selection === undefined || selection.reason === 'manual' || sessionId === undefined) return;
+      if (compacted) {
+        const previous = selection;
+        selection = promoteContextWindow(selection);
+        if (selection !== previous) {
+          log.info('Context window promoted after compaction', {
+            provider: providerName, model: options.model, sessionId, selected: selection.override,
+          });
+        }
+      }
+      contextWindowSessions.set(contextWindowSessionKey(providerName, options, sessionId), selection);
+    };
     const recoverFromCompaction = agent.recoverFromCompaction;
     if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
-      const observedOptions = recorder === undefined ? options : {
-        ...options,
+      let compacted = false;
+      const observedOptions = {
+        ...selectedOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
-          recorder.observe(event);
+          recorder?.observe(event);
+          if (event.type === 'context_compacted') compacted = true;
           options.onStream?.(event);
         },
       };
       const response = await agent.call(task, observedOptions);
       recorder?.finish(response);
+      recordSelection(response.sessionId ?? options.sessionId, compacted);
       return response;
     }
 
     let recovering = false;
     let recoveriesWithoutProgress = 0;
-    let currentOptions = options;
+    let currentOptions = selectedOptions;
     const usages: (ProviderUsageSnapshot | undefined)[] = [];
     while (true) {
       let compactionDetected = false;
@@ -338,6 +409,10 @@ export class AgentRunner {
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
+      recordSelection(responseSessionId, compactionDetected && compactionMatchesResponse);
+      if (selection?.override !== undefined) {
+        currentOptions = { ...currentOptions, contextWindow: selection.override };
+      }
       if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
         if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
         return withCompactionUsage(response, usages);
@@ -494,7 +569,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+      return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -555,7 +630,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
       }
 
       if (options.personaPath) {
@@ -574,7 +649,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
       }
 
       if (personaSpec) {
@@ -598,7 +673,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -611,7 +686,7 @@ export class AgentRunner {
       });
       const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+      return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }

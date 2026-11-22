@@ -12,6 +12,7 @@ import { startOpenCodeServer } from './server-process.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from './runtime.js';
 import { buildV2ServerConfig } from './v2-config.js';
 import { buildOpenCodeV1ExternalDirectoryPermissions, normalizeOpenCodeExternalDirectories } from './external-directories.js';
+import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import type { ManagedOpenCodeTransport, OpenCodeTransport } from './transport.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
 
@@ -90,10 +91,11 @@ function buildSharedServerKey(
   mcpIdentity: string | undefined,
   skillsEnabled: boolean,
   externalDirectoryAllowlist: readonly string[],
+  contextWindow: number | undefined,
 ): string {
   const runtime = openCodeRuntimeSelection();
   return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
-    ...(runtime.generation === 'v2' ? [skillsEnabled] : []), externalDirectoryAllowlist,
+    ...(runtime.generation === 'v2' ? [skillsEnabled] : []), externalDirectoryAllowlist, contextWindow,
   ]);
 }
 
@@ -158,10 +160,24 @@ async function createSharedServer(
   serverConfig: Record<string, unknown> | undefined,
   skillsEnabled: boolean,
   externalDirectoryAllowlist: readonly string[],
+  contextWindow: number | undefined,
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
   const registerListToolShim = runtime.generation === 'v1' && versionAllowsListToolShim(runtime.version);
+  const contextModel = model !== undefined && contextWindow !== undefined
+    ? parseProviderModel(model, 'OpenCode model')
+    : undefined;
+  const v1ProviderConfig: Record<string, unknown> = {
+    ...(apiKey === undefined ? {} : { opencode: { options: { apiKey } } }),
+  };
+  if (contextModel !== undefined) {
+    const existing = v1ProviderConfig[contextModel.providerID] as Record<string, unknown> | undefined;
+    v1ProviderConfig[contextModel.providerID] = {
+      ...existing,
+      models: { [contextModel.modelID]: { limit: { context: contextWindow } } },
+    };
+  }
   const openCodeServer = await startOpenCodeServer({
     runtime,
     ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
@@ -169,7 +185,7 @@ async function createSharedServer(
     timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
     ...(childProcessEnv === undefined ? {} : { childProcessEnv }),
     config: runtime.generation === 'v2' ? buildV2ServerConfig(
-      model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist,
+      model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist, contextWindow,
     ) : {
       ...(model === undefined ? {} : { model, small_model: model }),
       plugin: [
@@ -177,7 +193,7 @@ async function createSharedServer(
         ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
       ],
       permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
-      ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+      ...(Object.keys(v1ProviderConfig).length === 0 ? {} : { provider: v1ProviderConfig }),
       agent: {
         [TAKT_AGENT]: {
           prompt: loadTemplate('opencode_agent_prompt', 'en', {
@@ -252,13 +268,14 @@ export async function acquireOpenCodeClient(
   skillsEnabled = false,
   executionContext?: OpenCodeExecutionContext,
   externalDirectoryAllowlist?: readonly string[],
+  contextWindow?: number,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
   const normalizedExternalDirectories = normalizeOpenCodeExternalDirectories(externalDirectoryAllowlist);
   const key = buildSharedServerKey(
     model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled,
-    normalizedExternalDirectories,
+    normalizedExternalDirectories, contextWindow,
   );
   const entry = getSharedServerEntry(key, normalizedExternalDirectories);
   const sessionKey = sessionId ?? '';
@@ -276,7 +293,7 @@ export async function acquireOpenCodeClient(
 
   const initPromise = createSharedServer(
     key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled,
-    normalizedExternalDirectories,
+    normalizedExternalDirectories, contextWindow,
   )
     .then((server) => {
       entry.server = server;

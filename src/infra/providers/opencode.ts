@@ -14,6 +14,7 @@ import { resumeCompactedSession } from './compaction-recovery.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from '../opencode/runtime.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
+import { readOpenCodeModelContextWindow } from '../opencode/model-context-window.js';
 import { toV2ToolName } from '../opencode/v2-contract.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
@@ -92,6 +93,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     ...(model === undefined ? {} : { model }),
+    ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow }),
     ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     allowedTools: openCodeAllowedTools,
     ...(strictTools === undefined ? {} : { strictToolAllowlist: strictTools }),
@@ -180,6 +182,10 @@ export class OpenCodeProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
+
+  getContextWindowLimits(options: ProviderCallOptions) {
+    return readOpenCodeModelContextWindow(options);
+  }
 
   async preflight(options: ProviderCallOptions): Promise<void> {
     const resolved = toOpenCodeOptions(options);

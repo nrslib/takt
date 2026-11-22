@@ -12,6 +12,7 @@ import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
 import { buildCodexSessionConfig } from '../codex/session-config.js';
+import { readCodexModelContextWindow } from '../codex/model-context-window.js';
 import { prepareCodexMcpIsolation } from '../codex/mcp-isolation.js';
 import { createCodexMcpAdapter } from './mcp/codex.js';
 import { buildMcpServerSetIdentity } from '../config/runtime-provider/mcp-schema.js';
@@ -34,6 +35,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    contextWindow: options.contextWindow,
     reasoningEffort: options.effort ?? providerCodexOptions?.reasoningEffort,
     fastMode: providerCodexOptions?.fastMode,
     permissionMode: options.permissionMode,
@@ -70,6 +72,12 @@ export class CodexProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
+
+  getContextWindowLimits(options: ProviderCallOptions) {
+    return readCodexModelContextWindow(
+      options.model, options.childProcessEnv, options.cwd, options.providerOptions?.codex?.configProfile,
+    );
+  }
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
