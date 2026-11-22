@@ -177,7 +177,7 @@ When concurrency is greater than 1, TAKT uses a worker pool that:
 - Polls for newly added tasks at the configured interval
 - Picks up new tasks as workers become available
 - Displays color-coded prefixed output per task for readability
-- Supports graceful shutdown on Ctrl+C (waits for in-flight tasks to complete)
+- Stops claiming new tasks on Ctrl+C. `takt run` interrupts in-flight tasks and waits for execution and cleanup to finish; `takt watch` waits for them to finish without interruption
 
 ### Interrupted Task Cleanup
 
@@ -317,8 +317,6 @@ The Resume row uses a short label such as `Resume failed position: "review" (def
 
 When Retry, Requeue, or Instruct starts at a later step (`start_step` or a saved resume point), TAKT restores the complete system contexts, effect results, and AI structured outputs from immediately before that occurrence of the step started in the source run. Saved resume points identify the occurrence; selections such as `start_step` without an occurrence use the latest start of that step. If the selected occurrence has not started, TAKT uses the last saved state. In loops, this includes previous-iteration results that existed at that moment; TAKT does not infer dependencies to discard results. A new run saves the state restored for this resume before its first step, then saves only the pre-start and post-step states of occurrences it starts itself. It does not copy occurrence snapshots from the source run. A later resume pointing to an occurrence not yet started in the new run uses that run’s last saved state. The latest state is stored in `workflow-results.json`, and each occurrence’s pre-start state is stored in a separate file under `workflow-results/`, without rewriting the full history. An artifact is created even when the results are empty. Save or inheritance failures emit warnings and execution continues. Failed occurrences remain recorded in subsequent saves, distinguishing them from occurrences that have not started. Resuming a failed occurrence warns and starts with empty results instead of substituting results from another point in time. After a failed save, TAKT attempts to write an invalid state and, if that fails, to remove the old artifact. When invalidation or removal succeeds, resuming from that state warns and starts with empty results instead of substituting older saved values. If both invalidation and removal fail, TAKT also warns about that failure, but an old artifact may remain. Earlier input collection, effects, and AI steps are not replayed automatically. Later steps still fetch current state as usual. When the parent workflow name matches and the same call instance continues, only the child state restored for the selected resume position is inherited as that child’s initial snapshot. Another retry can use this state even if execution fails before entering the child. The child’s past occurrence snapshots are not copied. New calls and loop iterations do not copy a previous child's results. Changing the parent workflow name also prevents inheriting child results. Older runs without this snapshot format emit a warning and resume with empty results as before. A step that references an unavailable earlier result fails with a reference error at that step.
 
-After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
-
 After `/go`, the retry conversation shows the revised instruction and offers **Save as Task** first (the default) or **Continue editing**. Saving updates the existing task and returns it to `pending`; it does not start a worker immediately. `/retry`, `/replay`, and immediate execution choices are unavailable in this Retry conversation. Use `/cancel` to abort without changing the task.
 
 ### Non-Interactive Mode (`--non-interactive`)
@@ -408,9 +406,9 @@ TAKT uses `git clone --reference <main-repo> --dissociate` instead of `git workt
 
 > **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone` instead of `git worktree`.
 
-### Ephemeral Lifecycle
+### Clone Creation and Cleanup
 
-Clones follow an ephemeral lifecycle:
+Clones provide temporary workspaces for tasks and are created, used, and removed as follows:
 
 1. **Create** -- Clone is created before task execution
 2. **Execute** -- Task runs inside the clone directory
@@ -418,7 +416,7 @@ Clones follow an ephemeral lifecycle:
 4. **Preserve** -- Clone is preserved after execution (for instruct/retry operations)
 5. **Cleanup** -- Branches are the persistent artifacts; use `takt list` to merge or delete
 
-### Dual Working Directory
+### Execution and Storage Directories
 
 During worktree execution, TAKT maintains two directory references:
 

@@ -1,18 +1,18 @@
 # E2Eテスト概要
-このドキュメントは、E2Eテストの目的・前提条件・実行方法を短くまとめた索引です。
+E2Eテストの目的・前提条件・実行方法をまとめた索引です。
 E2Eテストを追加・変更した場合は、このドキュメントも更新してください。
 
-daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起動、manager・director のターン子、manager の HTTP MCP 呼出し、会話の保存と再起動後の復元、停止を確認する。実 provider や GitHub は使わない。
+daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）では、専用のエントリーポイントからの起動、manager・director の会話ターン、manager の HTTP MCP 呼び出し、会話の保存と再起動後の復元、停止を確認する。実プロバイダーや GitHub は使わない。
 
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
-- Task run auto PRはbuild済みのMCPサーバーを使用するため、先に `npm run build` を実行すること。GitHub APIとGitのクローン・push用認証の両方でテストリポジトリへアクセスでき、実providerを利用できることが必要。mock実行時やGitHubを利用できない場合のskipは実PR検証の成功を示さない。
+- Task run auto PRはビルド済みのMCPサーバーを使用するため、先に `npm run build` を実行すること。GitHub APIとGitのクローン・プッシュの両方で、認証してテストリポジトリへアクセスできることと、実プロバイダーを利用できることが必要。mock実行やGitHubを利用できない場合のスキップでは、実PRの作成は検証されない。
 - 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`）。
 - `TAKT_E2E_PROVIDER=cursor` の場合は `cursor-agent` CLI が利用可能で、認証済みであること。
-- `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npm script（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION` 未指定時に `v2` を既定として使う。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定し、必要に応じて `TAKT_OPENCODE_PATH` で CLI のパスを指定する。vitest を直接実行する場合は `TAKT_E2E_MODEL` と `TAKT_OPENCODE_VERSION` を明示すること（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
+- `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npmスクリプト（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION` 未指定時に `v2` を使う。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定し、必要に応じて `TAKT_OPENCODE_PATH` で CLI のパスを指定する。Vitest を直接実行する場合は `TAKT_E2E_MODEL` と `TAKT_OPENCODE_VERSION` を明示すること。モデルには `team_leader` の構造化されたタスク分解ができる能力が必要で、`opencode/big-pickle` のような小型無料モデルでは分解に失敗する。
 - 実行時間が長いテストがあるため、タイムアウトに注意すること。
-- E2Eは `e2e/helpers/test-repo.ts` が一時リポジトリを作成する。mock 固定テストはローカル bare origin を使い、GitHub 固有テストだけ `gh` でリポジトリをクローンする。
+- E2E用の一時リポジトリは `e2e/helpers/test-repo.ts` が作成する。mock 固定テストはローカルの bare origin を使い、GitHub 固有テストだけ `gh` でリポジトリをクローンする。
 - 対話UIを避けるため、E2E環境では `TAKT_NO_TTY=1` を設定してTTYを無効化する。
 - 実行ディレクトリの形式（macOSの例）:
   - リポジトリクローン: `$(os.tmpdir())/takt-e2e-repo-<random>/`
@@ -27,7 +27,7 @@ daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起
 - `~/.takt/config.yaml` はE2Eでは参照されないため、通常実行の設定には影響しない。
 
 ## 実行コマンド
-- `npm run test:e2e:smoke`: 対象を絞ったローカル確認向けの高速な mock E2E smoke を実行。provider はVitest設定内で `mock` を既定化するため、POSIX shell・PowerShellのどちらからも追加の環境変数構文なしで実行できる。
+- `npm run test:e2e:smoke`: 対象を絞った高速な mock E2E をローカルで実行する。Vitest設定のプロバイダーはデフォルトが `mock` のため、POSIXシェル・PowerShellのどちらでも環境変数を追加指定せずに実行できる。
 - `npm run test:e2e`: `test:e2e:mock` のラッパー。GitHub接続エラー検出とmacOS通知も行う。
 - `npm run test:e2e:mock`: mock固定のフルE2Eを複数シャードで並列実行。
 - `npm run test:e2e:mock:serial`: mock固定のフルE2Eを従来どおり単一Vitestプロセスで実行。
@@ -38,7 +38,7 @@ daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `goal-specification-file` / `worktree`）。
 - `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（未指定時の既定は `TAKT_E2E_MODEL=kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION=v2`）。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定する。
-- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない。この移行作業では実 API 呼び出しを実行しない）。
+- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: 明示的に有効にして、DeepSeek Harness の実 API を使うスモークテストを実行する。`DEEPSEEK_API_KEY` と対応するランタイムが必要。CI では実行しない。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
@@ -48,7 +48,11 @@ daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起
 - `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PARALLEL_INTEGRATION=1 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider、model、OpenCode CLI 世代、`TAKT_OPENCODE_PARALLEL_INTEGRATION=1` の指定が必要。この変数が未設定、または`opencode`がPATH上に見つからない場合はスペック全体がスキップされる。`TAKT_OPENCODE_PATH`の設定だけではこの条件を満たさない）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。OpenCode v2で直接実行する場合は `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 npx vitest run --config vitest.config.e2e.structured-output.ts` を使用する。
 
-provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`devin`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は `managed/deepseek-harness` にインストールした固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します（対象テストの前に managed 依存と実 SDK 型契約も検証されます）。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
+provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`devin`、`pi` には provider E2E の実行経路がない。
+
+`deepseek-harness` はローカル HTTP mock を使う SDK 統合テストとプロバイダーの単体テストで確認し、認証情報や課金を伴わない。`src/__tests__/deepseek-harness-client.test.ts` は、`managed/deepseek-harness` にインストールした固定バージョンの公式 TypeScript SDK・ランタイムをローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行する。対象テストの前には、管理対象の依存パッケージと実 SDK の型の契約も検証する。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK のセッション継続の制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` はプロバイダーとの接続部分の動作を確認する。
+
+セッションは、ランタイムが稼働して対応設定が変わらない間だけ、複数ターンを FIFO で処理する。ランタイムの再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT セッションまたは実行を開始してください。ランタイムの session-persistence プラグインは無効にし、SDK の通知に認証情報を含むエラー文があっても、ランタイムの JSONL セッションファイルには残さない。TAKT は継続拒否の判定に使う、秘密情報を含まないセッションマーカーを保持する。ランタイムをまたぐセッションの履歴保持は後続の対応予定。実 DeepSeek のスモークテストは明示的に有効にして実行し、通常 CI では実行しない。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
@@ -70,7 +74,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 既存の単一ステップ `simple.yaml` を使い、`takt run` を実行する。
     - 成功終了とタスクの完了、隔離クローンの `answer.txt` の1行目とランダム値の一致を確認する。
     - タスク本文・元の `order.md`・`tasks.yaml` に値がなく、実行時の `order.md` にも値がないこと、クローンに元のゴール記録がなく、`context/task/specifications/gherkin.feature` に保存した仕様があることを確認する。
-    - `TAKT_LOGGING_PROVIDER_EVENTS=true` で、完了タスクの `runSlug` に対応するクローン内の `.takt/runs/<runSlug>/logs/*-provider-events.jsonl` を読む。通常のセッションログや observability の shadow log ではなく、共通の provider イベントログを証拠にする。
+    - `TAKT_LOGGING_PROVIDER_EVENTS=true` で、完了タスクの `runSlug` に対応するクローン内の `.takt/runs/<runSlug>/logs/*-provider-events.jsonl` を読む。検証の証拠にはこの共通のプロバイダーイベントログを使う。
     - イベントの記録順で、種類を問わず `data` 全体から AC-2 のランダム値が最初に現れるイベントを選ぶ。初出が `tool_output` または `tool_result` であり、そのイベントより前にある同じ `data.id` の `tool_use` が仕様ファイルを対象とすることを確認する。呼び出し先の判定には `data.input` を再帰的に取り出し、シェルの区切り・引用符で分割してパス区切りと `.` / `..` を正規化する。区切り文字の違いを吸収したうえで、ネイティブの `path.resolve()` で相対パスをクローンのルート基準に解決し、`path.matchesGlob()` で実際の仕様ファイルの絶対パスと照合する。Windows のドライブ文字付き絶対パスもネイティブのパス規則に従う。明示パスに加え、`cat .../context/task/specifications/*.feature` のような glob も、その仕様ファイルに一致すれば受け付ける。別経路から先に値を得て後から仕様ファイルを読んだ実行、プロンプト中のパスや最終回答だけでは合格にしない。時刻での並べ替えは行わない。
     - 補助として、全 `tool_use` の引数について `.takt/goals` またはその配下を指すパスがないことを確認する（元リポジトリの絶対パス・相対パスも対象）。ログ欠落、ツール呼び出しなし、値を含む出力・結果なし、対応する仕様ファイルの呼び出しなしは失敗にする。
   - provider ごとの記録範囲（ソース上の変換契約。実 provider での実行確認とは別）:
@@ -83,10 +87,10 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     | `opencode` | v1 / v2 共通の tool part からツール名・input・callID（なければ part ID）と completed / error の `tool_result`。`tool_output` への変換はない。編集・書き込み本文は要約されるが、read のパスと shell の command は保持される。 |
     | `cursor` | CLI の stream-json の `tool_call` started / completed。ツール種別または MCP 名、args（入れ子を展開）、call ID、取得できた結果とエラー有無を `tool_use` / `tool_result` として保存。`tool_output` への変換はない。 |
 
-  - 判定範囲は provider が通知して共通ログに残した全イベントの内容（エージェントの文章、ツール引数・途中出力・結果など）。引数に `.takt/goals` が出ない読み方でも、文章やツール入力、別の呼び出しの途中出力や失敗結果に値が先に現れれば失敗にする。仕様読み取りの出力・結果に初めて値が現れた後は、`answer.txt` を書く呼び出しの入力や最終回答に値が出ても許可する。ただし、仕様ファイルを指す一つの呼び出し内で複数のファイルを読む場合の取得元の区別や、シェル内の変数展開・プログラム内部で組み立てたパスの解決までは行わない。OS のファイルアクセス監査ではなく、記録された全イベントへの値の初出と呼び出し先を検証する。記録不足を provider 別の推測やスキップで補わない。
+  - 判定範囲は、プロバイダーが通知して共通ログに残した全イベントの内容（エージェントの文章、ツール引数・途中出力・結果など）。引数に `.takt/goals` が出ない読み方でも、文章やツール入力、別の呼び出しの途中出力や失敗結果に値が先に現れれば失敗にする。仕様読み取りの出力・結果に初めて値が現れた後は、`answer.txt` を書く呼び出しの入力や最終回答に値が出ても許可する。ただし、仕様ファイルを指す一つの呼び出し内で複数のファイルを読む場合の取得元の区別や、シェル内の変数展開・プログラム内部で組み立てたパスの解決までは行わない。記録された全イベントで値が最初に現れる位置と、その呼び出し先を検証するもので、OS のファイルアクセスを監査する機能はない。記録不足をプロバイダー別の推測やスキップで補わない。
   - 対象だけの実行: `npm run test:e2e:provider:<provider> -- e2e/specs/goal-specification-file.e2e.ts`（`claude-headless` / `claude-sdk` / `claude` / `codex` / `opencode` / `cursor`）。先に `npm run build` を実行する。
 - Worktree/Clone isolation（`e2e/specs/worktree.e2e.ts`）
-  - 目的: `worktree: true` タスクが隔離環境に実行されることを確認。
+  - 目的: `worktree: true` のタスクが隔離環境で実行されることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が mock 以外の実 provider の場合に呼び出す）
   - 手順（ユーザー行動/コマンド）:
     - `.takt/tasks.yaml` に `worktree: true` のタスクを追加して `takt run` を実行する。
@@ -120,33 +124,34 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 出力に `Issue #` / `completed` / `PR created` が含まれることを確認する。
     - `gh pr list --repo <owner>/<repo>` でPR一覧にIssueタイトルがあることを確認する。
 - Direct task execution（`e2e/specs/direct-task.e2e.ts`）
-  - 目的: `--task` の直接実行が、プロンプトなしで完了することを確認。
+  - 目的: `--task` の直接実行がプロンプトなしで完了することを確認。
   - LLM: 呼び出さない（mock providerと固定scenarioを使用。runtime設定の由来を検証するケースだけはCLI provider overrideを注入しない）
   - 手順（ユーザー行動/コマンド）:
     - `takt --task 'Create a file called noop.txt' --workflow e2e/fixtures/workflows/mock-single-step.yaml --provider mock` を実行する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/execute-done.json` を設定する。
     - 出力に `Workflow completed` が含まれることを確認する。
 - Ink TUI（`e2e/specs/tui.e2e.ts`）
-  - 目的: 実 PTY 上で TUI が既定起動し、既存 readline セレクタ（ワークフロー選択・モード選択・`/go` 後のアクション選択）と Ink 会話の往復、Ctrl+C、前提条件違反が期待どおり動作することを確認。あわせて `takt make`（Workflow Maker）の base 選択、承認分岐、隔離成果物での直接実行、失敗時復帰、再実行、日本語表示を確認。
-  - LLM: 呼び出さない（mock providerと固定scenarioを使用。runtime設定の由来を検証するケースだけはCLI provider overrideを注入しない）
+  - 目的: 実 PTY 上で TUI が既定で起動し、既存の readline セレクター（ワークフロー選択・モード選択・`/go` 後のアクション選択）と Ink の会話画面を行き来できることを確認する。Ctrl+C と前提条件違反時の動作も確認する。`takt make`（Workflow Maker）では、元となるワークフローの選択、承認時の操作、隔離した成果物での直接実行、失敗後の復帰、再実行、日本語表示を確認する。
+  - LLM: 呼び出さない（mock プロバイダーと固定シナリオを使用。runtime 設定の由来を検証するケースだけは、CLI によるプロバイダーの上書きを行わない）
   - 備考: PTY が必要なため `e2e/helpers/takt-pty-runner.ts`（node-pty）を使う。固定 sleep は使わず、出力ポーリングで同期する。
-  - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。 ストリーミング後の残留フレーム検証では、応答末尾の受信に加えて入力ボックスの再描画完了も待つ。
+  - 備考: 生の出力は消去済みフレームも含むため、`@xterm/headless` に出力を渡し、`visibleTranscript()` / `visibleScreen()` で画面に実際に残る内容を検証する。ストリーミング後の残留フレームの検証では、応答末尾の受信に加えて入力ボックスの再描画完了も待つ。
   - 手順（ユーザー行動/コマンド）:
-    - `takt make` の初期セレクターで project、global、builtin、repertoire の各 source を実際に選択し、選択したファイルパス、YAML `name`、本文がMakerのprovider promptへ渡ることを確認する。
-    - 制御文字を含むworkflowファイル名は選択画面で16進表記へ可視化され、選択後のMaker provider promptには制御文字を含む元の実pathが渡ることを確認する。
-    - New workflow で名前を入力し、会話後の `/go` で timestamp 付き生成予定パスと、順序を含めて Execute / Continue editing / Cancel の3操作だけが表示されることを確認する。
+    - `takt make` の初期セレクターで project、global、builtin、repertoire の各取得元を実際に選択し、選択したファイルパス、YAML `name`、本文が Maker のプロバイダーへのプロンプトに渡ることを確認する。
+    - ワークフローのファイル名に含まれる制御文字が、選択画面では16進表記で表示されることを確認する。選択後のプロンプトには、制御文字を含む元のパスが渡ることも確認する。
+    - New workflow で名前を入力し、会話後の `/go` でタイムスタンプ付きの作成予定パスと、Execute / Continue editing / Cancel の3操作だけがこの順に表示されることを確認する。
     - Continue editing を選んだ場合は `.takt/make` を作成せず、同じ会話が重複表示なしで続くことを確認する。
-    - Cancel を実際に選択し、provider実行と `.takt/make` の作成が発生しないことを確認する。
-    - `/workflow` で異なる本文のproject baseへ変更し、同じPTYの次回provider promptに新baseのsource、制御文字を含む元の絶対path、YAML名、本文が渡り、旧base本文へ戻らないこと、base変更通知では制御文字が16進表記へ可視化されること、会話履歴が保持され、承認前には成果物が作成されないことを確認する。
-    - `/go` の実装指示と予定保存先にBELを含め、確認画面では16進表記へ可視化される一方、承認後のtaskとartifact cwdには元の値が渡ることを確認する。
-    - Execute中は英語・日本語それぞれで末尾の省略記号を含む待機placeholder全文が現在画面の1行に表示され、入力が破棄されることを確認する。成功・失敗後は同じPTYで通常入力を送信し、既知のinteractive応答を受信できることを確認する。
-    - Makerの承認操作から元projectのprovider、model、permission、provider optionsが実行へ伝播し、成果物の同名`edit` capabilityがMaker制御workflowへ混入しない一方、成果物側にはそのcapabilityが保持されることをsession recordとmock call logで確認する。
-    - readableなPASS Doctor reportではreviewが`approved`を選択し、FAIL、欠落、読取不能では`needs_fix`を選択することを、実report内容とruntime遷移で確認する。
-    - 成功・失敗画面にはfilesystem上のregular fileかつ非symlinkである実Doctor report pathが表示され、失敗画面には具体的な`rule_no_match`理由も表示されることを確認する。Doctor report pathがdirectoryまたはsymlinkの場合はreportなし表示となることも確認する。materialization前に予定rootを占有した失敗では、artifact pathと`EEXIST`理由だけが表示され、Doctor report表記と推測した`.takt/runs` pathが表示されないことを確認する。画面と本文の対応は公開現在版で確認し、検索対象から`.takt-report-internal`の実行記録・固定版を除外する。
-    - 専用fixtureで初回reviewの`needs_fix`からfixへ進み、更新Doctor report後の再reviewが`approved`となってCOMPLETEへ到達することを、step開始順、最終Doctor report、review report、完了画面で確認する。
-    - 同じTUIから再実行したときに別timestampの成果物rootが作成され、1回目root配下の相対directory/file一覧と全file byte内容が完全に維持されることを確認する。
-    - 実行後も `.takt/tasks.yaml` とworktreeが作成されず、Git branchとHEADが変化しないことを確認する。
-    - 日本語設定ではbase、action、待機、完了、失敗の各runtime表示が日本語になり、承認画面の選択可能行が順に「実行」「編集を続ける」「キャンセル」と完全一致することを確認する。
+    - Cancel を実際に選択し、プロバイダーの実行と `.takt/make` の作成が発生しないことを確認する。
+    - `/workflow` で、本文が異なるプロジェクト内のワークフローを新たな元として選択する。同じ PTY で次に送られるプロンプトに、新しい取得元、制御文字を含む元の絶対パス、YAML 名、本文が渡り、以前の本文に戻らないことを確認する。変更通知では制御文字が16進表記で表示され、会話履歴が保持されること、承認前には成果物が作成されないことも確認する。
+    - `/go` の実装指示と予定保存先に BEL を含め、確認画面では16進表記で表示されることを確認する。承認後のタスクと成果物の作業ディレクトリには元の値が渡ることも確認する。
+    - Execute 中は英語・日本語それぞれで、末尾の省略記号を含む待機メッセージの全文が現在の画面の1行に表示され、入力が破棄されることを確認する。成功・失敗後は同じ PTY で通常入力を送信し、想定した対話応答を受信できることを確認する。
+    - Maker で承認すると、元のプロジェクトのプロバイダー、モデル、権限、プロバイダーのオプションが実行に引き継がれることを、セッション記録と mock の呼び出しログで確認する。成果物に定義された同名の `edit` capability は、Maker を制御するワークフローには使われず、成果物側に保持されることも確認する。
+    - 読み取り可能で PASS の Doctor レポートでは `review` が `approved` を選び、FAIL、欠落、読み取り不能では `needs_fix` を選ぶことを、実際のレポート内容と実行時の遷移で確認する。
+    - 成功・失敗画面に、実在する Doctor レポートのパスが表示されることを確認する。表示対象は、シンボリックリンクでない通常ファイルに限る。失敗画面には具体的な `rule_no_match` の理由も表示されること、レポートのパスがディレクトリやシンボリックリンクを指す場合はレポートなしと表示されることも確認する。
+    - 成果物の実体を生成する前に作成予定のルートディレクトリを占有して失敗させる。この場合、成果物のパスと `EEXIST` の理由だけが表示され、Doctor レポートの案内や推測した `.takt/runs` のパスが表示されないことを確認する。画面と本文の対応は現在公開されているレポートで確認し、`.takt-report-internal` の実行記録・固定版は検索対象から除外する。
+    - 専用 fixture で、初回の `review` が `needs_fix` を返して `fix` に進み、更新した Doctor レポートを再レビューして `approved` となり、COMPLETE に到達することを確認する。ステップの開始順、最終の Doctor レポート、レビューレポート、完了画面を照合する。
+    - 同じTUIから再実行すると、別のタイムスタンプで成果物のルートディレクトリが作成されることを確認する。1回目のルート配下にあるディレクトリ・ファイルの相対パス一覧と、全ファイルの内容がバイト単位で維持されることも確認する。
+    - 実行後も `.takt/tasks.yaml` と worktree が作成されず、Git のブランチと HEAD が変化しないことを確認する。
+    - 日本語設定では、元となるワークフローの選択、操作の選択、待機、完了、失敗の各表示が日本語になることを確認する。承認画面の選択肢が「実行」「編集を続ける」「キャンセル」の順で、この表記と完全一致することも確認する。
     - PTY 上でフラグなしに `takt --workflow e2e/fixtures/workflows/mock-single-step.yaml` を起動し、モード選択が従来の readline セレクタ（`(default)` 表記）で出たあと、会話だけが Ink（枠付き入力ボックス）になることを確認する。
     - モード選択に Assistant / Grill Me / Persona が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
     - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。
@@ -155,16 +160,16 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 同シナリオで `/go` の後にアクション選択で「Continue editing」を選び、Ink がいったん閉じて（画面に入力ボックスの枠が残らない）選択後に再マウントされること、過去の会話がスクロールバックに二重表示されないことを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-abort.json`（`wait_for_abort`）で送信中の Ctrl+C により応答を待たず exit 0 になることを確認する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-slow-stream.json`（`text_chunks` で遅延ストリーミング）で、visible transcript の確定会話より上にスピナー行・プロンプト残骸が 0 行であること、`●` マーカー行と入力欄（上枠・入力行・下枠）が各1つで、状態・ヒント・モデルがその下にあることを確認する。
-    - 実 PTY と terminal emulator を同時にリサイズし、画面外まで積んだ70行の過去応答が狭幅化・広幅化・高速リサイズ・`/go` の Continue editing 復帰後もスクロールバックに各1回残ること、入力ボックスと Thinking が重複しないこと、応答中の未送信 `/go` ドラフトを編集できることを確認する。次の下書きを入力する前に、現在の入力枠が空で、その下に応答中のスピナーが表示されることを待つ。生出力履歴に残る過去の Thinking 表示は同期条件に使わない。
-    - 狭い端末で長いユーザー発言とAI回答を確定し、広幅化すると両方の段落が1行に戻り、再度の狭幅化・広幅化でも画面外の保存済み履歴が残り、段落と入力欄が重複しないことを実PTYで確認する。リサイズ後の新しい出力と、要求した幅の上枠・下枠の両方を待ち、同じ幅の過去フレームや描画途中の入力枠を同期条件に使わない。
+    - 実 PTY と端末エミュレーターを同時にリサイズし、画面外へスクロールした70行の過去応答が、幅を狭めたり広げたりした後、高速なリサイズ後、`/go` の Continue editing からの復帰後もスクロールバックに各1回残ることを確認する。入力ボックスと Thinking が重複しないこと、応答中に未送信の `/go` の下書きを編集できることも確認する。次の下書きを入力する前には、現在の入力枠が空で、その下に応答中のスピナーが表示されるまで待つ。生出力の履歴に残る過去の Thinking 表示は同期条件に使わない。
+    - 狭い端末で長いユーザー発言と AI 回答を確定し、幅を広げると両方の段落が1行に戻ることを実 PTY で確認する。再度幅を狭めたり広げたりしても、画面外の保存済み履歴が残り、段落と入力欄が重複しないことも確認する。リサイズ後の新しい出力と、要求した幅の上枠・下枠の両方を待ち、同じ幅の過去フレームや描画途中の入力枠を同期条件に使わない。
     - 長い下書きがある状態で端末の高さを8行・6行まで縮め、再拡大と横幅変更を繰り返しても、古い入力枠やThinkingがスクロールバックへ入り込まないことを、アイドル時・応答中の両方で確認する。70行の確定済み履歴は各1回残り、終了時には入力枠を消去する。
     - 日本語の複数行下書きで端末を高さ 1／2／3／6 行へ縮め、実 PTY の物理カーソルが現在の入力行・挿入列と一致し、未送信文字が重複しないことを確認する。折り畳み・再拡大後も元の複数行を送信できることを確認する。macOS IME の未確定文字・候補窓の GUI 確認を代替するテストではない。
     - 会話1往復後、visible screen で上枠・入力行・下枠・状態・ヒント・モデルが順に配置されることを確認する。
     - Shift+Enter（`ESC[13;2u`）と Option+Enter（`ESC[13;3u`）が改行になり送信されないこと、前方の行数が `↑ N` で表示され、↑ で折り畳み行へ戻ってから送信しても全行が維持されることを確認する。
     - 端末幅を超える長文を入力し、末尾がカーソル行に残り、前方の表示行が折り畳まれることを確認する。Home で先頭へ戻った後は上下の枠と入力枠4行が一組だけ描画された画面を待ち、全体の折り返しと各入力行の幅を確認する。
-    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-queue.json`（遅延ストリーミング + 2件目の応答）で、応答中に入力できること・Enter がキューへ積まれヒントが出ること・応答完了後にキューが自動送信されることを確認する。
-    - 同シナリオで、キュー投入後の ↑ がキュー項目をドラフトへ戻して編集できることを確認する。
-    - 同シナリオで、ストリーミング中に次の行をキューへ積んでから Esc を押すと、応答が中断され「Response interrupted.」が出たうえでキューが即送信され、その応答が完了して入力欄へ戻ることを現在画面で確認する。次の通常送信には中断した発言を送信順に引用して前置する。キューと手入力は同じ規則で扱い、ユーザー行と履歴には各原文を一度だけ残す。コマンドの後も未送達を保持し、終了時は追加送信しない（中断してもキューは破棄されない仕様）。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-queue.json`（遅延ストリーミング + 2件目の応答）で、応答中に入力できること、Enterを押すと入力がキューに追加されてヒントが表示されること、応答完了後にキューの入力が自動送信されることを確認する。
+    - 同シナリオで、キューへ追加した後に ↑ を押すと、項目を下書きへ戻して編集できることを確認する。
+    - 同シナリオで、ストリーミング中に次の行をキューに追加してから Esc を押す。応答が中断されて「Response interrupted.」が表示され、キューの入力が即座に送信されることと、その応答完了後に入力欄へ戻ることを現在画面で確認する。次の通常送信には中断した発言を送信順に引用して先頭に付ける。キューと手入力は同じ規則で扱い、ユーザー行と履歴には各原文を一度だけ残す。コマンドの後も未送達の発言を保持し、終了時は追加送信しない。中断してもキューは破棄されない。
     - `takt list` から completed タスクの Instruct を選び（ワークフロー再利用確認は Enter）、会話が Ink で開くこと・イントロが `/replay` を案内すること・`/replay` で前回 order がそのまま再実行され（`TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-instruct.json`）タスクが完了して一覧へ戻ることを確認する。
     - PTY 上で `takt exec backend` を起動し、会話が Ink（枠付き入力ボックス）で行われること・`/setup` で Ink が閉じて従来のセレクタが出ること（画面に入力ボックスの枠が残らない）を確認する。
     - PTY なし（`runTakt`）で `--tui` を実行し、exit 1 と `--tui requires an interactive terminal` を確認する。
@@ -174,7 +179,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
     - mock workflowを実行し、元のCLIプロセスの終了を確認する。
-    - 固定時間の待機ではなく、分析runの完了と公開現在版のreportへの出典追記を監視し、`loop-analysis.md`が1件保存されることを確認する。`.takt-report-internal`配下の実行記録・固定版は検索対象から除外する。判定用mockは現在の構造化応答形式を返す。
+    - 固定時間の待機は使わず、分析runの完了と、公開されている最新のレポートへの出典の追記を監視し、`loop-analysis.md`が1件保存されることを確認する。`.takt-report-internal`配下の実行記録・固定版は検索対象から除外する。判定用mockは現在の構造化応答形式を返す。
     - 同じ fixture を未指定、`--runtime-assignment cost`、空文字名（`--runtime-assignment ""`）、空白名（`--runtime-assignment "  "`）で実行し、元の workflow と分析 agent の呼出しログがそれぞれ `unselected-model`、`analysis-cost-model`、`analysis-empty-model`、`analysis-spaces-model` を使うことを確認する。provider の注入は無効にし、親 CLI 終了後に保存された分析レポートの本文も確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
@@ -184,7 +189,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 前回設定を `$TAKT_CONFIG_DIR/exec.yaml` に配置し、`takt exec` がその設定で開始することを確認する。
     - `takt exec <preset>` 中に `/setup` を入力し、Team Configuration が表示されることを確認する。
     - `/go <task>` で `.takt/exec/workflow.yaml` が生成され、既存 workflow engine 経由で完了することを確認する。
-    - `/go` だけでは last-used config が作成されないことを確認する。
+    - `/go` だけでは前回利用設定のファイルが作成されないことを確認する。
     - タスク文脈なしの `/go` では workflow が作成されないことを確認する。
 - Pipeline mode with --skip-git（`e2e/specs/pipeline-skip-git.e2e.ts`）
   - 目的: `--skip-git` 指定時にGit操作を行わずパイプラインが完了することを確認。
@@ -207,15 +212,15 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - E2E用 `config.yaml` に `observability.enabled: true`, `usage_events_phase: true`, `monitor: true`, `session_log_exporter: true` を設定する。
     - `takt --task 'Create a short report and finish' --workflow e2e/fixtures/workflows/report-judge.yaml --provider mock` を実行する。
     - run配下に `*-usage-events.phase.jsonl`, `*-otel-session-shadow.jsonl`, `monitor.json` が出力されることを確認する。
-    - command gate から nested `takt` を起動し、子 run 側の `.takt/config.yaml` に observability 設定がない状態でも、親 run から伝播した env snapshot により子 run 配下にも同じ observability artifact が出力されることを確認する。
+    - command gate から `takt` を入れ子で起動する。子の `.takt/config.yaml` に可観測性設定がなくても、親の実行環境から引き継いだ環境変数のスナップショットによって、子の実行ディレクトリにも同じ可観測性ファイルが出力されることを確認する。
 - Claude filesystem Skill metadata（`e2e/specs/claude-skills.e2e.ts`）
-  - 目的: `claude-headless` と `claude-sdk`（別名 `claude`）で同一promptからモデルに初期contextのSkill名を列挙させ、project sentinel Skillを報告するかを `provider_options.claude.skills.enabled` の有効・無効で比較する補助観測。
+  - 目的: `claude-headless` と `claude-sdk`（別名 `claude`）のモデルに、同じプロンプトで初期コンテキストのSkill名を列挙させる。`provider_options.claude.skills.enabled` の有効時・無効時で、プロジェクトの検出用Skillが報告されるかを比較する補助的な観測。
   - LLM: `TAKT_E2E_PROVIDER=claude-headless`、`claude-sdk` または `claude` の実provider E2Eでのみ呼び出す。
   - 手順（ユーザー行動/コマンド）:
-    - 一時repositoryの `.claude/skills/<sentinel>/SKILL.md` を作成する。
-    - `enabled: false` で実行し、モデルがsentinel Skill名を報告しないことを確認する。これはmetadata非混入を直接証明しない。
-    - `enabled: true` で実行し、モデルがsentinel Skill名を報告することを確認する。
-    - metadata非混入の決定的保証は、SDKへ`skills: []`を渡すこととCLI argvへ`--disable-slash-commands`を付与することを検証するunit/integration testが担う。
+    - 一時リポジトリに検出用の `.claude/skills/<sentinel>/SKILL.md` を作成する。
+    - `enabled: false` で実行し、モデルが検出用Skillの名前を報告しないことを確認する。これだけではメタデータが含まれないことを直接証明できない。
+    - `enabled: true` で実行し、モデルが検出用Skillの名前を報告することを確認する。
+    - メタデータが含まれないことは、SDKへ`skills: []`を渡すことと、CLI引数に`--disable-slash-commands`を付けることを、ユニットテスト・統合テストで検証して保証する。
 - Add task（`e2e/specs/add.e2e.ts`）
   - 目的: `takt add` がIssue参照からタスクファイルを生成できることを確認。
   - LLM: 呼び出さない（`provider: mock` + `TAKT_MOCK_SCENARIO` 固定）
@@ -236,20 +241,20 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 同一プロジェクトの run / watch の4組合せで後発を拒否し、所有者の種別と PID を表示することを確認。
   - LLM: 呼び出さない（provider mock、プロジェクトと設定ルートを分離。親環境の外部 OTLP endpoint は引き継がない）
   - 手順（ユーザー行動/コマンド）:
-    - 所有者の実行中記録を確認してから後発 CLI を起動し、非0終了とキュー不変を確認する。
-    - 空キュー run の正常終了後と watch の SIGKILL 後に、次の実行が取得できることを確認する。
-    - 同じ watch の SIGINT 後、所有者が停止中になり、実行中タスクの保存完了まで保持されることを確認する。
+    - ロック所有者の実行中の記録を確認してから後発 CLI を起動し、非ゼロ終了と、キューが変化しないことを確認する。
+    - キューが空の run が正常終了した後と、watch を SIGKILL で終了した後に、次の実行がロックを取得できることを確認する。
+    - SIGINT の確認用に pending タスクを用意して、新しい watch を起動する。タスクが実行中になったことを確認してから SIGINT を送り、所有者が停止中となり、実行中タスクの保存完了までロックが保持されることを確認する。
     - SIGINT 単発・連打・タイムアウトで解放後に再取得できることを確認する。
     - watch 保持中に非 Issue 入力の `takt add` を実行し、保存と読み取りが成功することを確認する。
 - Run interrupted task cleanup and high-priority run flows（`e2e/specs/run-recovery.e2e.ts`）
-  - 目的: 高優先度ユースケース（異常終了したrunningタスクのfailed化、並列実行、初期化〜add〜run）をまとめて確認。
+  - 目的: 優先度の高い利用場面として、異常終了したタスクの状態更新、並列実行、初期化から add、run までの流れをまとめて確認する。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
     - `takt --version` に2 MiBの標準入力を送り、stdin の EPIPE 後も終了コード0とバージョン出力が返ることを確認する。
-    - 異常終了したrunningタスクのfailed化:
+    - 異常終了時に `running` だったタスクを `failed` へ更新:
       - `.takt/tasks.yaml` に pending タスク2件を投入し、`takt run --provider mock` 実行中にプロセスを強制終了する。
       - 再度 `takt run --provider mock` を実行し、`Marked 1 interrupted running task(s) as failed.` が出力されることを確認する。
-      - 異常終了時にrunningだったタスクはfailedで残り、残りのpendingタスクだけが完了することを確認する。
+      - 異常終了時に `running` だったタスクは `failed` で残り、残りの `pending` タスクだけが完了することを確認する。
     - 高並列実行:
       - `concurrency: 10` を設定し、pending タスク12件を投入して `takt run --provider mock` を実行する。
       - 出力に `Concurrency: 10` と `Tasks Summary` が含まれること、および全タスクが completed 履歴として残ることを確認する。
@@ -268,7 +273,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `=== Tasks Summary ===` 以降に新規タスク開始やクローン作成ログが出ないことを確認する。
     - `concurrency: 3` の実 PTY 上で3タスクすべてが mock provider の応答待ちに入ったことを call log で確認し、共有 stdin を pause した後に Kitty keyboard protocol の Ctrl+C（CSI-u）を送って、3呼び出しが abort されプロセスが速やかに終了することを確認する。
 - Runtime config injection with provider（`e2e/specs/runtime-config-provider.e2e.ts`）
-  - 目的: `config.yaml` の `runtime.prepare` が provider 呼び出し前に反映される正例と未設定時のenv未注入をmockで確認し、任意の実provider E2Eでは子プロセスへの伝播も確認。
+  - 目的: `config.yaml` の `runtime.prepare` がプロバイダーの呼び出し前に反映されることと、未設定時には環境変数が追加されないことをmockで確認する。任意で実プロバイダーのE2Eを実行し、子プロセスへの引き継ぎも確認する。
   - LLM: 通常CIでは呼び出さない（mockでprovider呼び出し時のruntime環境を検証）。`TAKT_E2E_PROVIDER` が `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `opencode` の場合のみ、実コマンド伝播の追加テストを実行。
   - 手順（ユーザー行動/コマンド）:
     - E2E用 `config.yaml` に `runtime.prepare: [gradle, node]` を設定する。
@@ -276,7 +281,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - 正例では `takt --task '<./gradlew test && npm test を1回のコマンドとして実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行し、Gradle 成功後に npm が同じ provider 実行環境で続けて起動することを確認する。各コマンドの実行回数と初回の環境変数を記録し、fixture 未変更・1回実行・初回から必要な環境変数があったことを検証する。
     - 正例では、作業リポジトリに `.takt/.runtime/env.sh` と `.takt/.runtime/{cache,config,state,gradle,npm}` が作成されていることを確認する。`TMPDIR` はworktree固有の短い外部パスであり、NodeとGradleに同じ値が伝播することを確認する。
     - OpenCode では `edit: false` の workflow でも同じ初回環境伝播を検証する。
-    - 負例（`runtime.prepare` 未設定）では、隔離環境から `GRADLE_USER_HOME` と `npm_config_cache` を除外し、Gradle の欠落環境変数および npm のruntimeキャッシュ未注入を示す専用証跡ファイルと両コマンドの実行markerを確認する。`.takt/.runtime/env.sh` は生成されないことを確認する。
+    - 負例（`runtime.prepare` 未設定）では、隔離環境から `GRADLE_USER_HOME` と `npm_config_cache` を除外する。Gradle の環境変数が欠けていることと、npm のランタイム用キャッシュが設定されていないことを記録する専用ファイルと、両コマンドの実行マーカーを確認する。`.takt/.runtime/env.sh` が生成されないことも確認する。
 - Runtime.yaml provider section（runtime-v1）（`e2e/specs/runtime-provider.e2e.ts`）
   - 目的: 有効な `~/.takt/runtime.yaml` の `provider` セクションから provider/model が解決され（runtime-v1）、`--provider` を渡さずに workflow が完了することをmockで確認する（issue #1136）。
   - LLM: 呼び出さない（`--provider` 未指定で runtime.yaml の `provider: mock` プロファイルを使用）。
@@ -286,10 +291,10 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt --task '<任意>' --workflow e2e/fixtures/workflows/mock-single-step.yaml`（`--provider` 無し）を実行する。
     - `Workflow completed` を確認し、セッションログの `step_start` が `provider: mock` / `providerSource: runtime-v1` / `model` / `modelSource: runtime-v1` を持つことを確認する。
     - `--runtime-assignment` を直接実行・pipeline・`run`・`watch` で指定し、provider 注入を無効にした mock 呼出しログから選択した model を確認する。
-    - `run` の pending 2件と、起動後に公開CLIの `takt add` で追加した `watch` のタスクに同じ選択が効くことを確認する。監視中の保存は共通ロックを使う投入経路を通す。
-    - 設定内容の比較とタスクレコードのフィールド検査で選択の非保存を確認し、次の未指定起動では directories の model へ戻ることを確認する。
+    - `run` の pending 2件と、起動後に公開CLIの `takt add` で追加した `watch` のタスクに、同じ選択が適用されることを確認する。監視中のタスクは、共通ロックを使って保存する投入処理から追加する。
+    - 設定内容とタスクレコードのフィールドを調べ、選択が保存されないことを確認する。次に選択を指定せず起動すると、directories の model に戻ることも確認する。
     - 未定義名では agent 呼出しなし・非ゼロ終了・指定名と候補一覧の表示を確認し、設定と pending タスクが変わらないことを確認する。
-    - 負例（fail-fast 境界）: 同じく空の HOME / `TAKT_CONFIG_DIR` の隔離環境で（legacy provider signal を一切持たせず）、`provider.defaults` 未指定によりスキーマ上無効な targets-only の runtime.yaml を書き、`--provider` 無し・`TAKT_MOCK_SCENARIO` 無しで実行すると、agent 実行前に非ゼロ終了し `provider.defaults` 未指定の設定エラーが出力されることを確認する。既存設定が残っていると `Mixed provider configuration detected` や provider 解決成功に化けるため、この境界は隔離環境でのみ検証できる。
+    - 負例（設定エラーで即座に終了）: 同じく空の HOME / `TAKT_CONFIG_DIR` の隔離環境で、legacy provider signal を一切持たせず、`provider.defaults` 未指定によりスキーマ上無効な targets-only の runtime.yaml を書く。`--provider` と `TAKT_MOCK_SCENARIO` を指定せずに実行し、エージェント実行前に非ゼロで終了して `provider.defaults` 未指定の設定エラーが出ることを確認する。既存設定が残っていると `Mixed provider configuration detected` になったり、プロバイダーの解決に成功したりするため、この条件は隔離環境でのみ検証できる。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）
@@ -299,11 +304,11 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt list --non-interactive --action diff --branch <branch>` で差分統計が出力されることを確認する。
     - `takt list --non-interactive --action try --branch <branch>` で変更がステージされることを確認する。
     - `takt list --non-interactive --action merge --branch <branch>` でブランチがマージされ削除されることを確認する。
-    - `file_writes` で README.md を変更する mock の `worktree: true` task を `takt run --provider mock` で `completed` にし、root local branch が作成されることを確認する。ブランチの差分が README.md のみで、同期した `.takt` の設定がコミットに入らず、root の README.md は try-merge 前に変更されないことも確認する。
-    - isolated config に top-level の `provider: mock` / `model: mock-summary-model`、`branch_name_strategy: ai`、`telemetry.routing_decisions: true`、workflow step 用の `auto_routing` を設定し、queued worktree task の AI slug 生成と workflow 実行を `e2e/fixtures/scenarios/auto-routing-worktree.json` の2応答で処理する。
-    - task が `completed` になり、mock が返す `auto-routing-slug` を含む branch と worktree path が生成され、routing decision に workflow step の candidate `mock/workflow-model` と source `auto.rules` が記録されることを確認する。
-    - root local branch を意図的に削除した後でも、`takt list --non-interactive --action try --branch <branch>` が worktree から branch を復元して成功し、staged diff が生成されることを確認する。
-    - root に追加コミットを作成した後、`takt list --non-interactive --action sync --branch <branch>` で `Merge from root` 相当の同期が成功し、root 側変更が branch と worktree の両方へ反映されることを確認する。
+    - `file_writes` で README.md を変更する mock タスクを `worktree: true` で作成し、`takt run --provider mock` で `completed` にする。元リポジトリにローカルブランチが作成され、差分が README.md だけであること、同期した `.takt` の設定がコミットに含まれないことを確認する。元リポジトリの README.md は try-merge 前には変更されないことも確認する。
+    - 隔離環境の設定ファイルのトップレベルに `provider: mock` / `model: mock-summary-model`、`branch_name_strategy: ai`、`telemetry.routing_decisions: true` を設定し、ワークフローのステップ用に `auto_routing` を設定する。キューに入れた worktree タスクの AI による slug 生成とワークフロー実行を、`e2e/fixtures/scenarios/auto-routing-worktree.json` の2応答で処理する。
+    - タスクが `completed` になり、mock が返す `auto-routing-slug` を含むブランチ名と worktree パスが生成されることを確認する。ルーティング判断には、ワークフローのステップの候補 `mock/workflow-model` と取得元 `auto.rules` が記録されることも確認する。
+    - 元リポジトリのローカルブランチを意図的に削除した後でも、`takt list --non-interactive --action try --branch <branch>` が worktree からブランチを復元して成功し、変更がステージされることを確認する。
+    - 元リポジトリに追加コミットを作成した後、`takt list --non-interactive --action sync --branch <branch>` で `Merge from root` 相当の同期が成功し、その変更がブランチと worktree の両方へ反映されることを確認する。
 - Reset categories（`e2e/specs/cli-reset-categories.e2e.ts`）
   - 目的: `takt reset categories` でカテゴリオーバーレイのリセットを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）
@@ -323,7 +328,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Config priority（`e2e/specs/config-priority.e2e.ts`）
   - 目的: `workflow` と `auto_pr` の優先順位（config/env/CLI）を検証。
   - 手順（要約）:
-    - `--pipeline` では `--workflow` が必須で、未指定時は canonical な workflow 文言でエラーになることを確認。
+    - `--pipeline` では `--workflow` が必須で、未指定時のエラーに正式名称の workflow が使われることを確認。
     - 旧名称の CLI 引数が拒否され、`--workflow` のみ受理されることを確認。
     - `auto_pr` 未設定時は確認デフォルト `true` が反映されることを確認。
     - `config` と `TAKT_AUTO_PR` の優先を確認。
@@ -332,7 +337,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Task content_file reference（`e2e/specs/task-content-file.e2e.ts`）
   - 目的: `tasks.yaml` の `content_file` 参照が解決されること、および不正参照時エラーを確認。
 - Task status persistence（`e2e/specs/task-status-persistence.e2e.ts`）
-  - 目的: 成功時/失敗時の `tasks.yaml` 状態遷移に加え、`max_steps` 到達時の `exceeded` 永続化と `takt run --ignore-exceed` 指定時の完走・retry metadata 非生成を確認。
+  - 目的: 成功時・失敗時の `tasks.yaml` の状態遷移と、`max_steps` 到達時に `exceeded` が保存されることを確認する。`takt run --ignore-exceed` を指定すると最後まで実行され、再試行用のメタデータが生成されないことも確認する。
 - Run multiple tasks（`e2e/specs/run-multiple-tasks.e2e.ts`）
   - 目的: 複数pendingタスクの連続実行、途中失敗時継続、タスク空時の終了挙動を確認。
 - Session NDJSON log output（`e2e/specs/session-log.e2e.ts`）
@@ -350,7 +355,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Provider error handling（`e2e/specs/provider-error.e2e.ts`）
   - 目的: provider上書き、mockシナリオ不足時の挙動、シナリオ不在時エラーを確認。
 - Provider base_url options（`e2e/specs/provider-override.e2e.ts`）
-  - 目的: `runtime.yaml` の provider profile options（および legacy config の互換経路）から `provider_options.codex.base_url` / `provider_options.claude.base_url` が解決され、セッションログに設定済み marker と source attribution が出ること、および workflow / step の削除済み inline options が移行案内付きで拒否されることを確認。
+  - 目的: `runtime.yaml` のプロバイダープロファイルのオプション、および旧設定との互換処理で、`provider_options.codex.base_url` / `provider_options.claude.base_url` が解決されることを確認する。セッションログには設定済みの印と設定の取得元が記録されること、削除済みの workflow / step 内オプションは移行案内とともに拒否されることも確認する。
 - Model override（`e2e/specs/model-override.e2e.ts`）
   - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
 - Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）
@@ -368,7 +373,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - CLI バージョンと端末要件（`e2e/specs/cli-help.e2e.ts`）
   - 目的: `--version` がパッケージのバージョンと一致すること、および端末のない `make` が成果物を作成せず拒否されることを確認。
 - Eject builtin workflows（`e2e/specs/eject.e2e.ts`）
-  - 目的: `takt eject` のproject/global出力、既存時スキップ、facet個別eject、不正なfacet type（prototype由来名・改行/C1制御文字）の安全なstderr出力を確認。
+  - 目的: `takt eject` でプロジェクト・グローバルへの出力、既存ファイルのスキップ、ファセットの個別出力を確認する。不正なファセット型（prototype 由来の名前・改行・C1 制御文字）が標準エラー出力へ安全に表示されることも確認する。
 - Workflow authoring CLI（`e2e/specs/cli-workflow-authoring.e2e.ts`）
   - 目的: `takt workflow init` と `takt workflow doctor` が `node bin/takt` 経由の実 CLI で動作することを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）
@@ -377,11 +382,11 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt workflow doctor sample-flow` を実行し、正常系が成功終了することを確認する。
     - 壊れた YAML を配置して `takt workflow doctor <path>` を実行し、失敗終了と診断出力を確認する。
 - Claude allowed_tools pytest（`e2e/specs/claude-allowed-tools-pytest.e2e.ts`）
-  - 目的: `config.yaml` の `provider_options.claude.allowed_tools` が claude CLI に伝播し、approval なしで pytest が緑化することを確認（claude-headless provider suite 限定。pytest 不在時は skip）。
+  - 目的: `config.yaml` の `provider_options.claude.allowed_tools` が claude CLI に渡り、承認なしで pytest が成功することを確認（claude-headless provider suite 限定。pytest 不在時はスキップ）。
 - Export-cc command（`e2e/specs/cli-export-cc.e2e.ts`）
   - 目的: `takt export-cc` が skill ファイルとリソースディレクトリを HOME 配下へ配置することを確認。
 - Clone branch resolution（`e2e/specs/clone-branch-resolution.e2e.ts`）
-  - 目的: remote-only ブランチ（PR シナリオ）や未存在ブランチからの clone 時のブランチ解決を、worktree の場合も含めて確認。
+  - 目的: リモートにだけ存在するブランチ（PR シナリオ）や、存在しないブランチを指定してクローンした場合のブランチ解決を、worktree の場合も含めて確認する。
 - Codex permission mode（`e2e/specs/codex-permission-mode.e2e.ts`）
   - 目的: `provider_options.codex.default_permission_mode` が `readonly` で失敗し `full` で成功することを確認（codex provider suite 限定）。
 - Dynamic parallel selector（`e2e/specs/dynamic-parallel-selector.e2e.ts`）
@@ -397,7 +402,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Report file output（`e2e/specs/report-file-output.e2e.ts`）
   - 目的: report が `.takt/runs/*/reports` に期待内容で出力されることを確認。
 - structured_output + report output contract（`e2e/specs/structured-output-report.e2e.ts`）
-  - 目的: `structured_output` と `output_contracts.report` を併用した step で、report file が Phase 2 の Markdown（Phase 1 の JSON ではない）になり、`when(structured.<step>.…)` の遷移が効くことを確認（issue #1242 の組合せをリリースゲートで踏む）。
+  - 目的: `structured_output` と `output_contracts.report` を併用したステップで、レポートファイルが Phase 2 の Markdown となり、`when(structured.<step>.…)` の遷移が適用されることを確認。issue #1242 の組み合わせをリリースゲートで検証する。
 - Resume report inheritance（`e2e/specs/resume-report-inheritance.e2e.ts`）
   - 目的: resume 時に中断元 run の report スナップショットが引き継がれることを確認。
 - SIGINT during AI wait（`e2e/specs/run-sigint-ai-wait.e2e.ts`）
@@ -409,6 +414,6 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Team leader worker pool（`e2e/specs/team-leader-worker-pool.e2e.ts`）
   - 目的: worker-pool の動的スケジューリングで `max_parts` を超える件数のファイル生成を完了できること、および `inspect_tools` が child part に継承されないことを確認。
 - Workflow call budget（`e2e/specs/workflow-call-budget.e2e.ts`）
-  - 目的: `workflow_call` で抽出した subworkflow が、親と同じ step budget を共有したまま完走することを確認。
+  - 目的: `workflow_call` で切り出した子ワークフローが、親とステップ数の上限を共有したまま最後まで実行されることを確認する。
 - Workflow selection branches（`e2e/specs/workflow-selection-branches.e2e.ts`）
   - 目的: `--workflow` のファイルパス指定、ローカル名、repertoire `@scope` 名、未知名（fail fast）、省略時の各分岐を確認。

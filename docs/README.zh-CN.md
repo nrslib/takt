@@ -31,7 +31,7 @@
 
 TAKT 是一个开源 CLI，可将 AI 编码智能体变成可重复的开发工作流。你可以在 YAML 中定义规划、实现、审查、修复循环、人工检查点、权限和输出契约，然后在隔离的 worktree 中执行任务并保留可追踪的日志。
 
-你不需要让一个智能体记住整个流程；TAKT 为每个 step 分配独立的角色、上下文和转移规则。AI 负责编写代码，workflow 决定下一步做什么。
+TAKT 为每个 step 分配角色、上下文和转移规则，由 workflow 管理编码工作以及向下一阶段的转移。
 
 ![TAKT 控制 AI 编码智能体工作流](./assets/description/01-hero.png)
 
@@ -42,7 +42,7 @@ TAKT 是一个开源 CLI，可将 AI 编码智能体变成可重复的开发工�
 
 **T**AKT **A**gent **K**oordination **T**opology 通过审查循环、prompt 管理和按 step 划分的权限来编排多个 AI 智能体。
 
-先和 AI 对话描述需求，再将需求加入任务队列，最后运行 `takt run`。规划、实现、审查和修复循环都定义在 YAML workflow 文件中，不会把整个流程交给智能体自行决定。TAKT 让 Claude Code、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、GitHub Copilot CLI 和 Kiro CLI 以不同的角色、权限和上下文协作。
+先和 AI 对话描述需求，再将需求加入任务队列，最后运行 `takt run`。YAML workflow 文件定义规划、实现、审查和修复循环，各智能体按照分配的角色、权限和上下文工作。
 
 TAKT 主要用于 AI 编码工作流，但同样适用于任何需要多个 AI 智能体协作，或可以通过审查、判断和反馈循环提高质量的任务。
 
@@ -54,9 +54,7 @@ AI 编码智能体不会自动形成稳定的开发流程。在长时间工作�
 
 把更多规则写入 prompt、`CLAUDE.md` 或 skill 会有所帮助，却不能真正强制流程；规则是否被遵守仍取决于智能体自身的行为。
 
-TAKT 将 AI 智能体视为需要从外部控制的对象，而不是仅仅依赖信任。
-
-workflow 定义阶段，每个 step 获得自己的 persona、policy、knowledge、instruction 和 output contract。TAKT 以声明式方式管理实现、审查、修复和再次审查。把职责、知识和限制分开，再只向当前 step 提供所需内容，可以避免上下文膨胀并提高任务质量。
+TAKT 按照 workflow 中定义的阶段控制智能体的工作。每个 step 获得自己的 persona、policy、knowledge、instruction 和 output contract。workflow 指定实现、审查、修复和再次审查的顺序，以及需要修复时返回的阶段。把职责、知识和限制分开，只向当前 step 提供所需内容，可以避免上下文膨胀并提高任务质量。
 
 审查不会被静默跳过。发现问题后，工作会回到修复 step；需要时也可以请求人工判断。任务在隔离的 worktree 中运行，每个 step 都留下日志和报告，因此从任务到 PR 的路径可以追溯。
 
@@ -69,6 +67,9 @@ TAKT 将这些环节组织为由角色、阶段、判断和反馈循环组成的
 ```bash
 npm install -g takt
 
+# 安装默认 provider（claude-sdk）的 SDK
+takt install claude-sdk
+
 # 与 AI 对话描述任务，使用 /go，然后选择“加入任务队列”
 takt
 
@@ -79,7 +80,13 @@ takt run
 takt list
 ```
 
-首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`pi` 和 `deepseek-harness` 等 SDK provider 可在 Node.js 中运行。使用 DeepSeek Harness 前，请运行 `takt install deepseek-harness`。OpenCode 还需要安装外部 `opencode` CLI；其他 CLI provider 也需要对应的外部 CLI。
+首次运行时，请在 `~/.takt/config.yaml` 中配置 provider，或使用[配置](#配置)中列出的 API key 环境变量。`claude-sdk`、`codex`、`opencode`、`pi` 和 `deepseek-harness` 等 SDK provider 在 Node.js 中运行，使用前需执行一次 `takt install <provider>`。基于 CLI 的 provider 需要对应的外部 CLI。
+
+## CodeRabbit 审查循环
+
+对 GitHub PR 执行 `takt caccia <PR编号>`，即可等待 CodeRabbit 审查，并在隔离 clone 中处理未解决的 bot 讨论。每轮处理都会保存判断报告。
+
+合并 workflow 通过 `caccia` effect 执行同一循环。`caccia.enabled` 控制 effect 是否等待 CodeRabbit，默认禁用。启用后，worktree 任务的 `auto_pr` 和 Pipeline 的 `--auto-pr` 成功发布 PR 后也会执行循环。仅执行 Git push 不会启动循环。排除条件和执行顺序请参阅[配置指南](./configuration.zh-CN.md)，操作方法请参阅 [CLI 参考](./cli-reference.zh-CN.md#takt-caccia)。
 
 ### 视频教程
 
@@ -109,7 +116,7 @@ TAKT 需要 Node.js `>=22.22.0` 和 Git `>=2.38`（目标完成判定使用 `git
 
 如需继续使用 Claude Code CLI，请选择 `claude-headless`。权限 profile 应移到所选 provider 名称；默认 provider 已改为 `claude-sdk`，旧的 `provider_profiles.claude` 设置可能不再生效。以旧 `claude` 名称保存的 session 会重新开始。迁移详情见[权限解析优先级](./configuration.zh-CN.md#权限解析优先级)。
 
-以下 provider 通过 SDK 运行，不需要 CLI：
+以下 provider 通过 SDK 运行，不需要 CLI。SDK 不随 TAKT 分发，使用前需执行一次 `takt install <provider>`，更新 TAKT 后需执行 `takt update`。在终端中，缺少 SDK 时 TAKT 会询问是否安装；在 CI 等非交互环境中，请提前安装。详情请参阅[管理 SDK 的安装与更新](./cli-reference.zh-CN.md#托管sdk的安装与更新)。
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
@@ -119,7 +126,7 @@ TAKT 需要 Node.js `>=22.22.0` 和 Git `>=2.38`（目标完成判定使用 `git
 
 以下 provider 需要外部 CLI：
 
-- `opencode` — [OpenCode](https://opencode.ai/) CLI，默认使用 v2；v1 需显式选择（参阅[版本配置](./configuration.zh-CN.md#opencode-v1v2-选择)）。
+- `opencode` — [OpenCode](https://opencode.ai/) CLI，还需运行 `takt install opencode` 安装 SDK。默认使用 v2；v1 需显式选择（参阅[版本配置](./configuration.zh-CN.md#opencode-v1v2-选择)）。
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — 在交互式终端会话中驱动 [Claude Code](https://claude.ai/code)，还需要 [`tmux`](https://github.com/tmux/tmux)
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -141,6 +148,7 @@ TAKT 需要 Node.js `>=22.22.0` 和 Git `>=2.38`（目标完成判定使用 `git
 
 ```bash
 npm install -g takt
+takt install claude-sdk   # codex、opencode、pi、deepseek-harness 同样需要安装
 ```
 
 使用 Nix flakes：
@@ -279,7 +287,7 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑↓` 选择「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」，按 `Enter` 确定。默认返回对话并撤回草案；注册时需选择「Register goal」。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt manager` | 启动实验性目标对话 TUI，与 AI 讨论、加入队列并执行任务。参阅[目标管理（英文）](./goal-management.md) |
 | `takt director` | 打开统览所有 manager 的实验性对话 TUI；参阅 [director](#director实验性) |
 | `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
@@ -292,17 +300,11 @@ steps:
 | `takt workflow inspect` | 检查 workflow 的配置与解析来源 |
 | `takt repertoire add` | 从 GitHub 安装 repertoire package |
 
-manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮对话被接受后，即使关闭 TUI，也会继续在 daemon 中处理。为同一个仓库或 workspace 重新打开 manager，或为同一负责范围打开第二个 TUI，都会连接到同一个对话。如果有等待批准的目标注册草案，它会重新显示，选择批准并按 `Enter` 即可注册。
+manager 对话由 daemon 处理，关闭 TUI 后工作仍会继续。为同一个仓库或 workspace 重新打开 TUI，即可继续同一对话。目标注册、恢复对话和中断处理的详情请参阅[目标管理（英文）](./goal-management.md)。使用 `takt daemon stop` 可停止 daemon。
 
-重新打开 TUI 时，不会重新显示之前的发言和回复。对话历史由 provider 的会话管理。等待中的发言正文由 TAKT 保存到开始执行为止。等待批准的目标摘要和目标记录会单独保存。
-
-daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮优先处理人工输入，每条队列按接受顺序执行。发言、批准和询问回答在处理期间仍可持久化接受；accepted 表示已保存，不表示完成。读取界面和中断不进入模型队列。中断只影响当前轮次，等待输入会保留。人工输入和事件共用一个对话与会话。失败或中断后，manager 检查当前状态和副作用，自行判断恢复、修正后重试或提交新工作。
-
-只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
+manager 是实验性功能，行为、设置和保存的数据格式可能随时更改。它会自动将任务加入队列并执行，因此会产生 provider API 费用。
 
 **Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
-
-在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」操作；旧版本提案的按钮无效。
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
@@ -310,7 +312,7 @@ daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮�
 
 必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
 
-删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。对于 clone 任务，原仓库中的同名分支也会成为 `git branch -d` 的删除对象。如果 Git 因尚未合并等原因拒绝删除，则保留该分支并显示警告，clone 和任务记录仍会删除。保留分支的条件等详情请参阅[任务管理](./task-management.zh-CN.md)。
 
 ```bash
 # 先确认匹配列表，再执行删除
@@ -323,23 +325,15 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 
 TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作为 [Agent Client Protocol](./cli-reference.zh-CN.md#acp-agent) agent 运行；`takt-mcp` 作为 stdio [MCP server](./cli-reference.zh-CN.md#mcp-server) 运行，让 MCP 客户端（Codex、Claude Code 等）可以加入任务队列、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令。使用 `takt run` 或 `takt watch` 执行待处理任务。
 
-`takt_cleanup_tasks` 用于先查看筛选后的任务，再执行删除。必需输入为绝对路径的 `cwd` 和 `reason`。可选输入为 `statuses`（可指定一个或多个 `pending`、`completed`、`failed`、`exceeded`、`pr_failed`，不能指定 `running`）、`goalId`、`branch` 和 `confirm`（默认 `false`）。必须至少指定 `statuses`、`goalId` 或 `branch` 中的一个。
-
-省略 `confirm` 或设为 `false` 时，只返回匹配列表，不删除任何内容。只有 `confirm: true` 才会删除，删除范围与 `takt list` 相同。此工具仅在 `all` 工具集中提供，不包含在 `read-only` 或 `manager` 中；`manager` 另有 `takt_remove_goal_task` 工具。
-
-`takt_stop_goal_task` 可在 `manager` 和 `all` 工具集中使用。传入绝对路径的 `cwd`。从 `takt_list_tasks` 返回的同一个任务条目中，将 `name` 的值作为 `taskName`，并使用该条目的 `goalId` 和 `executionId`。所属PID必须仍存活。已保存启动时间时，必须获取当前启动时间并确认一致。未保存启动时间时，只要 goalId、taskName、executionId 一致、任务仍在运行且所属PID存活，就接受请求。标识不匹配、任务未运行或所属进程已结束时，返回原因且不保存停止请求。已保存启动时间但无法获取当前值时，也会拒绝请求。工具只保存请求；worker 每500毫秒检查一次并自行中断，执行和清理结束前任务保持 `running`。结束后保存 `failed` 和任务停止原因，可与整个 goal 的中止区分。其他任务和 goal 继续运行。只有在评估重复请求时，同一执行仍为 `running` 且能够验证所属进程，才返回已保存的请求；重试使用新的执行ID。
-
-daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 并创建 goal 任务完成事件，即使没有 pending 任务也会执行恢复。仅当所属PID缺失、已死亡，或已知保存的启动时间与当前启动时间不一致时，才进行恢复。如果PID仍存活，仅凭保存的或当前的启动时间不可用，不会恢复任务，而是保留 `running` 状态。
+MCP 工具 `takt_cleanup_tasks` 可以先查看匹配的任务，再执行删除。`takt_stop_goal_task` 可以请求停止一个运行中的目标任务，其他任务和目标会继续运行。参数、删除范围以及停止或中断后的处理，请参阅[任务管理](./task-management.zh-CN.md)和[目标管理（英文）](./goal-management.md)。
 
 普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
 
 ### manager 的判断与工作
 
-manager 是熟悉 TAKT、负责完成指定目标的工程师。它自行调查、实现、验证、执行 Git 操作，并在需要时委派任务。它以 `full` 权限使用普通 provider 工具及分配的 MCP 服务，保留配置的 provider options。manager 不再使用专门的权限判断 agent、读取范围审查或基于已保存批准的执行控制。
+manager 为完成负责的目标，自行调查、实现、验证、执行 Git 操作，并按需委派工作。它使用普通 provider 工具和分配的 MCP 服务，保留配置的 provider options。权限默认为 `auto`。权限设置和任务 workflow 的选择方式，请参阅[配置指南](./configuration.zh-CN.md)。
 
-Facet 方针要求：向 main 等集成目标反映变更、force push、删除远程分支或未保存成果、中止目标以及在请求范围外发布新内容时，必须有明确说明对象和作用的人工指令。指令可以直接发给 manager、由 director 转达，或作为已保存的持续指令。创建 PR、普通 push 和已配置的通知属于请求的工作。合并 PR 的指令包含删除该 PR 分支；不重复确认已给出的指令。读取秘密值需要涵盖该必要性的人工指令，秘密值不得写入回复、记录或成果。
-
-旧设置 `manager.sensitive_paths` 和 runtime 的 `provider.targets.internal_agents.manager-permission-judge` 已弃用。保留旧配置不会导致启动失败，但这些设置被忽略且不再生效。旧权限 Markdown 和批准回答不再决定执行。历史询问记录仍可读取和撤回。
+合并、force push、删除远程分支或未保存成果等操作遵循明确的人工指令。指令的处理方式、秘密信息保护和旧设置迁移，请参阅[目标管理（英文）](./goal-management.md)。
 
 ### 即时 exec 模式
 
@@ -428,11 +422,11 @@ auto_routing:
 
 旧版模式中，没有 workflow-step 上下文的操作使用具体的顶层 provider/model；Assistant 对话不走 auto routing。自动路由决策只在本地以 NDJSON 写入 `.takt/events/`，可通过 `telemetry.routing_decisions` 或 `takt telemetry status|enable|disable` 查看和控制，TAKT 不会上传这些决策。
 
-运行元数据、session、trace、report 等运行产物仍以普通文件保存在 `.takt/runs/<run>/` 下。
+运行元数据、session、trace、report 等运行产物仍以普通文件保存在 `.takt/runs/<run>/` 下。从 workflow 中途恢复时，会使用所选位置对应的已保存结果和报告。Requeue 选择从头执行时，不会恢复之前的执行状态。继承内容的详情请参阅[任务管理](./task-management.zh-CN.md)。
 
 更完整的配置、provider profile、model 解析和 `runtime.yaml` 说明请参阅[配置指南](./configuration.zh-CN.md)。
 
-TAKT 也可以直接使用 provider 凭据。DeepSeek Harness 需要先运行 `takt install deepseek-harness`。以下是凭据环境变量的示例：
+TAKT 也可以直接使用 provider 凭据。基于 SDK 的 provider 需要先运行 `takt install <provider>`，OpenCode 还需要安装外部 CLI。以下是凭据环境变量的示例：
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic（Claude）
@@ -446,7 +440,7 @@ export DEEPSEEK_API_KEY=...                 # 官方 DeepSeek Harness SDK；使�
 # Pi 使用其 SDK credential store 或 provider 原生环境变量
 ```
 
-OpenCode 默认有 60 分钟的 provider-event 不活跃上限；如果调用可能超过此时间，请显式设置 `provider_options.opencode.guards.call_timeout_ms`（最多 86,400,000 ms）：
+OpenCode 默认在连续 60 分钟未收到 provider 事件后超时。每次收到事件都会重置计时器，因此只要持续收到事件，调用就可以运行超过 60 分钟。可通过 `provider_options.opencode.guards.call_timeout_ms` 修改上限（最多 86,400,000 ms）：
 
 ```yaml
 provider_options:

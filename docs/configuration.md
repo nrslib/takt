@@ -556,9 +556,47 @@ manager:
 
 When `manager.runtime_assignments` is omitted at both project and global scopes, the candidates are empty and manager cannot specify a runtime assignment. Names refer to assignments defined in `provider.assignments` of `runtime.yaml`. A name that is not defined produces a warning when the manager conversation plan is created and is ignored.
 
-Manager reads the candidates and their usage descriptions with `takt_list_runtime_assignments` and passes a name as `runtimeAssignment` to `takt_enqueue_goal_task`. A name outside the candidates is rejected by the tool with an error. The specified name is saved on the task as `runtime_assignment`, and requeue and retry use the saved value. When a run is started with `--runtime-assignment`, the command-line selection takes precedence over the task's saved `runtime_assignment`. Resubmitting a task that already exists with a different valid candidate name does not change the saved `runtime_assignment`: the tool validates the name and returns the existing task without creating a new one.
+Manager reads the candidates and their usage descriptions with `takt_list_runtime_assignments` and passes a name as `runtimeAssignment` to `takt_enqueue_goal_task`. A name outside the candidates produces an error. The name is saved on the task as `runtime_assignment`; requeue and retry use it unless a replacement is specified. Starting a run with `--runtime-assignment` overrides the task's saved value.
 
-If a name is removed from `provider.assignments` in `runtime.yaml`, a task that saved that name cannot run under that saved value. For a task that belongs to a goal, the pre-run provider check skips the task, and the task is marked failed when it is claimed; other tasks are not affected. For a task that does not belong to a goal, the pre-run provider check stops before any task starts while that task remains pending, so the other pending tasks in the project are not executed either. There are three ways to recover: restore the name in `runtime.yaml`; start a run with a valid assignment name defined in `runtime.yaml` via `--runtime-assignment`, which applies to that run only and does not repair the saved `runtime_assignment` (see the `--runtime-assignment` selection below); or, for a goal task, remove the task with `takt_remove_goal_task` and then have manager enqueue the task again with a valid name through `takt_enqueue_goal_task` (`runtimeAssignment`). A goal task that has already been marked failed does not run again when the name is restored or `--runtime-assignment` is supplied: retry the task with `takt_retry_goal_task` so it returns to pending, and then start a run. Retrying also starts an automatic run when `manager.auto_run` is enabled (the default), and that run claims the task without any `--runtime-assignment` override; when you recover through the `--runtime-assignment` path, disable `manager.auto_run` before retrying so the task stays pending for the run you start yourself. Disabling `manager.auto_run` does not stop a run that is already active, and an active run keeps claiming pending tasks without the override, so also stop any active run or wait for it to finish before retrying. When you use this third path and the goal is paused (`executionStatus` is `paused`), resume the goal before enqueueing again: `takt_enqueue_goal_task` rejects a paused goal, so use `takt_resume_goal`, or press Ctrl+G in the TUI and select the goal to resume. `takt_remove_goal_task` removes the task's worktree without checking it for uncommitted changes except on the merge-task and unintegrated-completed-result paths, so inspect the worktree and save any needed changes before removing the task; re-enqueueing does not restore changes that were deleted. `takt_remove_goal_task` can cancel a pending task only while the goal status is `created`; a PR merge task may also be cancelled while the goal is `awaiting_merge`, and a running task cannot be removed. The saved `runtime_assignment` can be replaced when a goal task returns to pending: pass `runtimeAssignment` to `takt_retry_goal_task` or `takt_requeue_goal_task` to save a different name, or remove the task and enqueue it again. Without `runtimeAssignment`, requeue and retry keep the saved value: retrying a failed goal task returns it to pending with the same saved value, and the task is marked failed again when claimed while the name is missing. Additional instructions (`takt_tell_run`) apply only to a running task and do not change the saved value. Confirm the currently available candidates with `takt_list_runtime_assignments`. If `provider.defaults.assignment` or `provider.directories` in `runtime.yaml` still references a name that is not in `provider.assignments`, assignment resolution fails on that reference whether you start with `--runtime-assignment` or remove and re-enqueue the task with `takt_remove_goal_task` and `takt_enqueue_goal_task`. Fix those references to valid names before trying any recovery path.
+Resubmitting an existing task to `takt_enqueue_goal_task` with a different valid candidate name does not change its saved value. The tool validates the name and returns the existing task without creating a new one.
+
+### When a saved assignment name is removed
+
+If a name is removed from `provider.assignments` in `runtime.yaml`, a task that saved that name cannot run using the saved value.
+
+For a goal task, the pre-run provider check skips the task, and the task becomes `failed` when claimed for execution. Other tasks are not affected. For a task without a goal, the pre-run provider check stops before any task starts while that task remains `pending`, so other pending tasks in the project do not run either.
+
+Recovery options are:
+
+1. Restore the name in `runtime.yaml`.
+2. Start a run with `--runtime-assignment` set to a valid name defined in `runtime.yaml`. This applies only to that invocation and does not repair the task's saved `runtime_assignment`.
+3. For a goal task, remove it with `takt_remove_goal_task`, then have manager enqueue it again with a valid name in `takt_enqueue_goal_task`'s `runtimeAssignment`.
+
+A goal task already marked `failed` does not run again automatically when the name is restored or a CLI override is supplied. Return it to `pending` with `takt_retry_goal_task`, then start a run.
+
+### Automatic runs during recovery with a CLI override
+
+When `manager.auto_run` is enabled (the default), retry also starts an automatic run. That run claims tasks without `--runtime-assignment`, so disable `manager.auto_run` before retrying if you plan to recover with a CLI override.
+
+Disabling `manager.auto_run` does not stop an active run, which continues claiming pending tasks without the override. Stop any active run or wait for it to finish before retrying.
+
+### Removing and re-enqueueing a task
+
+For recovery option 3, resume a paused goal (`executionStatus: paused`) before enqueueing again. `takt_enqueue_goal_task`, retry, and requeue reject paused goals. Use `takt_resume_goal`, or press Ctrl+G in the TUI and select the goal to resume.
+
+Except on the merge-task and unintegrated-completed-result paths, `takt_remove_goal_task` deletes the worktree without checking for uncommitted changes. Inspect the worktree and save any needed changes before removal. Re-enqueueing does not restore deleted changes.
+
+A `pending` task can be removed only while the goal status is `created`. A PR merge task can also be removed while the goal is `awaiting_merge`. A `running` task cannot be removed.
+
+### Changing the saved value
+
+When a goal task returns to `pending`, pass `runtimeAssignment` to `takt_retry_goal_task` or `takt_requeue_goal_task` to save a different name. Removing and re-enqueueing the task can also change it.
+
+Without `runtimeAssignment`, requeue and retry keep the saved value. A failed goal task returned to pending with the same missing name becomes failed again when claimed. Additional instructions through `takt_tell_run` apply only to running tasks and do not change the saved value. Check available candidates with `takt_list_runtime_assignments`.
+
+### Check defaults and directory references too
+
+If `provider.defaults.assignment` or `provider.directories` in `runtime.yaml` refers to a name missing from `provider.assignments`, resolving that reference fails. Neither a CLI override nor removing and re-enqueueing the task bypasses it. Fix these references to valid names before trying recovery.
 
 ## Manager tool permissions
 
@@ -664,13 +702,13 @@ takt manager
 
 `TAKT_SLACK_APP_TOKEN` is the App-Level Token with `connections:write`; `TAKT_SLACK_BOT_TOKEN` is the bot token. After reading them, the daemon removes both variables from its environment so provider and tool subprocesses do not inherit them. `takt manager` and `takt director` start the dedicated daemon when needed. After changing tokens or Slack settings, stop it with `takt daemon stop` and start it again.
 
-The daemon stays running regardless of pending work or Slack connectivity, until `takt daemon stop` or a signal stops it. TUI admission and observation continue without Slack configuration or tokens. If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
+The daemon exits automatically when there are no Slack or TUI connections, pending events, waiting commands, or work to monitor. TUI admission and necessary observation are available without Slack configuration or tokens. To stop the daemon explicitly, use `takt daemon stop` or send a signal. If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
 
 ### Conversations and inquiries
 
-Waiting input survives restart. Non-human events interrupted by daemon shutdown or restart are redelivered in their original acceptance order. Explicitly interrupted turns are not redelivered; interrupted human messages retain their existing carry-forward behavior. Current Slack ports do not guarantee restoration of reply destinations after a daemon restart.
+Waiting input survives restart. Non-human events interrupted by daemon shutdown or restart are redelivered in their original acceptance order. Explicitly interrupted turns are not redelivered; interrupted human messages retain their existing carry-forward behavior. The current Slack integration may not restore reply destinations after a daemon restart.
 
-The Slack ACK acknowledges transport receipt. Business acceptance is reported only after the daemon durably saves the input. Results arrive later in the originating thread.
+The Slack ACK acknowledges transport receipt. The daemon reports acceptance after durably saving the input. Results arrive later in the originating thread.
 
 - Post a message in the configured channel. Manager replies in that post's thread; continue the exchange there. All conversation threads connect to the same manager conversation for the repository, shared with the TUI. Replies go only to the thread where the message was sent. Replies to TUI messages are not sent to Slack.
 - Messages in other channels, DMs to the bot, and messages or button actions from users outside `allowed_user_ids` receive no response.
@@ -847,7 +885,7 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 ## Model Resolution
 
-Provider and model selection is owned by `runtime.yaml` when runtime mode is active, with CLI and environment overrides still available. In legacy mode, the `config.yaml` provider, model, and routing settings described below remain supported. Workflow YAML cannot select a provider or model; `provider`, `model`, and inline provider options fail at the load boundary with a migration hint.
+In runtime mode, select the provider and model in `runtime.yaml`; CLI and environment overrides remain available. In legacy mode, the `config.yaml` provider, model, and routing settings described below remain supported. Workflow YAML cannot select a provider or model; `provider`, `model`, and inline provider options fail during loading with a migration hint.
 
 ### Provider-specific Model Notes
 
@@ -1090,8 +1128,9 @@ of `profile` or `ladder`. `targets` has the same shape as top-level `provider.ta
 
 Set `provider.defaults: { assignment: project-sol }` to select a named assignment by default.
 Top-level `defaults` must specify exactly one of `profile`, `ladder`, or `assignment`; assignment
-defaults accept only `profile` or `ladder` and cannot refer to another assignment. Selection uses
-CLI, matching directory, then default assignment priority. Project defaults replace global defaults
+defaults accept only `profile` or `ladder` and cannot refer to another assignment. Assignments are selected
+in this order: CLI, the task's saved `runtime_assignment` (when executing a task), a matching directory,
+then the default assignment. Project defaults replace global defaults
 wholesale. An unknown assignment or profile, conflicting or empty defaults, or a selected assignment
 without concrete defaults when top-level defaults names an assignment fails before an agent starts.
 When top-level defaults specifies a profile or ladder, an assignment may omit defaults and inherit it.
@@ -1174,11 +1213,11 @@ In this example, `cost` uses low effort by default and medium effort for the rev
 The option applies to interactive startup, direct execution, pipeline, `run`, `watch`, and
 other subcommands. All tasks in one `run`, tasks added later to the same `watch`, internal
 agents, and loop-analysis use the same selection. The `--runtime-assignment` selection is not written
-to configuration files or to task records; this does not change. A task carries `runtime_assignment`
-only when manager specified it through `takt_enqueue_goal_task`. When a run is started with
+to configuration files or to task records; this does not change. When manager supplies `runtimeAssignment`
+to `takt_enqueue_goal_task` for a new task, or to `takt_retry_goal_task` or `takt_requeue_goal_task`
+when returning a task to `pending`, the name is saved as `runtime_assignment`. When a run is started with
 `--runtime-assignment`, that selection takes precedence over the task's saved `runtime_assignment`.
-Ordinary task execution still updates task status. Without the option,
-existing directory matching and top-level resolution are unchanged.
+Ordinary task execution still updates task status. Without `--runtime-assignment`, a task uses its saved `runtime_assignment` if present. Without a saved value either, the existing directory matching and top-level resolution apply.
 
 An unknown name, missing assignments, or no active runtime provider section stops before
 any agent starts. The error includes the requested name and available assignment names,
@@ -1233,7 +1272,7 @@ defaults
   < steps
 ```
 
-The internal `selector`, `assistant`, `loop-judge` and `review-completion-judge` agents resolve separately. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. Each seat is optional and uses normal defaults when unassigned. The retired `manager-permission-judge` seat is ignored.
+The internal `selector`, `assistant`, `loop-judge` and `review-completion-judge` agents resolve separately. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. Configuration for each agent is optional; omitted entries use normal defaults. The retired `manager-permission-judge` setting is ignored.
 
 ```text
 defaults
@@ -1435,12 +1474,12 @@ MCP configuration also must not be mixed across the legacy and runtime modes:
 - Active `mcp` section in `runtime.yaml`: only the runtime MCP assignment is used.
 - Runtime MCP and workflow `mcp_servers` coexisting: TAKT fails fast, naming the workflow/step and the migration target.
 
-In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`.
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env. Define these in the `mcp` section in `runtime.yaml`.
 
 | Legacy setting | Runtime destination |
 |---|---|
-| workflow `mcp_servers` policy | `mcp.targets` |
-| step `mcp_servers` map | `mcp.targets.steps` |
+| Config `workflow_mcp_servers` policy | This transport permission policy cannot be copied directly into runtime assignments. Remove the legacy policy during migration. |
+| Step `mcp_servers` map | Move server definitions to `mcp.servers` and manually assign their names through `mcp.targets.steps`. |
 
 ## Provider Profiles
 
@@ -1468,7 +1507,7 @@ Pi permission modes are SDK active-tool allowlists, not an operating-system sand
 
 ### Configuration
 
-Provider profiles can be set at both global and project levels:
+Provider profiles can be defined in both global and project configuration:
 
 ```yaml
 # ~/.takt/config.yaml (global) or .takt/config.yaml (project)
@@ -1485,15 +1524,16 @@ provider_profiles:
 
 ### Permission Resolution Priority
 
-Permission mode is resolved in the following order (first match wins):
+First, select a mode from provider profiles in the following order, using the first matching setting:
 
 1. **Project** `provider_profiles.<provider>.step_permission_overrides.<step>`
 2. **Global** `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. **Project** `provider_profiles.<provider>.default_permission_mode`
 4. **Global** `provider_profiles.<provider>.default_permission_mode`
-5. **Step** `required_permission_mode` (acts as a minimum floor)
 
-The `required_permission_mode` on a step sets the minimum floor. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a step requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
+Then always apply the step's `required_permission_mode` as a minimum. If the selected profile mode is lower than the required mode, raise it to the required mode. For example, if a step requires `edit` and the profile resolves to `readonly`, the effective mode is `edit`.
+
+If no mode can be selected from profiles, use the step's `required_permission_mode`, or `readonly` if that is also unspecified.
 
 Every provider also has a builtin `default_permission_mode: edit` that always participates in this resolution. When neither project nor global `provider_profiles` set a value, the effective mode is therefore `edit` (raised when the step's `required_permission_mode` demands more).
 
@@ -1627,7 +1667,7 @@ In legacy mode, the top-level `provider` and `model` are the defaults. Set a pro
 
 Assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) do not go through auto routing. They resolve `takt_providers.assistant`, then fall back to the top-level provider/model when the assistant setting is unset; the assistant setting is not a default for other internal operations. CLI `--provider` / `--model` overrides apply to interactive planning only, while instruct and retry do not accept those overrides. Without a resolvable assistant or top-level provider, assistant startup fails with `Provider is not configured.`
 
-In runtime mode, `provider.defaults` selects the default profile or ladder. Set a pool on targets that use auto routing; pool candidates reference `provider.profiles`. Hard rules for pool selection run in `tags`, `steps`, `personas` order. Provider targets themselves have precedence `defaults < personas < tags < steps`. Without a matching hard rule, `pool_rules` and the router's tier choose a candidate.
+In runtime mode, `provider.defaults` specifies a profile, a ladder, or a default named assignment. When it specifies an assignment, the profile or ladder in the selected assignment's `defaults` is used. Set a pool on targets that use auto routing; pool candidates reference `provider.profiles`. Hard rules for pool selection run in `tags`, `steps`, `personas` order. Provider targets themselves have precedence `defaults < personas < tags < steps`. Without a matching hard rule, `pool_rules` and the router's tier choose a candidate.
 
 Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Runtime
 profiles carry provider/model/options, so candidates reference profiles rather
@@ -1657,7 +1697,9 @@ persona_providers:
 
 Capability references can load shared provider-options presets by name. Names are resolved first-match from `.takt/provider-options`, then `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For workflows installed from a repertoire package, the package-local `provider-options/` directory is checked before those locations. A scoped ref such as `@owner/repo/name` resolves `name` from another repertoire package's `provider-options/` directory. Workflow YAML may reference only capability presets; provider/model/options definitions belong in runtime profiles (or the retained legacy config layers).
 
-Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used.
+
+Relative paths are resolved from the directory of the file containing the reference. When following only path-based references from a workflow, relative paths stay within the workflow directory. After loading a named or scoped preset, subsequent relative paths are confined to that preset's directory. Symlink targets must stay within the same permitted directory. Absolute paths and paths whose real target escapes that directory are rejected.
 
 Provider options can also be set with the corresponding `TAKT_PROVIDER_OPTIONS_*` environment variables. Examples:
 
@@ -1782,7 +1824,7 @@ legacy mode it can also be set through `provider_routing`, deprecated
 
 #### Codex context compaction recovery
 
-Codex receives a stable developer contract that gives TAKT's current turn instructions priority. TAKT sends the current assignment, persona, and phase in `taktCurrentInstructions`, and the task input in `userInstruction`. The current assignment takes precedence over earlier assignments and progress notes. The developer contract overrides an existing user `developer_instructions` setting without changing the configuration file. Workflow sessions created before this contract use a different session key, so a new session starts with the current instructions. The report phase includes saved work results in that new request.
+Codex receives a fixed developer rule that gives TAKT's current turn instructions priority. TAKT sends the current assignment, persona, and phase in `taktCurrentInstructions`, and the task input in `userInstruction`. The current assignment takes precedence over earlier assignments and progress notes. This rule overrides an existing user `developer_instructions` setting without changing the configuration file. Workflow sessions created before this rule use a different session key, so a new session starts with the current instructions. The report phase includes saved work results in that new request.
 
 When Codex records a `compacted` event during Phase 1 and the same session returns a completed turn, TAKT checks whether that response completes the assigned step. The check runs in a separate, read-only structured Codex session without MCP tools. A completed review, including a concrete REJECT finding, is returned as the original response. If the agent has lost its assignment, TAKT resumes the working thread with the original Phase 1 instruction, current assignment and permissions. A failed or invalid check fails the provider call rather than accepting the candidate.
 
@@ -2131,9 +2173,11 @@ takt update           # Update installed providers with version drift only
 takt update codex     # Update the selected provider only
 ```
 
-Interactive entry points confirm required installations and approximate disk space before execution. Declining a missing SDK prevents execution; conversations display install advice and return to input. Declining an update uses an intact older SDK with a warning, and failures include update advice. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+Interactive entry points confirm required installations and approximate disk space before execution. Declining to install a missing SDK prevents execution; conversations explain how to install it and return to input. Declining an update keeps the intact older SDK with a warning; if that version fails, TAKT explains how to update it. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
 
 Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
+Pi's exception handler does not add update advice. If you are using an older SDK, update it with `takt update pi`.
 
 ## Merge selection
 

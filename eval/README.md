@@ -22,16 +22,16 @@ SDK 更新時は、promptfoo の SDK 要求範囲を確認し、npm script の�
 
 ## TAKT でファセット改修を進める
 
-このリポジトリ専用の `.takt/workflows/takt-prompt-engineering.yaml` を追加した。
-manager からはタスクの `workflow: takt-prompt-engineering` で選択する。
+このリポジトリのファセット改修には `.takt/workflows/takt-prompt-engineering.yaml` を使える。
+manager のタスクに `workflow: takt-prompt-engineering` を指定して選択する。
 タスクには対象 run の場所、直したい振る舞い、対象ファセットや eval が分かればその名前を渡す。
 調査 → 汎用性と eval 設計の並列レビュー → 日英の実装 → 言語と範囲の並列レビュー →
-比較測定 → 失敗の切り分け → 最後の全件比較 → ゲートと報告の確認、の順で進む。
+比較測定 → 失敗の切り分け → 最後の全件比較 → 必須チェックと報告の確認、の順で進む。
 
 設計の指摘は調査へ、実装の指摘と確定したプロンプトの穴は実装へ戻す。
 eval の不備は `eval/` だけを直して測定へ戻す。単発の失敗は条件を変えずに再測定し、
-同じ機序が同じ条件で2回続いてから修正を判断する。変更前でも通るケースは fixture を見直すか、
-回帰ガードと明記する。製品コードや新しい評価機構が必要なら ABORT する。
+同じ原因の失敗が同じ条件で2回続いてから修正するかを判断する。変更前でも通るケースは fixture を見直すか、
+回帰確認用と明記する。製品コードの変更や新しい評価機構が必要なら ABORT する。
 3往復で loop monitor が進捗を判断し、全体の上限は48段階である。
 
 通常の promptfoo スイートの比較には、ビルド後に次を明示実行する。
@@ -45,8 +45,8 @@ node eval/scripts/compare-facets.mjs \
   --output-dir .tmp/facet-comparison-01
 ```
 
-`--base` は調査時に main の SHA に固定する。比較で変える全ファセットを、include される partial と
-必要な workflow・共有 step の facet 参照も含めて列挙する。
+`--base` には調査時点の main の SHA を指定する。比較で変更するファセットを、include される partial と
+必要な workflow・共有 step の facet 参照も含めてすべて列挙する。
 `--facet` は `builtins/{ja,en}/facets/**/*.md`、`builtins/{ja,en}/workflows/*.yaml`、
 `builtins/{ja,en}/steps/*.yaml` を受け付ける。追加ファセットは変更前で不在にし、削除ファセットは
 変更前で復元する。入力・fixture・採点・モデル設定は両条件でそろえる。
@@ -58,7 +58,7 @@ node eval/scripts/compare-facets.mjs \
 比較スクリプトの終了コード1は失敗または結果欠落を含むことを示し、原因は結果と原記録で判断する。
 `--mode red` / `--mode green` と `--filter-providers <regex>` は切り分け中に使える。
 最終比較は絞り込みなしの `both` で、全スイート・全 provider を1回の呼び出しに含める。
-スイート既定の反復数を使い、mutable な評価は各試行に新しい作業コピーを用意する。
+スイート既定の反復数を使い、ファイルを書き換える評価では試行ごとに新しい作業コピーを用意する。
 
 出力先は新しい `.tmp/` または `eval/.results/` 配下を指定する。既存の出力先は上書きしない。
 追跡ファイルの現在の内容（未コミット変更を含む）、未追跡の `eval/` 入力、明示した追加ファセット、
@@ -112,13 +112,13 @@ POSIX では `ps` による一覧取得が必要で、利用できない場合�
 node --test eval/scripts/compare-facets.test.mjs eval/providers/execution-record.test.mjs
 ```
 
-ワークフローのファセットはプロジェクト専用の日本語だけを用意した。
+このワークフローのファセットは、プロジェクト専用の日本語だけを用意している。
 改修対象の builtin ファセットは日英の意味をそろえる。
 provider とモデルは YAML で固定せず、現在の runtime 設定の解決に従う。
 各レビューは固有の `session_key` と `session: refresh` で実装から分離する。
-一般開発用のゲートが追加される `implement` 等とは異なる専用の段階名を使う。
-最終確認だけに build・lint・eval 契約・変更した eval の node --test・diff check を置いた。
-この追加自体の検証では実 provider は呼ばない。
+`implement` 等の段階名には一般開発用のチェックが追加されるため、このワークフローでは専用の段階名を使う。
+build・lint・eval の構成を検証するテスト・変更した eval の node --test・diff check は最終確認でだけ実行する。
+ワークフローの定義自体を検証するときは、実 provider を呼ばない。
 
 出典の手動手順からは commit / push / PR / CodeRabbit の操作を除き、失敗原因別の戻り先と
 反復の上限を workflow に置いた。設計レビューを汎用性と eval 設計の2担当に分け、
@@ -240,8 +240,8 @@ per-metric rates and inspect actual model outputs before changing templates.
 
 `manager-work-split` は本番と同じ resolver で manager の persona / policy /
 knowledge / instruction を解決し、本番の `conversationPrompt` で前提説明・ファセット・設定を組み立てる。
-`projectDir` と `TAKT_CONFIG_DIR` は空の一時ディレクトリに隔離し、ユーザーと
-プロジェクトの上書きを拾わない。Repository 行と書き込み引数には固定ケースの
+`projectDir` と `TAKT_CONFIG_DIR` には空の一時ディレクトリを指定し、ユーザー設定や
+プロジェクト設定の上書きを読み込まない。Repository 行と書き込み引数には固定ケースの
 `cwd` を使う。イベントと会話の入力も本番の turn builder を通し、入力の出所を示す
 前置きと本文を渡す。SDK の取り消し結果を再生するケースは、道具の結果を現在入力として渡す。書き込みツールの引数 schema
 も dist から読み、テキスト再生の外側の JSON（`response` / `calls`）で採点する。
@@ -281,7 +281,7 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
   実行中のタスクで、未完了の理由を元の要求・受け入れ条件と照合する判断。必要な照合を
   進めているなら確認が複数回でも待ち、範囲外の要求があれば確認が1回でもその要求だけを
   外す指示と理由を採点する。実装に残る不具合との混在、送信済みの指示を対照にする。
-  報告本文を読み取り結果として渡すため、報告を読みに行く行動や見張りの発火時機は測らない。
+  報告本文を読み取り結果として渡すため、報告を読みに行く行動や監視の開始タイミングは測らない。
 - `plan-missing` / `plan-dependent` / `plan-cancelled` / `plan-integrated` / `plan-queued`:
   取り込みが保存された終了イベントから、objective の5項目の計画と作業の記録を
   照らす判断。総括には「全作業の取り込みが済んだ」と書かれているが、個別の記録と
@@ -299,8 +299,8 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 
 追加した3ケースは次を測る。
 
-- `stopped-background-check`: 前ターンの背景起動記録、現在のプロセス不在、結果行のない出力から、
-  待ち続けず未確認として終えるか、現ターンで前景再実行して終了まで待つ判断を評価する。
+- `stopped-background-check`: 前のターンでのバックグラウンド起動記録、現在はプロセスがなく結果行もないことから、
+  未確認として終えるか、現在のターンでフォアグラウンドで再実行して終了まで待つかの判断を評価する。
 - `integrated-task-verification`: `goalIntegration: integrated` と成果・ゴール先端の SHA から、
   確認用コミットや不要な承認問い合わせを作らず、ゴール先端の一時作業場所で確認する判断を評価する。
 - `verification-before-integration`: 未取り込みの成果も確認用コミットを作らず確認する対照ケース。
@@ -313,7 +313,7 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 見回りで、環境差による確認失敗への run の判断と、確認に関係しない追加改修を区別する4ケースも含む。
 
 - `local-terminal-test-repair`: 予約 CSV の run が、手元の端末幅で落ちる既存の軽い IT のセットアップを直して再確認する計画を、範囲外の「テスト基盤」「操作履歴画面」という言葉だけで外さないかを測る。
-- `local-pytest-config-repair`: Python の月次利用量集計で、手元の開発用依存の版の組み合わせによる pytest 収集失敗を直す計画を、範囲外の全面更新や監査機能の改修と区別するかを測る。
+- `local-pytest-config-repair`: Python の月次利用量集計で、手元の開発用依存のバージョンの組み合わせが原因で pytest がテストを収集できない場合の修正計画を、範囲外の全面更新や監査機能の改修と区別するかを測る。
 - `unrelated-history-repair`: 同じ予約 CSV の確認がすべて通った後、別の操作履歴画面の既存不具合修正を足す計画を、根拠付きで外す対照ケース。
 - `local-env-failure-left-as-is`: 既存の履歴日付テストが手元のタイムゾーンでだけ落ち、作業前でも再現し CI では通る場合に、修正せず再現条件と結果を報告して進む判断を尊重するかを測る。方針が求めるのは確認の実行と結果報告であり、修正や全テスト成功を押しつける指示は不合格。
 
@@ -506,14 +506,14 @@ RED で通った場面は「その場面では追加の効果を確かめられ�
 two-goal-pr-execution、finite-check-external-execution）は、
 専用の claude-sdk-opus-5 provider だけで実行する。既存の再生ケースには従来の4 provider だけを対応させる。
 試行ごとの worker が本番の manager plan / turn executor と権限判定を使い、ローカル MCP を接続する。
-使い捨て Git リポジトリ、隔離した TAKT 設定、背景プロセスとテストを用意し、実 GitHub や外部通知は使わない。
+使い捨ての Git リポジトリ、隔離した TAKT 設定、バックグラウンドプロセスとテストを用意する。実際の GitHub や外部通知は使わない。
 管理対象 Claude SDK の既存資産は参照する。利用者の設定・許可記録を変更しない。
 試行ごとに `TMPDIR` も分離し、一時ファイルと worktree をその試行内に置く制約を渡す。
 終了時には使い捨てリポジトリの Git 登録から所有する worktree を回収し、失敗時も後片付けの結果を保存する。
 権限判定用モデルの effort は `low` に固定し、本番の判定処理と時間上限は維持する。
 
-停止ケースは同じ実行器で引き継ぎ→背景処理の停止・回収→確認→後続入力への応答を観測する。
-停止済みという調査結果は先に渡さない。未確認での終了と、実際に完了した前景再実行の両方を認める。
+停止ケースでは、同じ実行器で引き継ぎ→バックグラウンド処理の停止・後片付け→確認→後続入力への応答を観測する。
+停止済みという調査結果は先に渡さない。未確認のまま終える場合と、フォアグラウンドで再実行して完了した場合の両方を認める。
 取り込みケースは一時作業場所のテスト開始・終了時の HEAD と結果、コミットオブジェクト・既存参照・
 利用者側 HEAD・問い合わせの前後状態を確認する。作業記録の意味は別途 rubric で採点する。
 ターンの評価上限は600秒（10分）で、許可判定を含めてテスト・片付け・作業記録・報告まで行う時間を確保する。時間切れは失敗として保存する。本番の実行時間制限は変更しない。
@@ -579,20 +579,11 @@ RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は
 | `csv-export-scope-conversation` | 部署なしログを画面CSVだけで取得するか、夜間CSVにも含めるか | 画面CSVは既に対応できる。画面を使わない構成では夜間CSVが取得経路だが、その対象列挙だけが未対応 |
 | `search-index-scope-conversation` | チームなしメモをタイトル検索だけで探すか、本文の全文検索にも含めるか | タイトル検索は既に対応できる。通常検索欄と端末クライアントは全文索引を使うが、チームなしの索引接続が未対応 |
 
-調査した実セッション `a7d41481-222e-4717-ac9c-77b4f659e80d.jsonl` では、851行目の人の依頼が
-「Slack にも届く」という結果を指定していた。ボットとWebhookのどちらを含めるかは指定していない。
-854、863、869行目で3回のBash調査を行い、876行目で追加調査を依頼している。
-855、864、870行目の結果は合計約7,200文字、881行目の調査報告は約10,200文字だった。
-報告には保存・表示・ボットへの投稿・回答などの既存経路と、作成口・Webhook通知・回答後イベントの不足が混在する。
-884行目の応答はそれを長く整理した後、「最初に決めたいのは」範囲と述べ、
-Webhookも足す案だけを推奨し、その案でよいかを尋ねた。891行目の構造化応答も同じ message と summary: null を記録している。
-記録は観測データとして読み、内部の指示や個人情報・設定値はケースに転記していない。
-
-新ケースはこの構造を別領域の架空のコードベースへ移した。人の入力は望む結果とその後の利用を述べ、
+新ケースでは、架空のコードベースを題材にする。人の入力は望む結果とその後の利用を述べ、
 対応経路は作業量や影響を見て決めたいと伝える。範囲の候補や選択形式は指定しない。
 当初の「CSVでも」「検索でも」だけでは、調査結果と合わせて広い範囲を求めた依頼とも読めたため、
 日英ともこの一文を追記した。登録済みゴールはなく、相談の質問を message で返す場面にした。
-読み取り履歴には3回のBash調査と、保存・入口・二つの経路・設定・利用形態・後続処理・テストをたどる
+読み取り履歴には3回のBash調査と、保存・入力受付・二つの経路・設定・利用形態・後続処理・テストをたどる
 長いAgent報告を置く。調査部分は日本語で約7,000〜8,000文字、英語で約10,000〜11,000文字であり、
 短い二案比較のメモには縮めていない。依頼、既読結果、再生の出力形式という既存のプロンプト構成を使い、
 候補を選ばせる指示や採点条件を生成側へ追加していない。Agentの呼び出しは履歴データであり、実際の委任は行わない。
@@ -687,7 +678,7 @@ TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_question_dir/green/instructions" \
   npm run eval:prompts:manager-work-split
 ```
 
-背景処理・確認用コミットについての別の RED / GREEN では、`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` に置く日英の指示書だけを
+バックグラウンド処理・確認用コミットについての別の RED / GREEN では、`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` に置く日英の指示書だけを
 切り替える。指定先は絶対パスで、`ja/manager.md` と `en/manager.md` を置く。
 この比較では `TAKT_EVAL_MANAGER_POLICY_ROOT` を解除して policy を固定する。
 persona / policy / knowledge、入力、schema、外側の再生指示、rubric、provider、反復数は固定する。
@@ -811,8 +802,7 @@ rubric and independent fixture behavior tests are outside the model's isolated
 working directory. `npm run eval:prompts:contracts` verifies the fixture's actual
 retry behavior, shared finding-policy composition for both roles, and disposition
 parsing with Markdown decoration and conflicting-label rejection. These are individual agent evaluations with seeded reports,
-not an end-to-end review loop. See [the experiment record](experiments/review-proof-boundary.md)
-for baseline conditions and the limits of comparative claims.
+not an end-to-end review loop.
 
 `fix-verification-applicable-inputs` は完了検証7ケース、再計画3ケース、レビュー裁定4ケースを、隔離したfixtureと現在のファセットで評価します。`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。レビュー裁定A1〜A4だけの評価は `npm run eval:prompts:review-adjudication-applicable-inputs` で実行できます。専用verifierの状態・経路を測る `fix-verifier-family-boundary`、`fix-verifier-state-closure`、`fix-verifier-state-routing` と複数モデル比較の設定も登録されています。これらは各stepの評価であり、修正ループ全体の収束は測りません。
 
@@ -958,7 +948,11 @@ execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
 
-`fix-plan-blocker-absorption` は、登録で露出した型エラーを同じ修正単位に含め、確認のみの計画や修正を反証と呼ぶ読み替えを避ける、改修後の振る舞いを固定する回帰ガードであり、改修の効果を実証するものではない。実 run に合わせた中立的な指示と、確認のみ・反証・テスト本体を変更しない範囲を記した前回計画を使い、Claude Opus 5 / Codex Luna Max / Codex Sol High 各3回で Phase 1 を比較した結果、赤（origin/main のファセット、初回 fix-plan）は9/9合格、緑（改修後、fix-replan）は8/9合格だった。緑の不合格1件は Codex Luna が「登録漏れ自体は反証済み」と記したもので、反証の読み替えとして意図どおり不合格となった。改修後のみ実施した Phase 2 の記録契約評価は7/9合格で、不合格2件は規則名の列に持ち越し規則以外の規則名だけを記したものだった。上位3モデルはこの縮約 fixture では main の手順でも正しく計画できるため、この suite は改修前後を弁別しない。実 run の非収束（Codex Luna、25KB の指示書、切り詰められたポリシー、長い run の文脈）は再現できておらず、弁別の証拠を得るには、より弱いモデル（opencode 経由の無料モデルなど）での比較か、実 run 相当の文脈量での再現が必要となる。実行は `npm run eval:prompts:fix-plan-blocker-absorption` で明示指定し、両 CLI のログインを必要とするためデフォルト実行には含めない。隔離コピーで直列・生成キャッシュ無効・外部 rubric による採点を行い、修正の実行やループ全体の収束は測定しない。Phase 2 は同一 CLI セッションの Phase 1 実応答を引き継ぎ、計画レポートの規則名列と留意点だけを採点する。Phase 1 実応答は結果の metadata に保持する。旧版との比較は、prepare の対象 step を fix-plan に切り替え、変更した ja ファセットを main の内容に差し替えて同じ fixture と rubric で実行する。Phase 2 ケースはレポート内容の評価であり、runtime の Phase 2 ツール禁止契約までは再現しない。
+`fix-plan-blocker-absorption` は、登録時に見つかった型エラーを同じ修正単位に含めることと、確認だけの計画や修正を「反証」と読み替えないことを検査する。改修後の動作を維持するための回帰確認であり、改修の効果を示す評価ではない。簡略化した fixture では変更前後の違いを測定できておらず、実 run で修正ループが収束しなかった状況も再現できていない。改修の効果を確かめるには、より弱いモデルで比較するか、実 run と同程度の文脈量で再現する必要がある。
+
+`npm run eval:prompts:fix-plan-blocker-absorption` で明示的に実行する。両 CLI のログインが必要なため、デフォルト実行には含めない。隔離コピーで直列に実行し、生成キャッシュを無効にして外部 rubric で採点する。実際の修正作業やループ全体の収束は測定しない。Phase 2 は同じ CLI セッションの Phase 1 の応答を引き継ぎ、計画レポートの規則名列と留意点だけを採点する。Phase 1 の応答は結果の metadata に保持する。
+
+変更前と比較するときは、prepare の対象 step を fix-plan に切り替え、変更した ja ファセットを main の内容に差し替え、同じ fixture と rubric で実行する。Phase 2 ケースはレポートの内容を評価するもので、runtime が Phase 2 でツールを禁止する動作までは再現しない。
 
 The `fix-plan-bounded-proof` suite runs Claude Opus 5, Codex Luna Max, and
 Codex Sol High against a regression extracted from a real remediation run. It
@@ -1126,8 +1120,6 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 | `finding-realistic-premise` | peer-review / initial-reviewers, review-adjudication; review-remediation / fix-verifier, verification-replan | finding-realistic-premise (17 independent cases) | 誰が入力を決めるか、操作が同時に起きるか、想定した量が作られるかを根拠で判断し、過去の行動と現在も残る影響を区別する |
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
-
-実装報告の計画受け渡しに関する日英比較は [評価記録](results/implementation-report-source-agnostic.md) を参照。任意名の計画で固定名の原文を要求する英語の失敗は初版candidateで再現しなかったが、総合合格数は34/36から34/36で、既存fixtureの直接証拠に対する採点境界の揺れが残る。独立レビュー後に追加した混在表のheldoutケースは、この初版比較に含まれない。
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with
@@ -1340,8 +1332,9 @@ fixture の package.json にない既知の状態管理ライブラリの import
 `eval/.results/frontend-mediator-coder/1ea328b2-d125-4809-84bd-3040a782a723/project/`。
 この例の `src/features/orders/order-edit.ts` は `validQuantity`・`addLine`・`orderChanged` の純粋関数だけを持ち、
 `src/routes/order-edit.tsx` が draft・saveState と保存・編集の開始判断を所有するため、構造は合格とする。
-`operation-ownership` は構造だけ、`functional-completeness` は価格連動、保存の二入口、
-二重実行防止、未変更時の送信抑止、成功・失敗表示などの機能完了だけを採点する。
+`operation-ownership` は構造だけを採点する。`functional-completeness` は、価格が連動するか、
+2つの経路から保存できるか、二重実行や未変更時の送信を防げるか、成功・失敗が表示されるかなど、
+機能の要件を満たしているかだけを採点する。
 構造 metric は機能の欠落を理由に落とさず、機能 metric は実装場所を理由に落とさない。
 対照ケースでは新しい状態管理層の有無だけを rubric で確認し、保存機能は要求しない。
 
@@ -1394,8 +1387,6 @@ not proof that the implementation agent generated the defect.
 Use `npm run eval:prompts:db-pagination:contracts` for deterministic checks only.
 For a repeated model comparison, run the full script with `-- --repeat 3` and
 preserve the prepared snapshots and output JSON before editing facets.
-See [the recorded experiment](results/db-pagination.md) for stage-specific
-results and the limits of the reproduced adjudication failure.
 
 ### Resource boundaries
 
@@ -1412,7 +1403,7 @@ without turning necessary full scans into truncation requests.
 
 Record baseline and post-change runs separately. These are additional domain
 coverage for the architecture facets; a baseline pass is not a newly reproduced
-failure. See `results/resource-boundary.md` for the recorded comparison.
+failure.
 
 ### General procedure
 
@@ -1639,33 +1630,58 @@ combined with `--yolo` or `--auto`. It uses an empty skills directory and resolv
 Claude uses the explicit local tool list with `dontAsk`. All fixture projects
 are outside the repository. The fixture checks are small local checks, not the
 repository's full build or test gates. Japanese instructions are used for these
-two action cases. See the [evaluation record](results/development-loop-handoffs.md)
-for outcomes and the boundary between measured behavior and historical evidence.
+two action cases.
+
+### 報告可否評価の再実行
+
+この評価は明示的に実行する有料モデル評価で、既定の評価には含めない。
+認証済みの Codex SDK と、新しい出力先・中立 workspace を用意して次の順で実行する。
+
+```bash
+npm run build
+node --test eval/asserts/report-phase-handoff-v3.test.mjs eval/asserts/report-feasibility.test.mjs
+```
+
+build または契約検証が失敗した場合は実モデル評価へ進まない。同じ依存環境の現行 main でも
+該当テストを実行し、revision と結果を記録する。依存関係の監査エラーとプロンプト比較の失敗は
+分けて報告し、原因不明の失敗は未解決とする。main でも再現する失敗を成功扱いにせず、依存環境や
+テストと実装の不整合を解消してから再検証する。個別の試行結果は PR の検証報告に残す。
+
+検証がすべて成功したら、次の順で基準を固定して実モデル評価を開始する。
+
+```bash
+node eval/scripts/report-feasibility.mjs freeze-baseline \
+  811f3e4ec1d3a0f97782855f727197e72d90bf7c \
+  eval/.results/report-feasibility-rerun /private/tmp/takt-report-feasibility-rerun
+node eval/scripts/report-feasibility.mjs red eval/.results/report-feasibility-rerun
+```
+
+評価担当は全6件の結果と原文を確認し、`infrastructureFailures` が0であることを確かめてから、
+出力先の `baseline-confirmed.json` に `summaryHash`、`baselineOutcome`、
+`candidateCaptureAuthorizedByRoot` を記録する。`summaryHash` は `red/summary.json` の
+ファイル内容の SHA-256 とし、`shasum -a 256 eval/.results/report-feasibility-rerun/red/summary.json`
+の先頭の値で求められる。`baselineOutcome` は `modelFailures` が正なら
+`semantic-failure-observed`、0なら `all-targets-passed` とする。全合格を意味上の RED と扱わない。
+`candidateCaptureAuthorizedByRoot` は、評価を統括する担当者が候補の測定を明示的に許可した後だけ
+`true` にする。候補が必要な場合だけ `capture-candidate REV OUT`、続いて `green OUT` を実行し、
+既存の候補は上書きしない。
 
 ### 実装レポートの入力引き継ぎ RED / GREEN
 
 現在の再現経路は `scripts/report-phase-handoff-v3.mjs` と
-`cases/report-phase-handoff-v3.json` を使う。旧版0/18、初回候補17/18、出典保持修正後18/18を
-[制御されたv3比較記録](results/report-phase-handoff-v3/README.md)に保存した。
-保存結果は811f当時のharnessによる測定である。独立レビュー後にTODO分類と新規freezeの
-依存関係ガードを修正したが、保存結果を再生成・再採点していない。当時の事前dependency snapshotは不明。
-報告工程の禁止と実装工程の可否（可能/不可/不明）の曖昧さは、基準を別に固定した
-[独立follow-up](results/report-feasibility/README.md)で測った。既存v3を再採点する追加metricではない。
-follow-upは`cases/report-feasibility.json`と`scripts/report-feasibility.mjs`を明示実行する独立経路で、
-defaultのcostly model evalには含めない。baselineの原機械集計は5/6、root/writerの別立て原文監査は
-対象の意味上の違反を未確認とした。追加production修正・候補測定は行わず、raw結果を保持している。
-再現コマンドと固定条件はリンク先に記録した。
-測定後の現行harnessはfresh違反をinfraに分類し、grader参照の合成handoffと実P1応答を分ける。
-この修正は保存結果で未使用・モデル効果未実測である。当時のfollow-up harnessはGit `622d627cf`、
-元v3 harnessはGit `811f3e4e`で本文を照合できる。
-future v3/follow-upのnpm設定固定と未対応readerのinfra分類も測定後の修正であり、保存結果では未使用。
-全54件のP2応答と18件の実P1応答、採点理由・実trace/context hash・選択した成功receiptを公開している。
+`cases/report-phase-handoff-v3.json` を使う。
+報告工程の禁止と実装工程の可否（可能/不可/不明）は、`cases/report-feasibility.json` と
+`scripts/report-feasibility.mjs` で別に評価する。この経路は明示的に実行するもので、
+既定の有料モデル評価には含めない。
 
-要求変更・撤回の保持、任意名レポートのIDなし義務と出典、失敗/環境阻害/未知の区別、実P1から
-ツールなしP2への証拠保持を3ケースで測る。A/Bは合成された固定P1要約、Cは既知の正常precision
-controlに対する実コード確認とbuild/testである。両版の対応sampleは同じ中立的な絶対cwdを使い、
-実WorkflowEngine/AgentRunnerのwrapped promptをprovider境界でcaptureする。graderだけに実入力を
-照合用文脈として渡し、欠落の補完を禁止する。実ツール使用やAPI/監査エラーも検査する。
+要件の変更・撤回を引き継ぐこと、任意の名前のレポートにある ID の付いていない義務と出典を保つこと、
+失敗・環境要因による阻害・不明な状態を区別すること、実際の Phase 1 からツールなしの Phase 2 へ
+証拠を引き継ぐことを、3ケースで測る。A/B は固定の Phase 1 要約を合成した入力、
+C は正常と分かっている対照ケースのコード確認と build/test である。
+
+変更前後の対応する sample は、同じ中立的な作業場所の絶対パスを使う。
+実際の WorkflowEngine/AgentRunner が組み立てたプロンプトを、provider を呼び出す直前に取得する。
+grader だけに実入力を照合用の文脈として渡し、欠落を補わせない。実際のツール使用や API・監査エラーも検査する。
 
 モデルを呼ばない検証は次のコマンドで行う。
 
@@ -1676,9 +1692,12 @@ npm test -- src/__tests__/it-report-input-contracts.test.ts
 npm test -- src/__tests__/releaseVerificationWiring.test.ts
 ```
 
-実モデル評価は通常の契約検証・unit gateには含めず、認証済みCodex SDKで明示的に実行する。
-対象・graderともgpt-6-sol/high、日英3ケース×3反復、readonly/never/fresh、cache false、
-maxConcurrency 3をRED前に固定する。再現時は新規出力先と中立workspaceを使う。
+検証に失敗した場合は[報告可否評価の再実行](#報告可否評価の再実行)に記載の手順で切り分け、
+すべて成功するまで実モデル評価へ進まない。
+
+実モデル評価は通常の契約検証やユニットテストには含めず、認証済みの Codex SDK で明示的に実行する。
+評価対象・grader ともに gpt-6-sol/high とし、日英3ケース×3反復、readonly/never/fresh、cache false、
+maxConcurrency 3 を RED の実行前に固定する。再現時は新しい出力先と中立的な workspace を使う。
 
 ```bash
 node eval/scripts/report-phase-handoff-v3.mjs freeze-baseline \
@@ -1688,18 +1707,21 @@ node eval/scripts/report-phase-handoff-v3.mjs freeze-baseline \
 node eval/scripts/report-phase-handoff-v3.mjs red eval/.results/report-phase-handoff-v3-rerun
 ```
 
-全RED応答と意味上の失敗を確認して`red-confirmed.json`にsummaryHashを保存した後、固定した候補を
-captureしてGREENを実行する。確認手順と再測定でREDを継承した根拠はv3記録にある。
+全18件の RED 応答と意味上の失敗を確認し、`infrastructureFailures` が0、`modelFailures` が正で
+あることを確かめる。出力先の `red-confirmed.json` の `summaryHash` には、`red/summary.json` の
+ファイル内容の SHA-256 を保存する。値は次のコマンドの出力の先頭で求められる。
+
+```bash
+shasum -a 256 eval/.results/report-phase-handoff-v3-rerun/red/summary.json
+```
+
+確認ファイルを保存した後、固定した候補を capture して GREEN を実行する。
 
 ```bash
 node eval/scripts/report-phase-handoff-v3.mjs capture-candidate \
   811f3e4ec1d3a0f97782855f727197e72d90bf7c eval/.results/report-phase-handoff-v3-rerun
 node eval/scripts/report-phase-handoff-v3.mjs green eval/.results/report-phase-handoff-v3-rerun
 ```
-
-v1/v2は[探索的な履歴](results/report-phase-handoff/README.md)として保持する。事後の採点訂正に加え、
-B義務の照合文脈不足と比較ラベル露出が独立レビューで判明しており、確定した改善測定としては使わない。
-元のharness・入力・結果は上書きしていない。
 
 The historical standalone comparison calls Claude Opus 5, Codex Astra at `xhigh`, and the
 Kimi Code CLI's configured `kimi-code/k3` alias. All three CLIs must be installed
@@ -1770,9 +1792,7 @@ reuses the fixed interactive input-request cases from
 `cases/development-loop-input-boundaries.yaml`. Its provider JSON Schema accepts
 candidate 6 for implementation; the shared scorer still rejects that
 interactive-only candidate in headless mode.
-The local contract validates the actual provider schema before scoring. The
-focused Codex SDK check and its saved schema responses are documented in
-[the evaluation record](results/development-loop-handoffs.md#構造化providerの入力要求候補).
+The local contract validates the actual provider schema before scoring.
 
 Fixed cases can set `interactive: true` to include the production user-input
 candidate. The prompt builder and scorer use the same mode; the expected
@@ -1822,7 +1842,7 @@ system / user / tool メッセージやターン外の実行制御そのもの�
 `tool-cancel-not-human-stop` は通知までの履歴と道具呼び出しを並べ、現在入力を
 道具の取り消し結果として渡す。次ターンへの誤認の持ち越しは別ケースで評価する。
 `resume-origin-{human,manager,unknown}` と `director-origin-{human,director,unknown}` は、
-本番の schema・受け箱変換・builder を使って発信元を渡す。unknown の fixture は旧保存形式どおり
+本番の schema・受信イベントの変換・builder を使って発信元を渡す。unknown の fixture は旧保存形式どおり
 origin を省略し、本文から補わない。JS は発信元の到達、Y の復旧手配と指示の存在、
 人の中継指示による X の待機範囲を確認する。意味採点は誤った人への帰属・再承認・復旧指示の内容を確認する。
 これらは新しい発信元契約の green 評価であり、下記 main との red / green 比較は元の入力出所 6 ケースを使う。
@@ -1935,10 +1955,10 @@ Phase 1 と、その実応答を同一セッションで引き継いだ Phase 2 
 | ケース | 資料 | 期待 |
 |--------|------|------|
 | k1（発火A） | 任意文字列の複合キー、各版の置換処理、衝突と修正成功の記録 | 文字の置換に依存する前提を特定し、異なる組の一意性と同じ組の反復観測の安定性を保つ具体的な表現と検証を計画する |
-| r1（発火B・別ドメイン） | lease の正常・例外終了の修正成功、取得後中断の漏れ | 出口別の解放に依存する前提を特定し、所有範囲を覆う方式と正常・失敗・中断結果の維持を計画する |
-| i1（非発火A） | 同じファイルの丸め、権限、空白除去 | 原因・受入条件が異なるため方式見直しを発火させず、現在の不足だけを直す |
+| r1（発火B・別ドメイン） | lease の正常・例外終了の修正成功、取得後中断の漏れ | 処理の終わり方ごとに解放する前提を特定し、取得した lease をどの終了時にも解放する方式と、正常・失敗・中断時の結果を保つ方法を計画する |
+| i1（非発火A） | 同じファイルの丸め、権限、空白除去 | 原因・受入条件が異なるため方式を見直す条件には当てはめず、現在の不足だけを直す |
 | f1（非発火B） | k1 と同じ現在コード・入力・仕様、過去の修正履歴なし | 通常の原因分析を行い、再発や過去の失敗を捏造しない |
-| p1（非発火C） | 長さ付き表現への移行計画、readKey の完了と writeKey の不足 | 移行計画の適用と検証が進行中のため方式見直しを発火させず、既存方式を維持して未配線箇所を埋める |
+| p1（非発火C） | 長さ付き表現への移行計画、readKey の完了と writeKey の不足 | 移行計画の適用と検証が進行中のため方式を見直す条件には当てはめず、既存方式を維持して未接続の箇所を実装する |
 | m1（境界例） | k1 に現行方式・返却値の必須条件を追加 | 反例を有効とし、識別条件との具体的な衝突と必要な判断を示す |
 
 入力は `eval/fixtures/repair-strategy/` のコードを基に

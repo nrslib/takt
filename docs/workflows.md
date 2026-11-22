@@ -527,7 +527,7 @@ Named pools are discovered with the same layering as step fragments:
 
 Bare names resolve the first matching `<name>.yaml` before `<name>.yml` in each layer. `@owner/repo/name` selects a repertoire package explicitly. Absolute paths, directory traversal, nested paths, root-escaping symlinks, non-regular files, unreadable files, and oversize files are rejected. Provenance and dependency resources are tracked so `doctor`, `preview`, `eject`, and `repertoire install` / `remove` can follow them.
 
-#### Candidate contract
+#### Candidate requirements
 
 Every candidate in a pool shares the same shape:
 
@@ -547,9 +547,9 @@ Every candidate in a pool shares the same shape:
 - A candidate may represent a single facet or a small bundle of facets.
 - The selector can choose multiple candidates.
 - An empty selection means "no additional facet is needed" and is valid.
-- The pool author's contract is that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
+- Pool authors must ensure that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
 
-#### Selector contract
+#### Selector behavior
 
 When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile in a fresh session. It runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`.
 
@@ -667,7 +667,7 @@ The selector guidance references the workflow's existing persona and instruction
 #### Packages, eject, and authoring tools
 
 - Repertoire packages can install and remove `facet-pools/`, and package-local / scoped pools resolve through the same lookup order as step fragments.
-- `takt eject <workflow>` copies referenced external pools and the facet dependencies they own, following the existing eject contract for collision handling and existing-user-file priority.
+- `takt eject <workflow>` copies referenced external pools and the facets they depend on, using the existing collision handling and priority for existing user files.
 - `takt workflow doctor` validates pools, candidates, and facet references.
 - `takt workflow inspect <workflow>` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
@@ -758,7 +758,7 @@ A `workflow_call` step does not accept provider, model, provider-options, or rou
 overrides. The child inherits the already-resolved runtime context from its parent; configure
 provider targets, profiles, options, and routing in `runtime.yaml`.
 
-`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
+`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own. Executable steps in the root and descendant workflows consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
 
 A `workflow_call` step may also declare scalar `vars` for execution context that is not a facet reference. Strings, finite numbers, and booleans are inherited through nested workflow calls; a nested call overrides a key by declaring it again. Agent instruction facets read a value with `{var:name}`. A missing value renders as `unspecified`, so an instruction can define a safe fallback explicitly.
 
@@ -1267,11 +1267,11 @@ Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, t
 
 ## Best Practices
 
-1. **Keep iterations reasonable** — 10-30 is typical for development workflows
-2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code. When delegating permission control to Codex, also disable writes in Codex itself
-3. **Use descriptive step names** — Makes logs easier to read
-4. **Test workflows incrementally** — Start simple, add complexity
-5. **Customize with `takt eject <workflow>`** — Copy a builtin workflow and edit it
+1. Set a reasonable iteration count. Development workflows typically use 10-30.
+2. Use `edit: false` for review steps to prevent reviewers from modifying code. When delegating permission control to Codex, also disable writes in Codex itself.
+3. Use descriptive step names to make logs easier to read.
+4. Test workflows incrementally, starting with a simple structure and adding complexity.
+5. Customize a builtin workflow by copying it with `takt eject <workflow>` and editing it.
 
 ## PR status and system-step waits
 
