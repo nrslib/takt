@@ -435,8 +435,8 @@ export class AgentRunner {
       const compactionMatchesPromotion = compactionSessionId !== undefined
         && compactionSessionId === responseSessionId;
       recordSelection(responseSessionId, currentOptions.sessionId, compactionDetected && compactionMatchesPromotion);
-      if (selection?.override !== undefined) {
-        currentOptions = { ...currentOptions, contextWindow: selection.override };
+      if (selection !== undefined) {
+        currentOptions = { ...currentOptions, contextWindow: selection.override ?? options.contextWindow };
       }
       if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
         if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);

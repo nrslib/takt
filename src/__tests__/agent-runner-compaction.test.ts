@@ -306,6 +306,53 @@ describe('AgentRunner compaction recovery', () => {
     expect(windows).toEqual([500_000, 872_000, 500_000]);
   });
 
+  it('resets the native window before recovering a new session from an ID-less compaction event', async () => {
+    const windows: Array<[string | undefined, number | undefined]> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push([options.sessionId, options.contextWindow]);
+      if (call.mock.calls.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-old-recovery' } });
+        return makeResponse('completed', 'window-old-recovery');
+      }
+      if (call.mock.calls.length === 2) {
+        options.onStream?.({ type: 'context_compacted', data: {} });
+        return makeResponse('needs recovery', 'window-new-recovery');
+      }
+      return makeResponse('completed', 'window-new-recovery');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(
+      async (_task, options) => {
+        windows.push([options.sessionId, options.contextWindow]);
+        return makeResponse('recovered', 'window-new-recovery');
+      },
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse: async () => ({ decision: 'needs_recovery' }) }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-old-recovery',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-new-recovery',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', { ...options, executionPhase: 2 });
+    const recovered = await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', { ...options, executionPhase: 2, sessionId: 'window-new-recovery' });
+
+    expect(recovered.content).toBe('recovered');
+    expect(windows).toEqual([
+      ['window-old-recovery', undefined],
+      ['window-old-recovery', 500_000],
+      ['window-new-recovery', undefined],
+      ['window-new-recovery', undefined],
+    ]);
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+  });
+
   it('does not reuse a promoted override when the current native default is unknown', async () => {
     const windows: Array<number | undefined> = [];
     const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
