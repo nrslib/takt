@@ -76,6 +76,8 @@ export class CodexProvider implements Provider {
   getContextWindowLimits(options: ProviderCallOptions) {
     return readCodexModelContextWindow(
       options.model, options.childProcessEnv, options.cwd, options.providerOptions?.codex?.configProfile,
+      typeof options.providerOptions?.codex?.contextWindow === 'object'
+        && options.providerOptions.codex.contextWindow.auto_expand === true,
     );
   }
 

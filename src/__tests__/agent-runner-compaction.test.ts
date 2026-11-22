@@ -96,6 +96,91 @@ describe('AgentRunner compaction recovery', () => {
     expect(getContextWindowLimits).not.toHaveBeenCalled();
   });
 
+  it('passes an explicit initial window to the provider and promotes it for recovery and the next call', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-object' } });
+      }
+      return makeResponse('completed', 'window-object');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(
+      async (_task, options) => {
+        windows.push(options.contextWindow);
+        return makeResponse('recovered', 'window-object');
+      },
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse: async () => ({ decision: 'needs_recovery' }) }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-object',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-object',
+        providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', { ...options, executionPhase: 2 });
+
+    expect(windows).toEqual([500_000, 872_000, 872_000]);
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+  });
+
+  it('does not reuse a promotion when the explicit setting changes or the maximum becomes unknown', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-object-change' } });
+      }
+      return makeResponse('completed', 'window-object-change');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 500_000 });
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-object-change',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-object-change',
+        providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', options);
+    const changed = {
+      ...options,
+      resolvedExecution: {
+        ...options.resolvedExecution!,
+        providerOptions: { codex: { contextWindow: { initial: 400_000, auto_expand: true } } },
+      },
+    };
+    await new AgentRunner().run(undefined, 'changed setting', changed);
+    await new AgentRunner().run(undefined, 'unknown maximum', changed);
+    await new AgentRunner().run(undefined, 'disabled', {
+      ...options,
+      resolvedExecution: {
+        ...options.resolvedExecution!,
+        providerOptions: { codex: { contextWindow: { initial: 400_000, auto_expand: false } } },
+      },
+    });
+    await new AgentRunner().run(undefined, 'original setting restored', options);
+    await new AgentRunner().run(undefined, 'maximum lowered', options);
+
+    expect(windows).toEqual([500_000, 400_000, 400_000, 400_000, 500_000, 500_000]);
+    expect(getContextWindowLimits).toHaveBeenCalledTimes(5);
+  });
+
   it('keeps auto promotion within its own provider session', async () => {
     const windows: Array<[string | undefined, number | undefined]> = [];
     const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
@@ -184,6 +269,41 @@ describe('AgentRunner compaction recovery', () => {
     await new AgentRunner().run(undefined, 'first', options);
     await new AgentRunner().run(undefined, 'second', { ...options, sessionId: 'new-session' });
     expect(windows).toEqual([undefined, undefined]);
+  });
+
+  it('does not carry a prior session promotion into a new response session', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-old' } });
+        return makeResponse('completed', 'window-old');
+      }
+      if (windows.length === 2) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-old' } });
+        return makeResponse('completed', 'window-new');
+      }
+      return makeResponse('completed', 'window-new');
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-old',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-new',
+        providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', { ...options, sessionId: 'window-new' });
+
+    expect(windows).toEqual([500_000, 872_000, 500_000]);
   });
 
   it('does not reuse a promoted override when the current native default is unknown', async () => {
