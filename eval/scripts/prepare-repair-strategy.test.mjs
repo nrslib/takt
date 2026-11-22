@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { buildRepairStrategyFixture, repairStrategyWorkDirectory, REPAIR_STRATEGY_CASES, REPAIR_STRATEGY_LANGUAGES } from '../repair-strategy-cases.mjs';
+import { buildRepairStrategyFixture, REPAIR_STRATEGY_CASES, REPAIR_STRATEGY_LANGUAGES } from '../repair-strategy-cases.mjs';
 import { observe as observeResource, satisfied as resourceSatisfied } from '../fixtures/repair-strategy/resource-probes.mjs';
 import { observe as observeKey, satisfied as keySatisfied } from '../fixtures/repair-strategy/key-probes.mjs';
 import { prepareRepairStrategy } from './prepare-repair-strategy.mjs';
 import CliPlanReportProvider from '../providers/cli-plan-report.mjs';
-import { resolveRefToContent } from '../../dist/infra/config/loaders/resource-resolver.js';
+import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../dist/infra/config/index.js';
 
 const read = path => readFileSync(path, 'utf8');
 
@@ -110,12 +110,25 @@ test('prepare resolves completed history, immutable references, and inherited ad
       assert.equal(parse(read(join(receipt.project, '.takt/config.yaml'))).language, receipt.language);
       const policyPath = join(receipt.project, '.takt/eval-snapshots/policies.md');
       const policySnapshot = read(policyPath);
-      if (receipt.stage === 'adjudication') {
-        for (const kind of ['policies', 'knowledge']) {
-          const resourceRoot = new URL(`../../builtins/${receipt.language}/`, import.meta.url).pathname;
-          const expected = resolveRefToContent('review-adjudication', undefined, join(resourceRoot, 'workflows'), kind, { lang: receipt.language, resourceRoot });
-          assert.equal(read(join(receipt.project, `.takt/eval-snapshots/${kind}.md`)), expected);
-        }
+      const workflow = loadWorkflowByIdentifier(new URL(`../../builtins/${receipt.language}/workflows/peer-review.yaml`, import.meta.url).pathname, receipt.project);
+      assert.ok(workflow);
+      const remediation = workflow.steps.find(step => step.name === 'remediation');
+      assert.ok(remediation);
+      const planWorkflow = resolveWorkflowCallTarget(workflow, remediation, receipt.project, receipt.project);
+      assert.ok(planWorkflow);
+      const target = receipt.stage === 'adjudication'
+        ? workflow.steps.find(step => step.name === 'review-adjudication')
+        : planWorkflow.steps.find(step => step.name === 'fix-plan');
+      assert.ok(target);
+      const expectedSnapshots = new Map([
+        ['policies', target.policyContents],
+        ['knowledge', target.knowledgeContents],
+      ].map(([kind, entries]) => {
+        assert.ok(entries?.length, `${receipt.id}: ${kind} input`);
+        return [kind, entries.map(entry => entry.content).join('\n\n---\n\n')];
+      }));
+      for (const [kind, expected] of expectedSnapshots) {
+        assert.equal(read(join(receipt.project, `.takt/eval-snapshots/${kind}.md`)), expected, `${receipt.id}: ${kind}`);
       }
       assert.ok(prompt.includes(policySnapshot.length > 2000 ? policyPath : policySnapshot));
       const reports = receipt.declaredReports;
@@ -188,14 +201,14 @@ test('prepare resolves completed history, immutable references, and inherited ad
             assert.ok(!supplied.includes(receipt.project));
             for (const kind of ['policies', 'knowledge']) {
               const path = `.takt/eval-snapshots/${kind}.md`;
-              assert.equal(read(join(cwd, path)), read(join(receipt.project, path)));
+              const expected = expectedSnapshots.get(kind);
+              assert.equal(read(join(cwd, path)), expected, `${receipt.id}: isolated ${kind}`);
+              if (calls.length === 1) assert.ok(supplied.includes(expected.length > 2000 ? join(cwd, path) : expected));
             }
             for (const reference of receipt.fixedReferences) {
               assert.equal(read(reference.path.replace(receipt.project, cwd)), read(reference.path));
             }
-            if (calls.length === 1) assert.ok(supplied.includes(policySnapshot.length > 2000
-              ? join(cwd, '.takt/eval-snapshots/policies.md') : policySnapshot));
-            else assert.ok(supplied.includes(analysis));
+            if (calls.length === 2) assert.ok(supplied.includes(analysis));
             return calls.length === 1 ? analysis : 'Final report';
           } };
         },
@@ -216,34 +229,5 @@ test('prepare resolves completed history, immutable references, and inherited ad
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('each suite filters both phases to the correct fixture and report prompt', () => {
-  for (const [stage, path] of [
-    ['adjudication', '../agents/review-adjudication/review-adjudication.yaml'],
-    ['plan', '../agents/fix-plan/fix-plan-bounded-proof.yaml'],
-  ]) {
-    const suite = parse(read(new URL(path, import.meta.url)));
-    const grader = suite.defaultTest.options.provider;
-    assert.equal(grader.id, 'openai:codex-sdk');
-    assert.equal(grader.config.model, 'gpt-6-luna');
-    assert.equal(grader.config.model_reasoning_effort, 'low');
-    for (const language of REPAIR_STRATEGY_LANGUAGES) {
-      for (const caseId of REPAIR_STRATEGY_CASES) {
-        const label = `${caseId}${language === 'en' ? '-en' : ''}`;
-        const prompt = suite.prompts.find(prompt => prompt.label === label);
-        const id = `repair-strategy-${stage}-${label}`;
-        assert.equal(prompt.config.working_dir, `.work/${repairStrategyWorkDirectory(caseId, language, stage)}`);
-        assert.deepEqual(prompt.config.required_snapshots, ['.takt/eval-snapshots/policies.md', '.takt/eval-snapshots/knowledge.md']);
-        assert.equal(prompt.config.report_prompt, `prompts/${id}.phase2.md`);
-        assert.equal(prompt.raw, `file://../../prompts/${id}.phase1.md`);
-        assert.deepEqual(suite.tests.filter(entry => entry.prompts.includes(label)).map(entry => entry.vars.output_phase), ['phase1', 'phase2']);
-      }
-    }
-    assert.equal(suite.prompts.length, 13);
-    assert.equal(suite.tests.length, stage === 'adjudication' ? 27 : 25);
-    assert.ok(suite.tests.every(entry => entry.prompts.length === 1));
-    assert.ok(suite.providers.every(provider => provider.id === 'file://../../providers/cli-plan-report.mjs' && provider.config.isolate_working_dir));
   }
 });

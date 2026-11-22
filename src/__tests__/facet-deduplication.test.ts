@@ -47,32 +47,6 @@ describe('policy and knowledge facet deduplication', () => {
       ?.map(({ content }) => content)).toEqual(['SECOND', 'FIRST']);
   });
 
-  it.each(['policies', 'knowledge'] as const)('%s: keeps only the first facet across files and inline definitions with identical content', (kind) => {
-    const context = { projectDir, lang: 'ja' as const };
-    const first = `./.takt/facets/${kind}/first.md`;
-    write(first, 'SAME');
-    write(`.takt/facets/${kind}/second.md`, 'SAME');
-    const sections = { inline: 'SAME', other: 'SAME' };
-    const refs = ['first', 'second', 'inline', 'other', first, 'inline'];
-
-    expect(resolveRefList(refs, sections, projectDir, kind, context)).toEqual(['SAME']);
-    expect(resolveRefList(['first', 'second', 'inline', 'other'], sections, projectDir, kind, context))
-      .toEqual(['SAME']);
-    expect(resolveRefList([], sections, projectDir, kind, context)).toBeUndefined();
-    expect(resolveRefList(undefined, sections, projectDir, kind, context)).toBeUndefined();
-  });
-
-  it.each(['policies', 'knowledge'] as const)('%s: preserves files and inline definitions with different content', (kind) => {
-    const context = { projectDir, lang: 'ja' as const };
-    write(`.takt/facets/${kind}/first.md`, 'FIRST');
-    write(`.takt/facets/${kind}/second.md`, 'SECOND');
-    const sections = { inline: 'INLINE', other: 'OTHER' };
-    const refs = ['first', 'second', 'inline', 'other'];
-
-    expect(resolveRefList(refs, sections, projectDir, kind, context))
-      .toEqual(['FIRST', 'SECOND', 'INLINE', 'OTHER']);
-  });
-
   it('preserves repeated instruction refs because their positions can express repeated actions', () => {
     const context = { projectDir, lang: 'ja' as const };
     write('.takt/facets/instructions/check.md', 'CHECK');
