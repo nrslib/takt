@@ -51,6 +51,8 @@ export interface DeclaredReportInputs {
 
 export interface PreparedInstruction {
   readonly text: string;
+  /** Full contents explicitly required after the inlined excerpt. */
+  readonly requiredReferenceContents?: readonly string[];
   readonly injectedReports: readonly InjectedReport[];
   readonly reportInputs?: Phase1ReportInputs;
 }

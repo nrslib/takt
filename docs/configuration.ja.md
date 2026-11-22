@@ -1224,6 +1224,20 @@ takt run --runtime-assignment personal
 
 `provider.profiles` に provider、model、options を名前付きで定義します。`capabilities` には provider-options preset 名を指定でき、project → global → builtin の順に探します。profile の `options` は preset より優先されます。必要なら `permission_mode` や別の profile を継承する `extends` も指定できます。global と project に同名の profile がある場合は project の定義が全体を置き換えます。
 
+profile の `provider`、`model` と同じ階層に `context_window: auto` または正の整数を指定できます。省略時は `auto` です。`extends` で継承され、選ばれた profile から defaults、persona/tag/step target、ladder、auto routing、内部エージェントへ伝わります。workflow や `config.yaml` に指定するキーではありません。設定能力のないプロバイダーでは無視します。この設定でモデルは変更しません。
+
+```yaml
+provider:
+  profiles:
+    reviewer: { provider: codex, model: gpt-6-luna, context_window: auto }
+    reviewer-fixed: { extends: reviewer, context_window: 500000 }
+  defaults: { profile: reviewer }
+```
+
+`auto` は組み立て済みのsystem/user指示、構造化出力schema、指示で全文を読む必要があるpolicy/knowledgeを固定量として概算します。本文に含まれるreportは本文として数え、重ねて加算しません。初期の必要量は `ceil((固定量 * 2 + 150000) * 1.2)` です。これはtokenizerによる実測や後続のツール使用量の予測ではありません。ASCIIは4文字で1 token、CJKは1文字で0.75 token、その他の非ASCIIは1文字で0.5 tokenとして概算します。係数は日本語中心のPhase 1観測を参考にした粗い値で、実際のtoken数はモデルと内容で変わります。各段階の実効容量を比較し、収まるならモデルの既定値を維持し、必要に応じて500000と確認済み上限を検討します。同じ容量以下の段階は飛ばします。圧縮を検知すると同じセッションの次回呼び出し・復帰で次の段階へ上げ、完了済み応答はやり直しません。整数指定は固定値として渡し、自動選定や圧縮時昇格を適用しません。
+
+Codexは実効`CODEX_HOME`の`models_cache.json`から、選択モデルの`context_window`、`max_context_window`、`effective_context_window_percent`を読みます。Codexのbase設定と選択された`config_profile`に`model_context_window`があれば、設定の優先順位に従った値を既定容量として扱います。作業ディレクトリ側の設定に同じキーがある場合は、Codexの信頼判定をTAKT側で確定できないため`auto`による上書きを見送ります。設定を読めない場合やモデル情報が欠けている場合も上書きを見送ります。OpenCode v1/v2のモデルカタログにある`limit.context`は、拡張可能な上限を示しません。現在は確認済みの上限を登録していないため、`auto`は既定値を維持し、モデル情報を調べるための追加サーバーを起動しません。整数指定は両プロバイダーのnative設定へ渡します。選択値と概算理由は本文を含めずログへ記録します。
+
 `provider` は継承解決後も必須です。codex、claude、claude-sdk、claude-headless、claude-terminal、copilot、cursor、kiro、pi、deepseek-harness、mock では `model` を省略できます。`extends` で親に model があれば継承し、継承後も model がなければプロバイダーの既定モデルに委ねます。選択されなかった defaults や低優先度の別 profile から model を補完しません。明示的な CLI `--model` または環境変数 `TAKT_MODEL` は優先されます。opencode は例外で、`provider/model` 形式の `model` が必要です。
 
 ```yaml

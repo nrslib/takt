@@ -2180,6 +2180,7 @@ describe('CodexClient retry', () => {
 
   it('破棄した thread の compacted 通知で safety refusal 後の新規 thread の成功を復帰対象にしない', async () => {
     vi.useFakeTimers();
+    const retryTimer = vi.spyOn(globalThis, 'setTimeout');
     runPlans = [
       {
         type: 'events',
@@ -2216,6 +2217,11 @@ describe('CodexClient retry', () => {
       },
       progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
+    try {
+      await vi.waitFor(() => expect(retryTimer.mock.calls.some(([, delay]) => delay === 1000)).toBe(true));
+    } finally {
+      retryTimer.mockRestore();
+    }
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
 
@@ -2239,6 +2245,7 @@ describe('CodexClient retry', () => {
 
   it('safety refusal 後の新規 thread も個別に compaction 復帰し transport と rollout の重複検出で再復帰しない', async () => {
     vi.useFakeTimers();
+    const retryTimer = vi.spyOn(globalThis, 'setTimeout');
     const now = new Date();
     const directory = path.join(
       projectDirectory,
@@ -2308,6 +2315,11 @@ describe('CodexClient retry', () => {
       },
       progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
+    try {
+      await vi.waitFor(() => expect(retryTimer.mock.calls.some(([, delay]) => delay === 1000)).toBe(true));
+    } finally {
+      retryTimer.mockRestore();
+    }
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
 
@@ -2340,6 +2352,7 @@ describe('CodexClient retry', () => {
 
   it('同一 thread の transient retry では compacted 通知を保持して復帰する', async () => {
     vi.useFakeTimers();
+    const retryTimer = vi.spyOn(globalThis, 'setTimeout');
     runPlans = [
       {
         type: 'events',
@@ -2388,6 +2401,11 @@ describe('CodexClient retry', () => {
       },
       progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
+    try {
+      await vi.waitFor(() => expect(retryTimer.mock.calls.some(([, delay]) => delay === 1000)).toBe(true));
+    } finally {
+      retryTimer.mockRestore();
+    }
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
 

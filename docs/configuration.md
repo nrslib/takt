@@ -1246,6 +1246,20 @@ project entry replaces the global entry entirely.
 
 Define named provider, model, and options combinations under `provider.profiles`. `capabilities` can name a provider-options preset, resolved project → global → builtin; a profile's `options` take precedence. Add `permission_mode` if needed, or `extends` to inherit another profile. A project profile replaces a same-named global profile in full.
 
+Set `context_window: auto` or a positive integer beside `provider` and `model` in a profile. Omission means `auto`. It is inherited through `extends`, and the selected profile supplies it through defaults, persona/tag/step targets, ladders, auto routing, and internal agents. It is not a workflow or `config.yaml` key. Providers without a context-window setting capability ignore it. The setting does not select a different model.
+
+```yaml
+provider:
+  profiles:
+    reviewer: { provider: codex, model: gpt-6-luna, context_window: auto }
+    reviewer-fixed: { extends: reviewer, context_window: 500000 }
+  defaults: { profile: reviewer }
+```
+
+For `auto`, TAKT estimates the assembled system and user instructions, native structured-output schema, and full policy/knowledge sources that the instruction explicitly requires the agent to read. Reports already included in the instruction are counted there; TAKT does not add them again. The initial requirement is `ceil((fixed_tokens * 2 + 150000) * 1.2)`. This is a heuristic, not a tokenizer or a prediction of later tool use. It estimates ASCII at four characters per token, CJK at 0.75 tokens per character, and other non-ASCII at 0.5 tokens per character. The coefficients are rough, based on a Japanese-heavy Phase 1 observation; actual tokenization varies by model and content. Selection compares each stage's effective capacity, keeps the model default if it fits, then considers 500000 and the confirmed maximum. Equal or smaller stages are skipped. A compaction event advances to the next larger stage for the next call or recovery in the same session, without restarting a completed response. Numeric settings are passed as fixed native overrides and are not auto-promoted.
+
+Codex reads `context_window`, `max_context_window`, and `effective_context_window_percent` for the selected model from `models_cache.json` under the effective `CODEX_HOME`. It uses `model_context_window` from the base config and selected `config_profile` according to their precedence as the native default. If a project config contains that key, TAKT cannot determine whether Codex trusts the project, so `auto` does not override the native default. It also avoids an override if a config cannot be read or model metadata is missing. OpenCode v1 and v2 expose a configured `limit.context` in their model catalogs, but that value does not establish an expandable maximum. No confirmed maximum is currently registered, so `auto` keeps the native default without starting another server to inspect model metadata. Numeric settings are passed to both providers' native config. The selected value and estimation reason are logged without logging prompt text.
+
 `provider` remains required after inheritance. You may omit `model` for codex, claude, claude-sdk, claude-headless, claude-terminal, copilot, cursor, kiro, pi, deepseek-harness, and mock. A child profile inherits its parent's model through `extends`; if no model remains after inheritance, TAKT delegates to the provider's default model. It does not fill in a model from unselected defaults or another lower-priority profile. An explicit CLI `--model` or `TAKT_MODEL` environment variable takes precedence. OpenCode is the exception: it requires `model` in `provider/model` format.
 
 ```yaml

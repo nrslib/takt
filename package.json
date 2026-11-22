@@ -239,6 +239,7 @@
     "ink": "7.1.1",
     "react": "19.2.8",
     "semver": "^7.8.5",
+    "smol-toml": "1.9.1",
     "string-width": "^8.2.2",
     "traced-config": "^0.3.0",
     "wanakana": "^5.3.1",

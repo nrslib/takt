@@ -83,6 +83,7 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     ...(options.reasoningEffort === undefined
       ? {}
       : { model_reasoning_effort: options.reasoningEffort }),
+    ...(options.contextWindow === undefined ? {} : { model_context_window: options.contextWindow }),
     ...((options.fastMode !== undefined || options.internalAgentIsolation === 'strict-readonly') ? {
       features: {
         ...(codexSkillConfig?.features as Record<string, boolean> | undefined),

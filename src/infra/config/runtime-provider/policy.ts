@@ -18,11 +18,13 @@ import type {
   RuntimeProviderAssignment,
 } from './schema.js';
 import { hasActiveProviderContent } from './schema.js';
+import type { ContextWindowSetting } from '../../../core/models/workflow-provider-options.js';
 import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
 
 export interface FlatProfile {
   provider?: string;
   model?: string;
+  contextWindow?: ContextWindowSetting;
   options?: Record<string, unknown>;
   capabilities?: string | string[];
   capabilitiesOriginProfile?: string;
@@ -78,6 +80,9 @@ export function flattenProfiles(
     }
     if (profile.model !== undefined) {
       flat.model = profile.model;
+    }
+    if (profile.context_window !== undefined) {
+      flat.contextWindow = profile.context_window;
     }
     if (profile.options !== undefined) {
       flat.options = profile.options;
