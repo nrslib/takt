@@ -1985,3 +1985,5 @@ main も合格した場合は回帰ガードとし、改善効果とは主張し
 裁定の既存の先頭基準は順序を保ち、追加ポリシーは固定の policy 配列へ一度だけ合成する。
 本文が2000文字で切れる段階では、プロンプトの Source Path にある全文スナップショットから読む。
 新ポリシー自体は日英とも2000文字以内で、目的・判断の要点を先頭に置いている。
+
+裁定の役割変更と探索行動の評価は [adjudication-scope](docs/adjudication-scope.md) を参照。`npm run eval:prompts:adjudication-scope:contracts` は provider を呼ばず、fixture と両フェーズの配線を確認する。`npm run eval:prompts:adjudication-scope` は日英8ケースの意味評価を実行する。

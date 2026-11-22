@@ -138,8 +138,7 @@ describe('facet include expansion', () => {
       assert.ok(step && isNormalOrTeamLeaderWorkflowStep(step), name);
       return step;
     };
-    const adjudicationFixedPolicies = ['process-deviation', 'review-adjudication', 'repair-strategy', 'architecture', 'takt', 'contract-change'];
-    const adjudicationPolicies = [...adjudicationFixedPolicies, 'review'];
+    const adjudicationPolicies = ['review-adjudication'];
     const stages: { step: ReturnType<typeof agentOf>; expectedPolicies: string[]; label: string }[] = [];
     for (const entry of ['peer-review', 'review-fix-simple']) {
       let peer = loadBuiltin(entry);
@@ -158,7 +157,7 @@ describe('facet include expansion', () => {
           step: agentOf(remediation, name), expectedPolicies: planningPolicies,
         })),
         ...['fix', 'fix-retry'].map(name => ({ step: agentOf(remediation, name), expectedPolicies: fixPolicies })),
-        { step: agentOf(defaults, 'review-adjudication'), expectedPolicies: [...adjudicationFixedPolicies, 'coding', 'testing', 'review'] },
+        { step: agentOf(defaults, 'review-adjudication'), expectedPolicies: adjudicationPolicies },
       ];
       assert.equal(entryStages.length, 9);
       stages.push(...entryStages.map(stage => ({ ...stage,
@@ -166,19 +165,19 @@ describe('facet include expansion', () => {
       })));
     }
     // These parents call review-remediation; the peer-review paths above call development-remediation variants without adjudication.
-    for (const { entry, planPolicies } of [
-      { entry: 'simple', planPolicies: ['review', 'coding', 'testing', 'ai-antipattern'] },
-      { entry: 'simple-core', planPolicies: ['review', 'coding', 'testing'] },
-      { entry: 'simple-mini', planPolicies: ['coding', 'testing', 'review'] },
-      { entry: 'review-fix-backend', planPolicies: ['coding', 'testing', 'review'] },
-      { entry: 'review-fix-backend-cqrs', planPolicies: ['coding', 'testing', 'review', 'cqrs-es'] },
-      { entry: 'review-fix-frontend', planPolicies: ['coding', 'testing', 'design-fidelity', 'review'] },
-      { entry: 'review-fix-dual', planPolicies: ['coding', 'testing', 'design-fidelity', 'screen-api', 'review'] },
-      { entry: 'review-fix-dual-cqrs', planPolicies: ['coding', 'testing', 'design-fidelity', 'screen-api', 'review', 'cqrs-es'] },
+    for (const entry of [
+      'simple',
+      'simple-core',
+      'simple-mini',
+      'review-fix-backend',
+      'review-fix-backend-cqrs',
+      'review-fix-frontend',
+      'review-fix-dual',
+      'review-fix-dual-cqrs',
     ]) {
       const remediation = childOf(loadBuiltin(entry), 'remediation');
       stages.push({ step: agentOf(remediation, 'review-adjudication'),
-        expectedPolicies: [...adjudicationFixedPolicies, ...planPolicies],
+        expectedPolicies: adjudicationPolicies,
         label: `${lang}/${entry}/remediation/review-adjudication`,
       });
     }
@@ -203,6 +202,23 @@ describe('facet include expansion', () => {
         return policies;
       };
       const policyContents = assertExactPolicies(step.policyContents);
+      if (step.name === 'review-adjudication') {
+        const knowledge = resolveRefToContent('review-adjudication', undefined, tempDir, 'knowledge', { projectDir: tempDir, lang });
+        assert.ok(knowledge);
+        const knowledgeContents = step.knowledgeContents;
+        assert.ok(knowledgeContents);
+        expect(knowledgeContents.map(({ content, sourcePath }) => ({ content, sourcePath }))).toEqual([{
+          content: knowledge,
+          sourcePath: fileURLToPath(new URL(`../../builtins/${lang}/facets/knowledge/review-adjudication.md`, import.meta.url)),
+        }]);
+        const sharedInputs = resolveRefToContent(
+          fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/knowledge/applicable-inputs.md`, import.meta.url)),
+          undefined, tempDir, 'knowledge', { projectDir: tempDir, lang });
+        assert.ok(sharedInputs);
+        const facets = [...policyContents, ...knowledgeContents].map(({ content }) => content).join('\n\n');
+        expect(facets.split(sharedInputs.trim()), `${label}: threat-model knowledge must appear once`).toHaveLength(2);
+        expect(facets).not.toContain('{{include:');
+      }
       assertExactPolicies([...policyContents].reverse());
       assert.throws(() => assertExactPolicies(undefined), { code: 'ERR_ASSERTION', message: `${label}: policyContents must exist` });
       const extraPolicy = { content: repairPolicy, sourcePath: join(tempDir, 'policies', 'unexpected.md') };
@@ -221,7 +237,7 @@ describe('facet include expansion', () => {
           ? { ...policy, sourcePath: join(tempDir, 'policies', `${name}.md`) } : policy);
         assert.throws(() => assertExactPolicies(wrongSource), { code: 'ERR_ASSERTION' }, `${label}: wrong source for ${name}`);
       }
-      expect(policyContents.filter(({ content }) => content === repairPolicy)).toHaveLength(1);
+      expect(policyContents.filter(({ content }) => content === repairPolicy)).toHaveLength(expectedPolicies.includes('repair-strategy') ? 1 : 0);
       const combined = policyContents.map(({ content }) => content).join('\n\n---\n\n');
       expect(combined).not.toContain('{{include:');
       expect(step.instruction).not.toContain('{{include:');
@@ -232,7 +248,8 @@ describe('facet include expansion', () => {
       writeFileSync(policyPath, combined);
       const snapshot = readFileSync(policyPath, 'utf8');
       expect(snapshot).toBe(combined);
-      expect(snapshot).toContain(repairPolicy);
+      if (expectedPolicies.includes('repair-strategy')) expect(snapshot).toContain(repairPolicy);
+      else expect(snapshot).not.toContain(repairPolicy);
       const instructionContext = makeInstructionContext({
         cwd: tempDir, projectCwd: tempDir, language: lang, policySourcePath: policyPath,
       });
@@ -241,7 +258,8 @@ describe('facet include expansion', () => {
         policyContents: [{ content: snapshot, sourcePath: policyPath }],
       }).build();
       expect(runtime).toBe(direct);
-      expect(runtime).toContain(policyPath);
+      if (snapshot.length > 2000) expect(runtime).toContain(policyPath);
+      else expect(runtime).toContain(snapshot);
       if (step.name === 'final-gate') {
         const report = step.outputContracts?.find(contract => 'name' in contract && contract.name === 'review-resolution.md');
         assert.ok(report && 'format' in report);

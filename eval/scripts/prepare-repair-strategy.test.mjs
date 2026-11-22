@@ -11,6 +11,7 @@ import { observe as observeResource, satisfied as resourceSatisfied } from '../f
 import { observe as observeKey, satisfied as keySatisfied } from '../fixtures/repair-strategy/key-probes.mjs';
 import { prepareRepairStrategy } from './prepare-repair-strategy.mjs';
 import CliPlanReportProvider from '../providers/cli-plan-report.mjs';
+import { resolveRefToContent } from '../../dist/infra/config/loaders/resource-resolver.js';
 
 const read = path => readFileSync(path, 'utf8');
 
@@ -111,8 +112,15 @@ test('prepare resolves completed history, immutable references, and inherited ad
       // Composition only: semantic decisions belong to the model rubric.
       const policyPath = join(receipt.project, '.takt/eval-snapshots/policies.md');
       const policySnapshot = read(policyPath);
-      assert.equal(policySnapshot.split(policy).length - 1, 1);
-      assert.ok(prompt.includes(policyPath));
+      assert.equal(policySnapshot.split(policy).length - 1, receipt.stage === 'plan' ? 1 : 0);
+      if (receipt.stage === 'adjudication') {
+        for (const kind of ['policies', 'knowledge']) {
+          const resourceRoot = new URL(`../../builtins/${receipt.language}/`, import.meta.url).pathname;
+          const expected = resolveRefToContent('review-adjudication', undefined, join(resourceRoot, 'workflows'), kind, { lang: receipt.language, resourceRoot });
+          assert.equal(read(join(receipt.project, `.takt/eval-snapshots/${kind}.md`)), expected);
+        }
+      }
+      assert.ok(prompt.includes(policySnapshot.length > 2000 ? policyPath : policySnapshot));
       const reports = receipt.declaredReports;
       assert.deepEqual(reports.map(({ reference }) => reference), receipt.stage === 'plan'
         ? ['review-resolution.md'] : receipt.caseId === 'f1' ? [] : ['fix-plan.md', 'fix-report.md', 'fix-verification.md']);
@@ -139,16 +147,27 @@ test('prepare resolves completed history, immutable references, and inherited ad
 
         }
       }
-      const resolution = read(join(receipt.project, '.takt/runs/eval/reports/review-resolution.md'));
+      const resolutionPath = join(receipt.project, '.takt/runs/eval/reports/review-resolution.md');
+      const resolution = read(resolutionPath);
       if (receipt.stage === 'adjudication') {
         assert.ok(!resolution.includes('CODE-C'));
         assert.ok(!read(join(receipt.project, 'reports-seed/review-resolution.md')).includes('CODE-C'));
       }
       else assert.ok(resolution.includes('CODE-C'));
       if (receipt.caseId === 'p1') {
+        if (receipt.stage === 'adjudication') {
+          const previousDecision = resolution.split('## 修正の経過')[0];
+          const mapping = previousDecision.split('\n').find(line => line.startsWith('問題ID:'));
+          assert.ok(mapping, `${receipt.id}: previous decision must map problem and finding IDs`);
+          assert.deepEqual(new Set(mapping.match(/\b(?:P-\d+|CODE-[A-Z])\b/g)), new Set(['P-1', 'CODE-A', 'CODE-B']));
+          assert.ok(prompt.includes(resolutionPath), `${receipt.id}: Phase 1 must expose the previous decision path`);
+        }
         for (const kind of ['plan', 'report', 'verification']) {
           const path = `history/migration-${kind}.md`;
-          if (receipt.stage === 'adjudication') assert.ok(prompt.includes(read(join(receipt.project, path)).trim()));
+          const material = read(join(receipt.project, path));
+          const problemIds = material.split('\n').filter(line => line.startsWith('問題ID:'));
+          assert.deepEqual(problemIds, ['問題ID: P-1'], `${receipt.id}: ${path}`);
+          if (receipt.stage === 'adjudication') assert.ok(prompt.includes(material.trim()));
           else assert.ok(prompt.includes(path));
         }
         assert.equal(receipt.fixedReferences.length, 6);
@@ -177,7 +196,8 @@ test('prepare resolves completed history, immutable references, and inherited ad
             for (const reference of receipt.fixedReferences) {
               assert.equal(read(reference.path.replace(receipt.project, cwd)), read(reference.path));
             }
-            if (calls.length === 1) assert.ok(supplied.includes(join(cwd, '.takt/eval-snapshots/policies.md')));
+            if (calls.length === 1) assert.ok(supplied.includes(policySnapshot.length > 2000
+              ? join(cwd, '.takt/eval-snapshots/policies.md') : policySnapshot));
             else assert.ok(supplied.includes(analysis));
             return calls.length === 1 ? analysis : 'Final report';
           } };
@@ -206,60 +226,47 @@ test('prepare resolves completed history, immutable references, and inherited ad
 for (const language of REPAIR_STRATEGY_LANGUAGES) {
   for (const caseId of REPAIR_STRATEGY_CASES) {
     for (const phase of ['phase1', 'phase2']) {
-      test(`adjudication rubric scores ${caseId} trigger decision / ${language} / ${phase}`, () => {
+      test(`adjudication rubric scores ${caseId} reconsideration without delegating its decision / ${language} / ${phase}`, () => {
         const suite = parse(read(new URL('../agents/review-adjudication/review-adjudication.yaml', import.meta.url)));
         const label = `${caseId}${language === 'en' ? '-en' : ''}`;
         const entries = suite.tests.filter(entry => entry.prompts.includes(label) && entry.vars.output_phase === phase);
         assert.equal(entries.length, 1);
         const rubrics = entries[0].assert.filter(assertion => assertion.type === 'llm-rubric');
         assert.equal(rubrics.length, 1);
-        const rubric = rubrics[0].value;
+        const rubric = rubrics[0].value.replace(/\s+/g, ' ');
         const context = `${label}/${phase}`;
-        if (caseId === 'k1' || caseId === 'r1' || caseId === 'm1') {
-          const conditions = language === 'ja' ? [
-            /再発と共通前提を認め.*方式見直しを発火させる.*合格条件/,
-            /方式見直しは発火しない.*不合格/,
-            /具体的な修正方式の確定.*必須条件にしない/,
-          ] : [
-            /Recognize the recurrence and shared assumption.*trigger reconsideration of the repair method.*condition for passing/,
-            /reconsideration does not trigger.*fails/,
-            /need not finalize a concrete repair method/,
-          ];
-          for (const condition of conditions) assert.match(rubric, condition, context);
-          if (caseId === 'm1') {
-            const conflicts = language === 'ja' ? [
-              /全入力の現行置換結果との一致/, /C の2入力.*同じキー.*識別条件との具体的な衝突/,
-              /合意された方式条件を独断で変更しない/, /必要な判断/,
-            ] : [
-              /match the current replacement output for every input/, /two C inputs.*same key.*concrete conflict with distinct-pair identification/,
-              /Do not unilaterally change the agreed method conditions/, /decision needed/,
-            ];
-            for (const condition of conflicts) assert.match(rubric, condition, context);
-            for (const otherCaseId of REPAIR_STRATEGY_CASES.filter(id => id !== caseId)) {
-              assert.doesNotMatch(rubric, new RegExp(`(?<![a-z0-9])${otherCaseId}(?![a-z0-9])`, 'i'), `${context}: reference to ${otherCaseId}`);
-            }
-          }
+        // Guard the grader's assigned responsibilities, not the model's ability to follow them.
+        const statements = rubric.split(/。|(?<=\.)\s+/);
+        const planningScope = statements.find(statement => statement.includes('fix-plan-bounded-proof'));
+        assert.ok(planningScope, context);
+        assert.match(planningScope, language === 'ja' ? /詳細.*経過.*方式比較.*新方式.*要求しない/ : /Detailed.*history.*method comparisons.*new method.*not required/i, context);
+        assert.doesNotMatch(planningScope, /発火|要否|trigger|whether/i, context);
+        assert.match(rubric, language === 'ja' ? /裁定.*方式見直し.*要否.*根拠.*維持.*採点/ : /adjudication.*whether.*reconsideration.*evidence.*conditions.*scored/i, context);
+
+        const decision = statements.find(statement => /合格条件|condition for passing/.test(statement));
+        assert.ok(decision, context);
+        const triggers = ['k1', 'r1', 'm1'].includes(caseId);
+        if (triggers) {
+          assert.match(decision, language === 'ja' ? /進行中.*計画.*なく.*適用範囲内.*再発.*共通.*仕組み/ : /no plan.*in progress.*recurrence.*applicable scope.*common mechanism/i, context);
+          assert.match(decision, language === 'ja' ? /方式見直しを発火させる.*合格条件/ : /trigger reconsideration.*condition for passing/i, context);
+          assert.match(rubric, language === 'ja' ? /発火しない.*不合格/ : /does not trigger.*fails/i, context);
         } else {
-          const conditions = language === 'ja' ? [
-            /現在の指摘の採用とは別に.*方式見直しを発火させないことを採点/,
-            /方式見直しを発火したと明示すれば不合格/,
-          ] : [
-            /Score the trigger decision separately from accepting the current finding/,
-            /(?:do not trigger|does not trigger) reconsideration of the repair method/,
-            /Explicitly declaring that reconsideration has triggered fails/,
-          ];
-          for (const condition of conditions) assert.match(rubric, condition, context);
-          if (caseId === 'f1') {
-            const historyConditions = language === 'ja' ? [
-              /修正履歴がないため通常の原因分析を行い/,
-              /過去の再発を主張せず現在の問題だけを根拠.*方式見直しを発火したと明示すれば不合格/,
-            ] : [
-              /no repair history is supplied.*perform ordinary cause analysis/,
-              /Explicitly declaring that reconsideration has triggered fails.*current problem without claiming past recurrence/,
-            ];
-            for (const condition of historyConditions) assert.match(rubric, condition, context);
-          }
+          const reason = {
+            f1: language === 'ja' ? /履歴.*ない.*初回/ : /no.*history.*first finding/i,
+            i1: language === 'ja' ? /原因.*守る条件.*異なる/ : /causes.*conditions.*differ/i,
+            p1: language === 'ja' ? /共通原因.*計画.*進行中/ : /plan.*common cause.*in progress/i,
+          }[caseId];
+          assert.match(decision, reason, context);
+          assert.match(decision, language === 'ja' ? /方式見直しを発火させない.*合格条件/ : /do not trigger reconsideration.*condition for passing/i, context);
+          assert.match(rubric, language === 'ja' ? /発火する.*不合格/ : /triggering reconsideration.*fails/i, context);
         }
+        if (caseId === 'p1') {
+          assert.match(rubric, /CODE-C.*P-1.*writeKey/);
+          assert.ok(rubric.includes('encodeKey'), context);
+          assert.match(rubric, language === 'ja' ? /writeKey.*接続.*検証.*残作業/ : /remaining work.*connect writeKey.*verify/i, context);
+          assert.match(rubric, language === 'ja' ? /readKey.*適用済み.*保持/ : /Preserve.*already applied readKey/i, context);
+        }
+        assert.match(rubric, language === 'ja' ? /Phase 2.*Phase 1.*方式見直し.*判断.*引き継/ : /Phase 2.*carry forward.*Phase 1.*reconsideration decision/i, context);
       });
     }
   }

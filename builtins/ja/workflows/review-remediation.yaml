@@ -99,25 +99,12 @@ loop_monitors:
 steps:
   - name: review-adjudication
     uses: peer-review-adjudication
-    with:
-      review_policy_additions: []
-      review_knowledge_additions:
-        $param: fix_knowledge
-    # review は plan_policy に含まれるため、固定分との重複を避ける。
-    policy:
-      - process-deviation
-      - review-adjudication
-      - repair-strategy
-      - architecture
-      - takt
-      - contract-change
-      - $param: plan_policy
     rules:
-      - condition: 修正対象あり
+      - condition: タスク全体の再計画は不要で、修正対象があるか、採否を決める事実の調査を現行の範囲内で進められる
         next: fix-plan
-      - condition: 修正対象なし
+      - condition: タスク全体の再計画は不要で、修正対象も現行の範囲内で進められる採否の調査もない（外部確認待ちや環境上確認不能だけが残る場合を含む）
         return: no_fix
-      - condition: タスク全体の再計画が必要
+      - condition: 守る義務や修正範囲など、タスク全体の再計画が必要
         return: need_replan
 
   - name: fix-plan

@@ -1,33 +1,37 @@
-Verify each specialist reviewer report in the Report Directory, adjudicate unresolved concerns and omissions within its assigned perspective, and determine which repairs are authorized now.
+Adjudicate submitted review findings against the requirements and threat model, and establish acceptance criteria and repair boundaries for problems to repair in this task.
 
-During adjudication, do not modify code, documentation, or tests yourself, and do not run tests or builds. To check a finding, read the current code and use records from the repair and verification stages. Keep unresolved items or missing content as “Repair” only when supported by the requirements, task instructions, or project rules, and describe what is missing. If records of necessary verification are missing, mark it as “Unverified” and leave that verification for the subsequent repair stage. Both changes and verification runs belong to subsequent stages.
+## Establish the Items to Adjudicate
 
-Keep supplied current reports distinct from history lists. Read earlier repair plans, results, and verification from the fixed paths in those lists. Compare documents with matching execution identities, and do not fill incomplete or missing entries with another version.
+List finding IDs by submitting source from the currently available review reports. Include plan caveats and items inherited from the previous decision, and associate each item with its source and previous treatment. Use repair and verification reports as evidence for decisions.
 
-Reconcile the current findings with the corresponding earlier plan, repair, and verification. Record the earlier method and assumptions, resolved conditions, current counterexample, shared cause, and why earlier verification missed it, with fixed-version references from the same execution. Keep finding acceptance separate from evidence for reassessing the method, and record the repair history.
+To carry plan caveats into adjudication, include items in "Caveats" ("Open Questions (if any)" in a regular plan) and items recorded as "carried forward as a plan caveat." For "Non-Finding Concerns" ("Unverified Scope" in testing-review), include rows whose Classification column is "plan-caveat-carry-forward." Reviewers record carry-forward in this column, so the row's Classification column establishes whether it is a target. Proceed with the decisions below for the targets established here.
+
+Consult background material where a target finding has an undecided matter that could change acceptance and the material is needed to establish that matter.
+
+## Decide Each Finding
 
 {{include:instructions/review-adjudication-check}}
 
-Do not add a new specialist perspective. Treat each reviewer report currently available under the Report Directory as a submission. Carry forward findings decided in earlier rounds from the existing adjudication. For each inherited Repair problem, read the current code every round to check whether it has been fixed, and use existing execution records to check whether the necessary verification has been completed against the current code. If complete and only external confirmation remains, remove it from repair targets and move it to Awaiting external confirmation under the external-confirmation criteria. If the remaining confirmation has no basis in requirements or existing project contracts, treat it as Outside this task. Compare each confirmation in earlier adjudications with the relevant part of the requirements or existing project contracts. Do not carry it forward as a repair target merely to preserve the previous decision. Then newly decide only unresolved concerns in current reports and omissions confirmed within a submitting reviewer's assigned perspective. Inspect current code, requirements, plans, and execution evidence only as needed to decide those submissions.
+## Match Existing Problems and Repair Plans
 
-For each concern, evaluate the technical claim, concrete failure condition, evidence, and reason remediation is required now separately. For every accepted remediation target, record that reason, the violated observable condition, affected contract paths, acceptance criteria, and repair boundary.
+Match each finding's cause, violated condition, and acceptance criteria to problems in previous decisions or repair plans in progress. For a corresponding problem, use the supplied decision, plan, repair, and verification records to organize the established method, applied and verified portions, and remaining work, associating them with problem and finding IDs and sources. If those records do not settle the merge destination or carry-forward, check the necessary portions of the corresponding fixed-version references. When no plan is in progress and a problem previously considered repaired recurs within the applicable scope, with a confirmed common mechanism violating the same condition, also record whether reconsideration of the method is needed and why. Where reconsideration is needed, identify the mechanism linking the previous repair to the new counterexample, conditions to preserve, and conflicts with requirements. Pass the inherited plan and remaining work to repair planning.
 
-Before selecting a finding for repair, or before setting acceptance criteria, check the following points about the inputs, states, and quantities the finding assumes.
+## Establish the Current State of Inherited Findings
 
-- Who can choose the input values, and which process reads them?
-- Which processes operate on the same resource simultaneously?
-- What counts and sizes are assumed?
+Separate the previous acceptance decision from current resolution status. Independent verification is responsible for checking whether the repair met the original acceptance criteria. In adjudication, match the independent verification or latest review records to the current state of the relevant implementation and configuration and to the subject, input, evaluation point, and expected result of the original acceptance criteria. Results in corresponding records establish the current resolution status. Where conditions conflict between records, check the locations that determine those conditions. Matters confirmed by corresponding records do not become unresolved merely because the adjudicator has not repeated the checks.
 
-Locate the requirements, documentation, code, or records supporting each premise.
+Record acceptance and resolution separately; do not treat resolution by repair as disproof of the original finding. Match the original acceptance criteria to requirements and existing contracts, compare necessary in-environment verification results, causes of external failures, and remaining checks, and record current resolution status and remaining work. When removing an acceptance criterion, preserve the original criterion and the reason for removal as "Outside this task."
 
-Use earlier decisions and history to avoid readjudicating decided concerns and to match problems with the same cause, violated condition, and acceptance criteria. Do not treat repair history or completion verification alone as sources of submitted concerns; adjudicate unresolved concerns submitted by reviewer reports.
+{{include:instructions/preserve-acceptance-conditions}}
 
-Separately from adjudicating new findings, read the plan report's "Caveats" (items carried forward under "Open Questions (if any)" in a regular plan) as known items. Cover both items a reviewer submitted as findings and items recorded under the review report's "Non-Finding Concerns" (or "Unverified Scope" in testing-review) as "carried forward as plan caveats", including those not submitted by a reviewer, and explicitly adjudicate each as "Repair in this round / Carry forward / Reject" with evidence. Even if a reviewer resubmits one as a new finding, treat it as reevaluation of a known item and retain decisions on previously adjudicated findings unless the `reopened` conditions below are met.
-
-Treat a caveat as "Repair in this round" only when it is promoted to a finding under the existing finding criteria for defect evidence and scope; otherwise record it as "Carry forward" or "Reject".
-
-Apply the following shared definition to exceptions that allow readjudicating previously decided findings.
+When revisiting acceptance, associate the immediately preceding decision with the new evidence and apply the following exception.
 
 {{include:output-contracts/base-review-reopened}}
 
-Record a complete decision for every submitted concern and every omission confirmed during verification, together with the consolidation target for concerns with the same cause. Base the result on current evidence and the adjudication criteria rather than reviewer vote counts. When a concern cannot be decided, state the unresolved premise instead of excluding it by assumption.
+## Return the Result
+
+Associate every finding ID with its decision and merge destination. For inherited caveats, record repair in this round, carry forward, or rejection and the reason. Pass factual investigations still needed to determine acceptance or acceptance criteria that can proceed within the current scope to repair planning, and task-wide decisions about protection obligations or repair scope to replanning, stating what needs to be checked. For findings that cannot be verified in this environment, record and carry forward the unverified conditions, why they cannot be verified in this environment, and evidence needed to decide.
+
+Preserve access to original records by copying supplied fixed-version plan, repair, and verification references and existing decision references, including execution identity, order, and missing or incomplete status. Distinguish current reports from history lists. Copy references from the supplied information; consult their contents as needed to decide acceptance or correspondence with inherited results. Preserve missing records as missing for that version.
+
+Return the result with decisions for all targets, acceptance criteria, repair boundaries, and unresolved matters.

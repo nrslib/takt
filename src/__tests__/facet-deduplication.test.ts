@@ -135,7 +135,7 @@ describe('policy and knowledge facet deduplication', () => {
     }
   });
 
-  it.each(['ja', 'en'] as const)('%s: takt-default review-adjudication assembles each policy and knowledge facet once', (lang) => {
+  it.each(['ja', 'en'] as const)('%s: takt-default review-adjudication assembles only its own policy and knowledge once without caller knowledge', (lang) => {
     write('.takt/config.yaml', `language: ${lang}\n`);
     const workflow = loadWorkflowByIdentifier(
       fileURLToPath(new URL(`../../builtins/${lang}/workflows/takt-default.yaml`, import.meta.url)), projectDir);
@@ -150,10 +150,15 @@ describe('policy and knowledge facet deduplication', () => {
     const peer = childOf(childOf(workflow, 'develop'), 'peer-review');
     const step = peer.steps.find(step => step.name === 'review-adjudication');
     assert.ok(step && isNormalOrTeamLeaderWorkflowStep(step));
-    for (const contents of [step.policyContents, step.knowledgeContents]) {
-      assert.ok(contents?.length);
+    for (const [kind, contents] of [
+      ['policies', step.policyContents],
+      ['knowledge', step.knowledgeContents],
+    ] as const) {
+      assert.ok(contents);
       const bodies = contents.map(({ content }) => content);
-      expect(new Set(bodies).size).toBe(bodies.length);
+      expect(bodies).toHaveLength(1);
+      expect(bodies).toEqual(resolveRefList(
+        ['review-adjudication'], undefined, projectDir, kind, { projectDir, lang }));
       const assembled = bodies.join('\n\n---\n\n');
       expect(assembled).not.toContain('{{include:');
     }
@@ -161,7 +166,7 @@ describe('policy and knowledge facet deduplication', () => {
       const path = fileURLToPath(new URL(`../../builtins/${lang}/facets/knowledge/${name}.md`, import.meta.url));
       const heading = readFileSync(path, 'utf8').split('\n')[0];
       assert.ok(heading);
-      expect(step.knowledgeContents?.map(({ content }) => content).join('\n').split(heading)).toHaveLength(2);
+      expect(step.knowledgeContents?.map(({ content }) => content).join('\n')).not.toContain(heading);
     }
   });
 });

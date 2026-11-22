@@ -116,9 +116,9 @@ for (const record of records) {
     }
   }
   if (caseId === 'p1') {
-    put('history/migration-plan.md', '# 修正計画\nencodeKey の長さ付き表現を readKey と writeKey の両方で使う。異なる組を識別し、同じ組は両経路で同じキーにする。既存データと外部利用者はない。\n');
-    put('history/migration-report.md', '# 修正報告\nreadKey を encodeKey へ移行済み。C の2入力は 3:a~b1:c と 3:a_b1:c に分かれた。writeKey はまだ key を呼ぶ。\n');
-    put('history/migration-verification.md', '# 修正完了検証\nincomplete\nreadKey の C は成功、writeKey の C は同じキーを返す。対象コード: src/service.mjs。\n');
+    put('history/migration-plan.md', '# 修正計画\n問題ID: P-1\nencodeKey の長さ付き表現を readKey と writeKey の両方で使う。異なる組を識別し、同じ組は両経路で同じキーにする。既存データと外部利用者はない。\n');
+    put('history/migration-report.md', '# 修正報告\n問題ID: P-1\nreadKey を encodeKey へ移行済み。C の2入力は 3:a~b1:c と 3:a_b1:c に分かれた。writeKey はまだ key を呼ぶ。\n');
+    put('history/migration-verification.md', '# 修正完了検証\n問題ID: P-1\nincomplete\nreadKey の C は成功、writeKey の C は同じキーを返す。対象コード: src/service.mjs。\n');
   }
   return { caseId, hasHistory, domain };
 }
