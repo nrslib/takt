@@ -2,8 +2,8 @@ import * as crypto from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
-import { GoalQuestionSchema } from '../infra/goals/schema.js';
-import { askTaktStandaloneQuestion } from '../features/mcp/standaloneInquiryOperations.js';
+import { StandaloneInquirySchema } from '../infra/goals/schema.js';
+import { askTaktStandaloneQuestion, listTaktStandaloneInquiries } from '../features/mcp/standaloneInquiryOperations.js';
 import { askStandaloneQuestionInputSchema } from '../features/mcp/schemas.js';
 import { sendSavedStandaloneQuestionNotification } from '../features/manager/notifications.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -83,6 +83,20 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+it('rejects a director recipient for standalone questions without writing a record', async () => {
+  expect(askStandaloneQuestionInputSchema.safeParse({ cwd: '/repos/a/app', body: 'Question', recipient: 'director' }).success).toBe(false);
+  await expect(new StandaloneInquiryStore(config, workspace).create({ body: 'Question', recipient: 'director' })).rejects.toThrow();
+  expect(io.write).not.toHaveBeenCalled();
+});
+
+it('rejects a director recipient in saved standalone data without rewriting it', async () => {
+  const saved = JSON.stringify({ id: firstId, body: 'Question', recipient: 'director', status: 'pending' });
+  files.set(workspaceFile(firstId), saved);
+  await expect(new StandaloneInquiryStore(config, workspace).get(firstId)).rejects.toThrow();
+  expect(io.write).not.toHaveBeenCalled();
+  expect(files.get(workspaceFile(firstId))).toBe(saved);
+});
+
 it('saves a standalone MCP question before notifying and returns its saved ID', async () => {
   const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?', options: ['A', 'B'], recommendation: 'A' });
   const result = await askTaktStandaloneQuestion(input, config, workspace, new AbortController().signal);
@@ -90,6 +104,8 @@ it('saves a standalone MCP question before notifying and returns its saved ID', 
   const saved = await new StandaloneInquiryStore(config, workspace).get(firstId);
   expect(saved).toMatchObject({ body: input.body, options: input.options, recommendation: input.recommendation,
     status: 'pending', kind: 'question', operation: { cwd: input.cwd, toolName: 'takt_ask_standalone_question', args: JSON.stringify(input) } });
+  expect(saved).not.toHaveProperty('questionType');
+  expect(JSON.parse(files.get(workspaceFile(firstId))!)).not.toHaveProperty('questionType');
   expect(sendSavedStandaloneQuestionNotification).toHaveBeenCalledExactlyOnceWith(input.cwd, saved);
   expect(io.write.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(sendSavedStandaloneQuestionNotification).mock.invocationCallOrder[0]!);
 });
@@ -110,13 +126,35 @@ it('does not save or notify a cancelled standalone MCP question', async () => {
 });
 
 describe('standalone inquiry ownership and persistence', () => {
+  it.each([undefined, 'routine'])('omits questionType %j from all standalone reads without rewriting saved data', async (questionType) => {
+    const saved = JSON.stringify({ id: firstId, body: 'routine', recipient: 'human', status: 'pending',
+      ...(questionType === undefined ? {} : { questionType }) });
+    files.set(workspaceFile(firstId), saved);
+    const store = new StandaloneInquiryStore(config, workspace);
+    const expected = { id: firstId, body: 'routine', recipient: 'human', status: 'pending', kind: 'question' };
+    expect(await store.get(firstId)).toEqual(expected);
+    expect(await store.list()).toEqual([expected]);
+    expect(await store.listPending()).toEqual([expected]);
+    const pending = [];
+    for await (const question of store.iteratePending()) pending.push(question);
+    expect(pending).toEqual([expected]);
+    expect(await store.listPendingPage(0, 50)).toEqual({ inquiries: [expected], totalCount: 1 });
+    const result = await listTaktStandaloneInquiries({ cwd: repository.repositoryDirectory }, config, workspace);
+    const page = JSON.parse(firstTextContent(result.content));
+    expect(page).toMatchObject({ inquiries: [{ ...expected, createdAt: null }], totalCount: 1 });
+    expect(page.inquiries[0]).not.toHaveProperty('questionType');
+    expect(files.get(workspaceFile(firstId))).toBe(saved);
+    expect(io.write).not.toHaveBeenCalled();
+  });
+
   it('stores a workspace inquiry in its config directory and restores the full shared record', async () => {
     const store = new StandaloneInquiryStore(config, workspace);
     const input = { body: '  相談の本文\n', options: ['CSV', 'JSON'], recommendation: 'JSON', targetSha: 'a'.repeat(40) };
     const created = await store.create(input);
     expect(created).toMatchObject({ ...input, id: firstId, kind: 'question', recipient: 'human', status: 'pending', createdAt: now });
     expect([...files.keys()]).toEqual([workspaceFile(firstId)]);
-    expect(GoalQuestionSchema.parse(JSON.parse(files.get(workspaceFile(firstId))!))).toEqual(created);
+    expect(JSON.parse(files.get(workspaceFile(firstId))!)).toEqual(created);
+    expect(created).not.toHaveProperty('questionType');
     expect(await new StandaloneInquiryStore(config, workspace).list()).toEqual([created]);
   });
 
@@ -177,7 +215,7 @@ describe('standalone inquiry ownership and persistence', () => {
     const store = new StandaloneInquiryStore(config, workspace);
     const created = await store.create({ body: '既存の相談' });
     expect(await store.list()).toEqual([created]);
-    const external = GoalQuestionSchema.parse({ ...created, id: secondId, body: '別の書き込み元からの相談' });
+    const external = StandaloneInquirySchema.parse({ ...created, id: secondId, body: '別の書き込み元からの相談' });
     files.set(workspaceFile(secondId), JSON.stringify(external));
     expect(await store.list()).toEqual(expect.arrayContaining([created, external]));
   });
@@ -222,7 +260,7 @@ describe('standalone pending inquiry reads', () => {
   it('scans completed history without dropping pending inquiries listed after it', async () => {
     for (let index = 0; index < 128; index++) {
       const id = `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`;
-      const record = GoalQuestionSchema.parse({ id, recipient: 'human', body: '完了した相談', status: 'answered',
+      const record = StandaloneInquirySchema.parse({ id, recipient: 'human', body: '完了した相談', status: 'answered',
         answer: { text: 'JSON', source: 'tui', answeredAt: now } });
       files.set(workspaceFile(id), JSON.stringify(record));
     }
@@ -338,7 +376,7 @@ describe('standalone pending inquiry pages', () => {
   it('counts the entire validated history while returning only the selected page', async () => {
     for (const index of [5, 3, 1, 4, 2, 0]) {
       const id = `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`;
-      files.set(workspaceFile(id), JSON.stringify(GoalQuestionSchema.parse({
+      files.set(workspaceFile(id), JSON.stringify(StandaloneInquirySchema.parse({
         id, body: '本文'.repeat(1000), status: index === 4 ? 'withdrawn' : 'pending',
       })));
     }
@@ -476,11 +514,17 @@ describe('standalone inquiry updates', () => {
     const store = new StandaloneInquiryStore(config, workspace);
     const created = await store.create({ kind, body: '確認してください',
       ...(kind === 'approval' ? { operation: { toolName: 'Bash', args: '{}', cwd: repository.repositoryDirectory } } : {}) });
-    await store.answer(created.id, answer);
+    const answered = await store.answer(created.id, answer);
     const [restored] = await new StandaloneInquiryStore(config, workspace).list();
     expect(restored).toMatchObject({ id: created.id, kind, status: 'answered', createdAt: now,
-      answer: { ...expected, source: 'tui', answeredAt: now } });
-    expect(GoalQuestionSchema.parse(restored)).toEqual(restored);
+      answer: { ...expected, answeredBy: 'human', source: 'tui', answeredAt: now } });
+    expect(answered).toEqual(restored);
+    expect(answered).not.toHaveProperty('questionType');
+    expect(JSON.parse(files.get(workspaceFile(created.id))!)).toEqual(answered);
+    const before = new Map(files);
+    await expect(store.answer(created.id, answer)).rejects.toThrow();
+    expect(await store.withdraw(created.id, '不要')).toEqual(answered);
+    expect(files).toEqual(before);
   });
 
   it('rejects a free-text operation report without changing the saved inquiry', async () => {
@@ -495,15 +539,42 @@ describe('standalone inquiry updates', () => {
   it.each([undefined, '  不要になりました\n'])('persists withdrawal with optional reason %j', async (reason) => {
     const store = new StandaloneInquiryStore(config, workspace);
     const created = await store.create({ body: '確認してください' });
-    await store.withdraw(created.id, reason);
+    const withdrawn = await store.withdraw(created.id, reason);
     const [restored] = await new StandaloneInquiryStore(config, workspace).list();
     expect(restored).toMatchObject({ id: created.id, status: 'withdrawn', withdrawnAt: now, createdAt: now });
     expect(restored?.withdrawalReason).toBe(reason);
+    expect(withdrawn).toEqual(restored);
+    expect(withdrawn).not.toHaveProperty('questionType');
+    expect(JSON.parse(files.get(workspaceFile(created.id))!)).toEqual(withdrawn);
+    const result = await listTaktStandaloneInquiries({ cwd: repository.repositoryDirectory }, config, workspace);
+    expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ inquiries: [], totalCount: 0 });
     const before = new Map(files);
     await expect(store.answer(created.id, 'JSON')).rejects.toThrow();
     expect(files).toEqual(before);
     await store.withdraw(created.id, '別の理由');
     expect(await store.list()).toEqual([restored]);
+    expect(files).toEqual(before);
+  });
+
+  it('keeps answers and publication state without adding a question type', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const created = await store.create({ body: 'routine' });
+    const answered = await store.answerForPublication(created.id, 'JSON', 'slack');
+    expect(answered).toMatchObject({ body: 'routine', recipient: 'human', status: 'answered', answerPublicationPending: true,
+      answer: { text: 'JSON', source: 'slack', answeredBy: 'human', answeredAt: now } });
+    expect(answered).not.toHaveProperty('questionType');
+    expect(JSON.parse(files.get(workspaceFile(created.id))!)).toEqual(answered);
+    const before = new Map(files);
+    await expect(store.answerForPublication(created.id, 'CSV')).rejects.toThrow();
+    expect(files).toEqual(before);
+    const published = await store.markAnswerPublished(created.id);
+    expect(published.answerPublicationPending).toBeUndefined();
+    expect(published.answer).toEqual(answered.answer);
+    expect(published).not.toHaveProperty('questionType');
+    expect(JSON.parse(files.get(workspaceFile(created.id))!)).not.toHaveProperty('questionType');
+    io.write.mockClear();
+    expect(await store.markAnswerPublished(created.id)).toEqual(published);
+    expect(io.write).not.toHaveBeenCalled();
   });
 
   it('rejects invalid creation before publishing any record', async () => {

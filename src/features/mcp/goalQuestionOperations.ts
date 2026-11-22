@@ -18,18 +18,21 @@ import type { GoalQuestion } from '../../infra/goals/schema.js';
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async ({ policy }) => {
     const kind = input.kind ?? 'question';
+    const questionType = input.questionType ?? 'routine';
     const matches = (question: GoalQuestion) => question.body === input.body
-      && question.status === 'pending' && (question.kind ?? 'question') === kind;
+      && question.status === 'pending' && (question.kind ?? 'question') === kind && (question.questionType ?? 'routine') === questionType;
     const store = new GoalStore(input.cwd);
     const saved = await withInquiryLock(getGlobalConfigDir(), () => store.update(input.goalId, (current) => {
-      if (current.status === 'completed') throw new Error('Goal is completed. New questions cannot be added.');
+      if (current.status === 'completed' || current.executionStatus === 'aborted') throw new Error('Goal is finished. New questions cannot be added.');
       const existing = current.questions?.find(matches);
       if (existing !== undefined) return current;
       const added = addGoalQuestion(current, {
+        questionType,
         body: input.body, options: input.options, recommendation: input.recommendation, recipient: input.recipient,
         kind, targetSha: input.targetSha,
       });
       const question = added.goal.questions!.at(-1)!;
+      if (question.recipient === 'director') return added.goal;
       return appendGoalNotification(added.goal, {
         kind: 'question', body: formatGoalQuestionNotification(question, resolveConfigValue(input.cwd, 'language')),
       }, policy);
@@ -86,7 +89,7 @@ export async function answerTaktGoalQuestion(input: AnswerGoalQuestionInput, dep
     }
     signal.throwIfAborted();
     const answer = await answerGoalQuestionForPublication(parsed.cwd, parsed.goalId, parsed.questionId, parsed.answer, 'mcp',
-      () => { answerSaved = true; });
+      () => { answerSaved = true; }, 'human');
     return jsonResult({ questionId: parsed.questionId, answer });
   } catch (error) { return errorResult('Goal question answer failed', answerSaved ? publicationError(error) : error); }
 }

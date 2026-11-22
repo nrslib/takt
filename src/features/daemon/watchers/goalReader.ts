@@ -2,7 +2,7 @@ import { Worker } from 'node:worker_threads';
 import type { Goal } from '../../../infra/goals/schema.js';
 import { WATCH_INTERVALS } from './loop.js';
 
-export type WatchGoal = Pick<Goal, 'id' | 'status' | 'executionStatus' | 'questions' | 'pullRequest' | 'branch' | 'integrationBranch'> & {
+export type WatchGoal = Pick<Goal, 'id' | 'questionRoute' | 'status' | 'executionStatus' | 'questions' | 'pullRequest' | 'branch' | 'integrationBranch'> & {
   blockedNotifications: string[];
 };
 type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GoalQuestionSchema, GoalSchema } from '../infra/goals/schema.js';
+import { GoalQuestionSchema, GoalSchema, StandaloneInquirySchema } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { isGoalPaused, transitionGoalExecution } from '../infra/goals/state.js';
 
@@ -156,24 +156,24 @@ describe('goal execution state and question participants', () => {
     expect(GoalSchema.safeParse({ ...goalRecord(), acceptanceCriteriaVersion }).success).toBe(false);
   });
 
-  it.each(['human'])('preserves the %s question recipient', (recipient) => {
-    const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', status: 'pending', recipient };
+  it.each(['human', 'director'])('preserves the %s question recipient', (recipient) => {
+    const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', questionType: 'routine', status: 'pending', recipient };
     expect(GoalQuestionSchema.parse(question)).toEqual({ ...question, kind: 'question' });
   });
 
   it.each(['tui', 'slack'])('preserves an answer from %s', (source) => {
-    const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', status: 'answered', recipient: 'human',
-      answer: { source, text: 'JSON', answeredAt: '2026-10-08T00:00:00Z' } };
+    const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', questionType: 'routine', status: 'answered', recipient: 'human',
+      answer: { source, answeredBy: 'human', text: 'JSON', answeredAt: '2026-10-08T00:00:00Z' } };
     expect(GoalQuestionSchema.parse(question)).toEqual({ ...question, kind: 'question' });
   });
 
   it.each([
-    { creationOrigin: 'director' },
+    { creationOrigin: 'unknown' },
     { confirmation: { confirmedAt: '2026-10-08T00:00:00Z', confirmedBy: 'human' } },
     { decisions: [] },
     { events: [{ id: 'event', kind: 'delegation_completion', requestId: 'r', result: {}, evidenceRefs: [], processed: false }] },
-    { questions: [{ id: '650e8400-e29b-41d4-a716-446655440001', body: 'question', recipient: 'director', status: 'pending' }] },
-  ])('rejects removed goal fields %#', (fields) => {
+    { questions: [{ id: '650e8400-e29b-41d4-a716-446655440001', body: 'question', recipient: 'unknown', status: 'pending' }] },
+  ])('rejects removed or invalid goal fields %#', (fields) => {
     expect(GoalSchema.safeParse({ ...goalRecord(), ...fields }).success).toBe(false);
   });
 });
@@ -181,8 +181,21 @@ describe('goal execution state and question participants', () => {
 describe('saved inquiry validation', () => {
   const question = {
     id: '650e8400-e29b-41d4-a716-446655440001',
-    recipient: 'human', body: '形式を選んでください', status: 'pending',
+    recipient: 'human', questionType: 'routine', body: '形式を選んでください', status: 'pending',
   };
+
+  it('accepts director recipients only for goal questions and keeps standalone recipients human', () => {
+    expect(GoalQuestionSchema.safeParse({ ...question, recipient: 'director' }).success).toBe(true);
+    expect(StandaloneInquirySchema.safeParse({ ...question, recipient: 'director' }).success).toBe(false);
+    expect(StandaloneInquirySchema.safeParse(question).success).toBe(true);
+  });
+
+  it('preserves routine as goal question type and body while omitting only the standalone type', () => {
+    const record = { ...question, body: 'routine' };
+    expect(GoalQuestionSchema.parse(record)).toEqual({ ...record, kind: 'question' });
+    const { questionType: _questionType, ...standalone } = record;
+    expect(StandaloneInquirySchema.parse(record)).toEqual({ ...standalone, kind: 'question' });
+  });
 
   it.each(['question', 'operation_request'])('accepts %s without an operation target', (kind) => {
     expect(GoalQuestionSchema.parse({ ...question, kind })).toEqual({ ...question, kind });

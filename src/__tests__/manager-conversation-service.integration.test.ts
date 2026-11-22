@@ -243,7 +243,7 @@ it.each(['legacy', 'legacy-without-question', 'structured', 'unidentified', 'mis
     await fixture.close();
     const inquiryAnswer = { questionId: randomUUID(),
       ...(format === 'legacy-without-question' ? {} : { question: 'Which goal should wait?' }),
-      answer: { text: 'X は待ってください。\nY は進めてください。', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' } };
+      answer: { answeredBy: 'human' as const, text: 'X は待ってください。\nY は進めてください。', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' } };
     const legacyText = `A person answered a standalone inquiry. ${JSON.stringify(inquiryAnswer)}`;
     const isAnswer = ['legacy', 'legacy-without-question', 'structured'].includes(format);
     const event = { kind: 'director_message' as const,
@@ -284,7 +284,7 @@ it('preserves a newly accepted director message matching the legacy answer text 
   const targetId = conversationId(owner);
   await fixture.conversations.ensure(owner);
   const inquiryAnswer = { questionId: randomUUID(), question: 'Which goal should wait?',
-    answer: { text: 'Wait for X.', source: 'tui', answeredAt: '2026-11-03T00:00:00Z' } };
+    answer: { answeredBy: 'human' as const, text: 'Wait for X.', source: 'tui', answeredAt: '2026-11-03T00:00:00Z' } };
   const event = { kind: 'director_message' as const, origin: 'director' as const, directorConversationId: conversationId({ kind: 'daemon' }),
     text: `A person answered a standalone inquiry. ${JSON.stringify(inquiryAnswer)}` };
   const eventId = randomUUID();
@@ -311,7 +311,7 @@ it.each(['legacy', 'without-question', 'workspace', 'reassigned-to-workspace', '
     const registration = await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
     const files = new DaemonPersistedFiles(directory);
     const questionId = randomUUID();
-    const answer = { text: 'X は待ってください。\nY は進めてください。', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' };
+    const answer = { answeredBy: 'human' as const, text: 'X は待ってください。\nY は進めてください。', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' };
     await files.saveStandaloneInquiryAnswer(repository, questionId, 'Which goal should wait?', answer);
     const inboxDirectory = await files.inboxDirectory(repository);
     const [name] = await readdir(inboxDirectory);

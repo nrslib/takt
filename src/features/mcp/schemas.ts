@@ -128,7 +128,8 @@ export const askGoalQuestionInputSchema = goalWriteInputSchema.extend({
   }).default('question'),
   targetSha: GoalInquiryInputSchema.shape.targetSha,
 });
-export const askStandaloneQuestionInputSchema = askGoalQuestionInputSchema.omit({ goalId: true });
+export const askStandaloneQuestionInputSchema = askGoalQuestionInputSchema.omit({ goalId: true, questionType: true })
+  .extend({ recipient: z.literal('human').default('human') });
 export type AskStandaloneQuestionInput = z.infer<typeof askStandaloneQuestionInputSchema>;
 export const getGoalQuestionInputSchema = goalWriteInputSchema.extend({ questionId: z.uuid(),
   path: z.string().regex(/^(body|recommendation|answer\.text|options\.\d+|withdrawalReason)$/).optional(), ...textReadShape });

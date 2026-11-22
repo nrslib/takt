@@ -7,8 +7,64 @@ import { getLabel } from '../shared/i18n/index.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { randomUUID } from 'node:crypto';
+import type { SnapshotValue } from '../features/manager/conversationPort.js';
 
 afterEach(cleanup);
+
+function humanInquiry(): Extract<SnapshotValue, { kind: 'inquiry' }> {
+  return { kind: 'inquiry', inquiry: {
+    target: { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/assigned' },
+    objective: 'Export goal',
+    question: { id: '650e8400-e29b-41d4-a716-446655440001', kind: 'question', recipient: 'human', status: 'pending',
+      body: 'Which output format?', options: ['CSV', 'JSON'] },
+  } };
+}
+
+it('answers a human inquiry from the initial director snapshot without sending a message to the AI', async () => {
+  const item = humanInquiry();
+  const client = new ManagerClientDouble({ items: [item] });
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  app.stdin.write('\x12');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Export goal'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(item.inquiry.question.body));
+  app.stdin.write('\r');
+
+  await vi.waitFor(() => expect(client.commands()).toEqual([{
+    kind: 'answer_question', target: item.inquiry.target, questionId: item.inquiry.question.id,
+    answer: { text: 'CSV' },
+  }]));
+});
+
+it('closes a displayed inquiry after delegation and shows the same inquiry again when it returns to the human', async () => {
+  const item = humanInquiry();
+  const client = new ManagerClientDouble();
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  client.change({ items: [item] });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Pending questions: 1'));
+  app.stdin.write('\x12');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Export goal'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(item.inquiry.question.body));
+
+  client.change({ items: [] });
+  await vi.waitFor(() => expect(app.lastFrame()).not.toContain(item.inquiry.question.body));
+  app.stdin.write('\r');
+  expect(client.commands()).toEqual([]);
+
+  client.change({ items: [item] });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Pending questions: 1'));
+  app.stdin.write('\x12');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Export goal'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(item.inquiry.question.body));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toEqual([{
+    kind: 'answer_question', target: item.inquiry.target, questionId: item.inquiry.question.id, answer: { text: 'CSV' },
+  }]));
+});
 it('keeps a CR-only bracketed paste as an unsent multi-line draft until Enter', async () => {
   const client = new ManagerClientDouble();
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));

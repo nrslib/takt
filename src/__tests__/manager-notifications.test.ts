@@ -160,7 +160,7 @@ it.each([
   doubles.language.mockReturnValue(language);
   const question: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440003', body: 'Which output format?',
     options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet'], recipient: 'human', status,
-    ...(status === 'answered' ? { answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-08T00:00:00Z' } } : {}),
+    ...(status === 'answered' ? { answer: { answeredBy: 'human' as const, text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-08T00:00:00Z' } } : {}),
   };
   const current = { ...goalRecord(), questions: [question], notifications: [{ ...notice,
     kind: 'question' as const, body: formatGoalQuestionNotification(question, language) }] };

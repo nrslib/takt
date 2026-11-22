@@ -161,6 +161,9 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       const version = digest(notice.question);
       if (this.inquiriesSeen.get(key) !== version) {
         if (this.inquiriesInitialized) await this.publish(notice);
+        if (notice.target.goalId !== null && (this.inquiriesInitialized || notice.question.status === 'pending')) {
+          await this.publish({ ...notice, conversationId: conversationId({ kind: 'daemon' }) });
+        }
         this.inquiriesSeen.set(key, version);
       }
     }
@@ -189,7 +192,9 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       try {
         for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError, this.goalReader)) {
           await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
+            questionRoute: goal.questionRoute,
             blockedNotifications: goal.blockedNotifications,
+            pendingQuestions: (goal.questions ?? []).filter((question) => question.status === 'pending').map(({ id, recipient, questionType }) => ({ id, recipient, questionType })),
             pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() },
           isGoalFinished(goal));
           for (const question of goal.questions ?? []) {

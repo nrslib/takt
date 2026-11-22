@@ -30,14 +30,14 @@ describe('saved goal questions', () => {
     const createdAt = created.goal.questions![0]!.createdAt!;
     expect(Date.parse(createdAt)).toBeGreaterThanOrEqual(before);
     expect(Date.parse(createdAt)).toBeLessThanOrEqual(Date.now());
-    expect(answerGoalQuestion(created.goal, created.questionId, 'JSON').questions![0]!.createdAt).toBe(createdAt);
+    expect(answerGoalQuestion(created.goal, created.questionId, 'JSON', 'tui', 'human').questions![0]!.createdAt).toBe(createdAt);
     expect(withdrawGoalQuestion(created.goal, created.questionId).questions![0]!.createdAt).toBe(createdAt);
   });
 
   it('rejects missing questions and blank answers without creating an event', () => {
     const created = addGoalQuestion(goalRecord(), { body: '形式はどれですか' });
-    expect(() => answerGoalQuestion(created.goal, created.questionId, ' ')).toThrow();
-    expect(() => answerGoalQuestion(created.goal, 'missing', 'JSON')).toThrow();
+    expect(() => answerGoalQuestion(created.goal, created.questionId, ' ', 'tui', 'human')).toThrow();
+    expect(() => answerGoalQuestion(created.goal, 'missing', 'JSON', 'tui', 'human')).toThrow();
     expect(() => withdrawGoalQuestion(created.goal, 'missing')).toThrow();
     expect(created.goal.questions).toEqual([expect.objectContaining({ status: 'pending' })]);
   });
@@ -304,7 +304,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
   it.each(['pending', 'answered', 'withdrawn'] as const)('shows answer guidance only for a %s question and keeps all TUI options', (status) => {
     const options = ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet', 'Avro'];
     const saved: GoalQuestion = { ...question, status, options, recommendation: 'Avro',
-      ...(status === 'answered' ? { answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-12T00:00:00Z' } } : {}),
+      ...(status === 'answered' ? { answer: { answeredBy: 'human' as const, text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-12T00:00:00Z' } } : {}),
     };
     const slack = questionText(saved);
     const tui = questionText(saved, 'tui');

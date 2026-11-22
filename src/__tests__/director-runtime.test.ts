@@ -11,7 +11,7 @@ vi.mock('../features/mcp/localConnection.js', () => ({ startLocalMcpConnection: 
 vi.mock('../features/director/turnExecutor.js', () => ({ createDirectorTurnExecutor: doubles.executor }));
 vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.managers }));
 const signal = () => new AbortController().signal;
-const notices = { tellManager: vi.fn(async () => ({})), notifyHuman: vi.fn(async (message: string) => ({ id: 'notification', message })) };
+const notices = { setQuestionRoute: vi.fn(async () => ({})), tellManager: vi.fn(async () => ({})), notifyHuman: vi.fn(async (message: string) => ({ id: 'notification', message })) };
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.plan.mockReturnValue({ cwd: '/config', systemPrompt: 'director', ctx: { provider: { preflight: doubles.preflight },

@@ -22,7 +22,7 @@ const endpoint = { teamId: 'T1', channelId: 'C0123', userId: 'U0AAA', parentTs: 
 function fixture(language: 'ja' | 'en' = 'ja') {
   const input: ConversationInput = { open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
   const client: SlackClient = { start: vi.fn(), postMessage: vi.fn().mockResolvedValue({ kind: 'delivered', parentTs: endpoint.parentTs }),
-    postThreadMessage: vi.fn().mockResolvedValue({ kind: 'delivered' }), stopAccepting: vi.fn(), close: vi.fn() };
+    updateMessage: vi.fn<SlackClient['updateMessage']>().mockResolvedValue({ kind: 'delivered' }), postThreadMessage: vi.fn().mockResolvedValue({ kind: 'delivered' }), stopAccepting: vi.fn(), close: vi.fn() };
   const resolveAssignment = vi.fn<() => Promise<ManagerAssignment>>(async () => ({ kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] }));
   const port = createSlackConversationPort({ repositoryDirectory: '/canonical', configDirectory: '/config', resolveAssignment, channelId: 'C0123', input, client, language });
   return { input, client, port, resolveAssignment };

@@ -45,7 +45,6 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
       return;
     }
     case 'interactive': {
-      if (selected === undefined || !selected.allowedUserIds.includes(userId)) return;
       if (body.type === 'block_actions') {
         if (!isRecord(body.container) || body.container.type !== 'message' || body.container.channel_id !== channelId
           || typeof body.container.message_ts !== 'string' || !isRecord(body.message) || body.message.ts !== body.container.message_ts
@@ -55,7 +54,9 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
         const parentTs = action.action_id === SLACK_GOAL_APPROVE || action.action_id === SLACK_GOAL_DISMISS
           ? body.message.thread_ts : body.container.message_ts;
         if (typeof parentTs !== 'string') return;
-        await selected.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
+        const destination = director?.channelId === channelId && await director.port.isInquiryThread(channelId, parentTs) ? director : selected;
+        if (destination === undefined || !destination.allowedUserIds.includes(userId)) return;
+        await destination.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
           action.value, requestId);
       }
       return;
@@ -130,7 +131,7 @@ export async function createDaemonSlackPorts(options: {
     if (configuredDirector !== undefined) {
       client ??= (options.clientFactory ?? createSlackClient)(options.tokens);
       director = { ...configuredDirector, port: createDirectorSlackConversationPort({ channelId: configuredDirector.channelId,
-        input: options.input, client, language: options.director!.language }) };
+        configDirectory: options.configDirectory, input: options.input, client, language: options.director!.language }) };
     }
     if (client !== undefined) {
       try {
@@ -152,6 +153,7 @@ export async function createDaemonSlackPorts(options: {
   const delivery: ConversationDelivery = {
     async deliver(id, output, version) {
       const results = await Promise.all([...ports.values()].map(({ port }) => port.delivery.deliver(id, output, version)));
+      if (director !== undefined) results.push(await director.port.delivery.deliver(id, output, version));
       return results.find((result) => result.kind === 'unavailable') ?? { kind: 'delivered' };
     },
   };

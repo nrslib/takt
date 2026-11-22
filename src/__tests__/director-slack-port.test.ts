@@ -5,9 +5,26 @@ import { ConversationError } from '../features/manager/conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, SnapshotRead } from '../features/manager/conversationPort.js';
 import type { SlackClient } from '../infra/slack/client.js';
 import { getLabel } from '../shared/i18n/index.js';
+import type { PortOutput } from '../features/manager/conversationPort.js';
+import type { SlackInquiryBinding } from '../infra/slack/inquiryBindings.js';
+import { createInquiry } from '../infra/goals/inquiry.js';
+import { SLACK_INQUIRY_ACTION } from '../features/manager/slackInquiryBlocks.js';
+
+const inquiryBindings = vi.hoisted(() => new Map<string, SlackInquiryBinding>());
+vi.mock('../infra/slack/inquiryBindings.js', async (original) => ({
+  ...await original<typeof import('../infra/slack/inquiryBindings.js')>(),
+  SlackInquiryBindings: class {
+    async find(channelId: string, parentTs: string) { return inquiryBindings.get(JSON.stringify([channelId, parentTs])); }
+    async question(channelId: string, target: SlackInquiryBinding['target'], questionId: string) {
+      return [...inquiryBindings.values()].find((binding) => binding.channelId === channelId
+        && binding.questionId === questionId && JSON.stringify(binding.target) === JSON.stringify(target));
+    }
+    async save(binding: SlackInquiryBinding) { inquiryBindings.set(JSON.stringify([binding.channelId, binding.parentTs]), binding); }
+  },
+}));
 
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: vi.fn() }) }));
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); inquiryBindings.clear(); });
 const id = conversationId({ kind: 'daemon' });
 const endpoint = { teamId: 'T1', channelId: 'C0DIR', userId: 'U0AAA', parentTs: '1700000000.000001' };
 function fixture() {
@@ -18,17 +35,68 @@ function fixture() {
   input.open.mockResolvedValue({ attachmentId: 'attachment', read });
   input.submit.mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
   const client = { start: vi.fn<SlackClient['start']>(), postMessage: vi.fn<SlackClient['postMessage']>(),
-    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(),
+    updateMessage: vi.fn<SlackClient['updateMessage']>().mockResolvedValue({ kind: 'delivered' }), postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(),
     stopAccepting: vi.fn(), close: vi.fn<SlackClient['close']>() };
   client.postMessage.mockResolvedValue({ kind: 'delivered', parentTs: 'posted' });
   client.postThreadMessage.mockResolvedValue({ kind: 'delivered' });
-  const port = createDirectorSlackConversationPort({ channelId: 'C0DIR', input, client, language: 'en' });
+  const port = createDirectorSlackConversationPort({ configDirectory: '/config', channelId: 'C0DIR', input, client, language: 'en' });
   return { port, input, client, read };
 }
 function result(operationId = 'operation') {
   return { kind: 'result' as const, operationId, result: { kind: 'reply' as const, message: 'Director reply' } };
 }
 const version = { revision: 1, stateSequence: 1, operationId: 'operation' };
+
+it('updates an existing Slack question through promotion and return and rejects its old thread and buttons while delegated', async () => {
+  const { port, input, client } = fixture();
+  const target = { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/assigned' };
+  let question = createInquiry({ body: 'Which format?', options: ['CSV', 'JSON'] });
+  input.open.mockImplementation(async () => ({ attachmentId: 'current', read: {
+    transferId: 'current', conversationId: id, revision: 0, stateSequence: 0, operationId: null, mode: 'initial',
+    items: (async function* () { if (question.recipient === 'human') yield { kind: 'inquiry' as const, inquiry: { target, question } }; })(),
+    complete: vi.fn(), cancel: vi.fn(),
+  } }));
+  const thread = { ...endpoint, parentTs: 'posted' };
+  try {
+    await port.delivery.deliver(id, { kind: 'inquiry', target, question }, version);
+    expect(client.postMessage).toHaveBeenCalledOnce();
+    question = { ...question, recipient: 'director' };
+    await port.delivery.deliver(id, { kind: 'inquiry', target, question }, version);
+    expect(client.updateMessage).toHaveBeenLastCalledWith({ channelId: 'C0DIR', parentTs: 'posted' }, expect.stringContaining('director'), []);
+    await port.receive(thread, 'Old reply');
+    await port.receiveAction(thread, `${SLACK_INQUIRY_ACTION}_option_0`, 'option_0');
+    expect(input.submit).not.toHaveBeenCalled();
+    question = { ...question, recipient: 'human' };
+    await port.delivery.deliver(id, { kind: 'inquiry', target, question }, version);
+    expect(client.postMessage).toHaveBeenCalledOnce();
+    expect(client.updateMessage).toHaveBeenLastCalledWith({ channelId: 'C0DIR', parentTs: 'posted' }, expect.stringContaining('Which format?'),
+      expect.arrayContaining([expect.objectContaining({ type: 'actions' })]));
+    await port.receiveAction(thread, `${SLACK_INQUIRY_ACTION}_option_0`, 'option_0');
+    expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: {
+      kind: 'answer_question', target, questionId: question.id, answer: { text: 'CSV' }, source: 'slack',
+    } }));
+  } finally { await port.close(); }
+});
+
+it('delivers a human inquiry to director Slack and saves a thread reply as an answer without asking the AI', async () => {
+  const { port, input, client, read } = fixture();
+  const notice: Extract<PortOutput, { kind: 'inquiry' }> = { kind: 'inquiry',
+    target: { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/assigned' },
+    question: { id: '650e8400-e29b-41d4-a716-446655440001', kind: 'question', recipient: 'human',
+      status: 'pending', body: 'Which output format?' },
+  };
+  read.items = (async function* () { yield { kind: 'inquiry' as const, inquiry: { target: notice.target, question: notice.question } }; })();
+  try {
+    await port.delivery.deliver(id, notice, { ...version, operationId: null });
+
+    expect(client.postMessage).toHaveBeenCalledExactlyOnceWith('C0DIR', expect.stringContaining(notice.question.body), expect.any(Array));
+    expect(input.submit).not.toHaveBeenCalled();
+    await port.receive({ ...endpoint, parentTs: 'posted' }, 'CSV');
+    expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: {
+      kind: 'answer_question', target: notice.target, questionId: notice.question.id, answer: { text: 'CSV' }, source: 'slack',
+    } }));
+  } finally { await port.close(); }
+});
 
 it('acknowledges queued speech and later delivers its result to the same thread', async () => {
   const { port, input, client } = fixture();
@@ -128,8 +196,7 @@ it('does not submit after admission closes while open is pending', async () => {
   let finishOpen!: (value: Awaited<ReturnType<ConversationInput['open']>>) => void;
   input.open.mockReturnValueOnce(new Promise((resolve) => { finishOpen = resolve; }));
   const receiving = port.receive(endpoint, 'status');
-  await Promise.resolve();
-  expect(input.open).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(input.open).toHaveBeenCalledOnce());
   port.stopAccepting();
   const closing = port.close();
   finishOpen({ attachmentId: 'attachment', read });

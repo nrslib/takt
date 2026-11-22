@@ -7,10 +7,12 @@ import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
 import { FileEventStore } from '../daemon/eventStore.js';
+import { initialQuestionRoute } from './question-routing.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
-  input = GoalCreateInputSchema.parse(input);
+  const parsed = GoalCreateInputSchema.parse(input);
+  input = parsed;
   const store = new GoalStore(input.cwd);
   store.assertAbsent(input.id);
   await registerProject({ globalConfigDirectory: getGlobalConfigDir(), projectDirectory: input.cwd, command: 'manager', managerUsed: true });
@@ -18,6 +20,7 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   const { commit, ...branches } = await prepareGoalBranch(input.cwd, input.id, input.startBranch, input.integrationBranch, signal);
   signal?.throwIfAborted();
   const goal = GoalSchema.parse({
+    creationOrigin: parsed.creationOrigin, questionRoute: initialQuestionRoute(parsed.creationOrigin),
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
     ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
@@ -54,7 +57,7 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
   input = GoalCreateInputSchema.parse(input);
   const existing = new GoalStore(input.cwd).find(input.id);
   if (existing !== undefined) {
-    if (existing.objective !== input.objective
+    if (existing.creationOrigin !== input.creationOrigin || existing.objective !== input.objective
       || JSON.stringify(existing.outOfScope) !== JSON.stringify(input.outOfScope)
       || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(input.acceptanceCriteria)
       || JSON.stringify(existing.specifications) !== JSON.stringify(input.specifications)

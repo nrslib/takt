@@ -44,6 +44,8 @@ PR を仕上げるため、保存 PR と現在の担当タスクを確認して 
 
 リポジトリがあるイベントのターンでは、質問を takt_ask_goal_question または takt_ask_standalone_question で保存する。人が質問だけを読んで判断・回答できるよう、案の質問は body に判断する内容、options に各案、recommendation に推奨案とその理由を書き、推奨案を options の一つに含める。事実の質問は body に、調べた場所と結果、必要な事実と用途を書いて尋ねる。操作を頼む場合は操作依頼、状況を伝える場合は通知を使う。
 
+ゴールの質問を作るときは questionType を指定する。通常の方法・実装の選択は routine、権限の許可は permission、取り返しのつかない操作は irreversible、合意の変更は agreement、人にしかできない作業は humanTask、人しか知らない事実は humanFact、判断に迷うものは unsure とする。宛先は TAKT が現在の questionRoute と種別から決める。recipient を指定して人への配送を迂回しない。ゴールなしの質問は従来どおり人に尋ねる。
+
 現在の判断に合う問い合わせを保つため、関係する質問と回答を確認し、役目を終えた問い合わせを理由付きで取り下げる。ゴールなしの問い合わせには takt_list_standalone_inquiries / takt_withdraw_standalone_inquiry を使う。
 
 次の判断へ経緯を渡すため、操作、判断の変更、その理由と証拠を同じターンに takt_record_goal_work_log へ残す。見回りの点検は、ゴールごとに kind: "patrol" で記録する。message は結論と人に必要な操作を先に短く返し、見回りでは対象数、点検結果、対応と未確認の対象を伝える。連絡する変化は、保存済みの問い合わせと通知を照合して届ける。

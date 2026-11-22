@@ -71,6 +71,16 @@ const roots: string[] = [];
 const signal = (): AbortSignal => new AbortController().signal;
 const io = (): IoOptions => ({ signal: signal(), timeoutMs: 5000 });
 async function root(): Promise<string> { const path = await mkdtemp(join(tmpdir(), 'takt-daemon-storage-')); roots.push(path); return path; }
+it('rejects a director recipient in standalone inquiry storage without changing the saved file', async () => {
+  const directory = await root();
+  const workspaceId = randomUUID();
+  const question = { ...createInquiry({ body: 'Standalone question' }), recipient: 'director' };
+  const path = join(directory, 'workspaces', workspaceId, 'inquiries', `${question.id}.json`);
+  const serialized = JSON.stringify(question);
+  await writePrivateFile(path, serialized);
+  await expect(new DaemonPersistedFiles(directory).readWorkspaceInquiry(workspaceId, question.id)).rejects.toThrow();
+  expect(await readFile(path, 'utf8')).toBe(serialized);
+});
 function event(id: string, sequence: number, text = id): AcceptedEvent {
   return { eventId: id, requestId: id, conversationId: 'conversation', source: 'tui', occurredAt: '2026-11-03T00:00:00Z',
     event: { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'test', id: 'human' }, agentOverrides: { provider: 'codex', model: 'test' } },

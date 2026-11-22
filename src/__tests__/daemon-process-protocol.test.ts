@@ -113,7 +113,7 @@ describe('daemon turn process protocol', () => {
   it('transfers a standalone answer through the existing director message event shape', () => {
     const event = { ...acceptedEvent, lane: 'other', source: 'director', event: {
       kind: 'director_message', directorConversationId: 'director', text: 'A person answered a standalone inquiry.',
-      inquiryAnswer: { questionId: 'question-1', question: 'Which format?', answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-06T00:00:00Z' } },
+      inquiryAnswer: { questionId: 'question-1', question: 'Which format?', answer: { text: 'CSV', source: 'tui', answeredBy: 'human', answeredAt: '2026-11-06T00:00:00Z' } },
     } };
     const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
     expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
@@ -131,7 +131,8 @@ describe('daemon turn process protocol', () => {
       const record = EventRecordSchema.parse({ state: 'queued', event: {
         ...acceptedEvent, lane: 'other', event,
       } });
-      expect(record.event.event).toMatchObject({ kind: 'director_message', inquiryAnswer: { questionId: event.questionId, answer: event.answer } });
+      expect(record.event.event).toMatchObject({ kind: 'director_message', inquiryAnswer: { questionId: event.questionId,
+        answer: { ...event.answer, answeredBy: 'human' } } });
     }
   });
 
@@ -152,7 +153,8 @@ describe('daemon turn process protocol', () => {
         ...(['settling', 'settled'].includes(state) ? { result: { ...identity, event: saved, outcome: { kind: 'interrupted' } } } : {}) };
       expect(EventRecordWriteSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
       const restored = EventRecordSchema.parse(JSON.parse(JSON.stringify(record)));
-      const normalized = { ...saved, event: { ...saved.event, inquiryAnswer } };
+      const normalized = { ...saved, event: { ...saved.event, inquiryAnswer: { ...inquiryAnswer,
+        answer: { ...inquiryAnswer.answer, answeredBy: 'human' } } } };
       expect(restored.event).toEqual(normalized);
       if (restored.state === 'settling' || restored.state === 'settled') expect(restored.result.event).toEqual(normalized);
       const authored = { ...saved, event: { ...saved.event, origin: 'director' } };

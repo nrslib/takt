@@ -1143,7 +1143,7 @@ it('rejects a verification proposal whose repository has left the workspace', as
 it.each(['ja', 'en'] as const)('delivers a saved goal question and its human answer in %s', async (language) => {
   const f = conversationFixture();
   const questionId = randomUUID();
-  const answer = { text: 'Wait on X. Continue Y.', source: 'slack' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const answer = { answeredBy: 'human' as const, text: 'Wait on X. Continue Y.', source: 'slack' as const, answeredAt: '2026-11-08T12:00:00Z' };
   const goal = { ...goalRecord(), questions: [{ id: questionId, kind: 'question' as const, recipient: 'human' as const,
     body: 'Continue verification of X?', status: 'answered' as const, answer }] };
   doubles.findGoal.mockReturnValue(goal);
@@ -1155,7 +1155,7 @@ it.each(['ja', 'en'] as const)('delivers a saved goal question and its human ans
 
 it('distinguishes a structured standalone answer from similar director text', async () => {
   const f = conversationFixture();
-  const answer = { text: 'Wait on X.', source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const answer = { answeredBy: 'human' as const, text: 'Wait on X.', source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' };
   const inquiryAnswer = { questionId: randomUUID(), question: 'Continue X?', answer };
   const text = 'A person answered a standalone inquiry. Wait on X.';
   await f.run({ kind: 'director_message', directorConversationId: 'director', text, inquiryAnswer });

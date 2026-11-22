@@ -10,6 +10,7 @@ import type { TurnBusiness, TurnIo } from './processRuntime.js';
 import { createDaemonConversationRuntime } from '../director/conversationRuntime.js';
 import { createConversationTurnService } from '../manager/conversationService.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
+import { changeDirectorGoalQuestionRoute } from '../director/goalQuestions.js';
 
 export async function createTurnBusiness(configDirectory: string, assignment: ConversationAssignment): Promise<TurnBusiness> {
   if (assignment.kind !== 'daemon') {
@@ -18,6 +19,10 @@ export async function createTurnBusiness(configDirectory: string, assignment: Co
   }
   let current: { input: TurnStart; io: TurnIo } | undefined;
   const runtime = createDaemonConversationRuntime(configDirectory, {
+    async setQuestionRoute(target, route, origin) {
+      if (current === undefined || current.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
+      return changeDirectorGoalQuestionRoute(configDirectory, target, route, origin, current.input.event, current.io.signal);
+    },
     async tellManager(managerId, text, origin) {
       const turn = current;
       if (turn === undefined || turn.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');

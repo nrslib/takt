@@ -7,7 +7,10 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import { listPendingInquiries } from '../../infra/goals/pending-inquiries.js';
 import type { DirectorNotificationSubject } from '../../infra/daemon/notifications.js';
 import { listTaktGoals, getTaktGoal, errorResult } from '../mcp/operations.js';
-import { getGoalInputSchema, listGoalsInputSchema } from '../mcp/schemas.js';
+import { getGoalInputSchema, listGoalsInputSchema, listGoalQuestionsInputSchema, getGoalQuestionInputSchema, answerGoalQuestionInputSchema } from '../mcp/schemas.js';
+import { GoalQuestionRouteSchema } from '../../infra/goals/schema.js';
+import { getTaktGoalQuestion, listTaktGoalQuestions } from '../mcp/goalQuestionOperations.js';
+import { answerDirectorGoalQuestion, assertDirectorGoalTarget, escalateDirectorGoalQuestion, type DirectorGoalTarget } from './goalQuestions.js';
 import { jsonResult, pagedResult } from '../mcp/response.js';
 import { listDirectorManagers, resolveDirectorManager } from './managers.js';
 import { directorNotificationTargetSchema, resolveDirectorNotificationSubject } from './notificationTarget.js';
@@ -16,10 +19,12 @@ import { DirectorMessageOriginSchema, type DirectorMessageOrigin } from '../../i
 export const DIRECTOR_MCP_SERVER_NAME = 'takt_director';
 export const DIRECTOR_TOOL_NAMES = [
   'takt_list_managers', 'takt_list_goals', 'takt_get_goal', 'takt_list_manager_inquiries', 'takt_tell_manager', 'takt_notify_human',
+  'takt_list_goal_questions', 'takt_get_goal_question', 'takt_answer_goal_question', 'takt_set_goal_question_route', 'takt_escalate_goal_question',
 ] as const;
 export const DIRECTOR_TOOL_ALLOWLIST = DIRECTOR_TOOL_NAMES.map((name) => `mcp__${DIRECTOR_MCP_SERVER_NAME}__${name}`);
 
 export interface DirectorStateActions {
+  setQuestionRoute(target: DirectorGoalTarget, route: 'human' | 'director', origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
   tellManager(managerId: string, text: string, origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
   notifyHuman(message: string, subject?: DirectorNotificationSubject): Promise<{ id: string; message: string }>;
 }
@@ -80,5 +85,26 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
     const notification = await actions.notifyHuman(message, subject);
     return jsonResult(notification);
   }));
+  server.registerTool('takt_list_goal_questions', { description: 'Read pending and historical questions and answers of an assigned goal.',
+    inputSchema: listGoalQuestionsInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.input<typeof listGoalQuestionsInputSchema> & { managerId: string }) => {
+    await assertDirectorGoalTarget(configDirectory, value);
+    return listTaktGoalQuestions(value, { readOnly: true, allowedProjectRoot: value.cwd });
+  }));
+  server.registerTool('takt_get_goal_question', { description: 'Read a saved question and its answer, including human answers.',
+    inputSchema: getGoalQuestionInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.input<typeof getGoalQuestionInputSchema> & { managerId: string }) => {
+    await assertDirectorGoalTarget(configDirectory, value);
+    return getTaktGoalQuestion(value, { readOnly: true, allowedProjectRoot: value.cwd });
+  }));
+  server.registerTool('takt_answer_goal_question', { description: 'Answer a pending question addressed to the director. Never answer a human question.',
+    inputSchema: answerGoalQuestionInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.input<typeof answerGoalQuestionInputSchema> & { managerId: string }) => {
+    const answer = await answerDirectorGoalQuestion(configDirectory, value, value.questionId, value.answer, signal);
+    return jsonResult({ questionId: value.questionId, answer });
+  }));
+  const routeInput = listGoalQuestionsInputSchema.pick({ cwd: true, goalId: true }).extend({ managerId, questionRoute: GoalQuestionRouteSchema, origin: DirectorMessageOriginSchema }).strict();
+  server.registerTool('takt_set_goal_question_route', { description: 'Change the goal question route only to relay a current human instruction. Autonomous director decisions are rejected.', inputSchema: routeInput },
+    guarded(async (value: z.infer<typeof routeInput>) => jsonResult(await actions.setQuestionRoute(value, value.questionRoute, value.origin))));
+  const escalateInput = getGoalQuestionInputSchema.pick({ cwd: true, goalId: true, questionId: true }).extend({ managerId }).strict();
+  server.registerTool('takt_escalate_goal_question', { description: 'Hand an uncertain director question directly to a human without changing the goal route.', inputSchema: escalateInput },
+    guarded(async (value: z.infer<typeof escalateInput>) => jsonResult(await escalateDirectorGoalQuestion(configDirectory, value, value.questionId, signal))));
   return server;
 }
