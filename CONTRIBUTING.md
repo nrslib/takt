@@ -26,6 +26,8 @@ If you use Nix flakes, `nix develop` opens a shell with the project Node.js runt
 nix develop
 ```
 
+When changing the root npm dependencies, run `npm run sync:nix-deps` in an environment with Nix installed. This updates dependency versions within their declared ranges, reinstalls them, and synchronizes `package-lock.json` with `flake.nix`'s `npmDepsHash`. Include the resulting changes to both files in the same commit as the dependency change so the Nix PR build uses the matching hash.
+
 ## How to Contribute
 
 PRs that accompany an issue are especially welcome. For bug fixes and small improvements, feel free to submit a PR without waiting for a maintainer response or for discussion to conclude.

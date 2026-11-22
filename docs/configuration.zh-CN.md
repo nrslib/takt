@@ -1036,16 +1036,23 @@ provider:
 
 ### 命名 assignment
 
-`provider.assignments` 用于定义通过项目目录或 `--runtime-assignment <name>` 选择的命名 provider 配置集合。每个 entry 必须至少包含
-`defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
-在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
+`provider.assignments` 用于定义通过项目目录、`--runtime-assignment <name>` 或默认设置选择的命名 provider 配置集合。每个 entry 必须至少包含
+`defaults` 或 `targets`，不能使用空 assignment。assignment 内的 `defaults` 必须
+在 `profile` 和 `ladder` 中选择一个，不能引用另一个 assignment。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
 `steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
 而 `companions` 只能使用固定的 `profile`。
+
+通过 `provider.defaults: { assignment: project-sol }` 可以选择默认 assignment。
+顶层 `defaults` 必须在 `profile`、`ladder` 和 `assignment` 中选择一个。
+选择优先级依次为 CLI、匹配的目录、默认 assignment。project 的 `defaults` 会整体替换 global 的值。
+未知的 assignment 或 profile、空的 defaults，以及同时指定多个选项的 defaults，都会在 agent 启动前报错。
+如果顶层 defaults 指定 assignment，而选中的 assignment 没有具体的 defaults，也会报错。
+如果顶层 defaults 指定 profile 或 ladder，assignment 可以省略 defaults 并继承该值。
 
 `provider.directories` 将目录路径映射到 assignment 名称。匹配对象是启动时的 project 目录。路径键会先展开
 `~`、转换为绝对路径，并对存在的路径进行 realpath 等价的规范化，然后进行完全匹配；不支持前缀匹配和 glob。
 如果目录值引用了未定义的 assignment，加载时会快速失败。目录匹配成功后使用 assignment 的 `defaults`；如果
-省略，则回退到顶层 `provider.defaults`。如果 assignment 提供了 `targets`，它会整体替换顶层
+省略，则使用顶层的 profile 或 ladder。如果 assignment 提供了 `targets`，它会整体替换顶层
 `provider.targets`，不会按 `personas` 等子 map 合并。省略 `targets` 的 assignment 会继续使用顶层
 `provider.targets`。`profiles` 和 `auto_routing` 继续共享。
 
@@ -1076,7 +1083,7 @@ assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其
 
 `--runtime-assignment <name>` 从 global 和 project runtime.yaml 合并后的 `provider.assignments`
 中选择名称，优先于匹配的 `provider.directories`。assignment 只应用一次，以合并后的顶层配置为基准：
-省略 `defaults` 或 `targets` 时继承顶层值；提供 `targets` 时整体替换 map。
+省略 `defaults` 时继承顶层的 profile 或 ladder，省略 `targets` 时继承顶层的 targets；提供 `targets` 时整体替换 map。
 `profiles`、`auto_routing`、`mcp`、`companion` 和 `loop_analysis` 保持共享。
 现有 `--provider`、`--model` 和 `--auto-strategy` override 仍优先于选择后的配置。
 
@@ -1140,7 +1147,7 @@ takt run --runtime-assignment personal
 
 两层中不同名称的 profile 和 assignment 在合并后保留；同名 entry 由 project 整体替换。
 
-`provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
+`provider.profiles` 保存命名的 provider/model/options 定义。每个有效 provider section 都必须指定 `provider.defaults`，并在固定的 `profile`、有序的 `ladder` 和命名的 `assignment` 中选择一个；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
 继承解析后仍必须提供 `provider`。codex、claude、claude-sdk、claude-headless、claude-terminal、copilot、cursor、kiro、pi、deepseek-harness 和 mock 可以省略 `model`。子 profile 通过 `extends` 继承父 profile 的 model；继承后仍没有 model 时，TAKT 使用 provider 自身的默认模型，不从未选中的 defaults 或其他低优先级 profile 补全 model。显式 CLI `--model` 或环境变量 `TAKT_MODEL` 优先。opencode 是例外，必须提供 `provider/model` 格式的 `model`。
 

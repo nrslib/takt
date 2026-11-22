@@ -17,7 +17,9 @@
 | Apalache | 首次执行 `quint verify` 时由 Quint 下载 | `~/.quint/`（可用 `QUINT_HOME` 更改） |
 | Alloy Analyzer 6.2.0 JAR | 首次进行 Alloy 验证时由 TAKT 下载并校验 SHA-256 | 项目内的 `.takt/cache/alloy/6.2.0/alloy.jar` |
 
-用于时态属性的 TLC 包含在 Apalache 发行包中，无需单独安装。每个文件首次下载时都需要网络访问。预先下载所需各验证器的文件后，`/verify` 才能离线运行。只验证 Quint 不会下载 Alloy JAR。
+用于时态属性的 TLC 包含在 Apalache 发行包中，无需单独安装。每个文件首次下载时都需要网络访问。预先下载所需各验证器的文件后，验证器本身可以在本地离线运行。只验证 Quint 不会下载 Alloy JAR。
+
+`/verify` 生成规范和解释结果时会调用配置的 Assistant provider。使用云端 provider 时，这些阶段需要网络连接。要离线运行整个 `/verify` 流程，Assistant 配置也必须支持离线使用。
 
 在无法访问网络的环境中使用 Alloy 时，请通过 `TAKT_ALLOY_JAR` 环境变量指定本地已有的 Alloy JAR。相对路径以项目目录为基准解析。
 

@@ -17,7 +17,9 @@ Two artifacts are downloaded automatically on first use.
 | Apalache | Fetched by Quint on the first `quint verify` | `~/.quint/` (override with `QUINT_HOME`) |
 | Alloy Analyzer 6.2.0 JAR | Fetched by TAKT on the first Alloy verification; SHA-256 is checked | `.takt/cache/alloy/6.2.0/alloy.jar` inside the project |
 
-TLC, which is used for temporal properties, is part of the Apalache distribution, so no separate TLC install is needed. The first download of each artifact requires network access. `/verify` works offline once the artifacts for every checker you intend to use have been downloaded. Verifying only Quint does not download the Alloy JAR.
+TLC, which is used for temporal properties, is part of the Apalache distribution, so no separate TLC install is needed. The first download of each artifact requires network access. The checkers themselves can run locally offline once the artifacts for every checker you intend to use have been downloaded. Verifying only Quint does not download the Alloy JAR.
+
+To generate specifications and interpret results, `/verify` calls the configured assistant provider. These stages require network access when you use a cloud provider. Running the entire `/verify` flow offline also requires an assistant configuration that works offline.
 
 To use Alloy without network access, point the `TAKT_ALLOY_JAR` environment variable at an Alloy JAR you already have. Relative paths are resolved from the project directory.
 
