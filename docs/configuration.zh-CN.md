@@ -1658,6 +1658,8 @@ takt update codex     # 仅更新指定提供者
 
 容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
 
+不过，Pi 的异常处理不会追加更新提示。如果使用的是旧 SDK，请运行 `takt update pi` 更新。
+
 ## PR 合并设置
 
 GitLab 支持 MR 详情、CI 状态获取和批量选择。启用 Caccia 时，在 `takt merge` 和 `from_pr` 任务中，Caccia effect 返回原因是 `github_unavailable` 的 `skipped`，然后等待返回 head 的 CI。合并结果 pipeline 通过合并提交的第二个父提交与 source head 的一致性进行验证。没有 pipeline 或 pipeline 对应旧 head 时不会通过 CI。指定合并方式和限制 head 仍不受支持，传入这些参数的 `merge_pr` 会失败。CI 等待完成不代表合并成功。

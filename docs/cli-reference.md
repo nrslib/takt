@@ -77,6 +77,8 @@ Interactive entry points confirm required installations and approximate disk spa
 
 Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
 
+Pi's exception handler does not add update advice. If you are using an older SDK, update it with `takt update pi`.
+
 ## DeepSeek Harness
 
 `takt install deepseek-harness` installs the required official SDK. It needs access to the npm registry. If the provider still malfunctions after installation, run `takt install deepseek-harness --force`. See the [configuration guide](./configuration.md#deepseek-harness-deepseek-harness) for credentials and `provider: deepseek-harness`.

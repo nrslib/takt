@@ -1636,6 +1636,30 @@ are outside the repository. The fixture checks are small local checks, not the
 repository's full build or test gates. Japanese instructions are used for these
 two action cases.
 
+### 報告可否評価の再実行
+
+この評価は明示的に実行する有料モデル評価で、既定の評価には含めない。
+認証済みの Codex SDK と、新しい出力先・中立 workspace を用意して次の順で実行する。
+
+```bash
+npm run build
+node --test eval/asserts/report-phase-handoff-v3.test.mjs eval/asserts/report-feasibility.test.mjs
+node eval/scripts/report-feasibility.mjs freeze-baseline \
+  811f3e4ec1d3a0f97782855f727197e72d90bf7c \
+  eval/.results/report-feasibility-rerun /private/tmp/takt-report-feasibility-rerun
+node eval/scripts/report-feasibility.mjs red eval/.results/report-feasibility-rerun
+```
+
+評価担当は全6件の結果と原文を確認し、`infrastructureFailures` が0であることを確かめてから、
+出力先の `baseline-confirmed.json` に `summaryHash`、`baselineOutcome`、
+`candidateCaptureAuthorizedByRoot` を記録する。`summaryHash` は `red/summary.json` の
+ファイル内容の SHA-256 とし、`shasum -a 256 eval/.results/report-feasibility-rerun/red/summary.json`
+の先頭の値で求められる。`baselineOutcome` は `modelFailures` が正なら
+`semantic-failure-observed`、0なら `all-targets-passed` とする。全合格を意味上の RED と扱わない。
+`candidateCaptureAuthorizedByRoot` は、評価を統括する担当者が候補の測定を明示的に許可した後だけ
+`true` にする。候補が必要な場合だけ `capture-candidate REV OUT`、続いて `green OUT` を実行し、
+既存の候補は上書きしない。
+
 ### 実装レポートの入力引き継ぎ RED / GREEN
 
 現在の再現経路は `scripts/report-phase-handoff-v3.mjs` と
@@ -1671,8 +1695,15 @@ node eval/scripts/report-phase-handoff-v3.mjs freeze-baseline \
 node eval/scripts/report-phase-handoff-v3.mjs red eval/.results/report-phase-handoff-v3-rerun
 ```
 
-全RED応答と意味上の失敗を確認して`red-confirmed.json`にsummaryHashを保存した後、固定した候補を
-captureしてGREENを実行する。
+全18件の RED 応答と意味上の失敗を確認し、`infrastructureFailures` が0、`modelFailures` が正で
+あることを確かめる。出力先の `red-confirmed.json` の `summaryHash` には、`red/summary.json` の
+ファイル内容の SHA-256 を保存する。値は次のコマンドの出力の先頭で求められる。
+
+```bash
+shasum -a 256 eval/.results/report-phase-handoff-v3-rerun/red/summary.json
+```
+
+確認ファイルを保存した後、固定した候補を capture して GREEN を実行する。
 
 ```bash
 node eval/scripts/report-phase-handoff-v3.mjs capture-candidate \

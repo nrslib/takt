@@ -31,7 +31,7 @@ TAKT 支持两种 MCP 配置模式。
 
 两种模式不能混用。如果 `runtime.yaml` 中有效的 `mcp` 部分与 workflow 的 `mcp_servers` 声明或 `workflow_mcp_servers` 策略同时存在，TAKT 会在 agent 执行前立即停止，并报告对应的 workflow/step 和迁移位置。
 
-- workflow 的 `mcp_servers` 策略 → `mcp.targets`
-- step 的 `mcp_servers` 映射 → `mcp.targets.steps`
+- config 中的 `workflow_mcp_servers` 是 transport 许可策略，不能将其值直接复制到 runtime 分配中。迁移时应移除旧策略。
+- 将 step 的 `mcp_servers` 中的 server 定义移到 `mcp.servers`，再通过 `mcp.targets.steps` 手动分配 server 名称。
 
 在 runtime MCP 模式下，workflow 不能指定 MCP server 的 command、URL、header 或 env。这些值在 `runtime.yaml` 的 `mcp` 部分定义。配置结构、实际 server 解析、各 provider 支持的 transport 和迁移说明，参见[英文配置指南中的 Runtime MCP 配置](./configuration.md#runtime-mcp-configuration-in-runtimeyaml)。

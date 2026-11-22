@@ -142,10 +142,11 @@ repertoire package. The same applies when the target YAML is invalid or is not
 a provider-options object, the extends chain is circular, or the removed `$ref`
 key is used.
 
-Relative paths
-are resolved from the workflow file and must stay inside the workflow
-directory after symlink resolution; absolute paths and paths whose real target
-escapes that directory are rejected.
+Relative paths are resolved from the directory of the file containing the reference.
+When following only path-based references from a workflow, relative paths stay
+within the workflow directory. After loading a named or scoped preset, subsequent relative paths are confined to that preset's
+directory. Symlink targets must stay within the same permitted directory.
+Absolute paths and paths whose real target escapes that directory are rejected.
 
 ```yaml
 capabilities: '@nrslib/takt-fullstack/edit'

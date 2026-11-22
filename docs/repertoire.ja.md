@@ -133,7 +133,7 @@ steps:
 
 preset または path を解決できない場合や、scoped ref が利用可能な repertoire package を指していない場合、capability preset の解決は設定エラーで直ちに停止します。参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合も同様です。
 
-相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
+相対 path は、その参照を書いたファイルのディレクトリを基準に解決します。workflow から path 形式の参照だけをたどる場合、相対 path は workflow directory 内に制限されます。名前付き preset または scoped preset を読み込むと、その先の相対 path は読み込んだ preset のディレクトリ内に制限されます。symlink 解決後の実体も、この範囲内に留まる必要があります。絶対 path と、実体がこの範囲外へ出る path は拒否されます。
 
 ```yaml
 capabilities: '@nrslib/takt-fullstack/edit'

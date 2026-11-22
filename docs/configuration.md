@@ -1420,8 +1420,8 @@ In runtime MCP mode, workflows cannot specify MCP server command, URL, header, o
 
 | Legacy setting | Runtime destination |
 |---|---|
-| workflow `mcp_servers` policy | `mcp.targets` |
-| step `mcp_servers` map | `mcp.targets.steps` |
+| Config `workflow_mcp_servers` policy | This transport permission policy cannot be copied directly into runtime assignments. Remove the legacy policy during migration. |
+| Step `mcp_servers` map | Move server definitions to `mcp.servers` and manually assign their names through `mcp.targets.steps`. |
 
 ## Provider Profiles
 
@@ -1638,7 +1638,9 @@ persona_providers:
 
 Capability references can load shared provider-options presets by name. Names are resolved first-match from `.takt/provider-options`, then `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For workflows installed from a repertoire package, the package-local `provider-options/` directory is checked before those locations. A scoped ref such as `@owner/repo/name` resolves `name` from another repertoire package's `provider-options/` directory. Workflow YAML may reference only capability presets; provider/model/options definitions belong in runtime profiles (or the retained legacy config layers).
 
-Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used.
+
+Relative paths are resolved from the directory of the file containing the reference. When following only path-based references from a workflow, relative paths stay within the workflow directory. After loading a named or scoped preset, subsequent relative paths are confined to that preset's directory. Symlink targets must stay within the same permitted directory. Absolute paths and paths whose real target escapes that directory are rejected.
 
 Provider options can also be set with the corresponding `TAKT_PROVIDER_OPTIONS_*` environment variables. Examples:
 
@@ -2115,6 +2117,8 @@ takt update codex     # Update the selected provider only
 Interactive entry points confirm required installations and approximate disk space before execution. Declining to install a missing SDK prevents execution; conversations explain how to install it and return to input. Declining an update keeps the intact older SDK with a warning; if that version fails, TAKT explains how to update it. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
 
 Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
+Pi's exception handler does not add update advice. If you are using an older SDK, update it with `takt update pi`.
 
 ## Merge selection
 

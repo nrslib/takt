@@ -74,6 +74,8 @@ takt update codex     # 指定対象だけを更新
 
 容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
 
+ただし、Pi の例外エラーには更新案内を追加しません。古い SDK を使用中なら `takt update pi` で更新してください。
+
 ## DeepSeek Harness
 
 `takt install deepseek-harness` は必要な公式 SDK を導入します。npm レジストリへの接続が必要です。導入後も動作しない場合は `takt install deepseek-harness --force` で入れ直してください。認証情報と `provider: deepseek-harness` の設定は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。

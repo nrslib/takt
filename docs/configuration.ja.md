@@ -1401,8 +1401,8 @@ runtime MCP モードでは、workflow から MCP server の command、URL、hea
 
 | 既存設定 | 移行先 |
 |---|---|
-| workflow の `mcp_servers` ポリシー | `mcp.targets` |
-| step の `mcp_servers` マップ | `mcp.targets.steps` |
+| config の `workflow_mcp_servers` ポリシー | transport の許可設定であり、runtime の割り当てへ値を直接コピーできません。移行時に旧ポリシーを取り除きます。 |
+| step の `mcp_servers` マップ | server 定義を `mcp.servers` へ移し、server 名を `mcp.targets.steps` へ手動で割り当てます。 |
 
 ## Provider プロファイル
 
@@ -1604,7 +1604,9 @@ persona_providers:
 
 capability の参照は共有 YAML provider-options preset を名前で読み込めます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package からインストールされた workflow ではそれらより先に package-local の `provider-options/` が参照されます。`@owner/repo/name` 形式の scoped ref は別の repertoire package の `provider-options/` から `name` を解決します。workflow YAML で参照できるのは capability preset だけで、provider/model/options の定義は runtime profile（または既存の legacy config layer）に置きます。
 
-capability preset の解決は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
+capability preset の解決は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。
+
+相対 path は、その参照を書いたファイルのディレクトリを基準に解決します。workflow から path 形式の参照だけをたどる場合、相対 path は workflow directory 内に制限されます。名前付き preset または scoped preset を読み込むと、その先の相対 path は読み込んだ preset のディレクトリ内に制限されます。symlink 解決後の実体も、この範囲内に留まる必要があります。絶対 path と、実体がこの範囲外へ出る path は拒否されます。
 
 provider option は対応する `TAKT_PROVIDER_OPTIONS_*` 環境変数でも指定できます。主な例を示します。
 
@@ -2080,6 +2082,8 @@ takt update codex     # 指定対象だけを更新
 端末では実行前に必要なプロバイダと容量の目安を示して確認します。未導入の SDK のインストールを拒否すると、実行は開始しません。会話ではインストール方法を案内して入力へ戻ります。正常に導入済みの古いバージョンの更新を拒否した場合は、警告してそのまま続行し、そのバージョンで失敗した場合に更新方法を案内します。実行中は導入・更新・確認を行いません。CI、pipeline、watcherでは実行前に必要な対象を明示的に導入してください。
 
 容量の目安はClaude SDKが約250 MB、Codexが約340 MB、OpenCodeが約60 MB、Piが約52 MB、DeepSeek Harnessが約510 MBです。DeepSeekはmacOS arm64で依存込みの導入先を測定しました。OSとアーキテクチャによって変わります。ClaudeとCodexはCLIバイナリも管理します。`TAKT_CLAUDE_CLI_PATH`と`TAKT_CODEX_CLI_PATH`の明示上書きは保持し、PATH上の同名CLIは自動で流用しません。OpenCodeの外部CLIは別途導入してください。`takt install <provider> --force`で再導入できます。更新失敗時は以前の正常な世代を保持します。
+
+ただし、Pi の例外エラーには更新案内を追加しません。古い SDK を使用中なら `takt update pi` で更新してください。
 
 ## PR マージ workflow の設定
 
