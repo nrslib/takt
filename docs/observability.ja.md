@@ -12,7 +12,7 @@
 docker compose -f docker-compose.observability.yml up -d
 ```
 
-`~/.takt/config.yaml` または `.takt/config.yaml` で TAKT の observability を有効化します。
+`~/.takt/config.yaml` または `.takt/config.yaml` で TAKT の可観測性機能を有効にします。
 
 ```yaml
 observability:
@@ -22,16 +22,16 @@ observability:
   usage_events_phase: true
 ```
 
-`monitor: true` は run ごとのメトリクスを `.takt/runs/<run>/monitor.json` に出力します。`session_log_exporter: true` は OpenTelemetry の情報を session log 形式に変換し、`.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl` に記録します。ローカルファイルへの記録に OTLP endpoint は必要ありません。
+`monitor: true` を指定すると、実行ごとのメトリクスを `.takt/runs/<run>/monitor.json` に出力します。`session_log_exporter: true` を指定すると、OpenTelemetry の情報をセッションログ形式に変換し、`.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl` に記録します。ローカルファイルへの記録に OTLP エンドポイントは必要ありません。
 
-OpenTelemetry HTTP exporter の送信先をローカル collector に向けて TAKT を実行します。
+OpenTelemetry HTTP エクスポーターの送信先をローカルのコレクターに設定し、TAKT を実行します。
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 takt run
 ```
 
-`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` の両方を設定すると、TAKT はローカル出力と併せて span とメトリクスを OTLP で送信します。endpoint を設定しなければローカル出力だけを使います。`observability.enabled: false` の場合は OTLP 環境変数があっても OpenTelemetry SDK を初期化しません。
+`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` の両方を設定すると、TAKT はローカル出力と併せてスパンとメトリクスを OTLP で送信します。エンドポイントを設定しなければローカル出力だけを使います。`observability.enabled: false` の場合は OTLP 環境変数があっても OpenTelemetry SDK を初期化しません。
 
 Grafana は `http://127.0.0.1:3000` で開き、`takt` サービスを確認します。トレースではワークフロー、ステップ、各処理段階の実行状況を追えます。メトリクスはローカルの `monitor.json` と併せて送信されます。
 
@@ -52,9 +52,7 @@ TAKT は `observability.enabled: true` の場合に、次のカウンターを�
 
 トークンのメトリクスにはプロバイダから取得できた使用量を使います。価格情報やモデル名が足りない場合は費用推定を送信しません。推定値の欠落を費用ゼロと解釈しないでください。
 
-実行中のワークフローも Tempo で探せます。`workflow_start.<workflowName>` を検索するか、次のようにワークフロー名や run ID で絞り込んでください。
-
-実行中のワークフローを探す Tempo TraceQL の例:
+実行中のワークフローも Tempo で探せます。`workflow_start.<workflowName>` を検索するか、次の TraceQL の例を使ってワークフロー名や run ID で絞り込んでください。
 
 ```traceql
 { resource.service.name = "takt" && span."takt.workflow.name" = "takt-default" }
@@ -66,7 +64,7 @@ TAKT は `observability.enabled: true` の場合に、次のカウンターを�
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
-workflow の完了時または中断時、observability が有効なら TAKT は `TraceQL discovery:` ブロックを出力します。同じ discovery 情報は `.takt/runs/<run>/meta.json` の `observability.traceDiscovery` に保存され、後から run を探すために使えます。生成される query は常に `takt.run.id` を含み、利用可能な task / git metadata に応じて `takt.task.pr_number`、`takt.task.issue_number`、`takt.git.branch` の filter を追加します。
+可観測性機能が有効なら、TAKT はワークフローの完了時または中断時に `TraceQL discovery:` ブロックを出力します。この検索情報は `.takt/runs/<run>/meta.json` の `observability.traceDiscovery` にも保存され、後から実行記録を探すために使えます。生成するクエリには常に `takt.run.id` を含め、タスクや Git のメタデータに応じて `takt.task.pr_number`、`takt.task.issue_number`、`takt.git.branch` のフィルターを追加します。
 
 CLI 出力例:
 
@@ -82,25 +80,25 @@ TraceQL discovery:
 
 | 属性 | 意味 |
 |------|------|
-| `takt.failure.kind` | `step_error`、`runtime_error`、`iteration_limit` などの abort 種別 |
-| `takt.failure.step` | ネストした workflow をまたいで保持される最深の failing step |
-| `takt.failure.reason` | sanitize 済みの abort reason |
+| `takt.failure.kind` | `step_error`、`runtime_error`、`iteration_limit` などの中断種別 |
+| `takt.failure.step` | ネストしたワークフローを含め、失敗した最も深いステップ |
+| `takt.failure.reason` | サニタイズ済みの中断理由 |
 
-OTLP export には base endpoint が必要です。
+OTLP で送信するには、共通のエンドポイントの指定が必要です。
 
 | 環境変数 | 用途 |
 |----------|------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | 必須の opt-in endpoint。TAKT はここから `/v1/traces` と `/v1/metrics` を派生させます。 |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | 任意の trace endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 任意の metric endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 設定すると OTLP 送信が有効になります。TAKT はこの URL から `/v1/traces` と `/v1/metrics` の送信先を作ります。 |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | トレースの送信先を個別に指定します。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | メトリクスの送信先を個別に指定します。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 
-TAKT が明示的に解決・検証するのはこの endpoint 3種だけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、OpenTelemetry SDK にはそのまま届きます。子プロセスへの伝播はより厳格で、資格情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）は TAKT が渡す環境から除外され、非機微な変数のみ通過します。
+TAKT が値を解決・検証するのは、この3種類のエンドポイントだけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、そのまま OpenTelemetry SDK に渡します。子プロセスには機密情報を含まない変数だけを渡し、認証情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）は除外します。
 
-OTLP export に使用する endpoint は絶対 `http` または `https` URL である必要があります。trace / metric 個別 endpoint だけを設定して base endpoint を設定していない場合、OTLP export には opt-in せず、TAKT はローカル exporter のみを使います。base endpoint が設定されている場合は個別 endpoint 上書きも run 開始前に検証されます。起動後に collector が停止しているなどの export 送信失敗が起きても、workflow run は阻害しません。
+OTLP の送信先は `http` または `https` の絶対 URL で指定してください。トレースやメトリクスの送信先だけを個別に設定し、共通のエンドポイントを設定していない場合は、ローカルのエクスポーターだけを使います。共通のエンドポイントを設定すると、個別の送信先も実行開始前に検証します。起動後にコレクターが停止するなどして送信に失敗しても、ワークフローの実行は妨げません。
 
-## 環境変数で observability を上書きする
+## 環境変数で可観測性設定を上書きする
 
-`observability` の各フラグは config ファイルを編集せずにプロセス単位で上書きできます。
+`observability` の各フラグは設定ファイルを編集せずに環境変数でプロセスごとに上書きできます。
 
 | 環境変数 | 上書き対象 |
 |----------|-----------|
@@ -111,7 +109,7 @@ OTLP export に使用する endpoint は絶対 `http` または `https` URL で�
 
 各変数は `true` または `false` を受け付け、`~/.takt/config.yaml` と `.takt/config.yaml` の値より優先されます。
 
-command gate から起動される nested `takt` run にはobservability 設定と OTLP endpoint がこれらの環境変数経由で自動的に伝播します。credential を含む exporter 変数（`_HEADERS`、client certificate、client key）は伝播から除外されます。
+command gate から `takt` を入れ子で起動した場合も、これらの環境変数を通じて可観測性設定と OTLP エンドポイントが自動的に引き継がれます。認証情報を含むエクスポーターの変数（`_HEADERS`、クライアント証明書、クライアント鍵）は引き継ぎません。
 
 ## Phase Usage Events を有効化する
 
@@ -123,7 +121,7 @@ observability:
   usage_events_phase: true
 ```
 
-phase 粒度の usage events は次に出力されます。
+処理段階ごとの使用量イベントは次のファイルに出力されます。
 
 ```text
 .takt/runs/<run>/logs/<session>-usage-events.phase.jsonl
@@ -133,36 +131,36 @@ phase 粒度の usage events は次に出力されます。
 
 ## イベント粒度
 
-record は workflow phase ごとに分かれます。
+レコードはワークフローの処理段階ごとに分かれます。
 
 | Phase | 意味 |
 |-------|------|
-| `phase1_execute` | step 本体の実行 |
-| `phase2_report` | output contract / report 生成 |
-| `phase3_structured` | structured output による status judgment |
-| `phase3_tag` | tag fallback による status judgment |
-| `phase3_fallback` | AI judge fallback による status judgment |
+| `phase1_execute` | ステップ本体の実行 |
+| `phase2_report` | 出力契約に従った出力・レポートの生成 |
+| `phase3_structured` | 構造化出力によるステータス判定 |
+| `phase3_tag` | タグを使うフォールバックによるステータス判定 |
+| `phase3_fallback` | AI を使うフォールバックによるステータス判定 |
 
-usage を取得できない場合は `usage_missing: true` と reason を記録します。分析コマンドでは missing usage を 0 token として扱わず、token 統計から除外します。
+使用量を取得できない場合は `usage_missing: true` と理由を記録します。分析コマンドでは使用量が欠けたレコードをトークンの統計から除外し、0 トークンとしては扱いません。
 
-各 record にはstep で定義されている場合に `persona` と `tags` も含まれます。`persona` は文字列、`tags` は文字列配列で、値がない場合はフィールド自体を省略します。
+ステップに `persona` と `tags` が定義されていれば、各レコードにも含まれます。`persona` は文字列、`tags` は文字列配列で、値がない場合はフィールド自体を省略します。
 
-## Usage を集計する
+## 使用量を集計する
 
-先に build します。
+先にビルドします。
 
 ```bash
 npm run build
 ```
 
-その後、ファイルまたは run directory を渡して集計します。
+その後、ファイルまたは実行ディレクトリを指定して集計します。
 
 ```bash
 npm run analyze:usage -- .takt/runs/<run>/logs/*-usage-events.phase.jsonl
 npm run analyze:usage -- .takt/runs/<run>
 ```
 
-デフォルト出力は `step x phase x provider x model` で集計した Markdown table です。
+デフォルトでは `step x phase x provider x model` の組み合わせごとに集計し、Markdown の表で出力します。
 
 CSV が必要な場合は `--format csv` を使います。
 
@@ -175,14 +173,14 @@ npm run analyze:usage -- --format csv .takt/runs/<run> > usage.csv
 | Column | 意味 |
 |--------|------|
 | `step` / `phase` / `provider` / `model` | 集計キー |
-| `runs` | unique な `run_id` 数 |
-| `calls` | phase usage record 数 |
-| `missing` | usage を取得できなかった record 数 |
-| `input_tokens` / `output_tokens` / `total_tokens` | usage を取得できた record の token 合計 |
-| `cached_input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` | cache 関連 token 合計 |
-| `avg_total_tokens` / `median_total_tokens` / `stddev_total_tokens` | missing usage を除外した call 単位の total token 統計 |
+| `runs` | 重複を除いた `run_id` 数 |
+| `calls` | 処理段階ごとの使用量レコード数 |
+| `missing` | 使用量を取得できなかったレコード数 |
+| `input_tokens` / `output_tokens` / `total_tokens` | 使用量を取得できたレコードのトークン合計 |
+| `cached_input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` | キャッシュ関連のトークン合計 |
+| `avg_total_tokens` / `median_total_tokens` / `stddev_total_tokens` | 使用量の欠落を除外した、呼び出し単位の総トークン数の統計 |
 
-before/after 比較ではそれぞれの run directory 群に対して別々にコマンドを実行し、出力された table または CSV を比較します。
+変更前後を比較するには、それぞれの実行ディレクトリ群に対して別々にコマンドを実行し、出力された表または CSV を比較します。
 
 ## トークン使用量をまとめて確認する
 
@@ -198,6 +196,6 @@ before/after 比較ではそれぞれの run directory 群に対して別々に�
 
 デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方をスキャンします。使用量イベントを記録するには `observability.enabled: true` と `observability.usage_events_phase: true` の両方が必要です。
 
-CSV 出力では `step` の後に `persona` と `tags` の列を追加します。tags は `|` で連結し、persona または tags が異なる record は別の行として集計します。
+CSV 出力では `step` の後に `persona` と `tags` の列を追加します。`tags` は `|` で連結し、`persona` または `tags` が異なるレコードは別の行に集計します。
 
 依存: `node`, `jq`

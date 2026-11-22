@@ -143,7 +143,7 @@ Records are grouped by workflow phase:
 | `phase3_tag` | Tag fallback status judgment |
 | `phase3_fallback` | AI judge fallback status judgment |
 
-Missing usage is recorded with `usage_missing: true` and a reason. Missing usage is not treated as zero tokens by the analysis command.
+Missing usage is recorded with `usage_missing: true` and a reason. The analysis command excludes these records from token statistics and does not treat them as zero tokens.
 
 Each record also includes the step's `persona` and `tags` when defined. `persona` is a string, and `tags` is an array of strings. Missing values are omitted.
 

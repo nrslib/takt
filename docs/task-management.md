@@ -177,7 +177,7 @@ When concurrency is greater than 1, TAKT uses a worker pool that:
 - Polls for newly added tasks at the configured interval
 - Picks up new tasks as workers become available
 - Displays color-coded prefixed output per task for readability
-- Supports graceful shutdown on Ctrl+C (waits for in-flight tasks to complete)
+- Stops claiming new tasks on Ctrl+C. `takt run` interrupts in-flight tasks and waits for execution and cleanup to finish; `takt watch` waits for them to finish without interruption
 
 ### Interrupted Task Cleanup
 
@@ -408,9 +408,9 @@ TAKT uses `git clone --reference <main-repo> --dissociate` instead of `git workt
 
 > **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone` instead of `git worktree`.
 
-### Ephemeral Lifecycle
+### Clone Creation and Cleanup
 
-Clones follow an ephemeral lifecycle:
+Clones provide temporary workspaces for tasks and are created, used, and removed as follows:
 
 1. **Create** -- Clone is created before task execution
 2. **Execute** -- Task runs inside the clone directory
@@ -418,7 +418,7 @@ Clones follow an ephemeral lifecycle:
 4. **Preserve** -- Clone is preserved after execution (for instruct/retry operations)
 5. **Cleanup** -- Branches are the persistent artifacts; use `takt list` to merge or delete
 
-### Dual Working Directory
+### Execution and Storage Directories
 
 During worktree execution, TAKT maintains two directory references:
 

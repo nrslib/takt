@@ -44,11 +44,12 @@ assistant:
 1. `parse` 检查语法。
 2. `typecheck` 检查类型和效果。
 3. `run` 模拟 1 个样本、最多 20 步。仅在找到包含 `init` 和 `step` action 的主模块，且选定的验证目标位于该模块中时执行。
-4. 若有 Java 17 或更高版本，则以 20 步为上限执行 `quint verify`。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索。
+4. 主模块包含 `run` 声明时，在模拟成功后使用 `quint test` 检查这些场景。
+5. 前面的阶段全部通过且有 Java 17 或更高版本时，以 20 步为上限执行 `quint verify`。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索。
 
 对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `run` 和 `check` 命令都会执行，也支持只有 `run` 的模型。
 
-`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
+`parse`、`typecheck`、`run`、`test` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
 
 ### Alloy 并发与 JVM 设置
 

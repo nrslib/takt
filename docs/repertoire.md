@@ -89,7 +89,7 @@ Before installing, TAKT displays a summary of the package contents (facet counts
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts package files from `facets/`, `workflows/`, `provider-options/`, `facet-pools/`, and `steps/` (`.md`, `.yaml`, `.yml`), plus root-level `.yaml` / `.yml` step fragments from `steps/`
+2. Extracts `.md`, `.yaml`, and `.yml` package files from `facets/`, `workflows/`, `provider-options/`, and `facet-pools/`, and only root-level `.yaml` / `.yml` step fragments from `steps/`
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`

@@ -18,7 +18,7 @@ You will build a small browser-based expense memo.
 2. **Phase 2:** Add total amount, category filtering, deletion, and persistence
 3. **Phase 3:** Polish mobile layout, empty states, focus states, and visual design
 
-Instead of asking TAKT to do everything at once, you queue one phase, inspect the result, and then instruct the next improvement.
+Queue one phase at a time, inspect the result, and then instruct the next improvement.
 
 ## 1. Start Without GitHub
 
@@ -112,7 +112,9 @@ What would you like to do?
     Continue editing
 ```
 
-`Save as Task` is the initial selection, so Enter proceeds to saving the generated instruction in `.takt/tasks.yaml`. `Execute here now` first explains that this TUI will be unavailable until the workflow finishes and that the normal flow is to save the task and use `takt run`. Its confirmation defaults to No (`[y/N]`). Only y starts the existing execution flow in the current directory; N, Enter, or Esc returns to the same menu with the selection preserved. Esc in the menu returns to conversation input. The normal tutorial flow is to queue the task and run it with `takt run`.
+`Save as Task` is selected initially. Press Enter to proceed to saving the generated instruction in `.takt/tasks.yaml`. This tutorial queues tasks and runs them with `takt run`.
+
+`Execute here now` first explains that this TUI will be unavailable until the workflow finishes and that the normal flow is to save the task and use `takt run`. Its confirmation defaults to No (`[y/N]`). Only y starts execution in the current directory; N, Enter, or Esc returns to the same menu with the selection preserved. Esc in the menu returns to conversation input.
 
 After choosing **Save as Task**, TAKT asks for worktree settings. `Auto-create PR?` defaults to Yes; answer `n` if you are proceeding without GitHub.
 
@@ -298,7 +300,9 @@ What would you like to do?
     Continue editing
 ```
 
-`Create Issue` asks `Save as a task too? [Y/n]` before creating anything. Y or Enter creates the Issue and continues through the existing task-saving and worktree settings flow. n creates only the Issue without saving a task. Esc creates nothing and returns to the same proposal's menu with the selection preserved; Esc in that menu returns to conversation input. The Issue option is hidden in `--pr` sessions. For this tutorial, answer Y or Enter. If you already know the Issue number, you can also use `takt add`.
+`Create Issue` asks `Save as a task too? [Y/n]` before creating anything. For this tutorial, answer Y or Enter to create the Issue and continue to task saving and worktree settings. n creates only the Issue without saving a task. Esc creates nothing and returns to the same proposal's menu with the selection preserved; Esc in that menu returns to conversation input. The Issue option is hidden in `--pr` sessions.
+
+If you already know the Issue number, you can also use `takt add`.
 
 ```bash
 takt add '#1'

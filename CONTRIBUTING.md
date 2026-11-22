@@ -89,7 +89,7 @@ Comment commands consume paid AI API credits, so access is limited. `/review` re
 
 ## Canary runs for instruction / facet changes
 
-Changes that affect prompt assembly — `InstructionBuilder`, `builtins/{lang}/facets/instructions`, and the like — can destabilize tool calling on weaker models in ways unit tests do not catch (real example: injecting objection-filing guidance while the ledger was still empty caused consecutive `implement` failures). For such changes, a canary run against a real provider is recommended.
+Changes to prompt assembly, including `InstructionBuilder` and `builtins/{lang}/facets/instructions`, can destabilize tool calling on weaker models in ways unit tests do not catch. For such changes, we recommend a canary run: try a small task against a real provider.
 
 ```bash
 npm run build

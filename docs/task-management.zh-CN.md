@@ -40,11 +40,23 @@ takt add '#28'
 
 **要求：** [GitHub CLI](https://cli.github.com/)（`gh`）必须已安装并完成认证。
 
+### 自动附加 GitHub PR 和 Issue 图片
+
+`takt add --pr N` 和 `takt add --issue N`（包括 `takt add '#N'`）会下载 GitHub 附件图片。图片来源包括 PR 正文、对话评论、审查摘要、审查线程评论，以及 Issue 正文和评论中的 Markdown 图片语法与 HTML `<img src>`。Pipeline 也支持 `--pr N` 和 `--issue N`。
+
+下载成功的图片保存为 `.takt/tasks/<slug>/attachments/image-N.png` 等文件。同一 URL 只保存一份，编号按成功下载并保存的图片首次出现顺序连续分配。原始图片语法保持不变，其后追加 `[Image #N]`；`order.md` 末尾按现有的 `## 添付画像` 格式追加文件列表。
+
+执行时，图片复制到执行目录的 `.takt/runs/<run-slug>/context/task/attachments/`，并由同目录的 `order.md` 引用。Pipeline 在执行后删除临时 task spec，run 中的图片和指令文件仍然保留。
+
+支持 PNG、JPEG、GIF、WebP，每张图片上限为 10 MiB。TAKT 检查 Content-Type 和 magic bytes，不下载 GitHub 附件以外的外部图片，也不处理代码示例或 HTML 注释中的图片。认证失败、404、网络错误、超过大小限制或格式不符时，会警告并跳过该图片，继续注册任务或执行 Pipeline。失败的引用不会追加标记。
+
+下载优先使用已认证的 `gh` 凭据。某些环境中，仅凭令牌认证无法下载私有仓库附件，因此不保证成功；不使用浏览器 Cookie。GitLab 附件和普通文本输入不在自动下载范围内。
+
 ### 从交互模式保存任务
 
 也可以从交互模式保存任务。对话完善需求后，使用 `/go` 查看指令预览，再选择 **Save as Task** 保存到 `tasks.yaml`。
 
-加载 Issue #N 只提供会话上下文。每次 `/go` 都判断最新任务是否属于当前 Issue；只有相关指令才在任务标题之后的独立行显示 `Issue: #N`，并将 N 传给执行、任务保存和 Issue 创建。保存记录的 `issue`、生成分支 `takt/N/{slug}` 和 PR 正文 `Closes #N` 使用同一编号。无关任务省略绑定；可选择 **Continue editing** 修正。`/issue` 替换上下文后重新判断。创建新 Issue M 时，若指令绑定 N，保存任务仍绑定 N，并在 N 评论 M 的链接；没有绑定时保存新编号 M。
+加载 Issue #N 后，其内容会作为对话的参考信息。每次 `/go` 都判断最新任务是否属于当前 Issue；只有相关指令才在任务标题之后的独立行显示 `Issue: #N`，并将 N 传给执行、任务保存和 Issue 创建。保存记录的 `issue`、生成分支 `takt/N/{slug}` 和 PR 正文 `Closes #N` 使用同一编号。无关任务省略绑定；可选择 **Continue editing** 修正。`/issue` 替换上下文后重新判断。创建新 Issue M 时，若指令绑定 N，保存任务仍绑定 N，并在 N 评论 M 的链接；没有绑定时保存新编号 M。
 
 CLI、TUI 和 MCP 注册允许同一 Issue、PR 或分支已有 pending/running 任务时继续注册，不增加警告或确认。只有 workflow 自动 enqueue 在保存锁内拒绝同一目标的活动任务重复。直接 `takt add '#N'` 仍保存 N，无需指令绑定行。
 
@@ -158,7 +170,7 @@ concurrency: 3              # takt run / takt watch 的并行任务数（1-10）
 task_poll_interval_ms: 500   # takt run / takt watch 的轮询间隔（100-5000ms）
 ```
 
-当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会优雅关闭并等待正在执行的任务完成。
+当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会停止领取新任务。`takt run` 中断正在执行的任务，并等待执行和清理结束；`takt watch` 则等待这些任务自然结束，不主动中断。
 
 ### 中断任务清理
 
@@ -288,13 +300,21 @@ TAKT 管理的远程 push 会禁用 Git 的 HTTPS 终端和 askpass 提示，以
 
 1. 显示失败详情（失败 step、错误消息、最后一条 agent 消息）
 2. 要求选择 workflow
-3. 要求选择起点：**Resume failed position** 或 **Restart from**
+3. 从一棵 workflow 树中选择起点
 4. 打开预加载失败上下文、run session 数据和 workflow 结构的 retry 对话
 5. 允许通过 AI 完善指令
 
-**Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。Retry 和 Requeue 都可以选择 **Resume**（从失败点继续，保留执行状态）或 **Restart**（从任意 step 新开始）；`workflow_call` 子 workflow 中的 step 也可以作为起点。
+**Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。起点选择将 workflow 显示为树。有有效的恢复位置时，第一行为 **Resume failed position**，表示从失败点继续并保留执行状态，其下将各 step 显示为可选的叶节点。`workflow_call` 子 workflow 作为不可选择的标题显示，子 step 缩进排列，不能选择子 workflow 本身。有有效恢复位置时，默认选择 Resume 行。没有保存位置但现有工作 clone 仍在时，默认选择 **Start workflow from the beginning**，在同一 clone 和分支中从初始 step 开始。明确选择某个叶节点会从该 step 开始新的执行。保存位置无效时，仍需选择可用的重新执行位置或取消。
 
 终端中的 Resume 选项显示简短标签，例如 `Resume failed position: "review" (default)`，并在标签正下方以淡色显示路径说明。路径以 root workflow 开头，以失败 step 结尾，每次调用表示为 `"调用 step" → "目标 workflow"`，例如 `"takt-default" > "develop" → "development-core" > "review"`。终端宽度为80列或以上时，说明会换行显示完整路径。宽度为60列时，仅说明从末尾截断并保留 root 一侧，标签中的失败 step 名和默认标记仍然可见。Web UI 下拉选项和 `Selected start position: …` 确认日志均保留标签与完整路径。
+
+通过 Retry、Requeue 或 Instruct 从中途 step（`start_step` 或已保存的恢复位置）开始时，TAKT 会恢复源 run 在该次 step 执行开始前的完整 system context、effect 结果和 AI 结构化输出。保存的恢复位置通过 occurrence 对应执行次数；`start_step` 等未指定执行次数的选择使用该 step 最后一次开始前的状态。目标执行尚未开始时，使用最后保存的状态。循环中也会恢复当时存在的上一轮结果，不会根据推测的依赖关系删除结果。
+
+新 run 在第一个 step 执行前保存本次恢复的状态，之后只保存自身开始的各次执行开始前及结束后的状态，不复制源 run 的逐次执行快照。在新 run 中恢复到尚未开始的某次执行时，使用该 run 最后保存的状态。最新状态保存在 `workflow-results.json`，每次执行开始前的状态保存在 `workflow-results/` 下的独立文件中，不重写全部历史。结果为空时也创建保存文件。
+
+保存或继承失败时会警告并继续执行。保存失败的执行也会记录到后续保存中，以区别于尚未开始的执行。从该次执行恢复时，会警告并从空结果开始，不使用其他时刻的结果替代。保存失败后，TAKT 尝试写入无效状态；若仍失败，则尝试删除旧文件。无效化或删除成功后，从该状态恢复会警告并使用空结果。如果两者都失败，也会警告，但旧文件可能保留。先前的输入获取、effects 和 AI step 不会自动重新执行，后续 step 仍按通常方式获取最新状态。
+
+父 workflow 名称相同且继续同一 call instance 时，只将所选恢复位置对应的子 workflow 状态作为该子 workflow 的初始快照继承。即使在进入子 workflow 前失败，下次恢复也能使用该状态。不会复制子 workflow 过去的逐次执行快照，也不会将上一次子 workflow 的结果复制到新调用或新循环中。父 workflow 名称改变时，不继承子 workflow 结果。不具备此保存格式的旧 run 会警告，并按原有方式从空结果恢复；step 引用未保存的前段结果时，会在该 step 产生引用错误。
 
 重新排队后，执行使用新的 namespace，因此不会继承原有 ledger，而是从空 ledger 开始。
 
@@ -384,7 +404,9 @@ TAKT 使用 `git clone --reference <main-repo> --dissociate` 创建带独立 `.g
 
 YAML 字段仍叫 `worktree` 是为了兼容；内部使用独立 clone，而不是 `git worktree`。
 
-### 临时生命周期
+### clone 的创建与清理
+
+clone 作为任务的临时工作目录，按以下流程创建、使用和清理。
 
 1. **Create** — 执行前创建 clone
 2. **Execute** — 在 clone 中运行任务
@@ -392,7 +414,7 @@ YAML 字段仍叫 `worktree` 是为了兼容；内部使用独立 clone，而不
 4. **Preserve** — 执行后保留 clone，以便 instruct/retry
 5. **Cleanup** — 分支是持久产物，使用 `takt list` 合并或删除
 
-### 双工作目录
+### 执行目录与保存目录
 
 | 目录 | 用途 |
 |------|------|

@@ -44,11 +44,12 @@ For a Quint block, TAKT runs the stages in order, and a stage that does not pass
 1. `parse` checks the syntax.
 2. `typecheck` checks types and effects.
 3. `run` simulates one sample for up to 20 steps. It runs only when a main module with `init` and `step` actions is found and the selected verification targets live in that module.
-4. With Java 17 or later, `quint verify` runs with a bound of 20 steps. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space.
+4. If the main module contains `run` declarations, `quint test` checks those scenarios after simulation succeeds.
+5. Once all preceding stages pass, `quint verify` runs with a bound of 20 steps if Java 17 or later is available. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space.
 
 For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `run` and `check` command in the specification is executed, including models with only `run` commands.
 
-`parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
+`parse`, `typecheck`, `run`, and `test` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
 
 ### Alloy concurrency and JVM settings
 
