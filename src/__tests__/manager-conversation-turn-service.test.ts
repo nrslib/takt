@@ -400,7 +400,7 @@ it.each([
   expect(f.execute.mock.calls[2]![0].prompt).toContain('interrupted with changed selection');
 });
 
-it('returns a system notice after dismissing a registration proposal without invoking AI', async () => {
+it('returns a system notice after dismissing a goal proposal without invoking AI', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
     summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
@@ -410,6 +410,48 @@ it('returns a system notice after dismissing a registration proposal without inv
     kind: 'notice', message: getLabel('manager.conversation.dismissed', 'en'),
   } });
   expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({ proposal: { revision: 2, pending: null } }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('stores a proposed registration summary as the pending proposal without invoking AI', async () => {
+  const f = fixture();
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'proposal_created', proposal: { revision: f.input.state.revision + 1, repositoryDirectory: '/repository' },
+    message: getLabel('manager.conversation.proposed', 'en'),
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: f.input.state.revision + 1,
+      pending: { revision: f.input.state.revision + 1, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('assigns the first revision when creating a goal proposal on a fresh conversation', async () => {
+  const f = fixture();
+  f.input.state.revision = 0;
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'proposal_created', proposal: { revision: 1, repositoryDirectory: '/repository' },
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: 1, pending: { revision: 1, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('refuses to create a goal proposal while another proposal is pending', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId,
+      summary: { objective: 'another goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'proposal_pending' } });
   expect(f.execute).not.toHaveBeenCalled();
 });
 
@@ -797,7 +839,7 @@ it.each(['task_completed', 'pr_changed'] as const)('notifies the event repositor
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/second', goalId, failure, f.input.turn.operationId);
 });
-it('does not turn an event response into a human registration proposal', async () => {
+it('does not turn an event response into a human goal proposal', async () => {
   const f = fixture(); f.input.event.lane = 'other';
   f.input.event.event = { kind: 'director_message', directorConversationId: 'director', text: 'check goals' };
   f.execute.mockResolvedValue({ message: 'reply', sessionId: 'next', assignment: undefined,
@@ -1019,7 +1061,7 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
 });
 
 
-it('routes only a human /verify to verification and preserves the current registration proposal', async () => {
+it('routes only a human /verify to verification and preserves the current goal proposal', async () => {
   const f = fixture();
   const pending = { revision: f.input.state.revision, repositoryDirectory: '/repository', summary: {
     objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [], specifications: { quint: 'module csv {}' },
