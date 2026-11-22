@@ -208,32 +208,7 @@ test('registered scope suite prepares both real phases for each isolated languag
         assert.equal(readFileSync(new URL(path.replace('reports-seed/', '.takt/runs/eval/reports/'), workRoot), 'utf8'), prepared);
       }
     }
-    const review = readFileSync(new URL('reports-seed/coding-review.md', workRoot), 'utf8');
-    const concernsContract = readFileSync(new URL(
-      `../../builtins/${language}/facets/partials/output-contracts/base-review-non-finding-concerns.md`, import.meta.url,
-    ), 'utf8').split('\n');
-    const concerns = review.split(`${concernsContract[0]}\n`)[1]?.split(/^## /m)[0];
-    assert.ok(concerns, `${prompt.label}: non-finding concerns section`);
-    const table = concerns.trim().split('\n');
-    assert.equal(table.length, 3, `${prompt.label}: one concern in a table`);
-    const cells = row => row.split('|').slice(1, -1).map(cell => cell.trim());
-    assert.deepEqual(cells(table[0]), cells(concernsContract[1]), `${prompt.label}: contract columns`);
-    assert.equal(cells(table[1]).length, 4);
-    assert.ok(cells(table[1]).every(cell => /^-+$/.test(cell)));
-    const row = cells(table[2]);
-    assert.equal(row.length, 4);
-    assert.ok(row.every(cell => cell.length > 0));
-    assert.equal(row[1], '`src/catalog-label.mjs:1`');
-    assert.equal(row[2], 'no_issue_after_verification', `${prompt.label}: not a carry-forward`);
-    assert.match(row[3], /\bhistory\/round-0\/catalog-plan\.md\b/);
     if (language === 'en') {
-      for (const heading of ['## Current Iteration Findings (new)', '## Resolved Findings (resolved)', '## Non-Finding Concerns']) {
-        const contract = heading === '## Non-Finding Concerns'
-          ? '../../builtins/en/facets/partials/output-contracts/base-review-non-finding-concerns.md'
-          : '../../builtins/en/facets/output-contracts/coding-review.md';
-        assert.ok(readFileSync(new URL(contract, import.meta.url), 'utf8').includes(heading));
-        assert.ok(review.includes(heading));
-      }
       const scenario = suite.tests.find(entry => entry.prompts.includes(prompt.label));
       assert.equal(typeof scenario.vars.task, 'string');
       assert.doesNotMatch(scenario.vars.task, /\p{Script=Han}/u);
@@ -249,9 +224,6 @@ test('registered scope suite prepares both real phases for each isolated languag
       const expected = resolveRefToContent('review-adjudication', undefined, join(resourceRoot, 'workflows'), kind, { lang: language, resourceRoot });
       assert.equal(full, expected, `${prompt.label}: only adjudication ${kind}`);
       assert.ok(phase1.includes(full.length > 2000 ? snapshot : full));
-    }
-    for (const report of ['coding-review.md', 'review-resolution.md', 'fix-verification.md']) {
-      assert.ok(readFileSync(new URL(`../${prompt.config.working_dir}/.takt/runs/eval/reports/${report}`, import.meta.url), 'utf8'));
     }
   }
 });

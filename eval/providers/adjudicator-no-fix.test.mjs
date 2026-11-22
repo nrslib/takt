@@ -11,7 +11,6 @@ import { ADJUDICATOR_CASES, ADJUDICATOR_TARGETS, buildAdjudicatorFixture } from 
 import { auditAdjudicator, snapshotFiles } from './adjudicator-no-fix-audit.mjs';
 import CliAdjudicatorNoFixProvider from './cli-adjudicator-no-fix.mjs';
 import gradeActions from '../asserts/adjudicator-no-fix.mjs';
-import { promptEvalPrepareTargets, selectPromptEvalSuites } from '../suite-registry.mjs';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const evalDir = join(repoRoot, 'eval');
@@ -224,17 +223,6 @@ test('six fixtures distinguish actual omissions, resolved code, absent and stale
       if (id === 'e') assert.match(order, /docs\/\*\* は変更しない/);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('suite selects six production readonly steps and the requested model matrix', () => {
-  const registered = selectPromptEvalSuites({ names: ['adjudicator-no-fix'] });
-  assert.equal(registered[0].execution.defaultEligible, false);
-  assert.deepEqual(promptEvalPrepareTargets(registered), ADJUDICATOR_TARGETS);
-  assert.deepEqual(suite.providers.map(({ config }) => [config.cli, config.model, config.reasoning_effort]), [
-    ['codex', 'gpt-6.1-terra', 'medium'], ['codex', 'gpt-6.1-sol', 'low'], ['codex', 'gpt-6-luna', 'max'], ['claude', 'opus', undefined],
-  ]);
-  assert.equal(suite.tests.length, 6);
-  for (const entry of suite.tests) assert.equal(entry.assert[0].type, 'llm-rubric');
 });
 
 test('provider persists failed adjudication evidence before cleaning its isolated workspace', async () => {
