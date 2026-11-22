@@ -534,6 +534,61 @@ manager:
 
 manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.prepare_workflow` / `merge.workflow`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
 
+## manager 的任务 runtime assignment
+
+在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中设置 `manager.runtime_assignments`，指定 manager 为各任务选择 runtime assignment 时可用的候选项。项目值替换整个全局列表。每项可以是名称字符串，或只含一个 `{ 名称: 用途说明 }` 的对象；不支持 `all`。
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: 不紧急、允许较长完成时间的目标任务
+    - fast
+```
+
+项目和全局都未设置 `manager.runtime_assignments` 时，候选项为空，manager 无法指定 runtime assignment。名称必须已定义在 `runtime.yaml` 的 `provider.assignments` 中。创建 manager 会话计划时，会警告并忽略未定义的名称。
+
+manager 通过 `takt_list_runtime_assignments` 读取候选项及用途说明，再将合适的名称作为 `runtimeAssignment` 传给 `takt_enqueue_goal_task`。指定候选项之外的名称会报错。名称以 `runtime_assignment` 保存到任务中；requeue 和 retry 未指定替换值时使用保存值。通过 `--runtime-assignment` 启动时，命令行指定优先于任务的保存值。
+
+将已有任务重新提交给 `takt_enqueue_goal_task` 时，即使指定另一个有效候选名称，也不会改变保存值。工具验证名称后返回已有任务，不会创建新任务。
+
+### 保存的 assignment 名称被删除时
+
+从 `runtime.yaml` 的 `provider.assignments` 删除名称后，保存该名称的任务无法继续按保存值执行。
+
+属于目标的任务会被执行前的 provider 检查跳过，在被领取（claim）执行时变为 `failed`，其他任务不受影响。不属于目标的任务只要仍为 `pending`，`takt run` 的 provider 预检查就会在任何任务开始前停止，因此项目中的其他 pending 任务也不会执行。
+
+可以采用以下恢复方法：
+
+1. 在 `runtime.yaml` 中恢复该名称。
+2. 启动时通过 `--runtime-assignment` 指定 `runtime.yaml` 中已定义的有效名称。此指定只对本次启动有效，不会修复任务中保存的 `runtime_assignment`。
+3. 仅对于目标任务，先通过 `takt_remove_goal_task` 移除任务，再由 manager 在 `takt_enqueue_goal_task` 的 `runtimeAssignment` 中指定有效名称，重新加入队列。
+
+已经变为 `failed` 的目标任务，不会因为名称恢复或指定了 CLI 覆盖而自动重跑。请先通过 `takt_retry_goal_task` 将其恢复为 `pending`，再启动 run。
+
+### 使用 CLI 覆盖恢复时的自动执行
+
+`manager.auto_run` 启用时（默认启用），retry 也会自动启动 run。该 run 不带 `--runtime-assignment` 领取任务，因此计划通过 CLI 覆盖恢复时，请先禁用 `manager.auto_run`，再 retry。
+
+禁用 `manager.auto_run` 不会停止已经运行的 run，它仍会在没有 CLI 覆盖的情况下继续领取 pending 任务。请先停止正在运行的 run，或等其结束后再 retry。
+
+### 移除任务并重新加入队列时
+
+采用上述第3种方法时，如果目标已暂停（`executionStatus` 为 `paused`），请先恢复目标，再重新加入队列。`takt_enqueue_goal_task`、retry 和 requeue 都会拒绝已暂停的目标。可以使用 `takt_resume_goal`，或在 TUI 中按 Ctrl+G，选择目标并恢复。
+
+除 merge 任务和未整合的已完成成果的处理路径外，`takt_remove_goal_task` 会直接删除 worktree，不检查未提交的修改。移除前请检查 worktree，并保存需要的修改。重新加入队列不会恢复已删除的修改。
+
+只有目标状态为 `created` 时，才能移除 pending 任务。PR 的 merge 任务在目标为 `awaiting_merge` 时也可以移除。不能移除 running 任务。
+
+### 修改保存值
+
+目标任务恢复为 `pending` 时，可以向 `takt_retry_goal_task` 或 `takt_requeue_goal_task` 传入 `runtimeAssignment`，保存另一个名称。移除任务后重新加入队列也可以修改保存值。
+
+省略 `runtimeAssignment` 时，requeue 和 retry 不改变保存值。Failed 目标任务使用同一个缺失名称恢复为 pending 后，在领取时仍会再次失败。追加指示 `takt_tell_run` 只用于 running 任务，不修改保存值。当前可用候选项可通过 `takt_list_runtime_assignments` 确认。
+
+### 同时检查 defaults 和 directories 的引用
+
+如果 `runtime.yaml` 的 `provider.defaults.assignment` 或 `provider.directories` 引用了 `provider.assignments` 中不存在的名称，解析该引用时会失败。CLI 覆盖、移除后重新加入队列都无法绕过。尝试恢复前，请先将这些引用也改为有效名称。
+
 ## manager 工具权限
 
 在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中配置：
@@ -1059,8 +1114,9 @@ takt --pipeline --runtime-assignment cost "#123"
 
 此选项适用于交互式启动、直接执行、pipeline、`run`、`watch` 和其他子命令。
 同一次 `run` 的所有任务、同一 `watch` 启动后新增的任务、内部 agent 和 loop-analysis 使用相同选择。
-选择操作不会改写配置文件，也不会保存到任务记录。requeue、retry 和 instruct 不会恢复过去启动的选择。
-正常任务执行仍会更新任务状态。未指定选项时，原有目录匹配和顶层解析行为保持不变。
+`--runtime-assignment` 的选择不会改写配置文件，也不会保存到任务记录。manager 通过 `takt_enqueue_goal_task` 创建新任务，或通过 `takt_retry_goal_task`、`takt_requeue_goal_task` 将任务恢复为 `pending` 时，传入的 `runtimeAssignment` 名称会以 `runtime_assignment` 保存到任务中。
+启动时指定 `--runtime-assignment`，该值优先于任务保存的 `runtime_assignment`。
+正常任务执行仍会更新任务状态。未指定 `--runtime-assignment` 时，如果任务保存了 `runtime_assignment`，就使用该值；也没有保存值时，沿用原有的目录匹配和顶层配置解析。
 
 名称未定义、assignments 不存在或没有有效 runtime provider section 时，在任何 agent 启动前停止。
 错误包含指定名称和可用 assignment 名称列表，或说明没有定义；不会回退到目录或 legacy 配置。

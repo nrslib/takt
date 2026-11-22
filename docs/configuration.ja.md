@@ -539,6 +539,61 @@ manager:
 
 manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で候補にない workflow を新規登録しようとすると、候補一覧と設定ファイルの場所を示すエラーになります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.prepare_workflow` / `merge.workflow`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI にはこの制限を適用しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
 
+## manager がタスクに使う runtime assignment
+
+グローバルの `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` の `manager.runtime_assignments` で、manager がタスクごとに選べる runtime assignment の候補を指定します。project の値は global の一覧全体を置き換えます。各要素は名前の文字列か、`{ 名前: 使い分けの説明 }` の1対だけを持つオブジェクトです。`all` は使えません。
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: 急がないゴールで、完了までに時間がかかってもよいタスク
+    - fast
+```
+
+`manager.runtime_assignments` が project と global のどちらにも設定されていない場合、候補は空で、manager は runtime assignment を指定できません。名前は `runtime.yaml` の `provider.assignments` に定義した名前です。定義されていない名前は、manager の会話の plan を作るときに警告して無視します。
+
+manager は `takt_list_runtime_assignments` で候補と使い分けの説明を読み、合う名前を `takt_enqueue_goal_task` の `runtimeAssignment` に渡します。候補に無い名前を指定するとエラーになります。指定した名前はタスクに `runtime_assignment` として保存され、requeue と retry では、変更を指定しなければ保存値を使います。`--runtime-assignment` を指定して起動すると、コマンドラインの指定がタスクの保存値より優先されます。
+
+既存タスクを `takt_enqueue_goal_task` に再送した場合は、別の有効な候補名を指定しても保存値は変わりません。名前を検証したうえで、新しいタスクを作らず既存タスクを返します。
+
+### 保存した assignment 名が削除された場合
+
+`runtime.yaml` の `provider.assignments` から名前を消すと、その名前を保存したタスクは保存値のままでは実行できません。
+
+ゴールに属するタスクは、実行前の provider 確認では飛ばされ、実行対象として取得（claim）された時点で `failed` になります。ほかのタスクは影響を受けません。ゴールに属さないタスクでは、そのタスクが `pending` に残っている間、`takt run` の実行前の provider 確認が、どのタスクも始める前に止まります。そのため、プロジェクトのほかの `pending` タスクも実行されません。
+
+復旧には次の方法があります。
+
+1. `runtime.yaml` に名前を戻します。
+2. `--runtime-assignment` で、`runtime.yaml` に定義済みの有効な assignment 名を指定して起動します。この指定はその起動にだけ適用され、保存済みの `runtime_assignment` は修復しません。
+3. ゴールのタスクに限り、`takt_remove_goal_task` でタスクを取り除いてから、manager が `takt_enqueue_goal_task` の `runtimeAssignment` に有効な名前を指定して積み直します。
+
+すでに `failed` になったゴールのタスクは、名前を戻したり `--runtime-assignment` を指定したりしても自動では再実行されません。`takt_retry_goal_task` で `pending` に戻してから、run を開始してください。
+
+### CLI の指定で復旧するときの自動実行
+
+`manager.auto_run` が有効な場合（既定は有効です）、retry は自動 run も起動します。この run は `--runtime-assignment` を指定せずにタスクを claim するため、CLI の指定で復旧する場合は、先に `manager.auto_run` を無効にしてから retry してください。
+
+`manager.auto_run` を無効にしても実行中の run は止まらず、引き続き CLI の指定なしに `pending` のタスクを claim します。実行中の run を止めるか、終わるまで待ってから retry してください。
+
+### タスクを取り除いて積み直すときの注意
+
+上記3の方法でゴールが一時停止中（`executionStatus` が `paused`）の場合は、積み直す前にゴールを再開してください。`takt_enqueue_goal_task` と retry・requeue は、一時停止中のゴールを拒否します。`takt_resume_goal` を使うか、TUI で Ctrl+G を押してゴールを選ぶと再開できます。
+
+`takt_remove_goal_task` は、merge タスクと未取り込みの完了成果の経路を除き、worktree の未保存の変更を確認せずに worktree を削除します。取り除く前に worktree を確認し、必要な変更を退避してください。積み直しても削除した変更は戻りません。
+
+`pending` タスクを取り除けるのは goal の状態が `created` のときだけです。PR の merge タスクは `awaiting_merge` のときにも取り除けます。`running` のタスクは取り除けません。
+
+### 保存値を変更する
+
+ゴールのタスクが `pending` に戻るとき、`takt_retry_goal_task` または `takt_requeue_goal_task` に `runtimeAssignment` を渡すと、別の名前を保存できます。タスクを取り除いてから積み直す方法でも変更できます。
+
+`runtimeAssignment` を省略した requeue と retry は保存値を変えません。`failed` になったゴールのタスクを同じ保存値のまま `pending` に戻しても、その名前が無い間は claim の時点で再び `failed` になります。追加指示の `takt_tell_run` は `running` のタスクにだけ使え、保存値は変えません。現在有効な候補は `takt_list_runtime_assignments` で確認できます。
+
+### defaults と directories の参照も確認する
+
+`runtime.yaml` の `provider.defaults.assignment` または `provider.directories` に、`provider.assignments` に無い名前が残っていると、その参照の解決で失敗します。`--runtime-assignment` を指定しても、タスクを取り除いて積み直しても回避できません。復旧を試す前に、これらの参照も有効な名前に修正してください。
+
 ## manager のツール権限
 
 プロジェクトの `.takt/config.yaml` またはグローバルの `~/.takt/config.yaml` に設定します。
@@ -1140,9 +1195,10 @@ takt --pipeline --runtime-assignment cost "#123"
 
 このオプションはインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
 同じ `run` の全タスク、同じ `watch` に後から追加したタスク、内部エージェント、loop-analysis に同じ選択を適用します。
-選択処理は設定ファイルを書き換えず、タスクレコードにも記録しません。requeue、retry、instruct は過去の起動指定を
-復元しません。通常のタスク実行による状態更新は従来どおり行います。未指定時は従来の directories 一致と
-トップレベルによる解決を維持します。
+`--runtime-assignment` の選択は設定ファイルにもタスクレコードにも保存しません。
+manager が新規タスクの `takt_enqueue_goal_task`、またはタスクを `pending` に戻す `takt_retry_goal_task`・`takt_requeue_goal_task` に `runtimeAssignment` を渡すと、その名前がタスクに `runtime_assignment` として保存されます。
+`--runtime-assignment` を指定した起動では、その指定がタスクに保存された `runtime_assignment` より優先されます。
+通常のタスク実行による状態更新は従来どおり行います。`--runtime-assignment` 未指定時は、タスクに `runtime_assignment` が保存されていれば、その値を使います。保存値もない場合は、従来どおり directories の一致とトップレベルの設定で解決します。
 
 未定義名、assignments 未定義、有効な runtime provider section がない場合は、どの agent も起動する前に停止します。
 エラーには指定名と定義済みの名前一覧、または定義がない旨を表示します。directories や legacy 設定へ戻りません。

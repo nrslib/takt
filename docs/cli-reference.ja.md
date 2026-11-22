@@ -52,8 +52,11 @@ Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで�
 `--runtime-assignment` はインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
 選択により変わるのは defaults/targets だけで、共通 section と既存 provider/model/auto-strategy override の優先順位は維持します。
 未定義名や有効な runtime provider section がない場合は agent 起動前に停止し、指定名と候補一覧（または定義なし）を表示します。
-選択は設定やタスクレコードへ保存せず、requeue/retry/instruct で過去の指定を復元しません。
-未指定時は従来の directories 選択を使います。
+CLI の選択はその起動だけに適用され、設定ファイルやタスクレコードには保存されません。
+manager はタスクの投入時や、retry・requeue で pending に戻すときに `runtimeAssignment` を指定し、タスクの `runtime_assignment` に保存できます。
+起動時に `--runtime-assignment` を指定すると、その値をタスクの保存値より優先します。
+未指定の場合はタスクの保存値を使い、保存値もない場合は従来の directories 選択を使います。
+保存条件と変更方法は、設定ガイドの[manager がタスクに使う runtime assignment](./configuration.ja.md#manager-がタスクに使う-runtime-assignment)を参照してください。
 
 ```sh
 takt --runtime-assignment cost "#123"

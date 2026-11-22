@@ -9,6 +9,7 @@ import type { TaskInfo } from '../infra/task/index.js';
 import * as reusedWorktree from '../features/tasks/execute/reusedWorktree.js';
 import * as config from '../infra/config/index.js';
 import { checkWorkflowProviders } from '../infra/config/runtime-provider/execution-preparation.js';
+import { getInvocationRuntimeAssignment } from '../infra/config/runtime-provider/invocation.js';
 
 const mocks = vi.hoisted(() => ({ inspect: vi.fn(), install: vi.fn(), warn: vi.fn() }));
 vi.mock('../infra/config/runtime-provider/execution-preparation.js', () => ({ checkWorkflowProviders: vi.fn().mockResolvedValue(undefined) }));
@@ -46,6 +47,24 @@ describe('managed provider preflight and failure diagnostics', () => {
       expect(mocks.inspect).toHaveBeenCalledTimes(required ? 1 : 0);
       expect(mocks.install).not.toHaveBeenCalled();
     } finally { for (const spy of spies) spy.mockRestore(); }
+  });
+
+  it('applies the queued task runtime assignment while checking workflow providers', async () => {
+    const loadWorkflow = vi.spyOn(config, 'loadWorkflowByIdentifier').mockReturnValue({} as never);
+    const providerOptions = vi.spyOn(config, 'resolveProviderOptionsWithTrace').mockReturnValue({ value: {} } as never);
+    let observed: string | undefined;
+    vi.mocked(checkWorkflowProviders).mockImplementationOnce(async () => {
+      observed = getInvocationRuntimeAssignment();
+      return undefined as never;
+    });
+    const task = { name: 'queued', data: { workflow: 'mock', runtime_assignment: 'slow' } } as TaskInfo;
+    try {
+      await checkQueuedTaskProviders('/project', task, {}, undefined);
+      expect(observed).toBe('slow');
+    } finally {
+      loadWorkflow.mockRestore();
+      providerOptions.mockRestore();
+    }
   });
 
   it('rechecks pending tasks added or changed during provider preparation', async () => {

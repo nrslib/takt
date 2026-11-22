@@ -55,8 +55,11 @@ The global config directory (default: `~/.takt/`) can be changed with the `TAKT_
 and other subcommands. It changes only the assignment's defaults/targets; shared sections and
 existing provider/model/auto-strategy override priority stay unchanged. A missing name or no active
 runtime provider section fails before any agent starts and reports available names (or no definitions).
-The selection is not written to configuration or task records and is not restored by requeue/retry/instruct.
-Without this option, directory selection works as before.
+The CLI selection applies only to that invocation and is not saved in configuration or task records.
+Manager can specify `runtimeAssignment` when enqueueing a task or returning it to pending through retry or requeue; the name is saved as the task's `runtime_assignment`.
+Starting with `--runtime-assignment` gives that selection priority over the task's saved value.
+Without this option, the task's saved value is used; tasks without one use directory selection as before.
+See [Manager runtime assignments](./configuration.md#manager-runtime-assignments) for the conditions for saving and changing task assignments.
 
 ```sh
 takt --runtime-assignment cost "#123"

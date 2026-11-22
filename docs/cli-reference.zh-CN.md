@@ -50,7 +50,11 @@ Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾，Esc 
 `--runtime-assignment` 适用于交互式启动、直接执行、pipeline、`run`、`watch` 和其他子命令。
 选择只改变 defaults/targets；共享 section 和现有 provider/model/auto-strategy override 优先级保持不变。
 名称未定义或没有有效 runtime provider section 时，在 agent 启动前停止，并显示指定名称和候选列表（或没有定义）。
-选择不会写入配置或任务记录，requeue/retry/instruct 不会恢复过去的选择。未指定时仍使用原有 directories 选择。
+CLI 选择只应用于本次启动，不会保存到配置或任务记录。
+manager 可在提交任务时，或通过 retry、requeue 将任务恢复为 pending 时指定 `runtimeAssignment`，并将名称保存到任务的 `runtime_assignment`。
+启动时指定 `--runtime-assignment`，该值优先于任务的保存值。
+未指定时使用任务的保存值；任务没有保存值时，沿用 directories 选择。
+保存条件与更改方法参见[manager 的任务 runtime assignment](./configuration.zh-CN.md#manager-的任务-runtime-assignment)。
 
 ```sh
 takt --runtime-assignment cost "#123"

@@ -117,6 +117,23 @@ describe('persistFailedTaskRetry', () => {
     expect(mockPersistRevision).not.toHaveBeenCalled();
   });
 
+  it('checks providers with the replacement runtime assignment instead of the saved one', async () => {
+    const taskWithSavedAssignment: TaskListItem = {
+      ...failedTask,
+      data: { task: 'old order', runtime_assignment: 'local-slow' },
+    };
+    await persistFailedTaskRetry({ ...retryOptions, task: taskWithSavedAssignment, runtimeAssignment: 'local-fast' });
+
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project',
+      { ...taskWithSavedAssignment, data: { task: 'old order', runtime_assignment: 'local-fast' } },
+      {}, undefined, undefined,
+      { workflow: undefined, worktreePath: '/project/.worktrees/task-a' },
+    );
+    expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'],
+      expect.objectContaining({ runtimeAssignment: 'local-fast' }));
+  });
+
   it('preserves an explicit absent source when restarting in the existing worktree', async () => {
     await persistFailedTaskRetry({
       ...retryOptions,

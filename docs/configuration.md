@@ -543,6 +543,61 @@ When `manager.workflows` is omitted at both project and global scopes, the candi
 
 Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
 
+## Manager runtime assignments
+
+Set `manager.runtime_assignments` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to list the runtime assignments manager may choose for each task. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair; `all` is not supported.
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: Tasks of a goal that is not urgent and may take longer to finish.
+    - fast
+```
+
+When `manager.runtime_assignments` is omitted at both project and global scopes, the candidates are empty and manager cannot specify a runtime assignment. Names refer to assignments defined in `provider.assignments` of `runtime.yaml`. A name that is not defined produces a warning when the manager conversation plan is created and is ignored.
+
+Manager reads the candidates and their usage descriptions with `takt_list_runtime_assignments` and passes a name as `runtimeAssignment` to `takt_enqueue_goal_task`. A name outside the candidates produces an error. The name is saved on the task as `runtime_assignment`; requeue and retry use it unless a replacement is specified. Starting a run with `--runtime-assignment` overrides the task's saved value.
+
+Resubmitting an existing task to `takt_enqueue_goal_task` with a different valid candidate name does not change its saved value. The tool validates the name and returns the existing task without creating a new one.
+
+### When a saved assignment name is removed
+
+If a name is removed from `provider.assignments` in `runtime.yaml`, a task that saved that name cannot run using the saved value.
+
+For a goal task, the pre-run provider check skips the task, and the task becomes `failed` when claimed for execution. Other tasks are not affected. For a task without a goal, the pre-run provider check stops before any task starts while that task remains `pending`, so other pending tasks in the project do not run either.
+
+Recovery options are:
+
+1. Restore the name in `runtime.yaml`.
+2. Start a run with `--runtime-assignment` set to a valid name defined in `runtime.yaml`. This applies only to that invocation and does not repair the task's saved `runtime_assignment`.
+3. For a goal task, remove it with `takt_remove_goal_task`, then have manager enqueue it again with a valid name in `takt_enqueue_goal_task`'s `runtimeAssignment`.
+
+A goal task already marked `failed` does not run again automatically when the name is restored or a CLI override is supplied. Return it to `pending` with `takt_retry_goal_task`, then start a run.
+
+### Automatic runs during recovery with a CLI override
+
+When `manager.auto_run` is enabled (the default), retry also starts an automatic run. That run claims tasks without `--runtime-assignment`, so disable `manager.auto_run` before retrying if you plan to recover with a CLI override.
+
+Disabling `manager.auto_run` does not stop an active run, which continues claiming pending tasks without the override. Stop any active run or wait for it to finish before retrying.
+
+### Removing and re-enqueueing a task
+
+For recovery option 3, resume a paused goal (`executionStatus: paused`) before enqueueing again. `takt_enqueue_goal_task`, retry, and requeue reject paused goals. Use `takt_resume_goal`, or press Ctrl+G in the TUI and select the goal to resume.
+
+Except on the merge-task and unintegrated-completed-result paths, `takt_remove_goal_task` deletes the worktree without checking for uncommitted changes. Inspect the worktree and save any needed changes before removal. Re-enqueueing does not restore deleted changes.
+
+A `pending` task can be removed only while the goal status is `created`. A PR merge task can also be removed while the goal is `awaiting_merge`. A `running` task cannot be removed.
+
+### Changing the saved value
+
+When a goal task returns to `pending`, pass `runtimeAssignment` to `takt_retry_goal_task` or `takt_requeue_goal_task` to save a different name. Removing and re-enqueueing the task can also change it.
+
+Without `runtimeAssignment`, requeue and retry keep the saved value. A failed goal task returned to pending with the same missing name becomes failed again when claimed. Additional instructions through `takt_tell_run` apply only to running tasks and do not change the saved value. Check available candidates with `takt_list_runtime_assignments`.
+
+### Check defaults and directory references too
+
+If `provider.defaults.assignment` or `provider.directories` in `runtime.yaml` refers to a name missing from `provider.assignments`, resolving that reference fails. Neither a CLI override nor removing and re-enqueueing the task bypasses it. Fix these references to valid names before trying recovery.
+
 ## Manager tool permissions
 
 Set these in project `.takt/config.yaml` or global `~/.takt/config.yaml`:
@@ -1156,10 +1211,12 @@ In this example, `cost` uses low effort by default and medium effort for the rev
 
 The option applies to interactive startup, direct execution, pipeline, `run`, `watch`, and
 other subcommands. All tasks in one `run`, tasks added later to the same `watch`, internal
-agents, and loop-analysis use the same selection. Selection does not write configuration
-files or add a field to task records; requeue, retry, and instruct do not restore a past
-invocation's choice. Ordinary task execution still updates task status. Without the option,
-existing directory matching and top-level resolution are unchanged.
+agents, and loop-analysis use the same selection. The `--runtime-assignment` selection is not written
+to configuration files or to task records; this does not change. When manager supplies `runtimeAssignment`
+to `takt_enqueue_goal_task` for a new task, or to `takt_retry_goal_task` or `takt_requeue_goal_task`
+when returning a task to `pending`, the name is saved as `runtime_assignment`. When a run is started with
+`--runtime-assignment`, that selection takes precedence over the task's saved `runtime_assignment`.
+Ordinary task execution still updates task status. Without `--runtime-assignment`, a task uses its saved `runtime_assignment` if present. Without a saved value either, the existing directory matching and top-level resolution apply.
 
 An unknown name, missing assignments, or no active runtime provider section stops before
 any agent starts. The error includes the requested name and available assignment names,

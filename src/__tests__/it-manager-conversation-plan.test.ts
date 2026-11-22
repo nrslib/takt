@@ -51,6 +51,23 @@ async function executeTurn(executor: ReturnType<typeof createManagerTurnExecutor
     abortSignal: new AbortController().signal });
 }
 
+function writeRuntimeAssignmentFixture(projectDirectory: string, assignmentName: string): void {
+  writeFileSync(join(projectDirectory, '.takt', 'runtime.yaml'), [
+    'version: 1',
+    'provider:',
+    '  profiles:',
+    '    manager-profile:',
+    '      provider: mock',
+    '      model: mock-model',
+    '  defaults:',
+    '    profile: manager-profile',
+    '  assignments:',
+    `    ${assignmentName}:`,
+    '      defaults:',
+    '        profile: manager-profile',
+  ].join('\n'));
+}
+
 describe('manager conversation configuration and provider boundary', () => {
   let cwd: string;
 
@@ -86,6 +103,71 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
     expect(warning).toHaveBeenCalledTimes(1);
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-workflow'));
+  });
+
+  it.each(['project', 'global'] as const)('preserves manager runtime assignments through %s configuration load and save', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, 'config.yaml');
+    const runtime_assignments = ['fast', { slow: 'Slow-path tasks' }];
+    writeFileSync(path, `provider: mock\nmanager:\n  runtime_assignments: ${JSON.stringify(runtime_assignments)}\n`);
+    invalidateGlobalConfigCache();
+    if (scope === 'project') saveProjectConfig(cwd, loadProjectConfig(cwd));
+    else saveGlobalConfig(loadGlobalConfig());
+    invalidateGlobalConfigCache();
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { runtime_assignments } });
+    expect(resolveManagerConfig(cwd).runtimeAssignments).toEqual(runtime_assignments);
+  });
+
+  it('prefers project manager runtime assignments over the global configuration', () => {
+    mkdirSync(getGlobalConfigDir(), { recursive: true });
+    writeFileSync(join(getGlobalConfigDir(), 'config.yaml'), 'provider: mock\nmanager:\n  runtime_assignments: [slow]\n');
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  runtime_assignments: [fast]\n');
+    invalidateGlobalConfigCache();
+    expect(loadProjectConfig(cwd).manager?.runtimeAssignments).toEqual(['fast']);
+    expect(loadGlobalConfig().manager?.runtimeAssignments).toEqual(['slow']);
+    expect(resolveManagerConfig(cwd).runtimeAssignments).toEqual(['fast']);
+  });
+
+  it('leaves manager runtime assignments unset when the configuration omits them', () => {
+    expect(loadProjectConfig(cwd).manager?.runtimeAssignments).toBeUndefined();
+    expect(resolveManagerConfig(cwd).runtimeAssignments).toBeUndefined();
+  });
+
+  it('warns about unavailable manager runtime assignments while creating the conversation plan', () => {
+    saveProjectConfig(cwd, { provider: 'mock', manager: { runtimeAssignments: ['missing-runtime-assignment'] } });
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      `Manager runtime assignment not found: missing-runtime-assignment; ignored in ${cwd}. Check manager.runtime_assignments in config.yaml and provider.assignments in runtime.yaml.`,
+    );
+  });
+
+  it('passes configured runtime assignment names and usage to the manager prompt', () => {
+    saveProjectConfig(cwd, { language: 'en', manager: { runtimeAssignments: [{ 'defined-assignment': 'Explicit low priority' }] } });
+    writeRuntimeAssignmentFixture(cwd, 'defined-assignment');
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    const plan = createManagerConversationPlan(cwd, {});
+    expect(plan.strategy.systemPrompt).toContain(JSON.stringify([{
+      repositoryDirectory: cwd,
+      assignments: [{ name: 'defined-assignment', usageDescription: 'Explicit low priority' }],
+    }]));
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it('checks manager runtime assignments against each repository configuration', () => {
+    const other = join(cwd, 'other');
+    mkdirSync(join(other, '.takt'), { recursive: true });
+    saveProjectConfig(cwd, { provider: 'mock', manager: { runtimeAssignments: ['shared-missing'] } });
+    writeFileSync(join(other, '.takt', 'config.yaml'), 'manager:\n  runtime_assignments: [defined-assignment]\n');
+    writeRuntimeAssignmentFixture(other, 'defined-assignment');
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    expect(createManagerConversationPlan(cwd, { repositoryDirectories: [other] }).ctx.providerType).toBe('mock');
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      `Manager runtime assignment not found: shared-missing; ignored in ${cwd}. Check manager.runtime_assignments in config.yaml and provider.assignments in runtime.yaml.`,
+    );
   });
 
   it('uses one configuration snapshot during candidate validation and refreshes it for the next plan', () => {

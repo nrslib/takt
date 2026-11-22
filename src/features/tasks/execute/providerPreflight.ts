@@ -7,6 +7,11 @@ import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import { assertPrMergeRetryWorktreePath, resolveReusedWorktreeExecution, toReusedTaskInfo, type ReusedTaskPreparationOverride } from './reusedWorktree.js';
 import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { resolveWorkflowCallTarget } from '../../../infra/config/loaders/workflowCallResolver.js';
+import { withTaskRuntimeAssignment } from '../../../infra/config/runtime-provider/invocation.js';
+
+import { runtimeAssignmentUnavailableReason } from './runtimeAssignmentGuard.js';
+
+export { runtimeAssignmentUnavailableReason };
 
 export function terminalProviderConfirmation(): ConfirmManagedProvider | undefined {
   return process.stdin.isTTY === true && process.stdout.isTTY === true && !process.env.CI && process.env.TAKT_NO_TTY !== '1'
@@ -41,7 +46,14 @@ export async function checkTaskNameProvider(cwd: string, confirmation: ConfirmMa
   }
 }
 
-export async function checkQueuedTaskProviders(cwd: string, task: TaskInfo | TaskListItem, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal, preparation?: ReusedTaskPreparationOverride): Promise<void> {
+export async function checkQueuedTaskProviders(
+  ...args: Parameters<typeof checkQueuedTaskProvidersInScope>
+): Promise<void> {
+  const [, task] = args;
+  return withTaskRuntimeAssignment(task.data?.runtime_assignment, () => checkQueuedTaskProvidersInScope(...args));
+}
+
+async function checkQueuedTaskProvidersInScope(cwd: string, task: TaskInfo | TaskListItem, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal, preparation?: ReusedTaskPreparationOverride): Promise<void> {
   const executionTask = toReusedTaskInfo(task, preparation);
   const unpreparedMergeClone = executionTask.data?.worktree && executionTask.data.merge_task === true
     && executionTask.data.merge_clone_prepared === false;
@@ -65,6 +77,11 @@ export async function checkPendingTaskProviders(taskRunner: TaskRunner, cwd: str
     const unchecked = pending.filter((task) => checked.get(task.name) !== JSON.stringify(task));
     if (unchecked.length === 0) return;
     for (const task of unchecked) {
+      if (task.data?.goal_id !== undefined
+        && runtimeAssignmentUnavailableReason(cwd, task.data) !== undefined) {
+        checked.set(task.name, JSON.stringify(task));
+        continue;
+      }
       await checkQueuedTaskProviders(cwd, task, options, confirmation, signal);
       signal?.throwIfAborted();
       checked.set(task.name, JSON.stringify(task));

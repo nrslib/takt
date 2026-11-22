@@ -76,11 +76,17 @@ export function buildManagerSystemPrompt(fixture) {
     const system = production.buildManagerSystemPrompt({
       lang: fixture.lang, facets: { persona, policy, knowledge, instruction }, specificationConfiguration,
       formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(fixture.lang), repository: fixture.cwd,
-      mainMerge: fixture.mainMerge, concurrency: fixture.concurrency,
+      mainMerge: fixture.mainMerge, concurrency: fixture.concurrency, runtimeAssignments: [],
     });
     // Retain the older concurrency comparison as an eval-only transformation.
-    return process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY === '1'
-      ? system.replace(/\n\nConcurrency limit: [^\n]+(?:\n\n[^#][^\n]*)?$/, '') : system;
+    // Strip only the runtime settings entry: a custom policy facet joined
+    // earlier in the prompt may contain the same "Concurrency limit:" text.
+    if (process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY !== '1') return system;
+    const settingsHeader = fixture.lang === 'ja' ? '## 現在の担当と設定' : '## Current assignment and settings';
+    const settingsIndex = system.lastIndexOf(settingsHeader);
+    if (settingsIndex === -1) return system;
+    return system.slice(0, settingsIndex)
+      + system.slice(settingsIndex).replace(/\n\nConcurrency limit: [^\n]+(?:\n\n[^#][^\n]*)?/, '');
   } finally {
     if (priorConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
     else process.env.TAKT_CONFIG_DIR = priorConfigDir;

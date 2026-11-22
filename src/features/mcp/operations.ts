@@ -13,6 +13,7 @@ import { readGoalPullRequestStatus as defaultReadGoalPullRequestStatus } from '.
 import type { PrMergeStatus } from '../../infra/github/pr-status.js';
 import type { Goal } from '../../infra/goals/schema.js';
 import type { ManagerWorkflow } from '../manager/workflowSelection.js';
+import type { ManagerRuntimeAssignment } from '../manager/runtimeAssignmentSelection.js';
 import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
 export { jsonResult } from './response.js';
 import {
@@ -46,6 +47,7 @@ type ReadGoalPullRequestStatus = typeof defaultReadGoalPullRequestStatus;
 
 export interface McpOperationDependencies {
   managerWorkflows?: readonly ManagerWorkflow[];
+  managerRuntimeAssignments?: readonly ManagerRuntimeAssignment[];
   turnOperationId?: string;
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
@@ -157,6 +159,7 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     ...(task.mergeTask !== true || task.completion === undefined ? {} : { completion: task.completion }),
     ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
+    ...(task.runtimeAssignment === undefined ? {} : { runtimeAssignment: task.runtimeAssignment }),
   };
   if (task.runSlug !== undefined) {
     summary.runSlug = task.runSlug;

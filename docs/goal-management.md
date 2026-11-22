@@ -69,6 +69,27 @@ When `manager.workflows` is omitted at both project and global scopes, the candi
 
 Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
 
+Set `manager.runtime_assignments` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to list the runtime assignments manager may choose for each task. A project value replaces the entire global list. Each entry is a name or an object containing a single `{ name: usage description }` pair. `all` is not supported.
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: Tasks of a goal that is not urgent and may take longer to finish.
+    - fast
+```
+
+Define the names in `provider.assignments` of `runtime.yaml`. When `manager.runtime_assignments` is omitted at both project and global scopes, the candidates are empty and manager cannot specify a runtime assignment. An undefined name produces a warning when the manager conversation plan is created and is excluded from the candidates.
+
+Manager uses these tools to inspect candidates and select the name saved on a task:
+
+- `takt_list_runtime_assignments` lists candidates and their usage descriptions.
+- `runtimeAssignment` on `takt_enqueue_goal_task` selects the name for a new task. Resubmitting an existing task does not change its saved value.
+- `runtimeAssignment` on `takt_retry_goal_task` or `takt_requeue_goal_task` changes the saved value when the task returns to pending. Omitting it preserves the saved value.
+
+The selected name must be among the candidates. It is saved as the task's `runtime_assignment` and used by requeue and retry. Starting a run with `--runtime-assignment` gives the CLI selection priority for that invocation without changing the task's saved value.
+
+See [Manager runtime assignments](./configuration.md#manager-runtime-assignments) in the configuration guide for the conditions for changing saved values, behavior when an assignment definition is removed, recovery steps, and precautions when deleting worktrees.
+
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 
 Use these tools for inquiries that do not belong to a goal.
@@ -164,7 +185,7 @@ Both views follow the current snapshot, including evidence invalidation, member 
 
 Workflows may use names, scope references or file paths, including workflows with merge_pr / close_pr. Set `autoPr` and `shouldPublishBranchToOrigin` on submission when needed; both default to false, retaining worktree isolation and the goal branch as the base.
 
-`takt_remove_goal_task` may cancel pending work while paused. To discard an unintegrated completed result, supply `discardUnmerged: true` and a reason. Running-state, ownership and cleanup-success checks remain.
+`takt_remove_goal_task` may cancel pending work while paused. To discard an unintegrated completed result, supply `discardUnmerged: true` and a reason. Running-state, ownership and cleanup-success checks remain. It removes the task's worktree without checking it for uncommitted changes except on the merge-task and unintegrated-completed-result paths, so inspect the worktree and save any needed changes before removing the task; re-enqueueing does not restore changes that were deleted.
 
 `takt_merge_goal_pr` requires `cwd`, `goalId`, a `prNumber` matching the saved PR, and `until`, without a conversation ID or director-only authorization. Stopped-state, saved PR and head/base checks remain. Manager may investigate and recover push or PR preparation failures itself; calling `takt_complete_goal` again retries preparation when `awaiting_merge` has no saved PR. Final verification may be delegated, with manager responsible for checking target SHA, methods and result evidence.
 
