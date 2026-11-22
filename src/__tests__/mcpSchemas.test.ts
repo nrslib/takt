@@ -5,6 +5,7 @@ import {
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
   listGoalProposalsInputSchema, approveGoalProposalInputSchema, rejectGoalProposalInputSchema,
   getGoalProposalInputSchema,
+  enqueueGoalTaskInputSchema,
   updateGoalBranchesInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
@@ -140,6 +141,34 @@ describe('MCP tool input schema', () => {
         { type: 'object', required: ['create'], additionalProperties: false },
       ],
     });
+  });
+});
+
+describe('MCP goal task enqueue input', () => {
+  const goalEnqueue = {
+    cwd: '/repo',
+    goalId,
+    purpose: '目的',
+    task: 'タスク',
+    workflow: 'safe',
+  } as const;
+
+  it('accepts an omitted runtimeAssignment and a non-blank runtimeAssignment name', () => {
+    const omitted = enqueueGoalTaskInputSchema.parse(goalEnqueue);
+    expect(omitted).not.toHaveProperty('runtimeAssignment');
+    expect(enqueueGoalTaskInputSchema.parse({ ...goalEnqueue, runtimeAssignment: 'local-fast' }))
+      .toMatchObject({ runtimeAssignment: 'local-fast' });
+    expect(enqueueGoalTaskInputSchema.parse({ ...goalEnqueue, runtimeAssignment: '  local-fast  ' }))
+      .toMatchObject({ runtimeAssignment: 'local-fast' });
+  });
+
+  it.each(['', '   ', '\n\t'])('rejects a blank runtimeAssignment %j', (runtimeAssignment) => {
+    expect(enqueueGoalTaskInputSchema.safeParse({ ...goalEnqueue, runtimeAssignment }).success).toBe(false);
+  });
+
+  it('enforces the runtimeAssignment length boundary shared with workflow names', () => {
+    expect(enqueueGoalTaskInputSchema.safeParse({ ...goalEnqueue, runtimeAssignment: 'a'.repeat(128) }).success).toBe(true);
+    expect(enqueueGoalTaskInputSchema.safeParse({ ...goalEnqueue, runtimeAssignment: 'a'.repeat(129) }).success).toBe(false);
   });
 });
 

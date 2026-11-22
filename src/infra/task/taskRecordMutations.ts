@@ -39,6 +39,7 @@ interface RetryTaskRecordOptions {
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
+  runtimeAssignment?: string;
   taskDir?: string;
   resumeSource?: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
@@ -122,6 +123,7 @@ export function buildRetryTaskRecord(
   return {
     ...baseTask,
     ...(options.workflow ? { workflow: options.workflow } : {}),
+    ...(options.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
     ...taskSpecSource,
     status,
     execution_id: status === 'running' ? randomUUID() : undefined,

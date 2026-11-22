@@ -28,6 +28,33 @@ it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blan
     }
   },
 );
+it.each([
+  { global: ['slow'], project: ['fast'], expected: ['fast'] },
+  { global: ['slow'], project: undefined, expected: ['slow'] },
+  { global: undefined, project: undefined, expected: undefined },
+])('replaces the global manager runtime assignment selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { runtimeAssignments: global } });
+  doubles.project.mockReturnValue({ manager: { runtimeAssignments: project } });
+  expect(resolveManagerConfig('/project').runtimeAssignments).toEqual(expected);
+});
+it('accepts manager runtime assignments at both scopes', () => {
+  const runtime_assignments = ['fast', { slow: 'Slow-path tasks' }];
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { runtime_assignments } }).manager?.runtime_assignments).toEqual(runtime_assignments);
+  }
+});
+it.each(['all', [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ fast: 'Fast', slow: 'Slow' }]])(
+  'rejects malformed manager runtime assignments %j at both scopes', (runtime_assignments) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { runtime_assignments } }).success).toBe(false);
+    }
+  },
+);
+it('tracks manager runtime assignments at both scopes', async () => {
+  const { getGlobalTracedSchema, getProjectTracedSchema } = await import('../infra/config/traced/tracedConfigSchema.js');
+  expect(Object.keys(getProjectTracedSchema())).toContain('manager.runtime_assignments');
+  expect(Object.keys(getGlobalTracedSchema())).toContain('manager.runtime_assignments');
+});
 it('defaults to automatic execution, goal worktree cleanup, and approval for main merges', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, preserveGoalWorktree: false, mainMerge: 'approve' });
 });

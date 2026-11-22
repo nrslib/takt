@@ -14,6 +14,7 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({ assertReusableWo
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../features/manager/notifications.js', () => ({ resolveManagerNotificationOptions: () => ({ policy: {}, mainMerge: 'approve' }), sendSavedGoalNotifications: vi.fn() }));
 vi.mock('../features/mcp/operations.js', async (original) => ({ ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: vi.fn() }));
+vi.mock('../infra/config/runtime-provider/invocation.js', async (original) => ({ ...await original<typeof import('../infra/config/runtime-provider/invocation.js')>(), validateTaskRuntimeAssignmentForSave: vi.fn() }));
 let goal: Goal;
 let state: TaskState;
 const input = { cwd: '/project', goalId: goalRecord().id, taskName: 'task-a' };
@@ -33,6 +34,19 @@ it('resumes exceeded work using its saved stop and does nothing on a repeated re
   expect(state.status).toBe('pending'); expect(doubles.exceeded).toHaveBeenCalledExactlyOnceWith('task-a', { retryNote: expect.stringContaining('追加の注意') });
   expect(goal.workLog).toHaveLength(1); expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith(input.cwd);
   expect((await requeueTaktGoalTask(input, {}, signal)).isError).toBeUndefined(); expect(doubles.exceeded).toHaveBeenCalledOnce();
+});
+it('passes a replacement runtime assignment to an exceeded requeue and returns it', async () => {
+  const result = await requeueTaktGoalTask({ ...input, runtimeAssignment: 'local-fast' }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(doubles.exceeded).toHaveBeenCalledExactlyOnceWith('task-a', { runtimeAssignment: 'local-fast' });
+  const body = JSON.parse((result.content[0] as { text: string }).text) as { runtimeAssignment?: string };
+  expect(body.runtimeAssignment).toBe('local-fast');
+  expect(state.status).toBe('pending');
+});
+it('rejects a runtime assignment outside the manager candidates on requeue', async () => {
+  const deps = { managerRuntimeAssignments: [{ name: 'local-fast' }] };
+  expect((await requeueTaktGoalTask({ ...input, runtimeAssignment: 'local-slow' }, deps, signal)).isError).toBe(true);
+  expect(doubles.exceeded).not.toHaveBeenCalled();
 });
 it.each(['pending', 'running', 'completed'] as const)('leaves a %s task unchanged on retry', async (status) => {
   state = { ...state, kind: status, status };

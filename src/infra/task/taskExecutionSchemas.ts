@@ -30,6 +30,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   branch: z.string().optional(),
   base_branch: z.string().optional(),
   workflow: z.string().optional(),
+  runtime_assignment: z.string().min(1).optional(),
   issue: positiveSafeIntegerSchema.optional(),
   start_step: z.string().optional(),
   retry_note: z.string().optional(),

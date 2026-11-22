@@ -194,6 +194,20 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
+  it('should accept a non-empty runtime_assignment and preserve it', () => {
+    const config = TaskExecutionConfigSchema.parse({
+      runtime_assignment: 'slow',
+    }) as Record<string, unknown>;
+
+    expect(config.runtime_assignment).toBe('slow');
+  });
+
+  it('should reject an empty runtime_assignment', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      runtime_assignment: '',
+    })).toThrow();
+  });
+
   it('should read the legacy start_movement key as start_step', () => {
     const config = TaskExecutionConfigSchema.parse({
       start_movement: 'develop',
@@ -463,6 +477,19 @@ describe('TaskExecutionConfigSchema', () => {
 
     expect(serialized).toMatchObject({
       managed_pr: true,
+    });
+  });
+
+  it('should preserve runtime_assignment in task config serialization', () => {
+    const record = TaskRecordSchema.parse({
+      ...makePendingRecord(),
+      runtime_assignment: 'slow',
+    });
+
+    const serialized = serializeTaskRecord(record);
+
+    expect(serialized).toMatchObject({
+      runtime_assignment: 'slow',
     });
   });
 });
