@@ -23,9 +23,11 @@ import { createDaemonConversationRuntime } from '../features/director/conversati
 import { createDirectorConversationPlan } from '../features/director/conversationPlan.js';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
 import { resolveNonWorkflowProviderOptions } from '../infra/config/index.js';
-import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME, DIRECTOR_TOOL_NAMES, DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
+import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME, DIRECTOR_TOOL_NAMES, DIRECTOR_TOOL_ALLOWLIST, type DirectorStateActions } from '../features/director/mcp.js';
 import { listDirectorManagers } from '../features/director/managers.js';
 import { createDirectorManagerPort } from '../features/director/managerPort.js';
+import { changeDirectorGoalQuestionRoute } from '../features/director/goalQuestions.js';
+import type { AcceptedEvent } from '../core/daemon/events.js';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { startLocalMcpConnection } from '../features/mcp/localConnection.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
@@ -71,7 +73,7 @@ vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
-const actions = { tellManager: vi.fn(async () => ({ kind: 'accepted' })), notifyHuman: vi.fn(async (message: string) => ({ id: randomUUID(), message })) };
+const actions = { setQuestionRoute: vi.fn(async () => ({})), tellManager: vi.fn(async () => ({ kind: 'accepted' })), notifyHuman: vi.fn(async (message: string) => ({ id: randomUUID(), message })) };
 let directory: string;
 const cleanups: Array<() => Promise<unknown>> = [];
 beforeEach(() => {
@@ -88,8 +90,8 @@ function decoded(result: Awaited<ReturnType<Client['callTool']>>): Record<string
   const content = result.content as Array<{ type: string; text?: string }>;
   return JSON.parse(content.find((item) => item.type === 'text')!.text!) as Record<string, unknown>;
 }
-async function connectMcp() {
-  const server = createDirectorMcpServer(directory, actions, signal());
+async function connectMcp(stateActions: DirectorStateActions = actions) {
+  const server = createDirectorMcpServer(directory, stateActions, signal());
   const client = new Client({ name: 'director-test', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
@@ -102,6 +104,104 @@ async function seedManager(name: string) {
   await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
   return repository;
 }
+
+function humanRouteEvent(): AcceptedEvent {
+  return { eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationId({ kind: 'daemon' }),
+    source: 'tui', occurredAt: new Date().toISOString(), operationId: randomUUID(), acceptedSequence: 1, lane: 'human',
+    event: { kind: 'human_command', command: { kind: 'message', text: 'Please change the question route' },
+      speaker: { namespace: 'tui-user', id: 'human' } } };
+}
+
+it('changes the question route only in a real human turn and preserves existing questions and answers across both changes', async () => {
+  const repository = await seedManager('routing');
+  const saved = saveGoal(repository, 'created', 'active');
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  const pending = saved.questions[0]!;
+  const permission = createInquiry({ body: 'Permission?', questionType: 'permission' });
+  const history = { ...createInquiry({ body: 'Previous?' }), status: 'answered' as const,
+    answer: { text: 'Earlier', source: 'tui' as const, answeredBy: 'human' as const, answeredAt: new Date().toISOString() } };
+  await new GoalStore(repository).update(saved.id, goal => ({ ...goal, questions: [pending, permission, history] }));
+  const target = { managerId, cwd: repository, goalId: saved.id };
+  let event = humanRouteEvent();
+  const setQuestionRoute = vi.fn<DirectorStateActions['setQuestionRoute']>(
+    async (value, route, origin) => changeDirectorGoalQuestionRoute(directory, value, route, origin, event, signal()));
+  const { client } = await connectMcp({ ...actions, setQuestionRoute });
+  const change = (questionRoute: 'human' | 'director', origin = 'human') => client.callTool({ name: 'takt_set_goal_question_route',
+    arguments: { ...target, questionRoute, origin } });
+  expect((await change('director')).isError).toBeUndefined();
+  expect(await new GoalStore(repository).get(saved.id)).toMatchObject({ creationOrigin: 'manager', questionRoute: 'director',
+    questions: [{ id: pending.id, recipient: 'director' }, { id: permission.id, recipient: 'human' }, history] });
+  expect((await change('human')).isError).toBeUndefined();
+  expect((await new GoalStore(repository).get(saved.id)).questions).toEqual([pending, permission, history]);
+  const before = await new GoalStore(repository).get(saved.id);
+  expect((await change('director', 'director')).isError).toBe(true);
+  event = { ...event, source: 'watcher', event: { kind: 'patrol', goalIds: [saved.id] } };
+  expect((await change('director')).isError).toBe(true);
+  event = { ...humanRouteEvent(), event: { kind: 'human_command', command: { kind: 'message', text: 'Fake human' },
+    speaker: { namespace: 'agent', id: 'director' } } };
+  expect((await change('director')).isError).toBe(true);
+  expect(await new GoalStore(repository).get(saved.id)).toEqual(before);
+});
+
+it('answers only director inquiries through the dedicated tools and hands an unsure question to the human', async () => {
+  const repository = await seedManager('answers');
+  const saved = saveGoal(repository, 'created', 'active');
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  const direct = createInquiry({ body: 'Use an array?', recipient: 'director' });
+  const unclear = createInquiry({ body: 'Unclear requirement', recipient: 'director' });
+  await new GoalStore(repository).update(saved.id, goal => ({ ...goal, creationOrigin: 'director', questionRoute: 'director',
+    questions: [direct, unclear, ...saved.questions] }));
+  const { client } = await connectMcp();
+  const target = { managerId, cwd: repository, goalId: saved.id };
+  const answer = (questionId: string, extra = {}) => client.callTool({ name: 'takt_answer_goal_question',
+    arguments: { ...target, questionId, answer: { text: 'Use the existing array', ...extra } } });
+  expect((await answer(saved.questions[0]!.id)).isError).toBe(true);
+  expect((await answer(direct.id, { answeredBy: 'human' })).isError).toBe(true);
+  expect((await client.callTool({ name: 'takt_answer_goal_question', arguments: { ...target, managerId: `manager-${'0'.repeat(64)}`,
+    questionId: direct.id, answer: { text: 'Wrong owner' } } })).isError).toBe(true);
+  expect((await answer(direct.id)).isError).toBeUndefined();
+  expect((await new GoalStore(repository).get(saved.id)).questions?.[0]).toMatchObject({ status: 'answered',
+    answer: { text: 'Use the existing array', answeredBy: 'director', source: 'mcp' } });
+  expect(readManagerEvents(repository).find(({ event }) => event.kind === 'answer' && event.questionId === direct.id)).toMatchObject({
+    event: { kind: 'answer', answer: { answeredBy: 'director', source: 'mcp' } } });
+  expect((await client.callTool({ name: 'takt_escalate_goal_question', arguments: { ...target, questionId: unclear.id } })).isError).toBeUndefined();
+  expect((await new GoalStore(repository).get(saved.id))).toMatchObject({ questionRoute: 'director',
+    questions: expect.arrayContaining([expect.objectContaining({ id: direct.id, status: 'answered' }),
+      expect.objectContaining({ id: unclear.id, recipient: 'human', questionType: 'unsure' })]) });
+  expect((await answer(unclear.id)).isError).toBe(true);
+  const listed = decoded(await client.callTool({ name: 'takt_list_goal_questions', arguments: { ...target, offset: 0, limit: 20 } }));
+  expect(JSON.stringify(listed)).toContain('director');
+  expect(decoded(await client.callTool({ name: 'takt_get_goal_question', arguments: { ...target, questionId: direct.id } }))).toMatchObject({
+    question: { answer: { answeredBy: 'director', source: 'mcp' } } });
+});
+it('rejects retired approval answers after a human promotes a legacy goal', async () => {
+  const repository = await seedManager('legacy-approval');
+  const saved = saveGoal(repository, 'created', 'active');
+  const approval = createInquiry({ body: 'Legacy tool approval', kind: 'approval',
+    operation: { toolName: 'Bash', args: '{}', cwd: repository } });
+  const file = join(repository, '.takt', 'goals', saved.id, 'goal.json');
+  writeFileSync(file, JSON.stringify({ ...saved, creationOrigin: undefined, questionRoute: undefined,
+    questions: [{ ...approval, questionType: undefined }] }));
+  const target = { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: repository, goalId: saved.id };
+  const setQuestionRoute: DirectorStateActions['setQuestionRoute'] = (value, route, origin) =>
+    changeDirectorGoalQuestionRoute(directory, value, route, origin, humanRouteEvent(), signal());
+  const { client } = await connectMcp({ ...actions, setQuestionRoute });
+  expect((await client.callTool({ name: 'takt_set_goal_question_route', arguments: { ...target,
+    questionRoute: 'director', origin: 'human' } })).isError).toBeUndefined();
+  expect((await new GoalStore(repository).get(saved.id)).questions?.[0]).toMatchObject({
+    id: approval.id, recipient: 'director', kind: 'approval', questionType: 'routine', status: 'pending' });
+  const before = readFileSync(file, 'utf8');
+  const events = readManagerEvents(repository);
+  for (const answer of [{ text: 'Allow the operation' }, { report: 'completed' }, { decision: 'allow' }]) {
+    const result = await client.callTool({ name: 'takt_answer_goal_question', arguments: { ...target,
+      questionId: approval.id, answer } });
+    expect(result.isError).toBe(true);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(readManagerEvents(repository)).toEqual(events);
+  }
+  expect(decoded(await client.callTool({ name: 'takt_get_goal_question', arguments: { ...target, questionId: approval.id } })))
+    .toMatchObject({ question: { kind: 'approval', status: 'pending' } });
+});
 function saveGoal(repository: string, status: 'created' | 'awaiting_merge', executionStatus: 'active' | 'paused') {
   const goal = { ...goalRecord(), status, executionStatus, questions: [createInquiry({ body: 'Choose the specification', recipient: 'human' })],
     notifications: [{ id: randomUUID(), kind: 'blocked', body: 'Human decision pending', recordedAt: new Date().toISOString() }],
@@ -210,6 +310,35 @@ it('filters an assigned manager repository goal list by state', async () => {
   expect(await list({ state: 'open' })).toEqual({ ids: [open.id], totalCount: 1, nextOffset: null });
   expect(await list({ state: 'finished', limit: 1 })).toEqual({ ids: [completed.id], totalCount: 2, nextOffset: 1 });
   expect(await list({ state: 'finished', limit: 1, offset: 1 })).toEqual({ ids: [aborted.id], totalCount: 2, nextOffset: null });
+});
+
+it('reads human answered history through director tools with question paging and answer text continuation', async () => {
+  const repository = await seedManager('human-answer-history');
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  const goal = saveGoal(repository, 'created', 'active');
+  const questionId = goal.questions[0]!.id;
+  const answerText = '日本語の回答'.repeat(20);
+  const file = join(repository, '.takt', 'goals', goal.id, 'goal.json');
+  const saved = JSON.stringify({ ...goal, questions: [{ ...goal.questions[0], status: 'answered',
+    answer: { answeredBy: 'human' as const, text: answerText, source: 'mcp', answeredAt: '2026-11-18T00:00:00.000Z' } }] });
+  writeFileSync(file, saved);
+  const { client } = await connectMcp();
+  const args = { managerId, cwd: repository, goalId: goal.id };
+
+  const history = await client.callTool({ name: 'takt_get_goal', arguments: { ...args, path: 'questions', limit: 1 } });
+  expect(history.isError).toBeUndefined();
+  expect(decoded(history)).toMatchObject({ totalCount: 1, items: [{ id: questionId, status: 'answered',
+    answer: { text: answerText, source: 'mcp', answeredBy: 'human' } }] });
+  const detail = await client.callTool({ name: 'takt_get_goal', arguments: { ...args, path: 'questions.answer', recordId: questionId } });
+  expect(detail.isError).toBeUndefined();
+  expect(decoded(detail)).toMatchObject({ value: { source: 'mcp', answeredBy: 'human', text: answerText } });
+  const textArgs = { ...args, path: 'questions.answer.text', recordId: questionId, maxBytes: 9 };
+  const first = decoded(await client.callTool({ name: 'takt_get_goal', arguments: textArgs }));
+  expect(first).toMatchObject({ content: '日本語', nextOffset: 9, truncated: true });
+  expect(decoded(await client.callTool({ name: 'takt_get_goal', arguments: { ...textArgs, textOffset: first.nextOffset } })))
+    .toMatchObject({ content: 'の回答', offset: 9 });
+  expect((await client.callTool({ name: 'takt_get_goal', arguments: { ...args, cwd: join(directory, 'unassigned'), path: 'questions' } })).isError).toBe(true);
+  expect(readFileSync(file, 'utf8')).toBe(saved);
 });
 
 it('uses global assistant settings and runtime profiles and rejects providers without strict tool support', () => {

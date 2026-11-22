@@ -19,7 +19,7 @@ vi.mock('../features/director/notificationTarget.js', async (original) => ({
 vi.mock('../features/director/managers.js', () => ({ resolveDirectorManager: doubles.resolveManager, listDirectorManagers: vi.fn() }));
 beforeEach(() => { vi.resetAllMocks(); doubles.handlers.clear(); doubles.schemas.clear(); });
 function fixture() {
-  const actions: DirectorStateActions = { tellManager: vi.fn(async () => ({ kind: 'accepted', operationId: 'operation', managerId: 'manager' })),
+  const actions: DirectorStateActions = { setQuestionRoute: vi.fn(async () => ({})), tellManager: vi.fn(async () => ({ kind: 'accepted', operationId: 'operation', managerId: 'manager' })),
     notifyHuman: vi.fn(async (message) => ({ id: 'notice', message })) };
   const controller = new AbortController();
   createDirectorMcpServer('/config', actions, controller.signal);

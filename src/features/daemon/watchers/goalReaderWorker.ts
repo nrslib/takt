@@ -44,7 +44,7 @@ async function readStoredGoal(cwd: string, goalId: string): Promise<Goal> {
 
 async function readGoal(cwd: string, goalId: string): Promise<WatchGoal> {
   const goal = await readStoredGoal(cwd, goalId);
-  const value: WatchGoal = { id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
+  const value: WatchGoal = { id: goal.id, questionRoute: goal.questionRoute, status: goal.status, executionStatus: goal.executionStatus,
     questions: goal.questions, pullRequest: goal.pullRequest, branch: goal.branch, integrationBranch: goal.integrationBranch,
     blockedNotifications: (goal.notifications ?? []).filter((entry) => entry.kind === 'blocked').map((entry) => entry.id).sort() };
 

@@ -34,11 +34,11 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { createWatchSource } from './helpers/daemon-watch-source.js';
 
-const sdk = vi.hoisted(() => ({ on: vi.fn(), start: vi.fn(), disconnect: vi.fn(), post: vi.fn() }));
+const sdk = vi.hoisted(() => ({ on: vi.fn(), start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), update: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
   on = sdk.on; start = sdk.start; disconnect = sdk.disconnect;
 } }));
-vi.mock('@slack/web-api', () => ({ WebClient: class { chat = { postMessage: sdk.post }; } }));
+vi.mock('@slack/web-api', () => ({ WebClient: class { chat = { postMessage: sdk.post, update: sdk.update }; } }));
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -61,6 +61,7 @@ let admitted: Map<string, Admission>;
 beforeEach(async () => {
   vi.clearAllMocks();
   sdk.start.mockResolvedValue(undefined); sdk.disconnect.mockResolvedValue(undefined);
+  sdk.update.mockResolvedValue({ ok: true });
   sdk.post.mockImplementation(async () => ({ ok: true, ts: `posted-${sdk.post.mock.calls.length}` }));
   events = []; items = []; sequence = 0; admitted = new Map(); beforeSave = async () => {};
   ingress = {

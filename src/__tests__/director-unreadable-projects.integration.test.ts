@@ -89,7 +89,7 @@ async function projectsWithNonGitDirectory() {
 }
 
 async function withMcp(action: (client: Client) => Promise<void>): Promise<void> {
-  const server = createDirectorMcpServer(directory, { tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal);
+  const server = createDirectorMcpServer(directory, { setQuestionRoute: vi.fn(async () => ({})), tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal);
   const client = new Client({ name: 'unreadable-project-test', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {

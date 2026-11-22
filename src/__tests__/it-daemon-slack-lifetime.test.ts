@@ -42,6 +42,7 @@ it.each((['director', 'manager'] as const).flatMap((agent) =>
           });
         },
         async postThreadMessage() { throw new Error('Unexpected reply'); },
+        async updateMessage() { throw new Error('Unexpected inquiry update'); },
         async postMessage() { throw new Error('Unexpected notification'); },
         async openModal() { throw new Error('Unexpected modal'); },
         stopAccepting() {},
@@ -137,7 +138,7 @@ it.each(['manager', 'director'] as const)('keeps Slack credentials out of %s pro
           appendFileSync(${JSON.stringify(posted)}, JSON.stringify({ thread, text }) + '\\n');
           process.stdout.write('reply-sent\\n');
           return { kind: 'delivered' };
-        }, stopAccepting() {}, async close() {}
+        }, async updateMessage() { throw new Error('Unexpected inquiry update'); }, stopAccepting() {}, async close() {}
       };
     }`;
   const preloadDirectory = mkdtempSync(join(tmpdir(), 'takt-slack-probe-'));
@@ -213,6 +214,7 @@ it.each(['enabled', 'no configuration', 'no app token', 'no bot token', 'duplica
     const fakeClient = `export function createSlackClient() { return {
       async start() { process.stdout.write('slack-open\\n'); },
       async postThreadMessage() { throw new Error('Unexpected Slack post'); },
+      async updateMessage() { throw new Error('Unexpected inquiry update'); },
       stopAccepting() {}, async close() { process.stdout.write('slack-close\\n'); }
     }; }`;
     const script = `import { registerHooks } from 'node:module';

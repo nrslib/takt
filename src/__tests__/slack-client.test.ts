@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
 import type { MarkdownBlock } from '@slack/types';
 
-const sdk = vi.hoisted(() => ({ start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), on: vi.fn(), socket: vi.fn(), web: vi.fn(), error: vi.fn() }));
+const sdk = vi.hoisted(() => ({ start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), update: vi.fn(), on: vi.fn(), socket: vi.fn(), web: vi.fn(), error: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
   constructor(options: unknown) { sdk.socket(options); }
   on = sdk.on;
@@ -11,11 +11,32 @@ vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeC
 } }));
 vi.mock('@slack/web-api', () => ({ WebClient: class {
   constructor(token: string, options: unknown) { sdk.web(token, options); }
-  chat = { postMessage: sdk.post };
+  chat = { postMessage: sdk.post, update: sdk.update };
 } }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: sdk.error }) }));
 beforeEach(() => { vi.resetAllMocks(); sdk.start.mockResolvedValue({ ok: true }); sdk.disconnect.mockResolvedValue(undefined); sdk.post.mockResolvedValue({ ok: true }); });
 afterEach(() => vi.useRealTimers());
+
+it('updates an existing inquiry and removes its old buttons through chat.update', async () => {
+  const client = createSlackClient({ appToken: 'app', botToken: 'bot' });
+  sdk.update.mockResolvedValue({ ok: true });
+  expect(await client.updateMessage({ channelId: 'C0123', parentTs: '1.000001' }, 'Current recipient: director', []))
+    .toEqual({ kind: 'delivered' });
+  expect(sdk.update).toHaveBeenCalledExactlyOnceWith({ channel: 'C0123', ts: '1.000001', text: 'Current recipient: director', blocks: [] });
+  expect(sdk.post).not.toHaveBeenCalled();
+  await client.close();
+});
+
+it.each(['rejected', 'failed'] as const)('contains update diagnostics when an existing message update is %s', async (failure) => {
+  const client = createSlackClient({ appToken: 'xapp-private', botToken: 'xoxb-private' });
+  if (failure === 'rejected') sdk.update.mockRejectedValue(new Error('xapp-private xoxb-private'));
+  else sdk.update.mockResolvedValue({ ok: false });
+  const result = await client.updateMessage({ channelId: 'C0123', parentTs: '1.000001' }, 'Question', []);
+  expect(result.kind).toBe('unavailable');
+  expect(sdk.update).toHaveBeenCalledOnce();
+  expect(JSON.stringify([result, sdk.error.mock.calls])).not.toMatch(/xapp-private|xoxb-private/);
+  await client.close();
+});
 
 it('posts a channel parent with blocks and preserves the returned timestamp as a string', async () => {
   const client = createSlackClient({ appToken: 'app', botToken: 'bot' });

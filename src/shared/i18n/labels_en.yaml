@@ -450,6 +450,8 @@ director:
   projectUnreadable: "Director could not read a project"
   description: "Open the experimental director conversation TUI"
   experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
+  pendingQuestions: "Pending questions: {count}"
+  inputHint: "Enter: send / Ctrl+R: answer questions / Ctrl+C: exit"
   costNotice: "director runs AI turns, which incur provider API costs."
   placeholder: "Discuss manager status or instructions"
   managerReply: "Reply from manager {managerId} (operation ID: {operationId}): {message}"

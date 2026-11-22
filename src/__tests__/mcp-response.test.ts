@@ -170,7 +170,7 @@ describe('goal response projections', () => {
     const text = '日本語'.repeat(1000);
     const result = questionSummary({ id: 'q', body: text, status: 'answered', recipient: 'human',
       options: [text, 'a', 'b', 'c'], recommendation: text,
-      answer: { text, source: 'tui', answeredAt: '2026-10-14T00:00:00Z' } });
+      answer: { answeredBy: 'human' as const, text, source: 'tui', answeredAt: '2026-10-14T00:00:00Z' } });
     expect(result).toMatchObject({ optionCount: 4, truncated: true });
     expect(result.optionCount - result.options!.length).toBe(1);
     expect(result.omissions.map(({ path }) => path)).toEqual(['body', 'options.0', 'recommendation', 'answer.text']);

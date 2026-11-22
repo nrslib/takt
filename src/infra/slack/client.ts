@@ -11,6 +11,7 @@ export interface SlackClient {
   start(receive: (event: SlackEvent) => Promise<void>): Promise<void>;
   postThreadMessage(thread: SlackThread, text: string, blocks?: KnownBlock[]): Promise<SlackDeliveryResult>;
   postMessage(channelId: string, text: string, blocks: KnownBlock[]): Promise<SlackPostResult>;
+  updateMessage(thread: SlackThread, text: string, blocks: KnownBlock[]): Promise<SlackDeliveryResult>;
   stopAccepting(): void;
   close(): Promise<void>;
 }
@@ -71,6 +72,16 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
       } catch {
         reportDaemonError('Cannot post Slack inquiry');
         return { kind: 'unavailable', reason: 'Slack inquiry unavailable' };
+      }
+    },
+    async updateMessage(thread, text, blocks) {
+      try {
+        const response = await bounded(web.chat.update({ channel: thread.channelId, ts: thread.parentTs, text, blocks }));
+        if (!response.ok) throw new Error('Slack update failed');
+        return { kind: 'delivered' };
+      } catch {
+        reportDaemonError('Cannot update Slack inquiry');
+        return { kind: 'unavailable', reason: 'Slack inquiry update unavailable' };
       }
     },
     stopAccepting() { accepting = false; },

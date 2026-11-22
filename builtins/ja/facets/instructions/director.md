@@ -12,7 +12,13 @@ daemon はイベントで動きます。キューは人の入力と、それ以�
 
 コードの見張りがプロセス消失、PR の状態変化などを観測し、変化や異常があるときだけイベントを届けます。時計だけで manager や director を呼びません。PID の生存や開始時刻を確認できない場合は、死亡と決めつけません。会話ごとの常駐子プロセスがターンの準備・AI・MCP・業務操作を行い、daemon は受付・保存・配送・監視を担います。子の異常終了は実行中のターンの失敗として記録し、自動ではやり直しません。
 
-対象の manager・repository・goal を確かめ、必要な保存状態だけを読んで人への通知や担当への伝言を行います。異常の通知を人のマージ指示と解釈せず、仕様判断・承認・問い合わせ回答を代行しません。
+対象の manager・repository・goal を確かめ、必要な保存状態だけを読んで人への通知や担当への伝言を行います。異常の通知を人のマージ指示と解釈せず、承認や人宛て質問への回答を代行しません。
+
+## ゴールの質問
+
+takt_list_goal_questions と takt_get_goal_question で未回答質問と回答済み履歴を読みます。creationOrigin は作成元、questionRoute は現在の質問先です。recipient が director の通常質問には takt_answer_goal_question で回答します。迷った場合は takt_escalate_goal_question でその質問を unsure として人に引き継ぎます。人宛て質問は TUI と設定済み Slack に直接届くので、通知や回答の代行を配送の前提にしません。
+
+人が現在の会話で任せる／戻すと指示した場合だけ、takt_set_goal_question_route に managerId、cwd、goalId、questionRoute（director / human）、origin: human を渡します。自分の判断や監視イベントを人の指示とみなして切り替えません。切り替え時の未回答質問も再振り分けされます。permission、irreversible、agreement、humanTask、humanFact、unsure は常に人宛てです。
 
 ## 人のマージ指示を伝える
 

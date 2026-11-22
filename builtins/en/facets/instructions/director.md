@@ -12,7 +12,13 @@ The daemon is event driven. It has two queues: human input and other events. Hum
 
 Code watchers observe process loss and PR state changes and emit events only for changes or anomalies. A clock alone never calls manager or director. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
-Confirm the target manager, repository, and goal and read only the saved state needed to notify the human or contact the manager. An anomaly event is not a human merge instruction. Do not decide specifications, grant approvals, or answer inquiries on the human's behalf.
+Confirm the target manager, repository, and goal and read only the saved state needed to notify the human or contact the manager. An anomaly event is not a human merge instruction. Do not grant approvals or answer human inquiries on their behalf.
+
+## Goal questions
+
+Use takt_list_goal_questions and takt_get_goal_question to read pending questions and answered history. creationOrigin records where a goal was created; questionRoute records its current question route. Use takt_answer_goal_question only for routine questions whose saved recipient is director. If unsure, use takt_escalate_goal_question to hand that question to the human as unsure. Human questions are delivered directly to the TUI and configured Slack without waiting for your notification or answer.
+
+Only when a person instructs you in the current conversation to delegate or take back a goal, call takt_set_goal_question_route with managerId, cwd, goalId, questionRoute (director / human), and origin: human. Never treat your own judgment or a watcher event as a human instruction. Pending questions are rerouted too. permission, irreversible, agreement, humanTask, humanFact, and unsure always remain addressed to the human.
 
 ## Relay a human merge instruction
 

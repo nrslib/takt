@@ -235,7 +235,8 @@ export class ConversationTransferReceiver {
           }
           const directory = parsed.kind === 'goal' ? parsed.goal.repositoryDirectory
             : parsed.kind === 'inquiry' && parsed.inquiry.target.goalId !== null ? parsed.inquiry.target.repositoryDirectory : undefined;
-          if (directory !== undefined && (transfer.assignment === undefined || !transfer.assignment.repositoryDirectories.includes(directory))) {
+          const directorInquiry = transfer.assignment?.kind === 'daemon' && parsed.kind === 'inquiry' && parsed.inquiry.target.goalId !== null;
+          if (directory !== undefined && !directorInquiry && (transfer.assignment === undefined || !transfer.assignment.repositoryDirectories.includes(directory))) {
             throw new Error('Display repository outside assignment');
           }
           if (parsed.kind === 'epic' && (transfer.assignment?.kind !== 'workspace' || parsed.epic.workspaceId !== transfer.assignment.workspaceId

@@ -57,7 +57,7 @@ it('reports one owner listing failure and continues publishing for later owners'
 
 it('reports one goal answer publication failure and continues publishing later goal answers', async () => {
   directory = await realpath(await mkdtemp(join(tmpdir(), 'takt-goal-answer-outbox-')));
-  const answer = { text: 'CSV', source: 'tui' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
+  const answer = { text: 'CSV', source: 'tui' as const, answeredBy: 'human' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
   const question = GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which output format?',
     recipient: 'human', status: 'answered', answer, answerPublicationPending: true });
   const goal = await new GoalStore(directory).create({ ...goalRecord(), questions: [question] });

@@ -34,7 +34,7 @@ afterEach(() => vi.useRealTimers());
 describe('goal execution inquiry lifecycle', () => {
   it('closes existing pending inquiries when the same goal is aborted and preserves closed inquiries', async () => {
     const answered: GoalQuestion = { ...pending('650e8400-e29b-41d4-a716-446655440002'), status: 'answered',
-      answer: { text: 'JSON', source: 'tui', answeredAt: now } };
+      answer: { answeredBy: 'human' as const, text: 'JSON', source: 'tui', answeredAt: now } };
     const withdrawn = { ...pending('650e8400-e29b-41d4-a716-446655440003'), status: 'withdrawn' as const };
     stored = GoalSchema.parse({ ...stored, questions: [...stored.questions!, answered, withdrawn] });
     const before = structuredClone(stored);
@@ -61,7 +61,7 @@ describe('goal execution inquiry lifecycle', () => {
     const previous = structuredClone(stored);
     doubles.get.mockImplementationOnce(async () => {
       stored = { ...stored, questions: [
-        { ...pending(questionId), status: 'answered', answer: { text: 'CSV', source: 'tui', answeredAt: now } },
+        { ...pending(questionId), status: 'answered', answer: { answeredBy: 'human' as const, text: 'CSV', source: 'tui', answeredAt: now } },
         pending('650e8400-e29b-41d4-a716-446655440002'),
       ] };
       return previous;
@@ -70,7 +70,7 @@ describe('goal execution inquiry lifecycle', () => {
     const result = await setGoalExecutionStatus('/project', goalId, 'aborted', signal);
 
     expect(result.questions).toEqual([
-      expect.objectContaining({ id: questionId, status: 'answered', answer: { text: 'CSV', source: 'tui', answeredAt: now } }),
+      expect.objectContaining({ id: questionId, status: 'answered', answer: { answeredBy: 'human' as const, text: 'CSV', source: 'tui', answeredAt: now } }),
       expect.objectContaining({ id: '650e8400-e29b-41d4-a716-446655440002', status: 'withdrawn', withdrawnAt: now, withdrawalReason: expect.any(String) }),
     ]);
   });

@@ -12,6 +12,8 @@ export function goalInput() {
 export function goalRecord() {
   return {
     id: goalId,
+    creationOrigin: 'manager' as const,
+    questionRoute: 'human' as const,
     ...goalInput(),
     mode: 'local' as const,
     status: 'created' as const,

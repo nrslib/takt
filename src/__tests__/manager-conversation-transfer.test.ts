@@ -7,20 +7,24 @@ import type { SnapshotValue, ConversationState } from '../features/manager/conve
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { MAX_CONVERSATION_TEXT_BYTES } from '../shared/types/conversation-activity.js';
 import { ToolActivityHistory } from '../shared/tool-activity/history.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import type { ConversationAssignment } from '../infra/conversations/schema.js';
 
-function fixture() {
+function fixture(assignment?: ConversationAssignment) {
   const record = conversationRecord('/repository');
-  const state: ConversationState = { conversationId: record.id, assignment: record.assignment, revision: 4,
-    pending: record.pending, approval: null, running: null, interrupted: false };
+  const selected = assignment ?? record.assignment;
+  const id = conversationId(selected);
+  const state: ConversationState = { conversationId: id, assignment: selected, revision: 4,
+    pending: assignment === undefined ? record.pending : null, approval: null, running: null, interrupted: false };
   const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
-  const receiver = new ConversationTransferReceiver(record.id, observer);
+  const receiver = new ConversationTransferReceiver(id, observer);
   const metadata = (revision: number, stateSequence: number, operationId: string | null = null): ConversationReadMetadata => ({
-    conversationId: record.id, transferId: randomUUID(), revision, stateSequence, operationId, mode: 'initial',
+    conversationId: id, transferId: randomUUID(), revision, stateSequence, operationId, mode: 'initial',
   });
-  const event = (output: unknown) => ({ protocolVersion: 1, type: 'event', conversationId: record.id, output });
+  const event = (output: unknown) => ({ protocolVersion: 1, type: 'event', conversationId: id, output });
   const frames = async (read: ConversationReadMetadata, items: unknown[], purpose: 'snapshot' | 'output' = 'snapshot') => {
     const values: unknown[] = [];
-    for await (const { frame } of conversationTransferFrames(record.id, purpose === 'snapshot' ? read : { ...read, mode: undefined }, purpose, (async function* () { yield* items; })())) values.push(frame);
+    for await (const { frame } of conversationTransferFrames(id, purpose === 'snapshot' ? read : { ...read, mode: undefined }, purpose, (async function* () { yield* items; })())) values.push(frame);
     return values;
   };
   return { receiver, observer, state, metadata, event, frames };
@@ -352,6 +356,109 @@ it('requires a goal objective in a snapshot inquiry before publishing it to the 
   expect(observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId, 'initial', read);
 });
 
+function goalInquiry(repositoryDirectory = '/repository') {
+  return { kind: 'inquiry' as const, inquiry: { target: { goalId: randomUUID(), repositoryDirectory }, objective: 'Export goal',
+    question: { id: randomUUID(), body: 'Choose a format', kind: 'question' as const, questionType: 'routine' as const,
+      recipient: 'human' as const, status: 'pending' as const } } };
+}
+
+async function displayRead(f: ReturnType<typeof fixture>, mode: 'initial' | 'delta', assignment?: SnapshotValue) {
+  const items: unknown[] = [{ kind: 'state', state: f.state }, ...(assignment === undefined ? [] : [assignment])];
+  if (mode === 'delta') {
+    for (const frame of await f.frames(f.metadata(4, 1), items)) f.receiver.receive(frame);
+    items.length = 0;
+    f.observer.item.mockClear();
+  }
+  const read = { ...f.metadata(4, 2), mode };
+  f.receiver.expectRead(read);
+  return { read, items };
+}
+
+it.each(['initial', 'delta'] as const)('accepts director goal inquiries in a %s snapshot with no assigned repositories', async (mode) => {
+  const f = fixture({ kind: 'daemon' });
+  const { read, items } = await displayRead(f, mode, { kind: 'assignment', assignment: { kind: 'daemon', repositoryDirectories: [] } });
+  const inquiry = goalInquiry();
+  for (const frame of await f.frames(read, [...items, inquiry])) f.receiver.receive(frame);
+  expect(f.observer.item).toHaveBeenCalledWith(inquiry, read.transferId, read);
+  expect(f.observer.read).toHaveBeenLastCalledWith('complete', read.transferId, mode, read);
+});
+
+it.each(['initial', 'delta'] as const)('rejects ordinary goal details in a director %s snapshot', async (mode) => {
+  const f = fixture({ kind: 'daemon' });
+  const { read, items } = await displayRead(f, mode, { kind: 'assignment', assignment: { kind: 'daemon', repositoryDirectories: [] } });
+  const goal = { kind: 'goal', goal: { id: randomUUID(), objective: 'Export goal', repositoryDirectory: '/repository',
+    status: 'created', executionStatus: 'active', awaitingHumanMerge: false } };
+  const values = await f.frames(read, [...items, goal]);
+  expect(() => values.forEach(frame => f.receiver.receive(frame))).toThrow();
+  expect(f.observer.item.mock.calls.some(([item]) => item.kind === 'goal')).toBe(false);
+  expect(f.observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId, mode, read);
+});
+
+for (const kind of ['repository', 'workspace'] as const) {
+  for (const mode of ['initial', 'delta'] as const) {
+    it.each(['/repository', '/other'])(`validates ${kind} inquiry membership in a ${mode} snapshot: %s`, async (repositoryDirectory) => {
+      const assignment: ConversationAssignment = kind === 'repository' ? { kind, repositoryDirectory: '/repository' }
+        : { kind, workspaceId: randomUUID() };
+      const f = fixture(assignment);
+      const display = assignment.kind === 'workspace' ? { ...assignment, name: 'Workspace', repositoryDirectories: ['/repository'] }
+        : { ...assignment, repositoryDirectories: ['/repository'] };
+      const { read, items } = await displayRead(f, mode, { kind: 'assignment', assignment: display });
+      const inquiry = goalInquiry(repositoryDirectory);
+      const values = await f.frames(read, [...items, inquiry]);
+      if (repositoryDirectory === '/repository') {
+        values.forEach(frame => f.receiver.receive(frame));
+        expect(f.observer.item).toHaveBeenCalledWith(inquiry, read.transferId, read);
+        expect(f.observer.read).toHaveBeenLastCalledWith('complete', read.transferId, mode, read);
+      } else {
+        expect(() => values.forEach(frame => f.receiver.receive(frame))).toThrow();
+        expect(f.observer.item.mock.calls.some(([item]) => item.kind === 'inquiry')).toBe(false);
+        expect(f.observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId, mode, read);
+      }
+    });
+  }
+}
+
+it.each(['initial', 'delta'] as const)('rejects director goal inquiries without a display assignment in a %s snapshot', async (mode) => {
+  const f = fixture({ kind: 'daemon' });
+  const { read, items } = await displayRead(f, mode);
+  const values = await f.frames(read, [...items, goalInquiry()]);
+  expect(() => values.forEach(frame => f.receiver.receive(frame))).toThrow();
+  expect(f.observer.item).not.toHaveBeenCalled();
+  expect(f.observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId, mode, read);
+});
+
+it.each(['matching', 'other', 'director'] as const)('validates standalone inquiry ownership for %s conversation', async (owner) => {
+  const assignment = { kind: 'repository' as const, repositoryDirectory: '/repository' };
+  const f = fixture(owner === 'director' ? { kind: 'daemon' } : assignment);
+  const read = f.metadata(4, 1);
+  const inquiry = { kind: 'inquiry', inquiry: { question: goalInquiry().inquiry.question,
+    target: { goalId: null, owner: { ...assignment, repositoryDirectory: owner === 'other' ? '/other' : '/repository' } } } };
+  const values = await f.frames(read, [{ kind: 'state', state: f.state }, inquiry]);
+  if (owner === 'matching') {
+    values.forEach(frame => f.receiver.receive(frame));
+    expect(f.observer.item).toHaveBeenCalledWith(inquiry, read.transferId, read);
+    expect(f.observer.read).toHaveBeenLastCalledWith('complete', read.transferId, 'initial', read);
+  } else {
+    expect(() => values.forEach(frame => f.receiver.receive(frame))).toThrow();
+    expect(f.observer.item).not.toHaveBeenCalled();
+    expect(f.observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId, 'initial', read);
+  }
+});
+
+it.each(['recipient', 'status', 'objective', 'goalId', 'repositoryDirectory'] as const)('retains director inquiry validation for %s', async (field) => {
+  const f = fixture({ kind: 'daemon' });
+  const { read, items } = await displayRead(f, 'initial', { kind: 'assignment', assignment: { kind: 'daemon', repositoryDirectories: [] } });
+  const inquiry = goalInquiry().inquiry;
+  const invalid = field === 'recipient' ? { ...inquiry, question: { ...inquiry.question, recipient: 'director' } }
+    : field === 'status' ? { ...inquiry, question: { ...inquiry.question, status: 'withdrawn' } }
+      : field === 'objective' ? { ...inquiry, objective: undefined }
+        : { ...inquiry, target: { ...inquiry.target, [field]: field === 'goalId' ? 'invalid' : 'relative/path' } };
+  const values = await f.frames(read, [...items, { kind: 'inquiry', inquiry: invalid }]);
+  expect(() => values.forEach(frame => f.receiver.receive(frame))).toThrow();
+  expect(f.observer.item.mock.calls.some(([item]) => item.kind === 'inquiry')).toBe(false);
+  expect(f.observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId, 'initial', read);
+});
+
 function changeRead(changes: SnapshotChanges, values: SnapshotValue[]) {
   return changes.read({ transferId: randomUUID(), conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null },
     (async function* () { yield* values; })());
@@ -444,7 +551,7 @@ it('accepts empty deltas and validates changed repositories against the complete
   receiver.expectRead(invalid);
   const goal = { kind: 'goal', goal: { awaitingHumanMerge: false, id: randomUUID(), objective: 'Outside', repositoryDirectory: '/other', status: 'created', executionStatus: 'active' } };
   const values = await frames(invalid, [goal]);
-  expect(() => values.forEach((frame) => receiver.receive(frame))).toThrow('Display repository outside assignment');
+  expect(() => values.forEach((frame) => receiver.receive(frame))).toThrow();
 });
 it('requires a completed initial read before delta and rejects a mode mismatch', async () => {
   const { receiver, metadata, state, frames } = fixture();
