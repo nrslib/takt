@@ -1644,6 +1644,16 @@ two action cases.
 ```bash
 npm run build
 node --test eval/asserts/report-phase-handoff-v3.test.mjs eval/asserts/report-feasibility.test.mjs
+```
+
+build または契約検証が失敗した場合は実モデル評価へ進まない。同じ依存環境の現行 main でも
+該当テストを実行し、revision と結果を記録する。依存関係の監査エラーとプロンプト比較の失敗は
+分けて報告し、原因不明の失敗は未解決とする。main でも再現する失敗を成功扱いにせず、依存環境や
+テストと実装の不整合を解消してから再検証する。個別の試行結果は PR の検証報告に残す。
+
+検証がすべて成功したら、次の順で基準を固定して実モデル評価を開始する。
+
+```bash
 node eval/scripts/report-feasibility.mjs freeze-baseline \
   811f3e4ec1d3a0f97782855f727197e72d90bf7c \
   eval/.results/report-feasibility-rerun /private/tmp/takt-report-feasibility-rerun
@@ -1682,6 +1692,9 @@ node --test eval/asserts/report-phase-handoff-v3.test.mjs eval/asserts/report-fe
 npm test -- src/__tests__/it-report-input-contracts.test.ts
 npm test -- src/__tests__/releaseVerificationWiring.test.ts
 ```
+
+検証に失敗した場合は[報告可否評価の再実行](#報告可否評価の再実行)に記載の手順で切り分け、
+すべて成功するまで実モデル評価へ進まない。
 
 実モデル評価は通常の契約検証・unit gateには含めず、認証済みCodex SDKで明示的に実行する。
 対象・graderともgpt-6-sol/high、日英3ケース×3反復、readonly/never/fresh、cache false、
