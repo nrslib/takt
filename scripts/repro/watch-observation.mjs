@@ -129,6 +129,7 @@ async function main() {
       const control = await nativePs(pid);
       controlOutcomes[control.kind]++;
     }
+    if (!stop.signal.aborted) await watchers.drain();
     await watchers.close();
     watchers = undefined;
     record('summary', { watchFailed: observations.filter((observation) => observation.kind === 'watch_failed').length,

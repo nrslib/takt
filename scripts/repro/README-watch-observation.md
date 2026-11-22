@@ -17,7 +17,7 @@ node scripts/repro/watch-observation.mjs > /tmp/watch-observation.jsonl
 node scripts/repro/watch-observation.mjs --pid 12345 > /tmp/watch-observation.jsonl
 ```
 
-観測時間は90秒、安全上限は130秒。既存PIDモードは監視対象を終了せず、`/bin/ps`と製品コードの`kill(pid, 0)`による生存照会だけを行う。開始前にPIDの識別情報を取得できなければ`not_started`を記録して失敗終了する。開始後の直接照会が失敗した場合は`native_ps`に`timeout`または`error`を記録し、監視を続ける。
+観測時間は90秒。正常終了時は進行中の巡回を待つため少し延びる場合があり、安全上限は130秒。既存PIDモードは監視対象を終了せず、`/bin/ps`と製品コードの`kill(pid, 0)`による生存照会だけを行う。開始前にPIDの識別情報を取得できなければ`not_started`を記録して失敗終了する。開始後の直接照会が失敗した場合は`native_ps`に`timeout`または`error`を記録し、監視を続ける。
 
 ## 観測できる範囲
 
