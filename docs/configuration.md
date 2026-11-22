@@ -1128,8 +1128,9 @@ of `profile` or `ladder`. `targets` has the same shape as top-level `provider.ta
 
 Set `provider.defaults: { assignment: project-sol }` to select a named assignment by default.
 Top-level `defaults` must specify exactly one of `profile`, `ladder`, or `assignment`; assignment
-defaults accept only `profile` or `ladder` and cannot refer to another assignment. Selection uses
-CLI, matching directory, then default assignment priority. Project defaults replace global defaults
+defaults accept only `profile` or `ladder` and cannot refer to another assignment. Assignments are selected
+in this order: CLI, the task's saved `runtime_assignment` (when executing a task), a matching directory,
+then the default assignment. Project defaults replace global defaults
 wholesale. An unknown assignment or profile, conflicting or empty defaults, or a selected assignment
 without concrete defaults when top-level defaults names an assignment fails before an agent starts.
 When top-level defaults specifies a profile or ladder, an assignment may omit defaults and inherit it.
@@ -1666,7 +1667,7 @@ In legacy mode, the top-level `provider` and `model` are the defaults. Set a pro
 
 Assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) do not go through auto routing. They resolve `takt_providers.assistant`, then fall back to the top-level provider/model when the assistant setting is unset; the assistant setting is not a default for other internal operations. CLI `--provider` / `--model` overrides apply to interactive planning only, while instruct and retry do not accept those overrides. Without a resolvable assistant or top-level provider, assistant startup fails with `Provider is not configured.`
 
-In runtime mode, `provider.defaults` selects the default profile or ladder. Set a pool on targets that use auto routing; pool candidates reference `provider.profiles`. Hard rules for pool selection run in `tags`, `steps`, `personas` order. Provider targets themselves have precedence `defaults < personas < tags < steps`. Without a matching hard rule, `pool_rules` and the router's tier choose a candidate.
+In runtime mode, `provider.defaults` specifies a profile, a ladder, or a default named assignment. When it specifies an assignment, the profile or ladder in the selected assignment's `defaults` is used. Set a pool on targets that use auto routing; pool candidates reference `provider.profiles`. Hard rules for pool selection run in `tags`, `steps`, `personas` order. Provider targets themselves have precedence `defaults < personas < tags < steps`. Without a matching hard rule, `pool_rules` and the router's tier choose a candidate.
 
 Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Runtime
 profiles carry provider/model/options, so candidates reference profiles rather

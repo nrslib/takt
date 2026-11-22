@@ -1044,7 +1044,7 @@ provider:
 
 通过 `provider.defaults: { assignment: project-sol }` 可以选择默认 assignment。
 顶层 `defaults` 必须在 `profile`、`ladder` 和 `assignment` 中选择一个。
-选择优先级依次为 CLI、匹配的目录、默认 assignment。project 的 `defaults` 会整体替换 global 的值。
+选择优先级依次为 CLI、任务中保存的 `runtime_assignment`（执行任务时）、匹配的目录、默认 assignment。project 的 `defaults` 会整体替换 global 的值。
 未知的 assignment 或 profile、空的 defaults，以及同时指定多个选项的 defaults，都会在 agent 启动前报错。
 如果顶层 defaults 指定 assignment，而选中的 assignment 没有具体的 defaults，也会报错。
 如果顶层 defaults 指定 profile 或 ladder，assignment 可以省略 defaults 并继承该值。
@@ -1557,6 +1557,8 @@ auto_routing:
 ```
 
 旧版模式中，顶层 `provider` 和 `model` 是默认值；candidate 只用于 workflow step 执行。没有 workflow-step 上下文的内部操作使用顶层默认值。Assistant 对话不走 auto routing，而解析 `takt_providers.assistant`，必要时回退到顶层 provider/model。runtime 模式下，只有显式选择 pool 的 persona、tag 或 step target 才自动路由。
+
+在 runtime 模式下，`provider.defaults` 指定 profile、ladder 或默认的命名 assignment。指定 assignment 时，使用所选 assignment 的 `defaults` 中的 profile 或 ladder。
 
 candidate 的 `routing_tier` 只能是 `high`、`medium` 或 `low`。CLI 可以用 `--auto-strategy cost|balanced|performance` 覆盖策略。路由决策默认不记录；启用 `telemetry.routing_decisions`（`takt telemetry enable` 或 `routing_decisions: true`）后，以 NDJSON 写入项目 `.takt/events/`，不会上传。
 

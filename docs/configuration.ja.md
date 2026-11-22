@@ -1116,7 +1116,7 @@ assignment 内の `defaults` は `profile` または `ladder` の一方を指定
 
 `provider.defaults: { assignment: project-sol }` で既定の assignment を選択できます。
 トップレベルの `defaults` は `profile`、`ladder`、`assignment` のいずれか一つを指定します。
-選択の優先順位は CLI、ディレクトリの一致、既定 assignment の順です。project の `defaults` は global の値を丸ごと置き換えます。
+選択の優先順位は CLI、タスクに保存された `runtime_assignment`（タスク実行時）、ディレクトリの一致、既定 assignment の順です。project の `defaults` は global の値を丸ごと置き換えます。
 未知の assignment や profile、空または複数指定の defaults は agent 起動前にエラーになります。
 トップレベルが assignment を指定し、選択先に具体的な defaults がない場合もエラーになります。
 トップレベルが profile または ladder の場合は、assignment の defaults を省略するとその値を引き継ぎます。
@@ -1635,7 +1635,7 @@ legacy モードでは最上位の `provider` と `model` が既定値です。`
 
 assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）は auto routing を通りません。設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を解決し、この assistant 設定はその他の内部処理の default にはなりません。CLI の `--provider` / `--model` override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。解決可能な assistant または top-level provider がない場合、assistant は起動時に `Provider is not configured.` で失敗します。
 
-runtime モードでは `provider.defaults` が既定の profile または ladder を選びます。自動ルーティングを使う target には pool を指定してください。pool の candidate は `provider.profiles` を参照します。pool 選択の hard rule は `tags`、`steps`、`personas` の順に評価します。provider target 自体の優先順位は `defaults < personas < tags < steps` です。hard rule が一致しない場合は `pool_rules` と router の tier に従って候補を選びます。
+runtime モードの `provider.defaults` には profile、ladder、または既定の名前付き assignment を指定します。assignment を指定した場合は、選択した assignment の `defaults` にある profile または ladder を使います。自動ルーティングを使う target には pool を指定してください。pool の candidate は `provider.profiles` を参照します。pool 選択の hard rule は `tags`、`steps`、`personas` の順に評価します。provider target 自体の優先順位は `defaults < personas < tags < steps` です。hard rule が一致しない場合は `pool_rules` と router の tier に従って候補を選びます。
 
 candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。runtime profile が provider/model/options を保持するため、candidate はこれらを重複記述せず profile を参照します。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きでき、runtime の auto-routing target に到達するまで伝播します。
 
