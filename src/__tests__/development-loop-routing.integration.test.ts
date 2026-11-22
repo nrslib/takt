@@ -174,6 +174,42 @@ describe('shipped development completion and remediation routes', () => {
     expect((await execute(config, 'replan', 2)).nextStep).toBe('ABORT');
   });
 
+  it.each(['ja', 'en'] as const)('%s: passes the caller-supplied fix replan instruction into the resolved remediation workflow', (language) => {
+    const resourceRoot = resolve(repoRoot, 'builtins', language);
+    const workflowDirectory = resolve(directory, '.takt/workflows');
+    const instructionDirectory = resolve(directory, '.takt/facets/instructions');
+    mkdirSync(workflowDirectory, { recursive: true });
+    mkdirSync(instructionDirectory, { recursive: true });
+    writeFileSync(resolve(directory, '.takt/config.yaml'), `language: ${language}\n`);
+    const instruction = 'Maintain the requirement scenario while revising the repair plan for this fixture.';
+    writeFileSync(resolve(instructionDirectory, 'scenario-replan-fixture.md'), instruction);
+    const parentPath = resolve(workflowDirectory, 'parent.yaml');
+    writeFileSync(parentPath, `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: development-remediation
+    args:
+      fix_replan_instruction: scenario-replan-fixture
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    const parent = loadWorkflowFromFile(parentPath, directory, { resourceRoot });
+    const call = parent.steps.find(step => step.kind === 'workflow_call');
+    if (call?.kind !== 'workflow_call') throw new Error('Missing fixture workflow call');
+    expect(call.args?.fix_replan_instruction).toBe('scenario-replan-fixture');
+
+    const child = resolverFor(parent)({ parentWorkflow: parent, step: call, projectCwd: directory, lookupCwd: directory });
+
+    expect(child?.steps.map(step => step.instruction)).toEqual(
+      expect.arrayContaining([expect.stringContaining(instruction)]),
+    );
+  });
+
   it.each(['ja', 'en'] as const)('%s: builtin remediation graphs resolve their report references', (language) => {
     const resourceRoot = resolve(repoRoot, 'builtins', language);
     const workflowDirectory = resolve(resourceRoot, 'workflows');
