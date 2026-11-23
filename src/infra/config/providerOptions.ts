@@ -13,7 +13,7 @@ import type {
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
 import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
-import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
+import { assertCodexPermissionControlOptions } from '../../core/models/workflow-provider-options.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -36,6 +36,7 @@ type RawProviderOptions = {
     network_access?: boolean;
     permission_control?: CodexPermissionControl;
     config_profile?: string;
+    readonly_permission_base?: string;
     reasoning_effort?: CodexReasoningEffort;
     fast_mode?: boolean;
     guards?: RawProviderGuardOptions;
@@ -293,6 +294,7 @@ export function normalizeProviderOptions(
     || options.codex?.network_access !== undefined
     || options.codex?.permission_control !== undefined
     || options.codex?.config_profile !== undefined
+    || options.codex?.readonly_permission_base !== undefined
     || options.codex?.reasoning_effort !== undefined
     || options.codex?.fast_mode !== undefined
     || options.codex?.guards !== undefined
@@ -313,6 +315,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.config_profile !== undefined
         ? { configProfile: options.codex.config_profile }
+        : {}),
+      ...(options.codex.readonly_permission_base !== undefined
+        ? { readonlyPermissionBase: options.codex.readonly_permission_base }
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
@@ -585,6 +590,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.codex.configProfile !== undefined
           ? { configProfile: layer.codex.configProfile }
+          : {}),
+        ...(layer.codex.readonlyPermissionBase !== undefined
+          ? { readonlyPermissionBase: layer.codex.readonlyPermissionBase }
           : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
@@ -983,13 +991,13 @@ export function resolveEffectiveProviderOptions(
   if (!resolvedConfigOptions) {
     const merged = mergeProviderOptions(personaOptions, stepOptions);
     if (resolvedProvider === 'codex') {
-      assertCodexConfigProfilePermissionControl(merged?.codex);
+      assertCodexPermissionControlOptions(merged?.codex);
     }
     return merged;
   }
   if (!personaOptions && !stepOptions) {
     if (resolvedProvider === 'codex') {
-      assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+      assertCodexPermissionControlOptions(resolvedConfigOptions.codex);
     }
     return resolvedConfigOptions;
   }
@@ -1079,6 +1087,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.configProfile,
     stepOptions?.codex?.configProfile,
     resolveProviderOptionOrigin(originResolver, 'codex.configProfile', source),
+  );
+  const codexReadonlyPermissionBase = selectProviderValue(
+    resolvedConfigOptions.codex?.readonlyPermissionBase,
+    personaOptions?.codex?.readonlyPermissionBase,
+    stepOptions?.codex?.readonlyPermissionBase,
+    resolveProviderOptionOrigin(originResolver, 'codex.readonlyPermissionBase', source),
   );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
@@ -1341,6 +1355,7 @@ export function resolveEffectiveProviderOptions(
       || codexNetworkAccess !== undefined
       || codexPermissionControl !== undefined
       || codexConfigProfile !== undefined
+      || codexReadonlyPermissionBase !== undefined
       || codexReasoningEffort !== undefined
       || codexFastMode !== undefined
       || codexCallTimeoutMs !== undefined
@@ -1352,6 +1367,9 @@ export function resolveEffectiveProviderOptions(
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
             ...(codexConfigProfile !== undefined ? { configProfile: codexConfigProfile } : {}),
+            ...(codexReadonlyPermissionBase !== undefined
+              ? { readonlyPermissionBase: codexReadonlyPermissionBase }
+              : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
             ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
             ...(codexCallTimeoutMs !== undefined
@@ -1536,7 +1554,7 @@ export function resolveEffectiveProviderOptions(
 
   const effective = Object.keys(result).length > 0 ? result : undefined;
   if (resolvedProvider === 'codex') {
-    assertCodexConfigProfilePermissionControl(effective?.codex);
+    assertCodexPermissionControlOptions(effective?.codex);
   }
   return effective;
 }
@@ -1693,6 +1711,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.networkAccess',
   'codex.permissionControl',
   'codex.configProfile',
+  'codex.readonlyPermissionBase',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',

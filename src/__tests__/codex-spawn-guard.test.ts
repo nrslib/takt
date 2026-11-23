@@ -371,6 +371,7 @@ describe('codex-spawn-guard', () => {
     ignoreRules: boolean;
     isolated?: boolean;
     readOnlyNetwork?: boolean;
+    derivedReadonlyProfile?: boolean;
   }> = [
     { name: 'default writable', options: { permissionMode: 'full' }, ignoreRules: true },
     { name: 'explicit TAKT writable', options: { edit: true, providerOptions: { codex: { permissionControl: 'takt', networkAccess: true } } }, ignoreRules: true },
@@ -380,14 +381,16 @@ describe('codex-spawn-guard', () => {
     { name: 'delegated readonly', options: { permissionMode: 'readonly', providerOptions: { codex: { permissionControl: 'codex' } } }, ignoreRules: false },
     { name: 'TAKT Phase 2', options: { executionPhase: 2, providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
     { name: 'delegated Phase 2 with profile', options: { executionPhase: 2, providerOptions: fakeProviderOptions('automation-review') }, ignoreRules: true },
+    { name: 'delegated Phase 2 with readonly permission base', options: { executionPhase: 2, providerOptions: { codex: { permissionControl: 'codex', configProfile: 'automation-review', readonlyPermissionBase: 'review-base' } } }, ignoreRules: true, derivedReadonlyProfile: true },
     { name: 'MCP-only', options: { mcpOnlySideEffects: [], providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
     { name: 'isolated structured', options: { edit: false, permissionMode: 'full', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true, isolated: true },
     { name: 'delegated isolated structured', options: { edit: false, providerOptions: { codex: { permissionControl: 'codex', configProfile: 'automation-review', networkAccess: true } } }, ignoreRules: true, isolated: true },
+    { name: 'delegated isolated structured with readonly permission base', options: { edit: false, providerOptions: { codex: { permissionControl: 'codex', configProfile: 'automation-review', readonlyPermissionBase: 'review-base' } } }, ignoreRules: true, isolated: true, derivedReadonlyProfile: true },
   ];
 
   it.skipIf(process.platform === 'win32').each(permissionCases.flatMap((entry) =>
     [undefined, 'thread-resume'].map((sessionId) => ({ ...entry, sessionId })),
-  ))('passes resolved rule loading through Provider and SDK to exec ($name, session=$sessionId)', async ({ options, ignoreRules, isolated, readOnlyNetwork, sessionId }) => {
+  ))('passes resolved rule loading through Provider and SDK to exec ($name, session=$sessionId)', async ({ options, ignoreRules, isolated, readOnlyNetwork, derivedReadonlyProfile, sessionId }) => {
     const fixture = makeProtocolExecutable('success');
     vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
     const provider = new CodexProvider();
@@ -413,10 +416,25 @@ describe('codex-spawn-guard', () => {
       ]));
       expect(args).not.toContain('--sandbox');
     }
-    if (isolated) {
+    if (isolated && !derivedReadonlyProfile) {
       const sandboxIndex = args.indexOf('--sandbox');
       expect(args.slice(sandboxIndex, sandboxIndex + 2)).toEqual(['--sandbox', 'read-only']);
       expect(configOverrides).toContain('sandbox_workspace_write.network_access=false');
+    }
+    if (derivedReadonlyProfile) {
+      expect(args).not.toContain('--sandbox');
+      const overridesText = configOverrides.join('\n').replace(/[ \t]+/g, ' ');
+      expect(overridesText).not.toMatch(/sandbox_mode\s*=/);
+      expect(overridesText).not.toMatch(/sandbox_workspace_write\./);
+      const defaultPermissions = configOverrides.find((value) => value.startsWith('default_permissions='));
+      expect(defaultPermissions).toBeDefined();
+      const derivedProfileName = JSON.parse(defaultPermissions!.slice('default_permissions='.length)) as string;
+      expect(derivedProfileName).not.toBe('review-base');
+      expect(overridesText).toContain('extends="review-base"');
+      expect(overridesText).toMatch(/":workspace_roots" = \{"\." = "read"\}/);
+      expect(overridesText).toMatch(/":slash_tmp" = "read"/);
+      expect(overridesText).toMatch(/":tmpdir" = "read"/);
+      expect(overridesText).toMatch(/network(?:\.enabled)?\s*=\s*(?:false|\{\s*enabled\s*=\s*false\s*\})/);
     }
     const profile = options.providerOptions?.codex?.configProfile;
     if (profile !== undefined) {

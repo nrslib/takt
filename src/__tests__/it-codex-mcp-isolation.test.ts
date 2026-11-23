@@ -133,7 +133,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
       try {
         const options = { cwd: probeCwd, preparedMcp, childProcessEnv: environment, mcpOnlySideEffects: true };
         const session = buildCodexSessionConfig(options);
-        const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+        const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
         expect(readFileSync(configPath, 'utf8')).toBe(nativeConfig);
         return { config: {}, env: isolated.env, configOverrides: isolated.configOverrides };
       } finally { await preparedMcp.dispose(); }
@@ -161,7 +161,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
       expect(before).toContainEqual(expect.objectContaining({ name: 'profile_docs', enabled: true }));
     }
 
-    const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+    const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
     const after = JSON.parse(await runCodexMcpList({
       executablePath: isolated.codexPathOverride, cwd, env: isolated.env,
       configProfile, configOverrides: isolated.configOverrides,
@@ -178,7 +178,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     try {
       const options = { cwd, childProcessEnv: env, preparedMcp, mcpOnlySideEffects: true };
       const session = buildCodexSessionConfig(options);
-      const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+      const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
       const listed = JSON.parse(await runCodexMcpList({ executablePath: isolated.codexPathOverride, cwd, env: isolated.env, configOverrides: isolated.configOverrides })) as { name: string; enabled: boolean }[];
       expect(listed).toContainEqual(expect.objectContaining({ name: 'datadog', enabled: false }));
       expect(listed.filter((entry) => entry.enabled).map((entry) => entry.name)).toEqual(allExcluded ? [] : ['retained']);
@@ -194,7 +194,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
         const options = { cwd: probeCwd, childProcessEnv: environment, preparedMcp, mcpOnlySideEffects };
         const session = buildCodexSessionConfig(options);
         if (!mcpOnlySideEffects) return session;
-        const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+        const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
         return { config: {}, configOverrides: isolated.configOverrides, env: isolated.env };
       } finally { await preparedMcp.dispose(); }
     });
@@ -217,7 +217,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
         const options = { cwd: probeCwd, childProcessEnv, preparedMcp, configProfile: profile === 'review' ? 'review' : undefined, mcpOnlySideEffects: profile === 'mcp-only' };
         const session = buildCodexSessionConfig(options);
         if (!options.mcpOnlySideEffects) return session;
-        const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+        const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
         return { config: {}, configOverrides: isolated.configOverrides, env: isolated.env };
       } finally { await preparedMcp.dispose(); }
     });
@@ -239,7 +239,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
           const options = { cwd: probeCwd, preparedMcp, childProcessEnv, mcpOnlySideEffects };
           const session = buildCodexSessionConfig(options);
           if (!mcpOnlySideEffects) return session;
-          const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+          const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
           return { config: {}, configOverrides: isolated.configOverrides, env: isolated.env };
         } finally { await preparedMcp.dispose(); }
       });
@@ -266,7 +266,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
       preparedMcp: { dispose: async () => {}, config: managerConfig },
     };
     const session = buildCodexSessionConfig(options);
-    const isolated = await prepareCodexMcpIsolation(options, session.config, env);
+    const isolated = await prepareCodexMcpIsolation(options, session.config, env, session.configOverrides);
     expect(isolated.codexPathOverride).toBe(runtime.executablePath);
     const after = JSON.parse(await runCodexMcpList({
       executablePath: isolated.codexPathOverride, cwd, env: isolated.env, configOverrides: isolated.configOverrides,
@@ -291,7 +291,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
       cwd, mcpOnlySideEffects: true, preparedMcp: { dispose: async () => {}, config: managerConfig },
     };
     const session = buildCodexSessionConfig(options);
-    await expect(prepareCodexMcpIsolation(options, session.config, env)).rejects.toThrow(/conflicts/);
+    await expect(prepareCodexMcpIsolation(options, session.config, env, session.configOverrides)).rejects.toThrow(/conflicts/);
     expect(readFileSync(join(cwd, 'config.toml'), 'utf8')).toBe(config);
   }, 30_000);
 
@@ -324,7 +324,7 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     try {
       const options = { cwd, childProcessEnv, mcpOnlySideEffects: true, preparedMcp };
       const session = buildCodexSessionConfig(options);
-      const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+      const isolated = await prepareCodexMcpIsolation(options, session.config, session.env, session.configOverrides);
       const listed = JSON.parse(await runCodexMcpList({
         executablePath: isolated.codexPathOverride, cwd,
         env: isolated.env, configOverrides: isolated.configOverrides,

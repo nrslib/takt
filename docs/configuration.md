@@ -142,7 +142,7 @@ assistant:
 
 `takt_providers.selector` selects agents for dynamic parallel, `dynamic_facets`, and Companion pools. Provider and model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. The model must belong to the selected provider.
 
-The selector's `provider_options` merge individual options from the global and project selector settings. Environment variables for the selected provider can override them. Top-level, persona, and pool sub-step options do not carry over to the selector. To use `config_profile` with a Codex selector, also set `permission_control: codex` in that selector's effective options. Empty selector or `provider_options` entries are errors.
+The selector's `provider_options` merge individual options from the global and project selector settings. Environment variables for the selected provider can override them. Top-level, persona, and pool sub-step options do not carry over to the selector. To use `config_profile` or `readonly_permission_base` with a Codex selector, also set `permission_control: codex` in that selector's effective options. Empty selector or `provider_options` entries are errors.
 
 Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Read`, `Glob`, and `Grep` allowed. Companion selectors can use the configured `allowed_tools` because TAKT does not pass them a fixed tool list. Tool restrictions depend on provider support.
 
@@ -1799,7 +1799,7 @@ provider_options:
     network_access: true
 ```
 
-With TAKT-managed permissions, Phase 1 can allow network access while keeping files read-only. This applies to steps with `edit: false` and calls resolved to `permission_mode: readonly`. With `permission_control: codex`, configure network access in Codex itself. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) always use the `read-only` sandbox and disable network access, even when `network_access: true`.
+With TAKT-managed permissions, Phase 1 can allow network access while keeping files read-only. This applies to steps with `edit: false` and calls resolved to `permission_mode: readonly`. With `permission_control: codex`, configure network access in Codex itself. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) prohibit writes and network access even when `network_access: true`. With `permission_control: codex` and `readonly_permission_base`, TAKT uses a permission profile that extends the configured base with read-only filesystem access and network disabled, so the user's `deny` rules also apply.
 
 OpenCode does not have a native sandbox. TAKT controls `webfetch` / `websearch` tool permissions as an abstraction layer behind the same key:
 
@@ -1857,7 +1857,7 @@ Codex uses TAKT-managed permissions by default, equivalent to `permission_contro
 | Read-only | `true` | No sandbox flag; TAKT passes the `takt-readonly-network` permission profile through `--config`, inheriting `:read-only` with `network.enabled=true` |
 | Read-only | `false` / omitted | `read-only` sandbox |
 
-TAKT-managed permissions add `--ignore-rules` to every `codex exec` invocation, including writable steps, new sessions, and `exec ... resume <id>`. Codex therefore does not load user or project execpolicy `.rules` files, whose allow rules could otherwise run matching commands outside the sandbox. With `permission_control: codex`, TAKT leaves those rules enabled, except in Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls). Phase 2, these internal calls, and MCP-only side effects always add `--ignore-rules` and prohibit writes and network access. When a Phase 2 call or an internal call running with `strict-readonly` selects `config_profile`, both `--ignore-rules` and `--profile <name>` are passed. Auxiliary `mcp list` / `mcp get` commands do not receive the exec flag.
+TAKT-managed permissions add `--ignore-rules` to every `codex exec` invocation, including writable steps, new sessions, and `exec ... resume <id>`. Codex therefore does not load user or project execpolicy `.rules` files, whose allow rules could otherwise run matching commands outside the sandbox. With `permission_control: codex`, TAKT leaves those rules enabled, except in Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls). Phase 2, these internal calls, and MCP-only side effects always add `--ignore-rules` and prohibit writes and network access. When a Phase 2 call or an internal call running with `strict-readonly` selects `config_profile`, both `--ignore-rules` and `--profile <name>` are passed. When `permission_control: codex` also selects `readonly_permission_base`, Phase 2 and such internal calls add `--ignore-rules` and omit `--sandbox`. Auxiliary `mcp list` / `mcp get` commands do not receive the exec flag.
 
 To delegate permission control to Codex, explicitly opt in:
 
@@ -1874,7 +1874,7 @@ provider_options:
 
 With `permission_control: codex`, Codex settings control sandbox and network permissions. TAKT's `network_access` setting does not affect effective Codex permissions in this mode. TAKT still sets `approvalPolicy: never` for non-interactive runs, so check the Codex configuration you use. `reasoning_effort`, `fast_mode`, and `skills` continue to apply.
 
-In Phase 1, `permission_control: codex` omits TAKT's sandbox and network overrides even with `edit: false` or `permission_mode: readonly`. Structured calls without `strict-readonly` follow the same rule. Codex's own configuration determines the effective permissions. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) remain exceptions: TAKT manages their permissions and always passes the `read-only` sandbox with `networkAccessEnabled: false`, including with delegated permissions. MCP-only side effects also retain the `read-only` sandbox and explicitly disable network access and web search; this mode cannot be combined with `permission_control: codex`.
+In Phase 1, `permission_control: codex` omits TAKT's sandbox and network overrides even with `edit: false` or `permission_mode: readonly`. Structured calls without `strict-readonly` follow the same rule. Codex's own configuration determines the effective permissions. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) remain exceptions: TAKT manages their permissions. Without `readonly_permission_base`, TAKT passes the `read-only` sandbox with `networkAccessEnabled: false`, including with delegated permissions. With `readonly_permission_base`, TAKT passes a permission profile that extends the base with the workspace, `/tmp`, and `$TMPDIR` read-only and network disabled through `--config`, and omits `--sandbox`. MCP-only side effects also retain the `read-only` sandbox and explicitly disable network access and web search; this mode cannot be combined with `permission_control: codex`.
 
 To select a named Codex configuration profile, add `config_profile` alongside `permission_control: codex`:
 
@@ -1886,6 +1886,42 @@ provider_options:
 ```
 
 `config_profile` accepts a name made of ASCII letters, digits, hyphens, and underscores. Use it with `permission_control: codex` in a runtime profile or legacy project or global config. TAKT passes `codex exec --profile <name>`, and Codex reads `$CODEX_HOME/<name>.config.toml`. Check that profile's contents, including permissions, before using it.
+
+##### Phase 2 and strict-readonly base (`readonly_permission_base`)
+
+With `permission_control: codex`, TAKT manages permissions for Phase 2 and calls running with `strict-readonly` (such as isolated structured calls). To keep the user's permission profile `deny` rules effective in these calls, set the base profile name in `readonly_permission_base`:
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    readonly_permission_base: review-base
+```
+
+The environment variable `TAKT_PROVIDER_OPTIONS_CODEX_READONLY_PERMISSION_BASE=review-base` also works. Like `config_profile`, the name uses ASCII letters, digits, hyphens, and underscores, and you can set it in a runtime profile or legacy project or global config. Combining it with anything other than `permission_control: codex`, including omitting that setting, is a configuration error.
+
+When set, TAKT passes the following permission profile through `--config` for Phase 2 and `strict-readonly` calls, for both new sessions and resumed threads:
+
+- It `extends` the configured base.
+- It makes the workspace, `/tmp`, and `$TMPDIR` read-only.
+- It sets `network.enabled` to `false`.
+
+TAKT then omits `--sandbox` and the `sandbox_mode` / `sandbox_workspace_write` overrides, while keeping `--ignore-rules`, `--profile`, and `approval_policy: never`. Without the option, and for Phase 1 and Phase 3, behavior is unchanged.
+
+If the base profile grants `write` on an individual path, that path remains writable through the derived profile. Codex prefers the more specific path entry, and TAKT does not prevent this. Make paths that Phase 2 must not write to `read` or `deny` in the base profile.
+
+```toml
+# Example base profile `review-base`
+# (place it in the $CODEX_HOME/<name>.config.toml selected by `config_profile`)
+[permissions.review-base]
+[permissions.review-base.filesystem]
+"~/.ssh" = "deny"
+"~/.aws" = "deny"
+[permissions.review-base.network]
+enabled = false
+```
+
+This example denies sensitive files and has no individual `write` entries. TAKT does not read or rewrite the user's Codex configuration.
 
 #### Codex Skill inheritance (`skills`)
 

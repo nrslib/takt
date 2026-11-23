@@ -10,7 +10,7 @@ import {
 import { emitResult } from '../codex/CodexStreamHandler.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
-import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
+import { assertCodexPermissionControlOptions } from '../../core/models/workflow-provider-options.js';
 import { buildCodexSessionConfig } from '../codex/session-config.js';
 import { prepareCodexMcpIsolation } from '../codex/mcp-isolation.js';
 import { createCodexMcpAdapter } from './mcp/codex.js';
@@ -26,7 +26,7 @@ import {
 
 function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
   const providerCodexOptions = options.providerOptions?.codex;
-  assertCodexConfigProfilePermissionControl(providerCodexOptions);
+  assertCodexPermissionControlOptions(providerCodexOptions);
   return {
     cwd: options.cwd,
     callerManagedSession: options.callerManagedSession,
@@ -41,6 +41,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     edit: options.edit,
     permissionControl: providerCodexOptions?.permissionControl,
     configProfile: providerCodexOptions?.configProfile,
+    readonlyPermissionBase: providerCodexOptions?.readonlyPermissionBase,
     networkAccess: providerCodexOptions?.networkAccess,
     onStream: options.onStream,
     onActivity: options.onActivity,
@@ -91,8 +92,8 @@ export class CodexProvider implements Provider {
     const prepared = await adapter.prepare(resolved, options);
     try {
       const codexOptions = toCodexOptions({ ...options, preparedMcp: prepared });
-      const { config, env } = buildCodexSessionConfig(codexOptions);
-      await prepareCodexMcpIsolation(codexOptions, config, env);
+      const { config, env, configOverrides } = buildCodexSessionConfig(codexOptions);
+      await prepareCodexMcpIsolation(codexOptions, config, env, configOverrides);
     } finally {
       await prepared.dispose();
     }

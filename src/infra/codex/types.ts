@@ -41,6 +41,8 @@ export interface CodexCallOptions {
   permissionControl?: CodexPermissionControl;
   /** Name of the Codex config profile selected by the caller. */
   configProfile?: string;
+  /** Base permission profile that Phase 2 and strict-readonly calls inherit from. */
+  readonlyPermissionBase?: string;
   /** Enable network access for the TAKT-controlled sandbox */
   networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */

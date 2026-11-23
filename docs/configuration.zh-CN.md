@@ -135,7 +135,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` 是可选项。provider/model 的优先级为显式 CLI 或环境变量覆盖、项目 selector、全局 selector、项目顶层、全局顶层。model 只有在其 candidate 属于解析出的 provider 时才有效。只有 selector 条目提供 `provider_options`，并按 option leaf 从全局到项目合并；顶层、persona 和 pool sub-step 的 options 不会传给 selector。provider option 的环境变量覆盖只应用于已解析的 selector provider。Codex selector 使用 `config_profile` 时，selector 自身的有效 options（selector 条目或匹配的环境变量覆盖）必须包含 `permission_control: codex`；顶层 `provider_options` 不会继承。空 selector 条目或空 `provider_options` 条目会在加载配置时被拒绝。dynamic parallel 和 `dynamic_facets` selector 使用 provider-neutral 的新 session，并传入固定的只读工具 allowlist `Read`、`Glob`、`Grep` 以及 `permission_mode: readonly`。Companion selector 不接收固定的 `allowedTools` 列表，因此可以使用 selector profile 中的 `allowed_tools`。工具 allowlist 只对遵守它的 provider 生效。没有 dynamic parallel、dynamic facets 或启用的 companion pool 时，selector 设置不会使用，也不会影响 workflow。
+`takt_providers.selector` 是可选项。provider/model 的优先级为显式 CLI 或环境变量覆盖、项目 selector、全局 selector、项目顶层、全局顶层。model 只有在其 candidate 属于解析出的 provider 时才有效。只有 selector 条目提供 `provider_options`，并按 option leaf 从全局到项目合并；顶层、persona 和 pool sub-step 的 options 不会传给 selector。provider option 的环境变量覆盖只应用于已解析的 selector provider。Codex selector 使用 `config_profile` 或 `readonly_permission_base` 时，selector 自身的有效 options（selector 条目或匹配的环境变量覆盖）必须包含 `permission_control: codex`；顶层 `provider_options` 不会继承。空 selector 条目或空 `provider_options` 条目会在加载配置时被拒绝。dynamic parallel 和 `dynamic_facets` selector 使用 provider-neutral 的新 session，并传入固定的只读工具 allowlist `Read`、`Glob`、`Grep` 以及 `permission_mode: readonly`。Companion selector 不接收固定的 `allowedTools` 列表，因此可以使用 selector profile 中的 `allowed_tools`。工具 allowlist 只对遵守它的 provider 生效。没有 dynamic parallel、dynamic facets 或启用的 companion pool 时，selector 设置不会使用，也不会影响 workflow。
 
 ```yaml
 # ~/.takt/config.yaml（续）
@@ -1660,7 +1660,7 @@ provider_options:
     network_access: true
 ```
 
-在 TAKT 管理权限的 Phase 1 中，可以保持文件只读并允许网络访问，适用于 `edit: false` 或解析为 `permission_mode: readonly` 的调用。使用 `permission_control: codex` 时，应在 Codex 中配置网络。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终使用 `read-only` sandbox，并禁用网络访问，即使设置 `network_access: true` 也不例外。
+在 TAKT 管理权限的 Phase 1 中，可以保持文件只读并允许网络访问，适用于 `edit: false` 或解析为 `permission_mode: readonly` 的调用。使用 `permission_control: codex` 时，应在 Codex 中配置网络。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）即使设置 `network_access: true` 也会禁止写入和网络访问。使用 `permission_control: codex` 并设置 `readonly_permission_base` 时，TAKT 会使用继承该基础 profile 并设为只读、禁用网络的权限 profile，因此用户的 `deny` 规则也会生效。
 
 OpenCode 通过 `webfetch` / `websearch` 工具权限实现同一抽象：
 
@@ -1706,7 +1706,7 @@ Codex 默认由 TAKT 管理权限，相当于 `permission_control: takt`。写�
 | 禁止 | `true` | 不传 sandbox 标志；通过 `--config` 传递继承 `:read-only` 且设置 `network.enabled=true` 的 `takt-readonly-network` 权限 profile |
 | 禁止 | `false` / 未指定 | `read-only` sandbox |
 
-TAKT 管理权限时，会为所有 `codex exec` 添加 `--ignore-rules`，包括可写 step、新 session 和 `exec ... resume <id>`。因此 Codex 不会加载用户或项目的 execpolicy `.rules` 文件，避免 allow 规则让匹配的命令在 sandbox 外执行。使用 `permission_control: codex` 时，规则由用户配置决定，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）例外。Phase 2、这些内部调用和仅允许 MCP 副作用的模式始终添加 `--ignore-rules`，并禁止写入和网络访问。Phase 2 或这些内部调用指定 `config_profile` 时，同时传递 `--ignore-rules` 和 `--profile <name>`。辅助命令 `mcp list` / `mcp get` 不会收到 exec 专用标志。
+TAKT 管理权限时，会为所有 `codex exec` 添加 `--ignore-rules`，包括可写 step、新 session 和 `exec ... resume <id>`。因此 Codex 不会加载用户或项目的 execpolicy `.rules` 文件，避免 allow 规则让匹配的命令在 sandbox 外执行。使用 `permission_control: codex` 时，规则由用户配置决定，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）例外。Phase 2、这些内部调用和仅允许 MCP 副作用的模式始终添加 `--ignore-rules`，并禁止写入和网络访问。Phase 2 或这些内部调用指定 `config_profile` 时，同时传递 `--ignore-rules` 和 `--profile <name>`。`permission_control: codex` 同时指定 `readonly_permission_base` 时，Phase 2 和这些内部调用也会添加 `--ignore-rules`，且不传 `--sandbox`。辅助命令 `mcp list` / `mcp get` 不会收到 exec 专用标志。
 
 ```yaml
 provider_options:
@@ -1721,7 +1721,7 @@ provider_options:
 
 Phase 1 使用 `permission_control: codex` 时，TAKT 从未使用 `strict-readonly` 的 Codex 调用中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
 
-Phase 1 使用 `permission_control: codex` 时，即使设置 `edit: false` 或 `permission_mode: readonly`，TAKT 也不传 sandbox 和网络覆盖，由 Codex 配置决定实际权限，未使用 `strict-readonly` 的结构化调用同样适用。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）是例外：即使委托权限，TAKT 仍管理这些调用的权限，始终传递 `read-only` sandbox 和 `networkAccessEnabled: false`。仅允许 MCP 副作用的模式也保持 `read-only` sandbox，并显式禁用网络和 Web 搜索；该模式不能与 `permission_control: codex` 同时使用。
+Phase 1 使用 `permission_control: codex` 时，即使设置 `edit: false` 或 `permission_mode: readonly`，TAKT 也不传 sandbox 和网络覆盖，由 Codex 配置决定实际权限，未使用 `strict-readonly` 的结构化调用同样适用。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）是例外：即使委托权限，TAKT 仍管理这些调用的权限。未设置 `readonly_permission_base` 时，TAKT 传递 `read-only` sandbox 和 `networkAccessEnabled: false`。设置后，TAKT 通过 `--config` 传递一个继承基础 profile、将工作目录、`/tmp` 和 `$TMPDIR` 设为只读并禁用网络的权限 profile，且不传 `--sandbox`。仅允许 MCP 副作用的模式也保持 `read-only` sandbox，并显式禁用网络和 Web 搜索；该模式不能与 `permission_control: codex` 同时使用。
 
 要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
 
@@ -1733,6 +1733,42 @@ provider_options:
 ```
 
 环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。runtime profile 或旧版项目、全局配置中的 provider options 可选择 profile；Codex 会在运行中应用该 profile 的权限设置，因此只应指定可信的配置和 profile 文件。
+
+##### Phase 2 和 strict-readonly 的继承基础（`readonly_permission_base`）
+
+使用 `permission_control: codex` 时，Phase 2 和以 `strict-readonly` 运行的调用（例如隔离的结构化调用）由 TAKT 管理权限。若要让这些调用同时保留用户 permission profile 的 `deny`，请把基础 profile 的名称设置到 `readonly_permission_base`：
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    readonly_permission_base: review-base
+```
+
+也可以通过环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_READONLY_PERMISSION_BASE=review-base` 设置。与 `config_profile` 一样，名称由 ASCII 字母、数字、连字符和下划线组成，可在 runtime profile 或旧版项目、全局配置中设置。与 `permission_control: codex` 以外（包括省略）组合会产生配置错误。
+
+设置后，Phase 2 和 `strict-readonly` 的新 session 与已恢复线程都会通过 `--config` 接收以下权限 profile：
+
+- 继承（`extends`）指定的基础 profile。
+- 将工作目录、`/tmp`、`$TMPDIR` 设为 `read`。
+- 将 `network.enabled` 设为 `false`。
+
+此时 TAKT 不传 `--sandbox` 以及 `sandbox_mode` / `sandbox_workspace_write` 覆盖，同时保留 `--ignore-rules`、`--profile` 和 `approval_policy: never`。未指定基础 profile 时，以及 Phase 1 和 Phase 3，行为不变。
+
+如果基础 profile 对某个路径单独设置了 `write`，该路径在继承后的 profile 中仍然可写。Codex 优先采用更具体的路径设置，TAKT 不会阻止这一点。Phase 2 不应写入的路径，请在基础 profile 中设为 `read` 或 `deny`。
+
+```toml
+# 基础 profile `review-base` 的示例
+#（放在由 `config_profile` 选择的 $CODEX_HOME/<name>.config.toml 中）
+[permissions.review-base]
+[permissions.review-base.filesystem]
+"~/.ssh" = "deny"
+"~/.aws" = "deny"
+[permissions.review-base.network]
+enabled = false
+```
+
+上面的示例拒绝机密文件，且不包含单独的 `write`。TAKT 不会读取或改写用户的 Codex 配置。
 
 #### Codex Skill 继承（`skills`）
 
