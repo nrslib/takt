@@ -316,6 +316,8 @@ TAKT 管理的远程 push 会禁用 Git 的 HTTPS 终端和 askpass 提示，以
 
 父 workflow 名称相同且继续同一 call instance 时，只将所选恢复位置对应的子 workflow 状态作为该子 workflow 的初始快照继承。即使在进入子 workflow 前失败，下次恢复也能使用该状态。不会复制子 workflow 过去的逐次执行快照，也不会将上一次子 workflow 的结果复制到新调用或新循环中。父 workflow 名称改变时，不继承子 workflow 结果。不具备此保存格式的旧 run 会警告，并按原有方式从空结果恢复；step 引用未保存的前段结果时，会在该 step 产生引用错误。
 
+恢复时继承的报告参与记录和调用记录按 workflow 名称、step 名称和调用位置进行匹配。即使定义的内容哈希发生变化，也可以使用同一位置的记录。不匹配或有冲突的记录，以及来自未完成调用的输入会被排除并发出警告，执行会从指定位置继续。即使从子 workflow 的中途恢复，也可以在子 workflow 完成后，将本次未重新执行的前段 step 的报告传给后续 step。如果找不到对应的正文，会发出警告并省略该输入，不会使用其他调用位置的同名报告补充。在本次 run 中重新执行生成该报告的 step 后，会按通常条件检查该次执行的完成状态和输出。
+
 `/go` 后 retry 对话会显示更新后的指示，提供 **Save as Task**（首项且默认）和 **Continue editing**。选择 Save as Task 会更新原任务并将其放回 `pending`，但不会立即启动 worker。Retry 对话不提供 `/retry`、`/replay` 或立即执行选项；使用 `/cancel` 可在不修改任务的情况下退出。
 
 ### 非交互模式（`--non-interactive`）
