@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveCodexHomeDirectory } from '../../dist/infra/codex/home.js';
 import { gradeAdjudicationAnswer } from './adjudication-handoff.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -71,12 +72,12 @@ function sourceBody(file) {
   return readFileSync(join(fixture, file === 'requirements.md' ? file : `src/${file}`), 'utf8').trimEnd();
 }
 
-function inspectOwnRollout(threadId, overridePath) {
+function inspectOwnRollout(threadId, overridePath, codexHome, prepared) {
   if (!threadId) return { status: 'thread id unavailable' };
   let path = overridePath;
   if (!path) {
     const now = new Date();
-    const directory = join(homedir(), '.codex/sessions', String(now.getFullYear()),
+    const directory = join(codexHome, 'sessions', String(now.getFullYear()),
       String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
     let filename;
     try { filename = readdirSync(directory).find((name) => name.endsWith(`-${threadId}.jsonl`)); }
@@ -117,8 +118,9 @@ function inspectOwnRollout(threadId, overridePath) {
       for (const file of sourceFiles) {
         if (text.includes(sourceBody(file))) sourceOutputMatches.add(file);
       }
-      if (compactions.length > 0 && text.includes('現在の担当はレビュー裁定のPhase 1')
-        && text.includes('AC7とSTYLE2の採否')) artifactOutputAfterCompaction = true;
+      const callInput = String(original?.input ?? original?.arguments ?? '');
+      if (compactions.length > 0 && callInput.includes(prepared.artifact)
+        && text.includes(prepared.input)) artifactOutputAfterCompaction = true;
       if (original?.name === 'read_ci_evidence'
         || String(original?.input ?? original?.arguments ?? '').includes('read_ci_evidence')) {
         const indices = [...text.matchAll(/SYNTHETIC CI EVIDENCE (\d+)\/36\./g)]
@@ -190,7 +192,7 @@ function inspectAppEvents(eventsPath, prepared) {
 
 export function evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath) {
   const observed = inspectAppEvents(eventsPath, prepared);
-  const rollout = inspectOwnRollout(base.threadId, rolloutPath);
+  const rollout = inspectOwnRollout(base.threadId, rolloutPath, base.codexHome ?? resolveCodexHomeDirectory(process.env), prepared);
   const decisions = gradeAdjudicationAnswer(observed.answer);
   const sourceReads = sourceFiles.filter((file) => observed.sourceCommandSuccess.includes(file)
     && rollout.sourceOutputMatches?.includes(file));
@@ -293,8 +295,11 @@ export async function runNative({ preparedPath, codexBin, model }) {
   if (!codexBin || !['gpt-6-luna', 'gpt-6.1-sol'].includes(model)) throw new Error('Exact managed Codex binary and Luna/Sol model are required');
   const prepared = JSON.parse(readFileSync(preparedPath, 'utf8'));
   if (prepared.contextWindow !== CONTEXT_WINDOW || prepared.chunks !== CHUNKS) throw new Error('Prepared trial is incompatible');
-  const version = spawnSync(codexBin, ['--version'], { encoding: 'utf8' });
-  if (version.status !== 0 || !/\b0\.164\.0\b/.test(version.stdout)) throw new Error('Managed Codex 0.164.0 is required');
+  const childEnv = { ...process.env };
+  const codexHome = resolveCodexHomeDirectory(childEnv);
+  if (childEnv.CODEX_HOME) childEnv.CODEX_HOME = codexHome;
+  const version = spawnSync(codexBin, ['--version'], { encoding: 'utf8', env: childEnv });
+  if (version.status !== 0 || version.stdout?.trim() !== 'codex-cli 0.164.0') throw new Error('Managed Codex 0.164.0 is required');
   const output = resolve(prepared.output, model.replaceAll('.', '-'));
   privateDirectory(output);
   const eventsPath = join(output, 'events.jsonl');
@@ -311,7 +316,7 @@ export async function runNative({ preparedPath, codexBin, model }) {
   const readChunks = [];
   const started = Date.now();
   const child = spawn(codexBin, ['app-server', '--listen', 'stdio://'], {
-    cwd: prepared.cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
+    cwd: prepared.cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
   });
   const stderr = [];
   child.stderr.on('data', (chunk) => stderr.push(chunk));
@@ -334,8 +339,9 @@ export async function runNative({ preparedPath, codexBin, model }) {
     return new Promise((resolveRequest, rejectRequest) => pending.set(id, { resolveRequest, rejectRequest }));
   }
   let buffer = '';
+  child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk) => {
-    buffer += chunk.toString('utf8');
+    buffer += chunk;
     const lines = buffer.split('\n');
     buffer = lines.pop();
     for (const line of lines) {
@@ -412,7 +418,7 @@ export async function runNative({ preparedPath, codexBin, model }) {
   clearTimeout(timer);
   if (killTimer) clearTimeout(killTimer);
   writeFileSync(join(output, 'stderr.txt'), Buffer.concat(stderr).toString('utf8'), { mode: 0o600 });
-  const base = { model, codexBin, trialClass: prepared.trialClass, threadId, turnId, code: exit.code, signal: exit.signal,
+  const base = { model, codexBin, codexHome, trialClass: prepared.trialClass, threadId, turnId, code: exit.code, signal: exit.signal,
     stoppedReason, durationMs: Date.now() - started, contextWindow: CONTEXT_WINDOW, toolCalls, readChunks,
     packetReadBeforeCompaction };
   const grade = evaluateNativeEvidence(prepared, base, eventsPath);

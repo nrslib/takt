@@ -10,7 +10,8 @@ test('native harness sends the production packet and requires an observed compac
   const temp = mkdtempSync(join(tmpdir(), 'takt-native-contract-'));
   const fake = join(temp, 'codex');
   writeFileSync(fake, `#!/usr/bin/env node
-if (process.argv.includes('--version')) { console.log('codex-cli 0.164.0'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log(process.env.TAKT_FAKE_VERSION || 'codex-cli 0.164.0'); process.exit(0); }
+if (process.env.CODEX_HOME && !require('node:path').isAbsolute(process.env.CODEX_HOME)) process.exit(17);
 let buffer = '';
 let read = 0;
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
@@ -18,8 +19,13 @@ const next = () => {
   if (read < 36) send({ id: 100 + read, method: 'item/tool/call', params: { tool: 'read_ci_evidence', arguments: {}, callId: String(read), threadId: 'thread-1', turnId: 'turn-1' } });
   else {
     send({ method: 'item/started', params: { item: { type: 'commandExecution', command: 'cat requirements.md src/goalOperations.mjs src/lifecycle.mjs src/managerMcpConnection.mjs src/workspaceRegistry.mjs' } } });
-    send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'AC7：維持。STYLE2：除外。' } } });
-    send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed', items: [] } } });
+    const answer = Buffer.from(JSON.stringify({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'AC7：維持。STYLE2：除外。' } } }) + '\\n');
+    const split = answer.indexOf(Buffer.from('維')) + 1;
+    process.stdout.write(answer.subarray(0, split));
+    setTimeout(() => {
+      process.stdout.write(answer.subarray(split));
+      send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed', items: [] } } });
+    }, 5);
   }
 };
 process.stdin.on('data', (chunk) => {
@@ -47,6 +53,7 @@ process.stdin.on('data', (chunk) => {
 `, { mode: 0o700 });
   chmodSync(fake, 0o700);
   let cwd;
+  const previousCodexHome = process.env.CODEX_HOME;
   try {
     const output = join(temp, 'prepared');
     const prepared = await prepareNative({ dist: resolve('dist'), output });
@@ -67,18 +74,31 @@ process.stdin.on('data', (chunk) => {
     assert.match(instructions, /text\(await tools\.read_ci_evidence\(\{\}\)\);/);
     assert.match(instructions, /`ID：採用。` または `ID：除外。`/);
     assert.doesNotMatch(instructions, /\{\{include:/);
+    process.env.CODEX_HOME = join(temp, 'custom-codex-home');
     const grade = await runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6-luna' });
     assert.equal(grade.pass, false); // The fake server has no native rollout to verify.
+    assert.equal(grade.codexHome, join(temp, 'custom-codex-home'));
     assert.notEqual(grade.rollout.status, 'read');
     assert.equal(grade.compacted, 1);
     assert.equal(grade.readChunks.length, 36);
     assert.equal(grade.reportedContext, 475000);
+    assert.equal(grade.answer, 'AC7：維持。STYLE2：除外。');
+    assert.equal(grade.ac7, true);
+    assert.equal(grade.style2, true);
     process.env.TAKT_FAKE_NO_COMPACTION = '1';
+    process.env.CODEX_HOME = 'relative-codex-home';
     const withoutCompaction = await runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6.1-sol' });
+    assert.equal(withoutCompaction.codexHome, resolve('relative-codex-home'));
     assert.equal(withoutCompaction.compacted, 0);
     assert.equal(withoutCompaction.pass, false);
+    process.env.TAKT_FAKE_VERSION = 'codex-cli 0.164.0-alpha.1';
+    await assert.rejects(runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6-luna' }),
+      /Managed Codex 0\.164\.0 is required/);
   } finally {
     delete process.env.TAKT_FAKE_NO_COMPACTION;
+    delete process.env.TAKT_FAKE_VERSION;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
     if (cwd) rmSync(cwd, { recursive: true, force: true });
     rmSync(temp, { recursive: true, force: true });
   }
@@ -108,7 +128,9 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
   const temp = mkdtempSync(join(tmpdir(), 'takt-native-grade-'));
   const eventsPath = join(temp, 'events.jsonl');
   const rolloutPath = join(temp, 'rollout.jsonl');
-  const prepared = { artifact: join(temp, 'packet.json') };
+  const prepared = { artifact: join(temp, 'packet.json'),
+    input: JSON.stringify({ taktCurrentInstructions: '現在の担当はレビュー裁定のPhase 1。AC7とSTYLE2の採否を確かめる。',
+      userInstruction: '裁定を続けてください。' }) };
   const base = { threadId: 'trial-thread', readChunks: Array.from({ length: 36 }, (_, index) => index),
     toolCalls: 42, stoppedReason: 'turn complete' };
   const files = ['requirements.md', 'goalOperations.mjs', 'lifecycle.mjs', 'managerMcpConnection.mjs', 'workspaceRegistry.mjs'];
@@ -144,8 +166,10 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
   }
   rollout.push({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'source',
     output: [{ type: 'input_text', text: `Script completed\nOutput:\n\n${encodedSource}` }] } });
+  rollout.push({ type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: 'packet',
+    input: `text(await tools.exec_command({cmd: 'cat ${prepared.artifact}'}));` } });
   rollout.push({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'packet',
-    output: [{ type: 'input_text', text: '現在の担当はレビュー裁定のPhase 1。AC7とSTYLE2の採否を確かめる。' }] } });
+    output: [{ type: 'input_text', text: prepared.input }] } });
   const write = () => {
     writeFileSync(eventsPath, `${events.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
     writeFileSync(rolloutPath, `${rollout.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
@@ -160,6 +184,17 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
     assert.equal(full.pass, true);
     assert.equal(full.rollout.historyCalls.length, 1);
     assert.equal(full.rollout.historyCalls[0].backendFailure, true);
+
+    const now = new Date();
+    const customHome = join(temp, 'custom-codex-home');
+    const sessions = join(customHome, 'sessions', String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+    mkdirSync(sessions, { recursive: true });
+    const customRollout = join(sessions, `rollout-test-${base.threadId}.jsonl`);
+    writeFileSync(customRollout, readFileSync(rolloutPath));
+    const fromCustomHome = evaluateNativeEvidence(prepared, { ...base, codexHome: customHome }, eventsPath);
+    assert.equal(fromCustomHome.rollout.path, customRollout);
+    assert.equal(fromCustomHome.pass, true);
 
     events[0].params.tokenUsage.modelContextWindow = 400000;
     write();
@@ -177,14 +212,26 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
 
     partial.payload.output[0].text = ciChunk(30);
     rollout.find((entry) => entry.payload?.call_id === 'packet' && entry.payload.type === 'custom_tool_call_output')
-      .payload.output[0].text = 'packet filename only';
+      .payload.output[0].text = `${prepared.artifact} 現在の担当はレビュー裁定のPhase 1。AC7とSTYLE2の採否を確かめる。`;
     write();
     const unreadPacket = evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath);
     assert.equal(unreadPacket.taskContinuityPass, true);
     assert.equal(unreadPacket.packetRecoveryPass, false);
 
     rollout.find((entry) => entry.payload?.call_id === 'packet' && entry.payload.type === 'custom_tool_call_output')
-      .payload.output[0].text = '現在の担当はレビュー裁定のPhase 1。AC7とSTYLE2の採否を確かめる。';
+      .payload.output[0].text = prepared.input.slice(0, -1);
+    write();
+    assert.equal(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).packetRecoveryPass, false);
+
+    rollout.find((entry) => entry.payload?.call_id === 'packet' && entry.payload.type === 'custom_tool_call_output')
+      .payload.output[0].text = prepared.input;
+    rollout.find((entry) => entry.payload?.call_id === 'packet' && entry.payload.type === 'custom_tool_call')
+      .payload.input = 'text(await tools.exec_command({cmd: "printf unrelated"}));';
+    write();
+    assert.equal(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).packetRecoveryPass, false);
+
+    rollout.find((entry) => entry.payload?.call_id === 'packet' && entry.payload.type === 'custom_tool_call')
+      .payload.input = `text(await tools.exec_command({cmd: 'cat ${prepared.artifact}'}));`;
     events.find((entry) => entry.params?.item?.id === 'packet' && entry.method === 'item/completed').params.item.exitCode = 1;
     write();
     const noPacket = evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath);

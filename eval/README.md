@@ -2020,4 +2020,4 @@ node eval/scripts/adjudication-native-compaction.mjs --prepared "$PWD/.takt/tmp/
 node eval/scripts/adjudication-native-compaction.mjs --grade-only --prepared "$PWD/.takt/tmp/native-luna/prepared.json" --model gpt-6-luna
 ```
 
-実行はmanaged Codex 0.164.0のapp-serverを使い、high effortと500,000 context windowを指定する。製品のCodex SDKとは輸送経路が異なるため、この試験はSDK経由の動作を直接証明しない。ネイティブ通知と自己rolloutで実圧縮を照合し、圧縮0回は失格とする。再採点は元の`grade.json`と`events.jsonl`を保持して`regrade.json`へ記録する。`taskContinuityPass`は圧縮後の裁定継続、`packetRecoveryPass`は圧縮後のパケット再読、`workloadFullyVisible`は合成資料36件の全文がモデルに届いたことを別々に示す。総合`pass`には三条件と36件の取得完了が必要となる。
+実行はmanaged Codex 0.164.0のapp-serverを使い、high effortと500,000 context windowを指定する。製品のCodex SDKとは輸送経路が異なるため、この試験はSDK経由の動作を直接証明しない。自己rolloutは実行時の`CODEX_HOME`から探す。ネイティブ通知と自己rolloutで実圧縮を照合し、圧縮0回は失格とする。再採点は元の`grade.json`と`events.jsonl`を保持して`regrade.json`へ記録する。`taskContinuityPass`は圧縮後の裁定継続、`packetRecoveryPass`は圧縮後に復帰パケットの全文をモデル可視出力として再取得したこと、`workloadFullyVisible`は合成資料36件の全文がモデルに届いたことを別々に示す。パケットの一部を読んだだけなら`packetReadAfterCompaction`と区別して記録する。総合`pass`には三条件と36件の取得完了が必要となる。
