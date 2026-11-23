@@ -243,7 +243,8 @@ function resolveReportInputEntry(
       producer: logicalProducer(source.name, report),
     };
   });
-  return { declaredNames: names, reports: [...inheritedReports, ...reports] };
+  const availableReports = [...inheritedReports, ...reports];
+  return { declaredNames: availableReports.map(({ reference }) => reference), reports: availableReports };
 }
 
 export function resolveDeclaredReportInputs(

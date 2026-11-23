@@ -362,7 +362,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     }
 
     it.each(['requeue', 'retry'] as const)(
-      'starts at the explicit nested step through MCP %s despite inconsistent inherited invocation records', async (kind) => {
+      'starts at the explicit nested step through MCP %s when namespace iteration differs from call instance', async (kind) => {
         installNestedWorkflow();
         const definitions = [
           [workflowName, [
@@ -430,7 +430,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
         expect(runner.listTaskStateItems()[0]?.status).toBe('completed');
         expect(warning.mock.calls.some(([level, , message, data]) => level === 'WARN'
           && message === 'Ignoring unmatched inherited workflow invocation'
-          && JSON.stringify(data).includes('peer-review'))).toBe(true);
+          && JSON.stringify(data).includes('peer-review'))).toBe(false);
       },
     );
 
