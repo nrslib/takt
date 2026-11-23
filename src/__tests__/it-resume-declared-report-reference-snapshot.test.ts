@@ -10,10 +10,74 @@ import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-cal
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { makeStep } from './test-helpers.js';
+import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
+import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+import { buildResumeReportConsumerKeyFromStack } from '../core/workflow/run/resume-report-consumer.js';
 
 describe('resume snapshot for declared report references', () => {
   const directories: string[] = [];
   afterEach(() => directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })));
+
+  it.each([false, true])('transfers only the selected saved consumer mapping to the current key (hash changed=%s)', (changed) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-resume-consumer-key-'));
+    directories.push(cwd);
+    const oldChild = attachWorkflowOpaqueRef<WorkflowConfig>({
+      name: 'child', initialStep: 'write', maxSteps: 3,
+      steps: [
+        makeStep({ name: 'write', outputContracts: [{ name: 'declared.md', format: 'Declared' }] }),
+        makeStep({ name: 'consume', instruction: '{report:sibling.md}\n{report:declared.md}',
+          inputReports: { fromStep: 'write', reports: ['declared.md'] } }),
+      ],
+    }, 'old-child');
+    const child = changed ? attachWorkflowOpaqueRef({ ...oldChild }, 'new-child') : oldChild;
+    const parent: WorkflowConfig = {
+      name: 'parent', initialStep: 'delegate-a', maxSteps: 3,
+      steps: ['delegate-a', 'delegate-b'].map((name) => makeStep({ name, kind: 'workflow_call', call: 'child' })),
+    };
+    const call = buildWorkflowResumePointEntry(parent, 'delegate-a', 'workflow_call', 1, undefined, 1);
+    const stack = [call, buildWorkflowResumePointEntry(oldChild, 'consume', 'agent', 1, new Map([['write', 1]]))];
+    const namespace = buildWorkflowCallNamespaceSegment('delegate-a', child.name, 1);
+    const selectedDirectory = `subworkflows/${namespace}`;
+    const siblingDirectory = 'subworkflows/iteration-1--step-reviews--workflow-sibling';
+    const otherDirectory = 'subworkflows/iteration-1--step-delegate-b--workflow-child';
+    const origin = buildRunPaths(cwd, 'origin-run').reportsRootAbs;
+    for (const directory of [selectedDirectory, siblingDirectory, otherDirectory]) mkdirSync(join(origin, directory), { recursive: true });
+    writeFileSync(join(origin, selectedDirectory, 'declared.md'), 'DECLARED');
+    writeFileSync(join(origin, siblingDirectory, 'sibling.md'), 'CHAINED REVIEW RESOLUTION');
+    writeFileSync(join(origin, otherDirectory, 'sibling.md'), 'OTHER');
+    const oldKey = buildResumeReportConsumerKeyFromStack(stack)!;
+    const otherStack = [buildWorkflowResumePointEntry(parent, 'delegate-b', 'workflow_call', 1, undefined, 1), stack[1]!];
+    inheritResumeReportSnapshot({
+      cwd, sourceRunSlug: 'origin-run', targetRunSlug: 'source-run',
+      resumeReportConsumers: [
+        { consumerKey: oldKey, reportDirectories: [selectedDirectory, siblingDirectory],
+          references: [{ reference: 'sibling.md', path: `${siblingDirectory}/sibling.md` }] },
+        { consumerKey: buildResumeReportConsumerKeyFromStack(otherStack)!, reportDirectories: [otherDirectory],
+          references: [{ reference: 'sibling.md', path: `${otherDirectory}/sibling.md` }] },
+      ],
+    });
+
+    const entry = buildResumeReportSnapshotConsumerEntry({
+      cwd, projectCwd: cwd, sourceRunSlug: 'source-run', workflow: parent, workflowCallResolver: () => child,
+      resumePoint: { version: 2, iteration: 2, elapsed_ms: 0, stack,
+        workflow_call_invocations: {
+          [buildWorkflowCallInvocationIdentity(parent.name, 'delegate-a', [])]: {
+            call_instance: 1, report_namespace_segment: namespace,
+          },
+        },
+        workflow_step_participations: {
+          [buildWorkflowStepParticipationIdentity(getWorkflowReference(oldChild), 'write', [call])]: { report_names: ['declared.md'] },
+        },
+      },
+    })!;
+
+    expect(entry.consumerKey).toBe(buildResumeReportConsumerKeyFromStack([
+      call, buildWorkflowResumePointEntry(child, 'consume', 'agent', 1),
+    ]));
+    expect(entry.reportDirectories).toEqual([selectedDirectory, siblingDirectory]);
+    expect(entry.references).toEqual([{ reference: 'sibling.md', path: `${siblingDirectory}/sibling.md` }]);
+  });
 
   it('does not bind a declared nested report to a same-name local file', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-resume-declared-report-'));
@@ -67,4 +131,56 @@ describe('resume snapshot for declared report references', () => {
 
     expect(entry?.references).toEqual([{ reference: 'local.md', path: 'local.md' }]);
   });
+
+  it.each(['all', ['review-summary.md']] as const)(
+    'keeps declared names reserved after a child workflow hash change with reports=%s', (reports) => {
+      const cwd = mkdtempSync(join(tmpdir(), 'takt-resume-changed-report-'));
+      directories.push(cwd);
+      const oldChild: WorkflowConfig = attachWorkflowOpaqueRef({
+        name: 'child', initialStep: 'write', maxSteps: 3,
+        steps: [
+          makeStep({ name: 'write', outputContracts: [{ name: 'review-summary.md', format: 'Summary' }] }),
+          makeStep({ name: 'consume', instruction: '{report:review-summary.md}\n{report:local.md}',
+            inputReports: { fromStep: 'write', reports: reports === 'all' ? 'all' : [...reports] } }),
+        ],
+      }, `builtin:v2:sha256:${'a'.repeat(64)}`);
+      const currentChild = attachWorkflowOpaqueRef({ ...oldChild }, `builtin:v2:sha256:${'b'.repeat(64)}`);
+      const parent: WorkflowConfig = {
+        name: 'parent', initialStep: 'delegate', maxSteps: 3,
+        steps: [makeStep({ name: 'delegate', kind: 'workflow_call', call: 'child' })],
+      };
+      const call = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1);
+      const namespace = buildWorkflowCallNamespaceSegment('delegate', oldChild.name, 1);
+      const directory = join('subworkflows', namespace);
+      const sourceReports = buildRunPaths(cwd, 'source-run').reportsRootAbs;
+      mkdirSync(join(sourceReports, directory), { recursive: true });
+      writeFileSync(join(sourceReports, directory, 'review-summary.md'), 'DECLARED');
+      writeFileSync(join(sourceReports, directory, 'local.md'), 'LOCAL');
+      writeFileSync(join(sourceReports, 'review-summary.md'), 'UNRELATED');
+
+      const entry = buildResumeReportSnapshotConsumerEntry({
+        cwd, projectCwd: cwd, sourceRunSlug: 'source-run', workflow: parent,
+        workflowCallResolver: () => currentChild,
+        resumePoint: {
+          version: 2, iteration: 2, elapsed_ms: 0,
+          stack: [call, buildWorkflowResumePointEntry(oldChild, 'consume', 'agent', 1,
+            new Map([['write', 1], ['consume', 1]]))],
+          workflow_call_invocations: {
+            [buildWorkflowCallInvocationIdentity(parent.name, 'delegate', [])]: {
+              call_instance: 1, report_namespace_segment: namespace,
+            },
+          },
+          workflow_step_participations: {
+            [buildWorkflowStepParticipationIdentity(getWorkflowReference(oldChild), 'write', [call])]: {
+              report_names: ['review-summary.md'],
+            },
+          },
+        },
+      });
+
+      expect(entry).toBeDefined();
+      expect(entry!.reportDirectories).toContain(directory);
+      expect(entry!.references).toEqual([{ reference: 'local.md', path: `${directory}/local.md` }]);
+    },
+  );
 });

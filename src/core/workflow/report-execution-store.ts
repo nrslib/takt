@@ -7,7 +7,8 @@ import { runPrivateFileExclusive } from '../../shared/utils/private-file-lock.js
 import { lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
 import { pinReportContent } from './report-writer.js';
 import { buildWorkflowCallNamespaceSegment, parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
-import { parseWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
+import { parseWorkflowExecutionIdentity, serializeWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
+import type { InheritedReportProducer } from './workflow-resume-records.js';
 
 const publicName = z.string().refine((value) => classifyReportRelativePath(value).kind === 'public');
 const versionPath = z.string().refine((value) => value.startsWith(`${REPORT_EXECUTIONS_DIRECTORY}/versions/`)
@@ -64,12 +65,87 @@ function reportProducerPath(path: string): string {
 /** Durable execution identities and immutable bodies; latest participation indexes stay separate. */
 export class ReportExecutionStore {
   private readonly active = new Set<string>();
+  private readonly started = new Set<string>();
+  private readonly inherited = new Map<string, Map<string, {
+    savedIdentity: string;
+    publicPath: string;
+    fixed?: { path: string; execution: ReportExecutionMetadata; origin: ReportExecutionMetadata };
+  }>>();
+  private resuming = false;
   private readonly directory: string;
   private readonly indexPath: string;
 
   constructor(private readonly reportsRoot: string) {
     this.directory = resolve(reportsRoot, REPORT_EXECUTIONS_DIRECTORY);
     this.indexPath = resolve(this.directory, 'index.json');
+  }
+
+  restoreInheritedReports(producers: readonly InheritedReportProducer[]): void {
+    this.resuming = true;
+    const state = this.read();
+    const executions = state?.executions.flatMap((entry) => {
+      const identity = parseWorkflowExecutionIdentity(entry.identity);
+      return identity === undefined ? [] : [{ entry, identity }];
+    }) ?? [];
+    for (const producer of producers) {
+      const identity = parseWorkflowExecutionIdentity(producer.savedIdentity);
+      const parallelParent = parseWorkflowExecutionIdentity(producer.identity)?.parallel_parent;
+      const namespace = producer.reportPath === producer.reportName ? '' : producer.reportPath.slice(0, -producer.reportName.length - 1);
+      const execution = executions.filter((candidate) => candidate.identity.step === identity?.step
+        && (candidate.identity.parallel_parent === identity?.parallel_parent || candidate.identity.parallel_parent === parallelParent)
+        && candidate.entry.namespace === namespace).at(-1)?.entry;
+      const version = execution?.reports[reportProducerPath(producer.reportName)];
+      // An execution without completed output must never borrow an older public body.
+      if (execution !== undefined && (!execution.completed || version == null)) continue;
+      const fixed = version == null ? undefined : {
+        path: resolve(this.reportsRoot, version),
+        execution: reportExecutionMetadata(state!.lineage, execution!),
+        origin: reportExecutionMetadata(state!.lineage, reportOrigin(state!.executions, version)),
+      };
+      const reports = this.inherited.get(producer.identity) ?? new Map();
+      reports.set(producer.reportName, { savedIdentity: execution?.identity ?? producer.savedIdentity, publicPath: resolve(this.reportsRoot, publicName.parse(producer.reportPath)),
+        ...(fixed === undefined ? {} : { fixed }),
+      });
+      this.inherited.set(producer.identity, reports);
+    }
+  }
+
+  isInheritedProducer(identity: string): boolean {
+    return this.resuming && !this.started.has(identity);
+  }
+
+  rebindInheritedInvocation(from: string, to: string, previousCallInstance: number, callInstance: number): void {
+    const source = parseWorkflowExecutionIdentity(from);
+    const target = parseWorkflowExecutionIdentity(to);
+    if (source === undefined || target === undefined) throw new Error('Invalid inherited invocation identity');
+    const oldPrefix = [...source.calls, { workflow: source.workflow, step: source.step, kind: 'workflow_call' as const, instance: previousCallInstance }];
+    const newPrefix = [...target.calls, { workflow: target.workflow, step: target.step, kind: 'workflow_call' as const, instance: callInstance }];
+    const moves = [...this.inherited].flatMap(([identity, reports]) => {
+      const parsed = parseWorkflowExecutionIdentity(identity);
+      if (parsed === undefined || !oldPrefix.every((frame, index) => {
+        const actual = parsed.calls[index];
+        return actual?.workflow === frame.workflow && actual.step === frame.step && actual.kind === frame.kind && actual.instance === frame.instance;
+      })) return [];
+      return [{ from: identity, to: serializeWorkflowExecutionIdentity({ ...parsed, calls: [...newPrefix, ...parsed.calls.slice(oldPrefix.length)] }), reports }];
+    });
+    for (const move of moves) this.inherited.delete(move.from);
+    for (const move of moves) this.inherited.set(move.to, move.reports);
+  }
+
+  readInherited(identity: string, reportName: string, previous?: number): {
+    content: string; path: string; execution?: ReportExecutionMetadata; origin?: ReportExecutionMetadata; history?: string;
+  } | undefined {
+    const report = this.inherited.get(identity)?.get(reportName);
+    if (report === undefined || !this.isInheritedProducer(identity)) return undefined;
+    const history = previous === undefined ? {} : { history: this.history(report.savedIdentity, reportName, previous) };
+    if (report.fixed !== undefined) {
+      const snapshot = readPrivateFileState(report.fixed.path);
+      if (snapshot.state.exists && 'content' in snapshot) return { ...report.fixed, ...history, content: snapshot.content.toString('utf8') };
+    }
+    // Only the public file explicitly adopted at this call position may replace a missing fixed version.
+    const snapshot = readPrivateFileState(report.publicPath);
+    return snapshot.state.exists && 'content' in snapshot
+      ? { path: report.publicPath, ...history, content: snapshot.content.toString('utf8') } : undefined;
   }
 
   private read(): z.infer<typeof storeSchema> | undefined {
@@ -95,6 +171,8 @@ export class ReportExecutionStore {
     if (namespace.startsWith('..') || resolve(this.reportsRoot, namespace) !== resolve(reportDir)) {
       throw new Error('Report execution directory escapes its run');
     }
+    this.started.add(identity);
+    this.inherited.delete(identity);
     const id = this.update((state) => {
       for (const entry of state.executions) {
         if (entry.identity === identity) this.active.delete(entry.id);
