@@ -1915,6 +1915,7 @@ If the base profile grants `write` on an individual path, that path remains writ
 # (place it in the $CODEX_HOME/<name>.config.toml selected by `config_profile`)
 [permissions.review-base]
 [permissions.review-base.filesystem]
+":minimal" = "read"
 "~/.ssh" = "deny"
 "~/.aws" = "deny"
 [permissions.review-base.network]

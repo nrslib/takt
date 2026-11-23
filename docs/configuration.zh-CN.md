@@ -1762,6 +1762,7 @@ provider_options:
 #（放在由 `config_profile` 选择的 $CODEX_HOME/<name>.config.toml 中）
 [permissions.review-base]
 [permissions.review-base.filesystem]
+":minimal" = "read"
 "~/.ssh" = "deny"
 "~/.aws" = "deny"
 [permissions.review-base.network]

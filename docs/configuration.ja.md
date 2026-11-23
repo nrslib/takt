@@ -1878,6 +1878,7 @@ TAKT はこのとき `--sandbox` と `sandbox_mode` / `sandbox_workspace_write` 
 #（`config_profile` で選ぶ $CODEX_HOME/<name>.config.toml などに置く）
 [permissions.review-base]
 [permissions.review-base.filesystem]
+":minimal" = "read"
 "~/.ssh" = "deny"
 "~/.aws" = "deny"
 [permissions.review-base.network]
