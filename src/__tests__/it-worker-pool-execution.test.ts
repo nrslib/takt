@@ -12,6 +12,8 @@ import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { writeDaemonOwner } from '../infra/daemon/owner.js';
+import { installDaemonErrorLog } from '../infra/daemon/diagnostics.js';
+import { BuiltinProjectHost } from '../infra/worker-pool/projectHost.js';
 import { AsyncCommand } from '../infra/daemon/command.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { TaskRunner } from '../infra/task/runner.js';
@@ -19,6 +21,7 @@ import { TaskStore } from '../infra/task/store.js';
 import { getSelfProcessIdentity } from '../infra/task/process.js';
 import { getProjectExecutionOwner } from '../infra/task/project-execution-lock.js';
 import { packageVersion } from '../shared/package-info.js';
+import { generateReportDir } from '../shared/utils/reportDir.js';
 import { ControlledTurnRunner } from './helpers/controlledDaemon.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -34,6 +37,26 @@ it.each([
   const project = mkdtempSync(join(directory, 'pool-execution-'));
   let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
   const controller = new AbortController();
+  const diagnostics: { at: number; event: string; details: unknown }[] = [];
+  const record = (event: string, details: unknown): void => {
+    diagnostics.push({ at: Date.now(), event, details });
+    if (diagnostics.length > 128) diagnostics.shift();
+  };
+  const uninstallErrorLog = installDaemonErrorLog(async (message) => { record('daemon error', message); });
+  const inspect = BuiltinProjectHost.prototype.inspect;
+  const inspectSpy = vi.spyOn(BuiltinProjectHost.prototype, 'inspect').mockImplementation(async function (this: BuiltinProjectHost) {
+    const result = await inspect.call(this);
+    record('inspect', result);
+    return result;
+  });
+  const start = BuiltinProjectHost.prototype.start;
+  const startSpy = vi.spyOn(BuiltinProjectHost.prototype, 'start').mockImplementation(async function (this: BuiltinProjectHost, taskName, workerName) {
+    record('start requested', { taskName, workerName });
+    const result = await start.call(this, taskName, workerName);
+    record('start result', { taskName, workerName, result });
+    return result;
+  });
+  let phase = 'setup';
   try {
     execFileSync('git', ['init', '--initial-branch=main'], { cwd: project, stdio: 'ignore' });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'fixture'], { cwd: project, stdio: 'ignore' });
@@ -57,11 +80,16 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
   const task = /independent work (\\d)/.exec(prompt)?.[1]
     ?? (prompt.includes('iteration bound') ? 'iteration' : prompt.includes('cancel while pending') ? 'cancelled' : undefined);
   if (task !== undefined) writeFileSync(join(root, 'entered-' + task), String(process.pid));
-  const deadline = Date.now() + 25000;
+  const enteredAt = Date.now();
+  const observe = status => writeFileSync(join(root, 'provider-state-' + task + '.json'), JSON.stringify({
+    task, pid: process.pid, enteredAt, at: Date.now(), status,
+  }));
+  observe('entered');
+  // The test owns release in every exit path, including failed startup and CLI checks.
   while (!existsSync(join(root, 'release-worker')) && !existsSync(join(root, 'release-worker-' + task))) {
-    if (Date.now() > deadline) throw new Error('Test did not release worker');
     await new Promise(resolve => setTimeout(resolve, 20));
   }
+  observe('released');
   return { persona: config.name, status: 'done', timestamp: new Date(), content: 'completed', sessionId: randomUUID() };
 } });
 `);
@@ -84,11 +112,13 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
       runnerFactory(bus) { turns.bus = bus; return turns; },
     });
     const expected = concurrency ?? initial;
+    phase = 'initial start';
     await vi.waitFor(() => {
       expect(readdirSync(project).filter((file) => file.startsWith('entered-')), JSON.stringify(runner.listTaskStateItems())).toHaveLength(expected);
       expect(runner.listTaskStateItems().filter((task) => task.status === 'running')).toHaveLength(expected);
     }, { timeout: 30_000 });
     const running = runner.listTaskStateItems().filter((task) => task.status === 'running');
+    phase = 'initial API and CLI checks';
     const childPid = getProjectExecutionOwner(project)!.pid;
     expect(readdirSync(project).filter((file) => file.startsWith('entered-'))
       .map((file) => Number(readFileSync(join(project, file), 'utf8')))).toEqual(Array(expected).fill(childPid));
@@ -115,6 +145,8 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
     expect((await removeTaktGoalTask({ cwd: project, goalId: goal.id, taskName: cancelled.name,
       reason: 'No longer required' }, {}, controller.signal)).isError).toBeUndefined();
     writeFileSync(join(project, 'release-worker'), 'release all');
+    record('release all', { phase });
+    phase = 'initial completion';
     await vi.waitFor(() => {
       const saved = new TaskStore(project).read().tasks;
       expect(saved.filter((task) => tasks.some((target) => target.name === task.name)).map((task) => task.status)).toEqual(['completed', 'completed', 'completed']);
@@ -132,8 +164,9 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
       // Keep the same daemon and project child through idle config changes in both directions.
       const cycles = (initial === 3 ? [1, 3] : [3, 1]).map((limit) => ({ limit, override: undefined as number | undefined }));
       if (settings === 'global concurrency' && initial === 3) cycles.push({ limit: 1, override: 1 }, { limit: 3, override: undefined });
-      for (const { limit, override } of cycles) {
-        for (const file of readdirSync(project).filter((name) => name.startsWith('entered-') || name.startsWith('release-worker'))) {
+      for (const [cycle, { limit, override }] of cycles.entries()) {
+        phase = `concurrency cycle ${limit}, override ${override}`;
+        for (const file of readdirSync(project).filter((name) => name.startsWith('entered-') || name.startsWith('release-worker') || name.startsWith('provider-state-'))) {
           rmSync(join(project, file));
         }
         if (settings === 'project') {
@@ -143,7 +176,7 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
           writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n'
             + (override === undefined ? '' : `concurrency: ${override}\n`));
         }
-        const next = Array.from({ length: 3 }, (_, index) => runner.addTask(`independent work ${index}`, {
+        const next = Array.from({ length: 3 }, (_, index) => runner.addTask(`independent work ${index} in cycle ${cycle}`, {
           workflow: 'pool', worktree: false, slug: `cycle-${limit}-${index}`, goal_id: goal.id,
         }));
         await vi.waitFor(() => {
@@ -165,6 +198,7 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
             });
           }, { timeout: 30_000 });
           writeFileSync(join(project, 'release-worker-0'), 'release the first slot');
+          record('release first slot', { phase });
           await vi.waitFor(async () => {
             const output = JSON.parse(firstTextContent((await listTaktTasks({ cwd: project })).content)) as {
               tasks: { name: string; status: string; waitingReason?: string; workerName?: string }[] };
@@ -174,6 +208,7 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
           }, { timeout: 30_000 });
         }
         writeFileSync(join(project, 'release-worker'), 'finish this group');
+        record('release group', { phase });
         await vi.waitFor(() => {
           expect(runner.listTaskStateItems().filter((task) => next.some((target) => target.name === task.name))
             .map((task) => task.status)).toEqual(['completed', 'completed', 'completed']);
@@ -185,7 +220,8 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
       writeFileSync(join(project, '.takt', 'workflows', 'limited.yaml'), 'name: limited\nmax_steps: 1\ninitial_step: first\nsteps:\n  - name: first\n    persona: coder\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: second\n  - name: second\n    persona: coder\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
       const cycles = [false, true, false].map((ignore) => ({ ignore, override: undefined as boolean | undefined }));
       if (settings === 'global ignore_exceed') cycles.push({ ignore: false, override: false }, { ignore: true, override: undefined });
-      for (const { ignore, override } of cycles) {
+      for (const [cycle, { ignore, override }] of cycles.entries()) {
+        phase = `iteration cycle ${ignore}, override ${override}`;
         if (settings === 'project') {
           writeFileSync(join(project, '.takt', 'config.yaml'), `provider: mock\nlanguage: en\nconcurrency: 3\nignore_exceed: ${ignore}\n`);
         } else {
@@ -193,7 +229,7 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
           writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n'
             + (override === undefined ? '' : `ignore_exceed: ${override}\n`));
         }
-        const task = runner.addTask(`iteration bound ${ignore}`, { workflow: 'limited', worktree: false, goal_id: goal.id });
+        const task = runner.addTask(`iteration bound cycle ${cycle} ${ignore}`, { workflow: 'limited', worktree: false, goal_id: goal.id });
         await vi.waitFor(() => {
           const saved = runner.listTaskStateItems().find((item) => item.name === task.name)!;
           expect(saved.status).toBe(ignore ? 'completed' : 'exceeded');
@@ -204,13 +240,50 @@ MockProvider.prototype.setup = config => ({ call: async (prompt) => {
         expect(Number(readFileSync(join(project, 'entered-iteration'), 'utf8'))).toBe(childPid);
       }
     }
+  } catch (error) {
+    console.error('Builtin worker execution failed', JSON.stringify({
+      phase, concurrency, settings, initial, diagnostics,
+      tasks: new TaskRunner(project).listTaskStateItems(),
+      owner: getProjectExecutionOwner(project),
+      providers: readdirSync(project).filter((file) => file.startsWith('provider-state-'))
+        .map((file) => ({ file, state: readFileSync(join(project, file), 'utf8') })),
+    }));
+    throw error;
   } finally {
-    writeFileSync(join(project, 'release-worker'), 'cleanup');
-    controller.abort();
-    await daemon?.close();
-    vi.unstubAllEnvs();
-    invalidateGlobalConfigCache();
-    rmSync(project, { recursive: true, force: true });
+    try {
+      writeFileSync(join(project, 'release-worker'), 'cleanup');
+      controller.abort();
+      await daemon?.close();
+    } finally {
+      inspectSpy.mockRestore();
+      startSpy.mockRestore();
+      uninstallErrorLog();
+      vi.unstubAllEnvs();
+      invalidateGlobalConfigCache();
+      rmSync(project, { recursive: true, force: true });
+    }
+  }
+});
+
+it('keeps distinct cycle run names in the same second beside an existing previous run', () => {
+  const directory = mkdtempSync(join(getGlobalConfigDir(), 'cycle-run-names-'));
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date('2026-11-18T11:41:14.000Z'));
+    const iterationRuns = [false, true, false, false, true]
+      .map((ignore, cycle) => generateReportDir(`iteration bound cycle ${cycle} ${ignore}`));
+    expect(new Set(iterationRuns).size).toBe(iterationRuns.length);
+    const previous = join(directory, iterationRuns[0]!);
+    mkdirSync(previous);
+    mkdirSync(join(directory, iterationRuns[2]!));
+    expect(existsSync(previous)).toBe(true);
+    expect(readdirSync(directory)).toHaveLength(2);
+    const concurrentRuns = Array.from({ length: 4 }, (_, cycle) =>
+      Array.from({ length: 3 }, (_, index) => generateReportDir(`independent work ${index} in cycle ${cycle}`))).flat();
+    expect(new Set(concurrentRuns).size).toBe(concurrentRuns.length);
+  } finally {
+    vi.useRealTimers();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
