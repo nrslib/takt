@@ -1,20 +1,21 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WorkflowConfig, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
+import type { NormalAgentWorkflowStep, WorkflowCallStep, WorkflowConfig, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { resolveDeclaredReportInputs } from '../core/workflow/instruction/declared-report-inputs.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
-import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
+import { WorkflowStepParticipationIndex, buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
 import type { WorkflowSharedRuntimeState } from '../core/workflow/types.js';
-import { makeNormalizedWorkflowCallStep } from './helpers/normalized-workflow-call-step.js';
 import { makeInstructionContext, makeStep } from './test-helpers.js';
+import { ReportExecutionStore } from '../core/workflow/report-execution-store.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 function workflow(name: string, steps: WorkflowStep[]): WorkflowConfig {
   return { name, initialStep: steps[0]!.name, maxSteps: 5, steps };
@@ -27,7 +28,9 @@ describe('declared report inputs', () => {
   function fixture() {
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-declared-report-inputs-'));
     directories.push(reportDir);
-    const source = makeNormalizedWorkflowCallStep({ name: 'source', call: 'child' });
+    const source: WorkflowCallStep = {
+      name: 'source', kind: 'workflow_call', call: 'child', personaDisplayName: 'source', instruction: '',
+    };
     const consumer = makeStep({
       name: 'consumer',
       inputReports: { fromStep: 'source', reports: ['review.md'] },
@@ -84,11 +87,64 @@ describe('declared report inputs', () => {
     expect(f.resolvedText()).not.toContain('review from call 1');
   });
 
+  it.each([true, false])('keeps other declared inputs when the inherited report is recorded=%s', (recorded) => {
+    const f = fixture();
+    f.record(1, true);
+    f.child.steps.push(makeStep({ name: 'verify', outputContracts: [{ name: 'verification.md', format: 'Verification' }] }));
+    f.consumer.inputReports = { fromStep: 'source', reports: ['review.md', 'verification.md'] };
+    const prefix = [buildWorkflowResumePointEntry(f.parent, 'source', 'workflow_call', 1, undefined, 1)];
+    const namespace = 'subworkflows/iteration-1--step-source--workflow-child';
+    const directory = join(f.reportDir, namespace);
+    const identity = buildWorkflowStepParticipationIdentity(f.child.name, 'review', prefix);
+    const writer = new ReportExecutionStore(f.reportDir);
+    const id = writer.begin(identity, 'review', directory, ['review.md']);
+    if (recorded) writer.capture(directory, 'review.md', 'SAVED-PLAN');
+    writer.finish(id, true);
+    writeFileSync(join(directory, 'review.md'), 'OLD-PLAN');
+    writeFileSync(join(directory, 'verification.md'), 'VERIFIED');
+    f.sharedRuntime.workflowStepParticipationIndex!.record(f.child, 'verify', prefix, ['verification.md']);
+    const restored = new ReportExecutionStore(f.reportDir);
+    const verification = buildWorkflowStepParticipationIdentity(f.child.name, 'verify', prefix);
+    restored.restoreInheritedReports([
+      { identity, savedIdentity: identity, reportName: 'review.md', reportPath: `${namespace}/review.md` },
+      { identity: verification, savedIdentity: verification, reportName: 'verification.md', reportPath: `${namespace}/verification.md` },
+    ]);
+    f.sharedRuntime.reportExecutions = restored;
+    const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    try {
+      const input = f.resolve()!;
+      expect(input.declaredNames).toEqual(['review.md', 'verification.md']);
+      expect(input.reports.find(({ reference }) => reference === 'verification.md')?.content).toBe('VERIFIED');
+      if (recorded) expect(input.reports.find(({ reference }) => reference === 'review.md')?.content).toBe('SAVED-PLAN');
+      else {
+        expect(input.reports.map(({ reference }) => reference)).toEqual(['verification.md']);
+        expect(warning.mock.calls.some(([level, , , data]) => level === 'WARN'
+          && JSON.stringify(data).includes('review.md'))).toBe(true);
+      }
+      expect(input.reports.every(({ content }) => !content.includes('OLD-PLAN'))).toBe(true);
+    } finally { warning.mockRestore(); }
+  });
+
   it('does not fall back to an older completed call when the current call is pending', () => {
     const f = fixture();
     f.record(1, true);
     f.record(2, false);
     expect(f.resolve).toThrow(/not_completed/);
+  });
+
+  it('uses inherited parallel participation recorded without its unique parallel parent', () => {
+    const f = fixture();
+    f.record(1, true);
+    f.child.steps = [makeStep({ name: 'reviews', parallel: [f.child.steps[0]!] })];
+    const prefix = [buildWorkflowResumePointEntry(f.parent, 'source', 'workflow_call', 1, undefined, 1)];
+    const savedIdentity = buildWorkflowStepParticipationIdentity(f.child.name, 'review', prefix);
+    const identity = buildWorkflowStepParticipationIdentity(f.child.name, 'review', prefix, 'reviews');
+    const store = new ReportExecutionStore(f.reportDir);
+    store.restoreInheritedReports([{ identity, savedIdentity, reportName: 'review.md',
+      reportPath: 'subworkflows/iteration-1--step-source--workflow-child/review.md' }]);
+    f.sharedRuntime.reportExecutions = store;
+
+    expect(f.resolve()?.reports).toEqual([expect.objectContaining({ reference: 'review.md', content: 'review from call 1' })]);
   });
 
   it('resets completion before replaying the same call occurrence', () => {
@@ -97,7 +153,7 @@ describe('declared report inputs', () => {
     expect(f.resolvedText()).toContain('review from call 1');
     const executor = new WorkflowCallExecutor({
       getConfig: () => f.parent,
-      getOptions: () => ({}),
+      getOptions: () => ({ projectCwd: f.reportDir }),
       getMaxSteps: () => 5,
       updateMaxSteps: () => undefined,
       getCwd: () => f.reportDir,
@@ -149,7 +205,7 @@ describe('declared report inputs', () => {
 
     const executor = new WorkflowCallExecutor({
       getConfig: () => f.parent,
-      getOptions: () => ({}),
+      getOptions: () => ({ projectCwd: f.reportDir }),
       getMaxSteps: () => 5,
       updateMaxSteps: () => undefined,
       getCwd: () => f.reportDir,
@@ -197,9 +253,71 @@ describe('declared report inputs', () => {
     expect(f.resolve).toThrow(/not_produced:replan:fix-plan.md/);
   });
 
+  it.each(['unrun', 'no-output', 'missing-body'] as const)(
+    'resolves inherited same-name producers using participation before reading bodies (%s)', (later) => {
+      const f = fixture();
+      f.child.steps = [
+        makeStep({ name: 'plan', outputContracts: [{ name: 'fix-plan.md', format: 'Plan' }] }),
+        makeStep({ name: 'replan', outputContracts: [{ name: 'fix-plan.md', format: 'Replan' }] }),
+        makeStep({ name: 'verify', outputContracts: [{ name: 'verification.md', format: 'Verification' }] }),
+      ];
+      f.consumer.inputReports = { fromStep: 'source', reports: ['fix-plan.md', 'verification.md'] };
+      f.record(1, true, false);
+      const prefix = [buildWorkflowResumePointEntry(f.parent, 'source', 'workflow_call', 1, undefined, 1)];
+      const namespace = 'subworkflows/iteration-1--step-source--workflow-child';
+      const directory = join(f.reportDir, namespace);
+      mkdirSync(directory, { recursive: true });
+      const writer = new ReportExecutionStore(f.reportDir);
+      const inherited = [];
+      for (const [step, report, body] of [
+        ['plan', 'fix-plan.md', 'EARLIER-PLAN'],
+        ['replan', 'fix-plan.md', 'LATER-PLAN'],
+        ['verify', 'verification.md', 'VERIFIED'],
+      ] as const) {
+        if (step === 'replan' && later === 'unrun') continue;
+        const identity = buildWorkflowStepParticipationIdentity(f.child.name, step, prefix);
+        const recorded = step !== 'replan' || later !== 'no-output';
+        f.sharedRuntime.workflowStepParticipationIndex!.record(f.child, step, prefix, recorded ? [report] : []);
+        const id = writer.begin(identity, step, directory, [report]);
+        if (recorded) writer.capture(directory, report, body);
+        writer.finish(id, true);
+        if (recorded) {
+          inherited.push({ identity, savedIdentity: identity, reportName: report, reportPath: `${namespace}/${report}` });
+          if (step === 'replan') rmSync(writer.current(identity, report)!.path);
+        }
+      }
+      const restored = new ReportExecutionStore(f.reportDir);
+      restored.restoreInheritedReports(inherited);
+      f.sharedRuntime.reportExecutions = restored;
+      writeFileSync(join(f.reportDir, 'fix-plan.md'), 'LOCAL-PLAN');
+      const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+      try {
+        const input = f.resolve()!;
+        expect(input.declaredNames).toEqual(['fix-plan.md', 'verification.md']);
+        expect(input.reports.find(({ reference }) => reference === 'verification.md')?.content).toBe('VERIFIED');
+        const prepared = new InstructionBuilder(makeStep({ instruction: '{report:fix-plan.md}\n{report:verification.md}' }),
+          makeInstructionContext({ reportDir: f.reportDir, declaredReportInputs: [input] })).prepare();
+        expect(prepared.text).toContain('VERIFIED');
+        expect(prepared.text).not.toContain('LOCAL-PLAN');
+        if (later === 'unrun') expect(prepared.text).toContain('EARLIER-PLAN');
+        else {
+          expect(input.reports.map(({ reference }) => reference)).toEqual(['verification.md']);
+          expect(prepared.text).toContain(formatMissingReportReference('fix-plan.md'));
+          expect(prepared.text).not.toContain('EARLIER-PLAN');
+          expect(prepared.text).not.toContain('LATER-PLAN');
+          expect(warning.mock.calls.some(([level, , message, data]) => level === 'WARN'
+            && message === 'Ignoring ambiguous inherited report input'
+            && JSON.stringify(data).includes('fix-plan.md'))).toBe(true);
+        }
+      } finally { warning.mockRestore(); }
+    },
+  );
+
   it('keeps completed invocations isolated by their resume call path', () => {
     const f = fixture();
-    const outer = workflow('outer', [makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'parent' })]);
+    const outer = workflow('outer', [{
+      name: 'delegate', kind: 'workflow_call', call: 'parent', personaDisplayName: 'delegate', instruction: '',
+    }]);
     const firstPath = [buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 1, undefined, 1)];
     const secondPath = [buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 2, undefined, 2)];
     f.record(1, true, true, firstPath);
@@ -219,10 +337,17 @@ describe('declared report inputs', () => {
 
   it('includes only selected completed reviewers and rejects a selected reviewer without participation', () => {
     const f = fixture();
-    const backend = makeStep({ name: 'backend', outputContracts: [{ name: 'backend.md', format: '# Backend' }] });
-    const security = makeStep({ name: 'security', outputContracts: [{ name: 'security.md', format: '# Security' }] });
+    const backend: NormalAgentWorkflowStep = {
+      name: 'backend', personaDisplayName: 'tester', instruction: '', passPreviousResponse: false,
+      outputContracts: [{ name: 'backend.md', format: '# Backend' }],
+    };
+    const security = {
+      name: 'security', personaDisplayName: 'tester', instruction: '', passPreviousResponse: false,
+      description: 'Security reviewer',
+      outputContracts: [{ name: 'security.md', format: '# Security' }],
+    };
     f.child.steps = [{
-      ...makeStep({ name: 'reviewers' }),
+      name: 'reviewers', personaDisplayName: 'tester', instruction: '', passPreviousResponse: false,
       parallel: {
         kind: 'dynamic',
         fixed: [backend],
@@ -264,7 +389,10 @@ describe('declared report inputs', () => {
     const f = fixture();
     const backend = makeStep({ name: 'backend', outputContracts: [{ name: 'backend.md', format: '# Backend' }] });
     const testing = makeStep({ name: 'testing', outputContracts: [{ name: 'testing.md', format: '# Testing' }] });
-    f.child.steps = [{ ...makeStep({ name: 'reviewers' }), parallel: [backend, testing] }];
+    f.child.steps = [{
+      name: 'reviewers', personaDisplayName: 'tester', instruction: '', passPreviousResponse: false,
+      parallel: [backend, testing],
+    }];
     f.consumer.inputReports = { fromStep: 'source', reports: 'all' };
     f.record(1, true, false);
     const callPath = [buildWorkflowResumePointEntry(f.parent, f.source.name, 'workflow_call', 1, undefined, 1)];

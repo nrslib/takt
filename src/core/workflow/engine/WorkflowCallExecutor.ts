@@ -347,6 +347,7 @@ export class WorkflowCallExecutor {
       this.deps.sharedRuntime.restartNavigator?.isActive() === true,
     );
     if (rebind !== undefined) {
+      this.deps.sharedRuntime.reportExecutions?.rebindInheritedInvocation(rebind.from, rebind.to, rebind.previousCallInstance, rebind.callInstance);
       this.deps.sharedRuntime.workflowStepParticipationIndex!.rebindInvocation(
         rebind.from,
         rebind.to,

@@ -721,7 +721,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       const instructions: string[] = [];
       const lifecycle: Array<{ event: string; instance: number; savedInstance: number | undefined }> = [];
       const originalEmit = WorkflowEngine.prototype.emit;
-      vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (event, ...args) {
+      vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (this: WorkflowEngine, event, ...args) {
         if (event === 'workflow_call:start' || event === 'workflow_call:complete') {
           const payload = args[0] as { step: string; callInstance: number };
           if (payload.step === 'delegate') {
@@ -883,7 +883,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         ...previous,
         stack: [buildWorkflowResumePointEntry(oldParent, 'stopped', 'agent', 1)],
         workflow_call_invocations: Object.fromEntries(Object.entries(index.serialized())
-          .map(([key, record]) => [key, { ...record, completed: true }])),
+          .map(([key, record]) => [key, { ...record, completed: true as const }])),
       };
       writeSourceRunMeta(environment.projectDir, point);
       const reports = join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'subworkflows');
@@ -1102,7 +1102,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       const resumePoint = {
         ...childPoint,
         workflow_call_invocations: {
-          [savedIdentity]: { ...savedInvocation, completed: true },
+          [savedIdentity]: { ...savedInvocation, completed: true as const },
         },
         stack: [buildWorkflowResumePointEntry(oldParent, 'fix', 'agent', 1, new Map([['delegate', 1]]))],
       };
@@ -1294,6 +1294,7 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
   afterEach(() => {
     injectedRuntimeEnvironmentFailure.enabled = false;
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     if (originalConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
     } else {
@@ -1324,12 +1325,28 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
     return instructions;
   }
 
-  it('resolves final-gate report through the snapshot mapping on the production requeue path', async () => {
+  it.each([false, true])('resolves final-gate report through the snapshot mapping on the production requeue path (definition changed=%s)', async (changed) => {
     environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
+    const builtinRoot = join(environment.root, 'builtins');
+    const builtinWorkflows = join(builtinRoot, 'en', 'workflows');
+    mkdirSync(join(builtinWorkflows, 'personas'), { recursive: true });
+    const localChild = join(environment.projectDir, '.takt', 'workflows', 'review-gate.yaml');
+    const builtinChild = join(builtinWorkflows, 'review-gate.yaml');
+    writeFileSync(builtinChild, readFileSync(localChild, 'utf8'));
+    writeFileSync(join(builtinWorkflows, 'personas', 'fixer.md'), 'You are a fixer.');
+    rmSync(localChild);
+    vi.spyOn(resources, 'getResourcesDir').mockReturnValue(builtinRoot);
+    vi.spyOn(resources, 'getLanguageResourcesDir').mockImplementation((lang) => join(builtinRoot, lang));
+    invalidateAllResolvedConfigCache();
     const instructions = captureFinalGateInstructions();
     const { resumePoint } = seedFinalGateResumeSource(environment.projectDir);
+    if (changed) {
+      writeFileSync(builtinChild, readFileSync(builtinChild, 'utf8').replace('Resolve final gate with', 'Resolve the updated final gate with'));
+      invalidateAllResolvedConfigCache();
+      expect(getWorkflowReference(loadFinalGateWorkflows(environment.projectDir).child)).not.toBe(resumePoint.stack[1]!.workflow_ref);
+    }
     const runner = new TaskRunner(environment.projectDir);
     const requeuedTask = prepareFinalGateRequeue(runner, resumePoint);
 
@@ -1342,6 +1359,7 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
     const manifest = readResumeArtifacts(environment.projectDir, targetRunSlug);
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
+    expect(instructions[0]).toContain('CHAINED REVIEW RESOLUTION');
     expect(manifest.resumeReportConsumers?.[0]?.references).toEqual([
       expect.objectContaining({ reference: 'review-resolution.md' }),
     ]);
@@ -1423,7 +1441,7 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
       const resumePoint = {
         ...childPoint,
         workflow_call_invocations: {
-          [savedIdentity]: { ...savedInvocation, completed: true },
+          [savedIdentity]: { ...savedInvocation, completed: true as const },
         },
         stack: [
           buildWorkflowResumePointEntry(savedParent, stepName, 'agent', 1, new Map([['delegate', 1]])),

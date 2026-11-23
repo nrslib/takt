@@ -9,6 +9,7 @@ import { buildWorkflowResumePointEntry,getWorkflowReference } from '../core/work
 import type { WorkflowResumePoint } from '../core/models/index.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
 import { runAssistantRetryCommand } from '../features/interactive/assistantRetryCommand.js';
@@ -359,6 +360,79 @@ describe('goal task retry through manager MCP and persistent task execution', ()
       expect(existsSync(join(clone, '.takt', 'runs', stopped.runSlug!, 'reports'))).toBe(false);
       return stopped.runSlug!;
     }
+
+    it.each(['requeue', 'retry'] as const)(
+      'starts at the explicit nested step through MCP %s despite inconsistent inherited invocation records', async (kind) => {
+        installNestedWorkflow();
+        const definitions = [
+          [workflowName, [
+            `name: ${workflowName}`, 'initial_step: before', 'max_steps: 10', 'steps:',
+            '  - name: before', '    persona: ./personas/planner.md', '    instruction: Wrong initial start',
+            '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+            '  - name: develop', '    kind: workflow_call', '    call: retry-child',
+            '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+          ]],
+          ['retry-child', [
+            'name: retry-child', 'subworkflow:', '  callable: true', 'initial_step: peer-review', 'max_steps: 10', 'steps:',
+            '  - name: peer-review', '    kind: workflow_call', '    call: retry-peer',
+            '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+          ]],
+          ['retry-peer', [
+            'name: retry-peer', 'subworkflow:', '  callable: true', 'initial_step: before', 'max_steps: 10', 'steps:',
+            '  - name: before', '    persona: ./personas/planner.md', '    instruction: Wrong peer start',
+            '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+            '  - name: review-adjudication', '    persona: ./personas/reviewer.md', '    instruction: Explicit adjudication',
+            '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+            '  - name: final-gate', '    persona: ./personas/verifier.md', '    instruction: Wrong saved start',
+            '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+          ]],
+        ] as const;
+        for (const directory of [cwd, clone]) {
+          for (const [name, lines] of definitions) writeFileSync(join(directory, '.takt', 'workflows', `${name}.yaml`), lines.join('\n'));
+        }
+        invalidateAllResolvedConfigCache();
+        const parent = loadWorkflowByIdentifier(workflowName, cwd, { lookupCwd: clone })!;
+        const child = loadWorkflowByIdentifier('retry-child', cwd, { lookupCwd: clone })!;
+        const peer = loadWorkflowByIdentifier('retry-peer', cwd, { lookupCwd: clone })!;
+        const rootEntry = buildWorkflowResumePointEntry(parent, 'develop', 'workflow_call', 1, undefined, 1);
+        const peerEntry = buildWorkflowResumePointEntry(child, 'peer-review', 'workflow_call', 1, undefined, 1);
+        const invocations = new WorkflowCallInvocationIndex(new Map());
+        invocations.record(parent, 'develop', [], { call_instance: 1,
+          report_namespace_segment: buildWorkflowCallSiteIdentity({ stack: [rootEntry], childWorkflow: child }).runPathSegment });
+        invocations.record(child, 'peer-review', [rootEntry], { call_instance: 1,
+          report_namespace_segment: buildWorkflowCallSiteIdentity({ stack: [rootEntry, peerEntry], childWorkflow: peer })
+            .runPathSegment.replace('iteration-1--', 'iteration-2--') });
+        const saved: WorkflowResumePoint = {
+          version: 2, stack: [rootEntry, peerEntry, buildWorkflowResumePointEntry(peer, 'final-gate', 'agent', 1)],
+          iteration: 3, elapsed_ms: 100, workflow_call_invocations: invocations.serialized(), workflow_step_participations: {},
+        };
+        writeHistoryRun(previousSlug, '2026-11-01T00:00:00Z', { point: saved });
+        writeHistoryRun(latestSlug, '2026-11-02T00:00:00Z', { reports: false });
+        const warning = vi.spyOn(DebugLogger.prototype, 'writeLog');
+
+        const response = await call(kind, { startStep: 'develop/peer-review/review-adjudication' });
+
+        expect(response.isError, firstTextContent(response.content)).toBeUndefined();
+        const pending = new TaskRunner(cwd).listPendingTaskItems()[0]!;
+        expect(pending.sourceRunSlug).toBe(previousSlug);
+        expect(pending.data?.source_resume_point).toEqual(saved);
+        expect(pending.data?.restart_point?.stack.map(({ step }) => step)).toEqual(['develop', 'peer-review', 'review-adjudication']);
+        const started: string[] = [];
+        const run = WorkflowEngine.prototype.run;
+        vi.spyOn(WorkflowEngine.prototype, 'run').mockImplementation(function (this: WorkflowEngine) {
+          this.on('step:start', (step) => started.push(step.name));
+          return run.call(this);
+        });
+        await executeQueued('reviewer');
+        expect(started[0]).toBe('review-adjudication');
+        expect(started).not.toContain('final-gate');
+        expect(started).not.toContain('before');
+        expect(runner.listTaskStateItems()[0]?.status).toBe('completed');
+        expect(warning.mock.calls.some(([level, , message, data]) => level === 'WARN'
+          && message === 'Ignoring unmatched inherited workflow invocation'
+          && JSON.stringify(data).includes('peer-review'))).toBe(true);
+      },
+    );
 
     it('selects the newest usable task run beyond startup failures and a run with missing reports', () => {
       const { point } = installNestedWorkflow();

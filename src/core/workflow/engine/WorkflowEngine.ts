@@ -28,6 +28,7 @@ import {
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 import { ReportGenerationIndex } from '../report-generation-index.js';
 import { ReportExecutionStore } from '../report-execution-store.js';
+import { matchWorkflowResumeRecords } from '../workflow-resume-records.js';
 import { buildWorkflowStepParticipationIdentity } from '../workflow-step-participation-index.js';
 import { getWorkflowReference } from '../workflow-reference.js';
 import { getReportFiles } from '../output-contract-files.js';
@@ -157,7 +158,8 @@ export class WorkflowEngine extends EventEmitter {
 
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
-    const resumePoint = options.resumePoint === undefined ? undefined : parseWorkflowResumePoint(options.resumePoint);
+    const publicResumeInvocationSource = options.sharedRuntime?.resumeInvocationSource;
+    let resumePoint = options.resumePoint === undefined ? undefined : parseWorkflowResumePoint(options.resumePoint);
     const restartPoint = options.restartPoint === undefined
       ? undefined
       : WorkflowRestartPointSchema.parse(options.restartPoint);
@@ -173,6 +175,10 @@ export class WorkflowEngine extends EventEmitter {
     if (resumePoint !== undefined && (options.resumeStackPrefix?.length ?? 0) === 0) {
       validateWorkflowResumeRoot(config, resumePoint);
     }
+    const recordContext = { workflow: config, workflowCallResolver: options.workflowCallResolver, projectCwd: options.projectCwd, lookupCwd: cwd };
+    let resumeRecords = resumePoint !== undefined && (options.resumeStackPrefix?.length ?? 0) === 0
+      ? matchWorkflowResumeRecords(resumePoint, recordContext) : undefined;
+    if (resumeRecords !== undefined) resumePoint = resumeRecords.point;
     this.config = config;
     inheritWorkflowConfigMetadata(config, this.config);
     const restartNavigator = restartPoint === undefined
@@ -280,14 +286,18 @@ export class WorkflowEngine extends EventEmitter {
           this.options.runPathsDirectory,
         )?.resumePoint);
       if (restoredSourceResumePoint !== undefined) {
-        this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(restoredSourceResumePoint);
-        this.sharedRuntime.workflowStepParticipationIndex = restoreWorkflowStepParticipationIndex(restoredSourceResumePoint);
-        this.sharedRuntime.resumeInvocationSource = restoredSourceResumePoint;
+        resumeRecords = matchWorkflowResumeRecords(restoredSourceResumePoint, recordContext);
         resumeWorkflowMatches(restoredSourceResumePoint.stack[0]!, this.config);
       }
     }
     this.sharedRuntime.resumeInvocationSource ??= this.options.resumePoint;
     this.sharedRuntime.reportExecutions ??= new ReportExecutionStore(runPaths.reportsRootAbs);
+    if (resumeRecords !== undefined) {
+      this.sharedRuntime.resumeInvocationSource = resumeRecords.point;
+      this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(resumeRecords.point);
+      this.sharedRuntime.workflowStepParticipationIndex = restoreWorkflowStepParticipationIndex(resumeRecords.point);
+      this.sharedRuntime.reportExecutions.restoreInheritedReports(resumeRecords.inheritedReports);
+    }
     this.options.sharedRuntime = this.sharedRuntime;
     if (restartNavigator !== undefined) {
       if (this.sharedRuntime.restartNavigator !== undefined) {
@@ -375,7 +385,7 @@ export class WorkflowEngine extends EventEmitter {
       this.resumeStackPrefix.length === 0 && sourceSlug !== undefined && (shouldRestoreResults || restartPoint !== undefined),
       selectedRestartOccurrence
         ?? (resultResumeFrame?.step === this.state.currentStep ? resultResumeFrame.occurrence : undefined),
-      { source: this.sharedRuntime.resumeInvocationSource, target: restartPoint ?? this.options.resumePoint },
+      { source: publicResumeInvocationSource ?? this.sharedRuntime.resumeInvocationSource, target: restartPoint ?? this.options.resumePoint },
     );
     this.resumeContinuation = new WorkflowResumeContinuation(
       this.config,
@@ -636,6 +646,7 @@ export class WorkflowEngine extends EventEmitter {
       }) ?? null,
     );
     for (const rebind of rebinds) {
+      this.sharedRuntime.reportExecutions?.rebindInheritedInvocation(rebind.from, rebind.to, rebind.previousCallInstance, rebind.callInstance);
       this.sharedRuntime.workflowStepParticipationIndex!.rebindInvocation(
         rebind.from,
         rebind.to,
