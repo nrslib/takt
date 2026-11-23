@@ -3,7 +3,7 @@ import type { WorkflowCallResolver } from './types.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { parseWorkflowExecutionIdentity, serializeWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
 import { parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
-import { buildWorkflowResumePointEntry, getWorkflowReference } from './workflow-reference.js';
+import { buildWorkflowResumePointEntry, getWorkflowReference, workflowEntriesMatch } from './workflow-reference.js';
 import { getReportFiles } from './output-contract-files.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from './workflow-call-depth.js';
 import { resolveReviewReportStepParticipation } from './review-report-participation.js';
@@ -229,7 +229,10 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
     participations.delete(identity);
     participationEvidence.delete(identity);
     const stackIndex = target.calls.length;
-    if (source.stack[stackIndex]?.step_iterations?.[parsed.step] !== undefined) {
+    const savedCallPath = source.stack.slice(0, stackIndex);
+    const matchesSavedCallPath = savedCallPath.length === target.calls.length
+      && savedCallPath.every((entry, index) => workflowEntriesMatch(entry, target.calls[index]!));
+    if (matchesSavedCallPath && source.stack[stackIndex]?.step_iterations?.[parsed.step] !== undefined) {
       const names = excludedStepIterations.get(stackIndex) ?? new Set<string>();
       names.add(parsed.step);
       excludedStepIterations.set(stackIndex, names);

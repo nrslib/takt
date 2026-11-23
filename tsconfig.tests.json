@@ -230,6 +230,7 @@
     "src/__tests__/engine-provider-options.test.ts",
     "src/__tests__/engine-rate-limit-fallback.test.ts",
     "src/__tests__/engine-report-fallback-integration.test.ts",
+    "src/__tests__/engine-report-inheritance.test.ts",
     "src/__tests__/engine-team-leader.test.ts",
     "src/__tests__/engine-workflow-call-parallel.test.ts",
     "src/__tests__/engine-workflow-call-runner.test.ts",

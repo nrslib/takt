@@ -95,6 +95,53 @@ describe('resume records matched by name', () => {
     }).kind).toBe('not-participated');
   });
 
+  it.each([
+    { call: 'alpha', expectedIteration: undefined },
+    { call: 'beta', expectedIteration: 1 },
+  ])('updates step iterations only when the saved call path matches ($call)', ({ call, expectedIteration }) => {
+    const child: WorkflowConfig = {
+      name: 'child',
+      initialStep: 'delegate',
+      maxSteps: 2,
+      steps: [
+        makeStep({ name: 'delegate', kind: 'workflow_call', call: 'grandchild' }),
+        makeStep({ name: 'fix' }),
+      ],
+    };
+    const root: WorkflowConfig = {
+      name: 'root',
+      initialStep: 'alpha',
+      maxSteps: 2,
+      steps: [
+        makeStep({ name: 'alpha', kind: 'workflow_call', call: 'child' }),
+        makeStep({ name: 'beta', kind: 'workflow_call', call: 'child' }),
+      ],
+    };
+    const alphaFrame = buildWorkflowResumePointEntry(root, 'alpha', 'workflow_call', 1, undefined, 1);
+    const resumeFrame = buildWorkflowResumePointEntry(root, call, 'workflow_call', 1, undefined, 1);
+    const participation = buildWorkflowStepParticipationIdentity(getWorkflowReference(child), 'delegate', [alphaFrame]);
+    const invocation = buildWorkflowCallInvocationIdentity(getWorkflowReference(root), call, []);
+    const point: WorkflowResumePoint = {
+      version: 2,
+      iteration: 2,
+      elapsed_ms: 0,
+      stack: [resumeFrame, { ...buildWorkflowResumePointEntry(child, 'fix', 'agent', 1), step_iterations: { delegate: 1 } }],
+      workflow_call_invocations: {
+        [invocation]: { call_instance: 1, report_namespace_segment: `iteration-1--step-${call}--workflow-child` },
+      },
+      workflow_step_participations: { [participation]: { report_names: [] } },
+    };
+    const result = matchWorkflowResumeRecords(point, {
+      workflow: root,
+      workflowCallResolver: ({ step }) => step.call === 'child' ? child : null,
+      projectCwd: '/project',
+      lookupCwd: '/project',
+    });
+
+    expect(result.point.workflow_step_participations).toEqual({});
+    expect(result.point.stack[1]?.step_iterations?.delegate).toBe(expectedIteration);
+  });
+
   it.each([1, 2])('does not equate namespace iteration with call instance (%s)', (iteration) => {
     const f = fixture();
     f.point.workflow_call_invocations[f.invocation]!.report_namespace_segment =

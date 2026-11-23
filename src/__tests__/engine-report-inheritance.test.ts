@@ -26,7 +26,12 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import type { WorkflowCallInvocationRecord, WorkflowConfig } from '../core/models/index.js';
+import type {
+  DynamicParallelPoolSubStep,
+  NormalAgentWorkflowStep,
+  WorkflowCallInvocationRecord,
+  WorkflowConfig,
+} from '../core/models/index.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
@@ -375,17 +380,17 @@ describe('WorkflowEngine report inheritance', () => {
     const fixed = makeStep('architecture', {
       outputContracts: [{ name: 'architecture.md', format: '# Architecture' }],
       rules: [makeRule('approved', 'COMPLETE')],
-    });
+    }) as NormalAgentWorkflowStep;
     const frontend = makeStep('frontend', {
       description: 'Review frontend changes',
       outputContracts: [{ name: 'frontend.md', format: '# Frontend' }],
       rules: [makeRule('approved', 'COMPLETE')],
-    });
+    }) as DynamicParallelPoolSubStep;
     const backend = makeStep('backend', {
       description: 'Review backend changes',
       outputContracts: [{ name: 'backend.md', format: '# Backend' }],
       rules: [makeRule('approved', 'COMPLETE')],
-    });
+    }) as DynamicParallelPoolSubStep;
     const reviewers = makeStep('reviewers', {
       parallel: {
         kind: 'dynamic',
@@ -442,7 +447,7 @@ describe('WorkflowEngine report inheritance', () => {
       [architectureReport, architectureContent],
       [frontendReport, frontendContent],
       [backendReport, backendContent],
-    ]) {
+    ] as const) {
       const sourcePath = join(sourceReportDir, ...reportName.split('/'));
       mkdirSync(join(sourcePath, '..'), { recursive: true });
       writeFileSync(sourcePath, content, 'utf-8');
