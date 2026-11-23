@@ -15,11 +15,11 @@ const MAX_TOOLS = 100;
 const MAX_DURATION_MS = 30 * 60_000;
 const sourceFiles = ['requirements.md', 'goalOperations.mjs', 'lifecycle.mjs', 'managerMcpConnection.mjs', 'workspaceRegistry.mjs'];
 const privateHistoryPath = /\.codex\/(?:sessions|memories)|session_index|state_5\.sqlite|rollout-|report-executions\/index\.json/i;
-const codexPath = /(?:^|[/'"`\s])\.codex(?=\/|['"`\s]|$)/g;
-const codexHomeVariable = /\$(?:CODEX_HOME|\{CODEX_HOME\})(?=\/|['"`\s]|$)/g;
+const codexPath = /(?:^|[/'"`\s])\.codex(?=\/|['"`\s;|&]|$)/g;
+const codexHomeVariable = /\$(?:CODEX_HOME|\{CODEX_HOME\})(?=\/|['"`\s;|&]|$)/g;
 
 function isPrivateCodexSuffix(suffix) {
-  const path = suffix.replace(/^['"`]/, '');
+  const path = suffix.replace(/^['"`]/, '').split(/['"`\s;|&]/, 1)[0];
   const child = path.startsWith('/') ? path.slice(1).match(/^[^/'"`\s;|&]+/)?.[0] : undefined;
   return !['skills', 'AGENTS.md'].includes(child) || /(?:^|\/)\.\.(?:\/|$)/.test(path);
 }
@@ -37,7 +37,7 @@ function isProhibited(input, codexHome) {
   while (offset !== -1) {
     const suffix = command.slice(offset + codexHome.length);
     const prefixBoundary = offset === 0 || /[='"`\s(]/.test(command[offset - 1]);
-    if (prefixBoundary && /^(?:\/|['"`\s]|$)/.test(suffix) && isPrivateCodexSuffix(suffix)) return true;
+    if (prefixBoundary && /^(?:\/|['"`\s;|&]|$)/.test(suffix) && isPrivateCodexSuffix(suffix)) return true;
     offset = command.indexOf(codexHome, offset + 1);
   }
   return false;

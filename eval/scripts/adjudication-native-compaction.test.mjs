@@ -101,6 +101,9 @@ process.stdin.on('data', (chunk) => {
     process.env.TAKT_FAKE_UNSAFE_COMMAND = 'cat "$CODEX_HOME"/sessions/2026/11/23/*.jsonl';
     const blocked = await runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6-luna' });
     assert.equal(blocked.stoppedReason, 'self-session exploration');
+    process.env.TAKT_FAKE_UNSAFE_COMMAND = 'ls "$CODEX_HOME/skills/.."';
+    const blockedTraversal = await runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6-luna' });
+    assert.equal(blockedTraversal.stoppedReason, 'self-session exploration');
   } finally {
     delete process.env.TAKT_FAKE_NO_COMPACTION;
     delete process.env.TAKT_FAKE_VERSION;
@@ -282,18 +285,38 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
     }
     for (const command of ['cat "$CODEX_HOME"/sessions/2026/11/23/*.jsonl',
       'rg --files ${CODEX_HOME}/sessions', `find ${base.codexHome} -type f`,
-      `cat ${base.codexHome}/sessions/2026/11/23/rollout.jsonl`]) {
+      `cat ${base.codexHome}/sessions/2026/11/23/rollout.jsonl`,
+      'ls "$CODEX_HOME/skills/.."', 'ls $CODEX_HOME/skills/..  ',
+      `ls "${base.codexHome}/skills/.."`, 'ls ~/.codex/skills/..  ']) {
       rollout.at(-1).payload.input = command;
       write();
       assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
         ['exec'], command);
     }
     for (const command of ['cat "$CODEX_HOME"/skills/coding/SKILL.md',
-      `rg --files ${base.codexHome}/skills`, `cat ${base.codexHome}/AGENTS.md`]) {
+      `rg --files ${base.codexHome}/skills`, `cat ${base.codexHome}/AGENTS.md`,
+      'ls "$CODEX_HOME/skills" /tmp/..', 'cat ~/.codex/AGENTS.md /tmp/..']) {
       rollout.at(-1).payload.input = command;
       write();
       assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
         [], command);
+    }
+    for (const separator of [';', '|', '&&']) {
+      for (const command of [`ls ~/.codex${separator} pwd`, `ls $CODEX_HOME${separator} pwd`,
+        `ls ${base.codexHome}${separator} pwd`]) {
+        rollout.at(-1).payload.input = command;
+        write();
+        assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
+          ['exec'], command);
+      }
+      for (const command of [`cat ~/.codex/skills/coding/SKILL.md${separator} pwd`,
+        `cat $CODEX_HOME/skills/coding/SKILL.md${separator} pwd`,
+        `cat ${base.codexHome}/skills/coding/SKILL.md${separator} pwd`]) {
+        rollout.at(-1).payload.input = command;
+        write();
+        assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
+          [], command);
+      }
     }
     rollout.pop();
     events.push(rpc('item/started', { item: item('commandExecution', 'unsafe-custom',
@@ -301,6 +324,36 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
     write();
     assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).diskExplorationCalls,
       ['unsafe-custom']);
+    for (const command of ['ls "$CODEX_HOME/skills/.."', 'ls $CODEX_HOME/skills/..  ',
+      `ls "${base.codexHome}/skills/.."`, 'ls ~/.codex/skills/..  ']) {
+      events.at(-1).params.item.command = command;
+      write();
+      assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).diskExplorationCalls,
+        ['unsafe-custom'], command);
+    }
+    for (const command of ['ls "$CODEX_HOME/skills" /tmp/..', 'cat ~/.codex/AGENTS.md /tmp/..']) {
+      events.at(-1).params.item.command = command;
+      write();
+      assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).diskExplorationCalls,
+        [], command);
+    }
+    for (const separator of [';', '|', '&&']) {
+      for (const command of [`ls ~/.codex${separator} pwd`, `ls $CODEX_HOME${separator} pwd`,
+        `ls ${base.codexHome}${separator} pwd`]) {
+        events.at(-1).params.item.command = command;
+        write();
+        assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).diskExplorationCalls,
+          ['unsafe-custom'], command);
+      }
+      for (const command of [`cat ~/.codex/skills/coding/SKILL.md${separator} pwd`,
+        `cat $CODEX_HOME/skills/coding/SKILL.md${separator} pwd`,
+        `cat ${base.codexHome}/skills/coding/SKILL.md${separator} pwd`]) {
+        events.at(-1).params.item.command = command;
+        write();
+        assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).diskExplorationCalls,
+          [], command);
+      }
+    }
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
