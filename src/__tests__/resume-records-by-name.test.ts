@@ -118,7 +118,7 @@ describe('resume records matched by name', () => {
       ],
     };
     const alphaFrame = buildWorkflowResumePointEntry(root, 'alpha', 'workflow_call', 1, undefined, 1);
-    const resumeFrame = buildWorkflowResumePointEntry(root, call, 'workflow_call', 1, undefined, 1);
+    const resumeFrame = buildWorkflowResumePointEntry(root, call, 'workflow_call', 2, undefined, 1);
     const participation = buildWorkflowStepParticipationIdentity(getWorkflowReference(child), 'delegate', [alphaFrame]);
     const invocation = buildWorkflowCallInvocationIdentity(getWorkflowReference(root), call, []);
     const point: WorkflowResumePoint = {
