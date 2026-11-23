@@ -2007,3 +2007,17 @@ main も合格した場合は回帰ガードとし、改善効果とは主張し
 新ポリシー自体は日英とも2000文字以内で、目的・判断の要点を先頭に置いている。
 
 裁定の役割変更と探索行動の評価は [adjudication-scope](docs/adjudication-scope.md) を参照。`npm run eval:prompts:adjudication-scope:contracts` は provider を呼ばず、fixture と両フェーズの配線を確認する。`npm run eval:prompts:adjudication-scope` は日英8ケースの意味評価を実行する。
+
+## Codexの実圧縮を跨ぐ裁定試験
+
+`eval/scripts/adjudication-native-compaction.mjs` はPhase 1の本番 `prepareCodexCallPacket` で作った約43,000字の入力と私有の復帰パケットを使う。日本語の実裁定ファセットと展開済み指示を含め、合成CI資料36件をコンテキスト負荷として追加する。合成資料は裁定の根拠ではない。`gpt-6-luna` と `gpt-6.1-sol` を別々の出力先で準備し、各モデルを明示して実行する。
+
+```sh
+npm run build
+node --test eval/scripts/adjudication-native-compaction.test.mjs
+node eval/scripts/adjudication-native-compaction.mjs --prepare-only --dist "$PWD/dist" --output-dir "$PWD/.takt/tmp/native-luna"
+node eval/scripts/adjudication-native-compaction.mjs --prepared "$PWD/.takt/tmp/native-luna/prepared.json" --codex-bin /path/to/managed/codex-0.164.0 --model gpt-6-luna
+node eval/scripts/adjudication-native-compaction.mjs --grade-only --prepared "$PWD/.takt/tmp/native-luna/prepared.json" --model gpt-6-luna
+```
+
+実行はmanaged Codex 0.164.0のapp-serverを使い、high effortと500,000 context windowを指定する。製品のCodex SDKとは輸送経路が異なるため、この試験はSDK経由の動作を直接証明しない。自己rolloutは実行時の`CODEX_HOME`から探す。ネイティブ通知と自己rolloutで実圧縮を照合し、圧縮0回は失格とする。再採点は元の`grade.json`と`events.jsonl`を保持して`regrade.json`へ記録する。`taskContinuityPass`は圧縮後の裁定継続、`packetRecoveryPass`は圧縮後に復帰パケットの全文をモデル可視出力として再取得したこと、`workloadFullyVisible`は合成資料36件の全文がモデルに届いたことを別々に示す。パケットの一部を読んだだけなら`packetReadAfterCompaction`と区別して記録する。総合`pass`には三条件と36件の取得完了が必要となる。

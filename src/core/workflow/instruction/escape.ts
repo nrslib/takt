@@ -144,7 +144,7 @@ export function prepareTemplatePlaceholders(
         return declared.history;
       }
       if (declared !== undefined) {
-        const content = renderCurrentReport(declared);
+        const content = renderCurrentReport(declared, context.language ?? 'en');
         injectedReports.set(key, { ...declared, content });
         return content;
       }

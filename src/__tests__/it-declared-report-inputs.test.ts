@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NormalAgentWorkflowStep, WorkflowCallStep, WorkflowConfig, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
@@ -7,6 +7,7 @@ import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { resolveDeclaredReportInputs } from '../core/workflow/instruction/declared-report-inputs.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { CURRENT_REPORT_BODY_LIMIT } from '../core/workflow/instruction/prepared-instruction.js';
 import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex, buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
@@ -123,6 +124,34 @@ describe('declared report inputs', () => {
       }
       expect(input.reports.every(({ content }) => !content.includes('OLD-PLAN'))).toBe(true);
     } finally { warning.mockRestore(); }
+  });
+
+  it.each(['ja', 'en'] as const)('marks a short legacy report as lacking its original fixed version and execution ID (%s)', (language) => {
+    const f = fixture();
+    f.record(1, true);
+    const inputs = f.resolve()!;
+    expect(inputs.reports[0]).toMatchObject({ content: 'review from call 1' });
+    const prompt = new InstructionBuilder(f.consumer, makeInstructionContext({
+      reportDir: f.reportDir, language, declaredReportInputs: [inputs],
+    })).prepare().text;
+    expect(prompt).toContain('review from call 1');
+    expect(prompt).toContain(language === 'ja' ? '元の完了実行の固定版と実行IDは未供給' : 'Original completed execution version and ID not supplied');
+  });
+
+  it.each(['ja', 'en'] as const)('distinguishes a host snapshot of a long legacy report from the original version (%s)', (language) => {
+    const f = fixture();
+    f.record(1, true);
+    const body = 'x'.repeat(CURRENT_REPORT_BODY_LIMIT + 1);
+    writeFileSync(join(f.reportDir, 'subworkflows', 'iteration-1--step-source--workflow-child', 'review.md'), body);
+    const inputs = f.resolve()!;
+    const snapshot = inputs.reports[0]!.path!;
+    expect(readFileSync(snapshot, 'utf8')).toBe(body);
+    const prompt = new InstructionBuilder(f.consumer, makeInstructionContext({
+      reportDir: f.reportDir, language, declaredReportInputs: [inputs],
+    })).prepare().text;
+    expect(prompt).toContain(snapshot);
+    expect(prompt).toContain(language === 'ja' ? '今回作成したsnapshot' : 'snapshot created for this call');
+    expect(prompt).toContain(language === 'ja' ? '元の完了実行の固定版と実行IDは未供給' : 'Original completed execution version and ID not supplied');
   });
 
   it('does not fall back to an older completed call when the current call is pending', () => {
@@ -410,7 +439,7 @@ describe('declared report inputs', () => {
   it('allows an optional source only before it has run', () => {
     const f = fixture();
     f.consumer.inputReports = { fromStep: 'source', reports: ['review.md'], optionalIfUnrun: true };
-    expect(f.resolve()).toEqual({ declaredNames: ['review.md'], reports: [] });
+    expect(f.resolve()).toEqual({ declaredNames: ['review.md'], reports: [], unavailable: [{ producer: 'source', names: ['review.md'] }] });
     f.record(1, false);
     expect(f.resolve).toThrow(/not_completed/);
   });
@@ -436,12 +465,13 @@ describe('declared report inputs', () => {
       writeFileSync(join(f.reportDir, 'local-note.md'), 'LOCAL-NOTE');
 
       const declared = f.resolve();
-      expect(declared).toEqual({ declaredNames: ['review.md'], reports: [] });
+      expect(declared).toEqual({ declaredNames: ['review.md'], reports: [], unavailable: [{ producer: 'source', names: ['review.md'] }] });
       const prepared = new InstructionBuilder(
         makeStep({ instruction: '{report:review.md}\n{report:local-note.md}' }),
         makeInstructionContext({ reportDir: f.reportDir, declaredReportInputs: [declared!] }),
       ).prepare();
       expect(prepared.text).toContain(formatMissingReportReference('review.md'));
+      expect(prepared.text).toMatch(/producer has not run|producer未実行/);
       expect(prepared.text).toContain('LOCAL-NOTE');
       expect(prepared.text).not.toContain('UNRELATED-REVIEW');
     },

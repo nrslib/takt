@@ -827,7 +827,7 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls).toContain('call:peer-review');
     expect(h.calls).toContain('call:single-review-suite');
     expect(h.calls).not.toContain('call:development-remediation-dynamic');
-    expect(h.calls.filter((call) => call === 'call:single-review-suite')).toHaveLength(1);
+    expect(h.simpleReviewPrompts).toHaveLength(1);
     expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
       options?.workflowMeta?.workflowName === 'single-review-suite' && options.executionPhase === 1)).toHaveLength(1);
     expect(new Set(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)))
@@ -880,7 +880,8 @@ describe('Builtin PR merge workflow execution', () => {
     const result = await h.engine.run();
     expect(result.status).toBe('completed');
     expect(h.failures).toEqual([]);
-    expect(h.calls.filter((call) => call === 'call:single-review-suite')).toHaveLength(2);
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
+      options?.workflowMeta?.workflowName === 'single-review-suite' && options.executionPhase === 1)).toHaveLength(2);
     expect(h.calls).toContain('call:development-remediation-dynamic');
     expect(h.calls.indexOf('call:development-remediation-dynamic')).toBeLessThan(h.calls.indexOf('commit_and_push'));
     const simpleSteps = vi.mocked(runAgent).mock.calls

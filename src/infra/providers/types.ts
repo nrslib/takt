@@ -41,6 +41,8 @@ export interface ProviderCallOptions {
   executionPhase?: 1 | 2 | 3;
   /** Current TAKT assignment for a Phase 1 compaction handoff. */
   compactionAssignment?: string;
+  /** TAKT-owned private directory for this Phase 1 call's immutable recovery input. */
+  compactionHandoffDirectory?: string;
   /** Expose only the built-in Read tool for a strict read-only call. */
   allowReadonlyFileRead?: boolean;
   /** Exact files that the /verify interpretation call may read. */

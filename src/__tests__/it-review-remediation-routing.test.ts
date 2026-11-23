@@ -174,7 +174,10 @@ describe('review-remediation return routing and report handoff', () => {
       expect(review?.text).toBeDefined();
       expect(review?.text).not.toContain('FIX_PLAN_EVIDENCE');
       expect(review?.text).not.toContain('FIX_REPORT_EVIDENCE');
-      expect(review?.text).not.toContain('fix-verification.md');
+      expect(review?.text).not.toContain('OTHER_REPORT_fix-verification.md');
+      expect(review?.text).toContain(language === 'ja'
+        ? '## 未供給の成果物入力\n- remediation: fix-plan.md, fix-report.md, fix-verification.md; producer未実行、固定版と実行IDは未供給'
+        : '## Unavailable declared report inputs\n- remediation: fix-plan.md, fix-report.md, fix-verification.md; producer has not run; fixed version and execution ID not supplied');
       expect(prompts.some(prompt => prompt.step === 'fix-plan')).toBe(false);
     },
   );
