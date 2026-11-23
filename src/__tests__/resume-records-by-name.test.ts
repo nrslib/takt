@@ -5,6 +5,7 @@ import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/wor
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { collectWorkflowReportProducers, matchWorkflowResumeRecords } from '../core/workflow/workflow-resume-records.js';
+import { resolveReviewReportStepParticipation } from '../core/workflow/review-report-participation.js';
 import { DebugLogger } from '../shared/utils/debug.js';
 import { makeStep } from './test-helpers.js';
 
@@ -57,6 +58,29 @@ describe('resume records matched by name', () => {
     const f = fixture();
     f.point.workflow_call_invocations[f.invocation] = { call_instance: 2, report_namespace_segment: 'iteration-2--step-delegate--workflow-child' };
     expect(matchWorkflowResumeRecords(f.point, f.context).inheritedReports).toEqual([]);
+  });
+
+  it('drops a workflow-call participation when its invocation was excluded', () => {
+    const f = fixture();
+    const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(f.root), 'delegate', []);
+    f.point.workflow_step_participations[identity] = { report_names: [] };
+    f.point.stack[0] = { ...f.frame, step_iterations: { delegate: 1 } };
+    f.point.workflow_call_invocations[f.invocation]!.report_namespace_segment = 'iteration-1--step-delegate--workflow-other';
+
+    const result = matchWorkflowResumeRecords(f.point, f.context);
+
+    expect(result.point.workflow_call_invocations).toEqual({});
+    expect(result.point.workflow_step_participations).toEqual({});
+    expect(result.inheritedReports).toEqual([]);
+    expect(result.point.stack[0]?.step_iterations?.delegate).toBeUndefined();
+    expect(resolveReviewReportStepParticipation(f.root.steps[0]!, f.root, [], {
+      activeWorkflowReference: getWorkflowReference(f.root),
+      stepOutputNames: new Set(),
+      restoredStepIterationNames: new Set(Object.keys(result.point.stack[0]?.step_iterations ?? {})),
+      workflowCallInvocations: { kind: 'exact', records: new Map() },
+      workflowStepParticipations: new Map(),
+      dynamicParallelSelections: new Map(),
+    }).kind).toBe('not-participated');
   });
 
   it.each([1, 2])('matches the saved call instance against namespace iteration %s', (iteration) => {
@@ -172,6 +196,24 @@ describe('resume records matched by name', () => {
       [saved]: { report_names: ['first.md'] }, [qualified]: { report_names: ['second.md'] },
     };
     const result = matchWorkflowResumeRecords(f.point, f.context);
+    expect(result.point.workflow_step_participations).toEqual({});
+    expect(result.inheritedReports).toEqual([]);
+  });
+
+  it('excludes an unqualified record when qualified aliases conflict for the same parallel producer', () => {
+    const f = fixture();
+    f.child.steps.push(makeStep({ name: 'reviews', parallel: [makeStep({ name: 'review' })] }));
+    const unqualified = JSON.stringify({ ...JSON.parse(f.savedIdentity) as Record<string, unknown>, step: 'review' });
+    const firstQualified = buildWorkflowStepParticipationIdentity('old-child', 'review', [f.frame], 'reviews');
+    const secondQualified = buildWorkflowStepParticipationIdentity('another-old-child', 'review', [f.frame], 'reviews');
+    f.point.workflow_step_participations = {
+      [unqualified]: { report_names: ['first.md'] },
+      [firstQualified]: { report_names: ['second.md'] },
+      [secondQualified]: { report_names: ['third.md'] },
+    };
+
+    const result = matchWorkflowResumeRecords(f.point, f.context);
+
     expect(result.point.workflow_step_participations).toEqual({});
     expect(result.inheritedReports).toEqual([]);
   });

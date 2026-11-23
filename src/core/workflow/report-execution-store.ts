@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { REPORT_EXECUTIONS_DIRECTORY, classifyReportRelativePath } from '../models/reserved-report-names.js';
 import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '../../shared/utils/private-file.js';
 import { runPrivateFileExclusive } from '../../shared/utils/private-file-lock.js';
 import { lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
+import { createLogger } from '../../shared/utils/index.js';
 import { pinReportContent } from './report-writer.js';
 import { buildWorkflowCallNamespaceSegment, parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
 import { parseWorkflowExecutionIdentity, serializeWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
@@ -23,12 +24,18 @@ const executionSchema = z.object({
   completionOrder: z.number().int().positive().optional(),
   completed: z.boolean(),
   reports: z.record(publicName, versionPath.nullable()),
+  reportHashes: z.record(publicName, z.string().regex(/^[a-f0-9]{64}$/)).optional(),
 }).strict();
 const storeSchema = z.object({
   lineage: z.string().uuid(),
   executions: z.array(executionSchema),
 }).strict();
 type ReportExecution = z.infer<typeof executionSchema>;
+const log = createLogger('report-execution-store');
+
+function reportContentHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
 
 export interface ReportExecutionMetadata {
   readonly id: string;
@@ -69,7 +76,7 @@ export class ReportExecutionStore {
   private readonly inherited = new Map<string, Map<string, {
     savedIdentity: string;
     publicPath: string;
-    fixed?: { path: string; execution: ReportExecutionMetadata; origin: ReportExecutionMetadata };
+    fixed?: { path: string; execution: ReportExecutionMetadata; origin: ReportExecutionMetadata; contentSha256?: string };
   }>>();
   private resuming = false;
   private readonly directory: string;
@@ -94,13 +101,15 @@ export class ReportExecutionStore {
       const execution = executions.filter((candidate) => candidate.identity.step === identity?.step
         && (candidate.identity.parallel_parent === identity?.parallel_parent || candidate.identity.parallel_parent === parallelParent)
         && candidate.entry.namespace === namespace).at(-1)?.entry;
-      const version = execution?.reports[reportProducerPath(producer.reportName)];
+      const producerName = reportProducerPath(producer.reportName);
+      const version = execution?.reports[producerName];
       // An execution without completed output must never borrow an older public body.
       if (execution !== undefined && (!execution.completed || version == null)) continue;
       const fixed = version == null ? undefined : {
         path: resolve(this.reportsRoot, version),
         execution: reportExecutionMetadata(state!.lineage, execution!),
         origin: reportExecutionMetadata(state!.lineage, reportOrigin(state!.executions, version)),
+        ...(execution?.reportHashes?.[producerName] === undefined ? {} : { contentSha256: execution.reportHashes[producerName] }),
       };
       const reports = this.inherited.get(producer.identity) ?? new Map();
       reports.set(producer.reportName, { savedIdentity: execution?.identity ?? producer.savedIdentity, publicPath: resolve(this.reportsRoot, publicName.parse(producer.reportPath)),
@@ -144,8 +153,18 @@ export class ReportExecutionStore {
     }
     // Only the public file explicitly adopted at this call position may replace a missing fixed version.
     const snapshot = readPrivateFileState(report.publicPath);
-    return snapshot.state.exists && 'content' in snapshot
-      ? { path: report.publicPath, ...history, content: snapshot.content.toString('utf8') } : undefined;
+    if (!snapshot.state.exists || !('content' in snapshot)) return undefined;
+    if (report.fixed !== undefined) {
+      if (report.fixed.contentSha256 === undefined) {
+        log.warn('Ignoring inherited public report because its saved content hash is unavailable', { path: report.publicPath });
+        return undefined;
+      }
+      if (snapshot.state.contentSha256 !== report.fixed.contentSha256) {
+        log.warn('Ignoring inherited public report because it differs from the saved version', { path: report.publicPath });
+        return undefined;
+      }
+    }
+    return { path: report.publicPath, ...history, content: snapshot.content.toString('utf8') };
   }
 
   private read(): z.infer<typeof storeSchema> | undefined {
@@ -206,12 +225,15 @@ export class ReportExecutionStore {
       });
       if (matching.length === 0) return;
       const path = relative(this.reportsRoot, pinReportContent(this.reportsRoot, reportName, content)).split(sep).join('/');
+      const contentSha256 = reportContentHash(content);
       for (const execution of matching) {
         const name = relative(resolve(this.reportsRoot, execution.namespace), resolve(reportDir, reportName)).split(sep).join('/');
         const producerName = publicName.parse(reportProducerPath(name));
         if (parseWorkflowExecutionIdentity(execution.identity)?.parallel_parent !== undefined
           && !Object.hasOwn(execution.reports, producerName)) continue;
         execution.reports[producerName] = path;
+        execution.reportHashes ??= {};
+        execution.reportHashes[producerName] = contentSha256;
       }
     });
   }

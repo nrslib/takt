@@ -515,7 +515,7 @@ describe('report execution versions', () => {
     expect(restored.readInherited(current, 'plan.md')).toBeUndefined();
   });
 
-  it.each(['unrecorded', 'missing-version'] as const)(
+  it.each(['unrecorded', 'missing-version', 'mismatched-version'] as const)(
     'distinguishes an inherited output that is %s from a missing public file', (condition) => {
       const saved = buildWorkflowStepParticipationIdentity('old-definition', 'plan', []);
       const current = buildWorkflowStepParticipationIdentity('current-definition', 'plan', []);
@@ -523,16 +523,18 @@ describe('report execution versions', () => {
       store.capture(root, 'plan.md', 'EARLIER-PLAN');
       store.finish(earlier, true);
       const latest = store.begin(saved, 'plan', root, ['plan.md']);
-      if (condition === 'missing-version') store.capture(root, 'plan.md', 'SAVED-PLAN');
+      if (condition !== 'unrecorded') store.capture(root, 'plan.md', 'SAVED-PLAN');
       store.finish(latest, true);
-      writeFileSync(join(root, 'plan.md'), condition === 'unrecorded' ? 'OLD-PLAN' : 'SAVED-PLAN');
-      if (condition === 'missing-version') {
+      writeFileSync(join(root, 'plan.md'), condition === 'unrecorded'
+        ? 'OLD-PLAN' : condition === 'mismatched-version' ? 'DIFFERENT-PLAN' : 'SAVED-PLAN');
+      if (condition !== 'unrecorded') {
         rmSync(join(root, store.executions(saved).at(-1)!.reports['plan.md']!));
       }
       const restored = new ReportExecutionStore(root);
       restored.restoreInheritedReports([{ identity: current, savedIdentity: saved, reportName: 'plan.md', reportPath: 'plan.md' }]);
       if (condition === 'unrecorded') expect(restored.readInherited(current, 'plan.md')).toBeUndefined();
-      else expect(restored.readInherited(current, 'plan.md')?.content).toBe('SAVED-PLAN');
+      else if (condition === 'missing-version') expect(restored.readInherited(current, 'plan.md')?.content).toBe('SAVED-PLAN');
+      else expect(restored.readInherited(current, 'plan.md')).toBeUndefined();
     },
   );
 

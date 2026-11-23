@@ -151,7 +151,7 @@ describe('resume snapshot for declared report references', () => {
       };
       const call = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1);
       const namespace = buildWorkflowCallNamespaceSegment('delegate', oldChild.name, 1);
-      const directory = join('subworkflows', namespace);
+      const directory = `subworkflows/${namespace}`;
       const sourceReports = buildRunPaths(cwd, 'source-run').reportsRootAbs;
       mkdirSync(join(sourceReports, directory), { recursive: true });
       writeFileSync(join(sourceReports, directory, 'review-summary.md'), 'DECLARED');

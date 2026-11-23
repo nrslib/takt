@@ -84,7 +84,8 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
       workflow, calls, ...(legacyParallelParent === undefined ? {} : { parallelParent: legacyParallelParent }),
     };
   };
-  function match<T>(records: Record<string, T>, equivalent: (left: T, right: T) => boolean): Map<string, { record: T; savedIdentity: string }> {
+  function match<T>(records: Record<string, T>, equivalent: (left: T, right: T) => boolean,
+    conflictIdentities = new Set<string>()): Map<string, { record: T; savedIdentity: string }> {
     const matched = new Map<string, { record: T; savedIdentity: string }>();
     const conflicts = new Set<string>();
     for (const [identity, record] of Object.entries(records)) {
@@ -99,6 +100,7 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
         log.warn('Ignoring conflicting inherited workflow records', { identity: target.identity });
         matched.delete(target.identity);
         conflicts.add(target.identity);
+        conflictIdentities.add(target.identity);
       } else if (existing === undefined) matched.set(target.identity, { record, savedIdentity: identity });
     }
     return matched;
@@ -163,20 +165,60 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
     const rightNames = new Set(right.report_names);
     return leftNames.size === rightNames.size && [...leftNames].every((name) => rightNames.has(name));
   };
-  const participations = match(source.workflow_step_participations, sameReports);
+  const participationConflicts = new Set<string>();
+  const participations = match(source.workflow_step_participations, sameReports, participationConflicts);
   const producerIdentity = (identity: string): string => {
     const parallelParent = locate(identity)!.parallelParent;
     return parallelParent === undefined ? identity
       : serializeWorkflowExecutionIdentity({ ...parseWorkflowExecutionIdentity(identity)!, parallel_parent: parallelParent });
   };
+  const normalizedParticipationConflicts = new Set([...participationConflicts].map(producerIdentity));
   for (const identity of [...participations.keys()]) {
     const qualified = producerIdentity(identity);
+    if (normalizedParticipationConflicts.has(qualified)) {
+      log.warn('Ignoring inherited parallel participation records with a conflicting producer identity', { identity: qualified });
+      participations.delete(identity);
+      continue;
+    }
     if (qualified === identity || !participations.has(qualified)) continue;
     if (!sameReports(participations.get(identity)!.record, participations.get(qualified)!.record)) {
       log.warn('Ignoring conflicting inherited parallel participation records', { identity: qualified });
       participations.delete(qualified);
     }
     participations.delete(identity);
+  }
+  const participationEvidence = new Map([...participations].map(([identity, value]) => [identity, value.record]));
+  const invocationEvidence = {
+    kind: 'exact' as const,
+    records: new Map([...invocations].map(([identity, value]) => [identity, value.record])),
+  };
+  const excludedStepIterations = new Map<number, Set<string>>();
+  for (const identity of [...participations.keys()]) {
+    const target = locate(identity);
+    const parsed = parseWorkflowExecutionIdentity(identity);
+    if (target === undefined || parsed === undefined) continue;
+    const parallelParent = parsed.parallel_parent ?? target.parallelParent
+      ?? (target.calls.at(-1)?.kind === 'parallel' ? target.calls.at(-1)!.step : undefined);
+    const step = findStep(target.workflow, parsed.step, parallelParent);
+    if (step?.kind !== 'workflow_call') continue;
+    const resolved = resolveReviewReportStepParticipation(step, target.workflow, target.calls, {
+      activeWorkflowReference: getWorkflowReference(target.workflow),
+      stepOutputNames: new Set([step.name]),
+      restoredStepIterationNames: new Set(),
+      workflowCallInvocations: invocationEvidence,
+      workflowStepParticipations: participationEvidence,
+      dynamicParallelSelections: new Map(),
+    }, parallelParent);
+    if (resolved.kind !== 'invalid') continue;
+    log.warn('Ignoring inherited workflow-call participation without a matching invocation', { identity });
+    participations.delete(identity);
+    participationEvidence.delete(identity);
+    const stackIndex = target.calls.length;
+    if (source.stack[stackIndex]?.step_iterations?.[parsed.step] !== undefined) {
+      const names = excludedStepIterations.get(stackIndex) ?? new Set<string>();
+      names.add(parsed.step);
+      excludedStepIterations.set(stackIndex, names);
+    }
   }
   const inheritedReports: InheritedReportProducer[] = [];
   for (const [identity, { record, savedIdentity }] of participations) {
@@ -192,15 +234,19 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
   }
   let workflow = context.workflow;
   let parallelParent: string | undefined;
-  const stack = source.stack.map((entry) => {
+  const stack = source.stack.map((entry, index) => {
     if (entry.workflow === workflow.name && entry.workflow_ref !== getWorkflowReference(workflow)) {
       log.warn('Saved workflow reference differs from current workflow', { workflow: workflow.name, saved: entry.workflow_ref, current: getWorkflowReference(workflow) });
     }
     const current = { ...entry, workflow_ref: getWorkflowReference(workflow) };
+    const excluded = excludedStepIterations.get(index);
+    const stepIterations = entry.step_iterations === undefined || excluded === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(entry.step_iterations).filter(([name]) => !excluded.has(name)));
     const step = findStep(workflow, entry.step, parallelParent);
     if (step !== undefined) workflow = resolveChild(context, workflow, step) ?? workflow;
     parallelParent = entry.kind === 'parallel' ? entry.step : undefined;
-    return current;
+    return stepIterations === undefined ? current : { ...current, step_iterations: stepIterations };
   });
   return {
     point: { ...source, stack,
