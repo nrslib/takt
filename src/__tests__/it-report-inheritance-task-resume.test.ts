@@ -49,6 +49,7 @@ import { DebugLogger } from '../shared/utils/debug.js';
 import * as reportDirectory from '../shared/utils/reportDir.js';
 import { buildResumeReportConsumerKeyFromStack } from '../core/workflow/run/resume-report-consumer.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
+import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -466,6 +467,8 @@ function readResumeArtifacts(projectDir: string, runSlug: string) {
     files: Array<{ path: string; size: number; sha256: string }>;
     skippedEntries: Array<{ path: string; reason: string }>;
     resumeReportConsumers?: Array<{
+      consumerKey: string;
+      reportDirectories: string[];
       references: Array<{ reference: string; path: string }>;
     }>;
   };
@@ -1325,7 +1328,12 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
     return instructions;
   }
 
-  it.each([false, true])('resolves final-gate report through the snapshot mapping on the production requeue path (definition changed=%s)', async (changed) => {
+  it.each([
+    { changed: false, legacy: false },
+    { changed: true, legacy: false },
+    { changed: false, legacy: true },
+    { changed: true, legacy: true },
+  ])('resumes final-gate on the production requeue path (definition changed=$changed, legacy mapping=$legacy)', async ({ changed, legacy }) => {
     environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -1342,6 +1350,17 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
     invalidateAllResolvedConfigCache();
     const instructions = captureFinalGateInstructions();
     const { resumePoint } = seedFinalGateResumeSource(environment.projectDir);
+    let legacyKey: string | undefined;
+    if (legacy) {
+      const manifest = readResumeArtifacts(environment.projectDir, sourceRunSlug);
+      const entry = manifest.resumeReportConsumers![0]!;
+      const savedKey = JSON.parse(entry.consumerKey) as { workflow: string; step: string; calls: { workflow: string; step: string; kind: string; call_instance: number }[] };
+      legacyKey = JSON.stringify({ ...savedKey, calls: savedKey.calls.map(({ workflow, step, kind }) => ({ workflow, step, kind })) });
+      writeFileSync(join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'resume-artifacts.json'), JSON.stringify({
+        ...manifest, resumeReportConsumers: [{ ...entry, consumerKey: legacyKey }],
+      }));
+    }
+    const warnings = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
     if (changed) {
       writeFileSync(builtinChild, readFileSync(builtinChild, 'utf8').replace('Resolve final gate with', 'Resolve the updated final gate with'));
       invalidateAllResolvedConfigCache();
@@ -1359,10 +1378,17 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
     const manifest = readResumeArtifacts(environment.projectDir, targetRunSlug);
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain('CHAINED REVIEW RESOLUTION');
-    expect(manifest.resumeReportConsumers?.[0]?.references).toEqual([
-      expect.objectContaining({ reference: 'review-resolution.md' }),
-    ]);
+    if (legacy) {
+      expect(instructions[0]).toContain(formatMissingReportReference('review-resolution.md'));
+      expect(manifest.resumeReportConsumers?.[0]?.references).toEqual([]);
+      expect(warnings.mock.calls.some(([level, component, , data]) => level === 'WARN'
+        && component === 'resume-report-snapshot' && (data as { consumerKey?: string })?.consumerKey === legacyKey)).toBe(true);
+    } else {
+      expect(instructions[0]).toContain('CHAINED REVIEW RESOLUTION');
+      expect(manifest.resumeReportConsumers?.[0]?.references).toEqual([
+        expect.objectContaining({ reference: 'review-resolution.md' }),
+      ]);
+    }
   });
 
   it('propagates final-gate snapshot mapping through a zero-iteration failed requeue', async () => {

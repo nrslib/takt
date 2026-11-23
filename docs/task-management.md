@@ -319,6 +319,8 @@ When Retry, Requeue, or Instruct starts at a later step (`start_step` or a saved
 
 Report participation records and call records inherited on resume are matched by workflow name, step name, and call position. Records at the same position can be used even when the definition's content hash has changed. Unmatched or conflicting records and inputs from incomplete calls are excluded with warnings, and execution continues from the specified position. When resuming partway through a child workflow, reports from earlier steps that were not re-executed can also be passed to subsequent steps after the child completes. If the corresponding body cannot be found, TAKT warns and omits that input; it does not substitute a report with the same name from another call position. After the producer step is re-executed in the current run, the usual conditions that check that execution's completion and output apply.
 
+Saved report references also match the execution instance of every workflow_call in the call path. References from the same call instance remain available after a definition's content hash changes; references from a different instance are not used. Older references whose call instances cannot be identified are excluded with a warning, and execution continues from the specified position.
+
 After `/go`, the retry conversation shows the revised instruction and offers **Save as Task** first (the default) or **Continue editing**. Saving updates the existing task and returns it to `pending`; it does not start a worker immediately. `/retry`, `/replay`, and immediate execution choices are unavailable in this Retry conversation. Use `/cancel` to abort without changing the task.
 
 ### Non-Interactive Mode (`--non-interactive`)
