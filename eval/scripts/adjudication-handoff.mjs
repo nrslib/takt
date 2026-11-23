@@ -124,7 +124,7 @@ export async function run({ preparedPath, codexBin, model, timeoutMs = 600000 })
 export function gradeAdjudicationAnswer(answer) {
   const outcomes = { AC7: new Set(), STYLE2: new Set() };
   const accepted = new Set(['採用', '維持', '残す', '有効', '修正対象']);
-  const pattern = /\b(AC7|STYLE2)\b(?:\*\*)?[ \t：:、-]*(不採用|採用|維持|除外|外す|残す|有効|修正対象)(?=[。．\s*]|$)/g;
+  const pattern = /\b(AC7|STYLE2)\b(?:\*\*)?[ \t：:、-]*(?:\*\*)?(不採用|採用|維持|除外|外す|残す|有効|修正対象)(?=[。．\s*]|$)/g;
   for (const [, id, verdict] of answer.matchAll(pattern)) {
     outcomes[id].add(accepted.has(verdict) ? 'accepted' : 'rejected');
   }

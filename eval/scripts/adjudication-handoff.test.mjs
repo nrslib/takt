@@ -43,3 +43,18 @@ test('accepts repeated decisions that agree', () => {
   assert.deepEqual(gradeAdjudicationAnswer('AC7：採用。AC7：維持。STYLE2：除外。STYLE2：不採用。'),
     { ac7: true, style2: true });
 });
+
+test('accepts bold adoption and rejection words', () => {
+  assert.deepEqual(gradeAdjudicationAnswer('AC7：**維持**\nSTYLE2：**除外**'),
+    { ac7: true, style2: true });
+});
+
+test('rejects a bold AC7 rejection conflicting with plain adoption', () => {
+  assert.deepEqual(gradeAdjudicationAnswer('AC7：**不採用**。AC7：採用。\nSTYLE2：**除外**'),
+    { ac7: false, style2: true });
+});
+
+test('rejects a bold STYLE2 adoption conflicting with plain rejection', () => {
+  assert.deepEqual(gradeAdjudicationAnswer('STYLE2：**採用**。STYLE2：不採用。\nAC7：**採用**'),
+    { ac7: true, style2: false });
+});
