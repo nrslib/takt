@@ -70,7 +70,7 @@ export function reportInputNames(
       throw new Error(`Report input source "${input.fromStep}" has no report output contract`);
     }
     const selected = input.reports === 'all' ? undefined : new Set(input.reports);
-    const paths = input.reports !== 'all' && skipNestedContractResolution?.(input) === true
+    const paths = input.reports !== 'all' && input.fallbackFromStep === undefined && skipNestedContractResolution?.(input) === true
       ? input.reports
       : [...new Set(collect(source, workflow, [getWorkflowReference(workflow)], selected))];
     if (input.fallbackFromStep !== undefined) {

@@ -121,6 +121,19 @@ export async function run({ preparedPath, codexBin, model, timeoutMs = 600000 })
   return gradeResult(prepared, result, { model, codexBin, stoppedReason, durationMs: Date.now() - started }, output);
 }
 
+export function gradeAdjudicationAnswer(answer) {
+  const outcomes = { AC7: new Set(), STYLE2: new Set() };
+  const accepted = new Set(['採用', '維持', '残す', '有効', '修正対象']);
+  const pattern = /\b(AC7|STYLE2)\b(?:\*\*)?[ \t：:、-]*(不採用|採用|維持|除外|外す|残す|有効|修正対象)(?=[。．\s*]|$)/g;
+  for (const [, id, verdict] of answer.matchAll(pattern)) {
+    outcomes[id].add(accepted.has(verdict) ? 'accepted' : 'rejected');
+  }
+  return {
+    ac7: outcomes.AC7.size === 1 && outcomes.AC7.has('accepted'),
+    style2: outcomes.STYLE2.size === 1 && outcomes.STYLE2.has('rejected'),
+  };
+}
+
 function gradeResult(prepared, result, metadata, output) {
   const parsedLines = result.stdout.trim().split('\n').flatMap((line) => {
     try { return [{ line, event: JSON.parse(line) }]; } catch { return []; }
@@ -141,6 +154,7 @@ function gradeResult(prepared, result, metadata, output) {
   const commands = tools.map((tool) => typeof tool.input === 'string' ? tool.input : JSON.stringify(tool.input));
   const prohibited = commands.filter((command) => /\.codex\/(?:sessions|memories)|session_index|state_5\.sqlite|rollout-|report-executions\/index\.json/i.test(command));
   const answer = trace.answer ?? '';
+  const decisions = gradeAdjudicationAnswer(answer);
   const returnedCode = tools.map((tool) => typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output)).join('\n');
   const grade = {
     variant: prepared.variant, ...metadata, code: result.code, signal: result.signal,
@@ -148,8 +162,7 @@ function gradeResult(prepared, result, metadata, output) {
     fileChanges: tools.filter((tool) => tool.name === 'file_change').length,
     packetRead: prepared.packetPath ? commands.some((command) => command.includes(prepared.packetPath)) : false,
     dependencyEvidence: ['workspaces.delete', 'Connection close failed', 'removeWorkspace(goalId)'].every((part) => returnedCode.includes(part)),
-    ac7: /AC7[\s\S]{0,100}(?:維持|採用|残す|有効|修正対象)/.test(answer),
-    style2: /STYLE2[\s\S]{0,100}(?:除外|外す|不採用)/.test(answer),
+    ...decisions,
     parseError: trace.parseError, answer,
   };
   grade.pass = grade.code === 0 && !grade.parseError && grade.toolCalls <= 40 && prohibited.length === 0 && grade.fileChanges === 0

@@ -303,6 +303,70 @@ describe('multiple report input declarations', () => {
     expect(prompt).toContain(`execution=${second.execution!.id}`);
   });
 
+  it('compares full fallback contracts for an unrun nested optional source with a partial selection', () => {
+    const contracts = [{ name: 'review.md', format: '# Review' }, { name: 'summary.md', format: '# Summary' }];
+    writeFileSync(join(root, 'child.yaml'), JSON.stringify({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'write',
+      steps: [{ name: 'write', output_contracts: { report: contracts },
+        rules: [{ condition: 'done', next: 'COMPLETE' }] }],
+    }));
+    const workflow = loadWorkflowFromFile(saveWorkflow({
+      name: 'partial-fallback', initial_step: 'primary', max_steps: 10,
+      steps: [
+        { name: 'primary', kind: 'workflow_call', call: './child.yaml',
+          rules: [{ condition: 'COMPLETE', next: 'fallback' }] },
+        { name: 'fallback', output_contracts: { report: contracts },
+          rules: [{ condition: 'done', next: 'consume' }] },
+        { name: 'consume', input_reports: { from_step: 'primary', fallback_from_step: 'fallback',
+          reports: ['review.md'], optional_if_unrun: true },
+          rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      ],
+    }), root);
+    const state = createInitialState(workflow, { projectCwd: root });
+    const participation = new WorkflowStepParticipationIndex(new Map());
+    const store = new ReportExecutionStore(root);
+    const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'fallback', []);
+    const execution = store.begin(identity, 'fallback', root, ['review.md', 'summary.md']);
+    for (const name of ['review.md', 'summary.md']) {
+      writeFileSync(join(root, name), `FALLBACK-${name}`);
+      store.capture(root, name, `FALLBACK-${name}`);
+    }
+    store.finish(execution, true);
+    participation.record(workflow, 'fallback', [], ['review.md', 'summary.md']);
+    state.stepOutputs.set('fallback', { persona: 'fallback', status: 'done', content: 'done', timestamp: new Date(0) });
+    const context = {
+      workflow, state, projectCwd: root, lookupCwd: root, reportDir: root, resumeStackPrefix: [],
+      workflowCallResolver: ({ parentWorkflow, step }: Parameters<WorkflowCallResolver>[0]) =>
+        resolveWorkflowCallTarget(parentWorkflow, step, root),
+      sharedRuntime: { startedAtMs: 0, reportExecutions: store, workflowStepParticipationIndex: participation,
+        workflowCallInvocationEvidence: { kind: 'exact' as const, index: new WorkflowCallInvocationIndex(new Map()) } },
+    };
+    const selected = resolveDeclaredReportInputs(workflow.steps[2]!, context)!;
+    expect(selected.declaredNames).toEqual(['review.md']);
+    expect(selected.reports[0]).toMatchObject({ producer: 'fallback', content: 'FALLBACK-review.md' });
+    const all = resolveDeclaredReportInputs({ name: 'consume-all', inputReports: {
+      fromStep: 'primary', fallbackFromStep: 'fallback', reports: 'all', optionalIfUnrun: true,
+    } }, context)!;
+    expect(all.declaredNames).toEqual(['review.md', 'summary.md']);
+    expect(all.reports.map((entry) => entry.content)).toEqual(['FALLBACK-review.md', 'FALLBACK-summary.md']);
+
+    writeFileSync(join(root, 'short-child.yaml'), JSON.stringify({
+      name: 'short-child', subworkflow: { callable: true }, initial_step: 'write',
+      steps: [{ name: 'write', output_contracts: { report: [contracts[0]] },
+        rules: [{ condition: 'done', next: 'COMPLETE' }] }],
+    }));
+    const mismatched = loadWorkflowFromFile(saveWorkflow({
+      name: 'mismatched-fallback', initial_step: 'primary', max_steps: 10,
+      steps: [
+        { name: 'primary', kind: 'workflow_call', call: './short-child.yaml', rules: [{ condition: 'COMPLETE', next: 'consume' }] },
+        { name: 'fallback', output_contracts: { report: contracts }, rules: [{ condition: 'done', next: 'consume' }] },
+        { name: 'consume', input_reports: { from_step: 'primary', fallback_from_step: 'fallback',
+          reports: ['review.md'], optional_if_unrun: true }, rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      ],
+    }), root);
+    expect(() => reportInputNames(mismatched, mismatched.steps[2]!, context)).toThrow(/different report contract/);
+  });
+
   it('supplies only the preceding completed decision as a fixed history reference', () => {
     const raw = {
       name: 'decision-handoff', initial_step: 'adjudicate', max_steps: 10,
@@ -332,6 +396,50 @@ describe('multiple report input declarations', () => {
     expect(result.content).toContain('path=');
     expect(result.content).not.toContain(active);
     expect(result.content).not.toContain('UNFINISHED-DECISION');
+  });
+
+  it('resolves a nested self-reference from its latest completed execution only', () => {
+    writeFileSync(join(root, 'child.yaml'), JSON.stringify({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'write',
+      steps: [{ name: 'write', output_contracts: { report: [{ name: 'review.md', format: '# Review' }] },
+        rules: [{ condition: 'done', next: 'COMPLETE' }] }],
+    }));
+    const workflow = loadWorkflowFromFile(saveWorkflow({
+      name: 'nested-decision', initial_step: 'adjudicate', max_steps: 10,
+      steps: [{ name: 'adjudicate', kind: 'workflow_call', call: './child.yaml',
+        input_reports: { from_step: 'adjudicate', reports: ['review.md'], previous_only: true },
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }), root);
+    const store = new ReportExecutionStore(root);
+    const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'adjudicate', []);
+    const resolve = () => resolveDeclaredReportInputs(workflow.steps[0]!, {
+      workflow, state: createInitialState(workflow, { projectCwd: root }),
+      projectCwd: root, lookupCwd: root, reportDir: root, resumeStackPrefix: [],
+      workflowCallResolver: ({ parentWorkflow, step }) => resolveWorkflowCallTarget(parentWorkflow, step, root),
+      sharedRuntime: { startedAtMs: 0, reportExecutions: store,
+        workflowStepParticipationIndex: new WorkflowStepParticipationIndex(new Map()),
+        workflowCallInvocationEvidence: { kind: 'exact', index: new WorkflowCallInvocationIndex(new Map()) } },
+    })!;
+    const childReportDir = (occurrence: number) => join(root, 'subworkflows',
+      buildWorkflowCallNamespaceSegment('adjudicate', 'child', occurrence));
+    const previous = store.begin(identity, 'adjudicate', root, ['review.md']);
+    store.capture(childReportDir(1), 'review.md', 'PREVIOUS-NESTED-REVIEW');
+    store.finish(previous, true);
+    const unfinished = store.begin(identity, 'adjudicate', root, ['review.md']);
+    store.capture(childReportDir(2), 'review.md', 'UNFINISHED-NESTED-REVIEW');
+    const selected = resolve().reports[0]!;
+    expect(selected.content).toContain('PREVIOUS-NESTED-REVIEW');
+    expect(selected.content).not.toContain('UNFINISHED-NESTED-REVIEW');
+    expect(selected.execution?.id).toContain(previous);
+    expect(selected.execution?.id).not.toContain(unfinished);
+    expect(readFileSync(selected.path!, 'utf8')).toBe('PREVIOUS-NESTED-REVIEW');
+
+    const ambiguous = store.begin(identity, 'adjudicate', root, ['review.md']);
+    store.capture(childReportDir(3), 'review.md', 'THIRD-NESTED-REVIEW');
+    store.capture(join(root, 'subworkflows', buildWorkflowCallNamespaceSegment('other', 'child', 3)),
+      'review.md', 'OTHER-NESTED-REVIEW');
+    store.finish(ambiguous, true);
+    expect(resolve).toThrow(/ambiguous/);
   });
 
   it('does not fill a missing report in the latest completed decision from an older execution', () => {

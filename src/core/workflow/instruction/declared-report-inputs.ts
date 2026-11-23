@@ -94,11 +94,19 @@ function resolveReportInputEntry(
   if (declaration.previousOnly === true) {
     const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(context.workflow), source.name, context.resumeStackPrefix);
     const store = context.sharedRuntime.reportExecutions;
-    const completed = store?.executions(identity).some((execution) => execution.completed) ?? false;
+    const completed = store?.executions(identity).filter((execution) => execution.completed).at(-1);
     let selectedExecution: string | undefined;
     const reports = names.map((report) => {
-      const fixed = completed ? store?.current(identity, report) : undefined;
+      const matching = Object.entries(completed?.reports ?? {})
+        .filter(([name, version]) => basename(name) === report && version !== null)
+        .map(([name]) => name);
+      if (matching.length > 1) throw new Error(`Previous report input "${report}" from "${source.name}" is ambiguous`);
+      const reportName = matching[0] ?? report;
+      const fixed = completed === undefined ? undefined : store?.current(identity, reportName);
       if (fixed !== undefined) {
+        if (completed !== undefined && !fixed.execution.id.endsWith(`/${completed.id}`)) {
+          throw new Error(`Previous report inputs from "${source.name}" changed execution during resolution`);
+        }
         if (selectedExecution !== undefined && fixed.execution.id !== selectedExecution) {
           throw new Error(`Previous report inputs from "${source.name}" changed execution during resolution`);
         }
@@ -112,7 +120,7 @@ function resolveReportInputEntry(
           ? 'Previous completed report: 0 / 1; report=not supplied'
           : `Previous completed report: 1 / 1; execution=${fixed.execution.id}; path=\`${fixed.path}\`\n\n${fixed.content}`,
         ...(fixed === undefined ? {} : { path: fixed.path, execution: fixed.execution, origin: fixed.origin }),
-        ...(declaration.history === undefined ? {} : { history: store?.history(identity, report, declaration.history.previous)
+        ...(declaration.history === undefined ? {} : { history: store?.history(identity, reportName, declaration.history.previous)
           ?? `History: 0 / ${declaration.history.previous} completed previous executions; execution history unavailable` }),
       };
     });

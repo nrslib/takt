@@ -475,10 +475,10 @@ describe('report current versions and execution history in complete prompts', ()
 
     const prompt = prompts.find(({ persona }) => persona === 'consumer')!.prompt;
     const rows = new Map(prompt.split('\n').flatMap((line) => {
-      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+)$/.exec(line);
+      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+); path=`([^`]+)`$/.exec(line);
       return match === null ? [] : [[match[1]!, {
         execution: match[2]!, order: Number(match[3]), completion: Number(match[4]),
-        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]),
+        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]), path: match[8]!,
       }]];
     }));
     const alphaRow = rows.get(plan)!;
@@ -495,6 +495,9 @@ describe('report current versions and execution history in complete prompts', ()
     expect(betaRow.start).toBeLessThan(alphaRow.originCompletion);
     expect(alphaRow.completion).toBeGreaterThan(alphaRow.originCompletion);
     expect(betaRow.completion).toBe(alphaRow.completion);
+    expect(alphaRow.path).not.toBe(betaRow.path);
+    expect(readFileSync(alphaRow.path, 'utf8')).toBe(`BODY-${plan}`);
+    expect(readFileSync(betaRow.path, 'utf8')).toBe(`BODY-${report}`);
 
     const alphaExecution = store.executions(alphaIdentity)
       .find((entry) => entry.id === alphaRow.origin.split('/').at(-1));

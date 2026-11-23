@@ -31,7 +31,7 @@ describe('Codex Phase 1 compaction handoff', () => {
     const firstPath = (firstDeveloper as string).match(/Current call artifact: `([^`]+)`/)?.[1];
     expect(firstPath).toBeDefined();
     expect(JSON.parse(readFileSync(firstPath!, 'utf8'))).toEqual(JSON.parse(firstInput));
-    expect(statSync(firstPath!).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(firstPath!).mode & 0o777).toBe(0o600);
 
     await agent.call('recovery with latest notes', { ...options, sessionId: 'same-session' });
     const [, secondInput, secondDeveloper] = callCodexCustom.mock.calls[1]!;
@@ -46,25 +46,27 @@ describe('Codex Phase 1 compaction handoff', () => {
     expect(phase2Developer).not.toContain('Current call artifact:');
   });
 
-  it.skipIf(process.getuid?.() === 0)('continues with inline instructions when the artifact directory is not writable', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'takt-codex-handoff-'));
-    directories.push(directory);
-    const parent = join(directory, 'unwritable');
-    mkdirSync(parent);
-    chmodSync(parent, 0o500);
-    try {
-      callCodexCustom.mockResolvedValue({ persona: 'review-adjudication', status: 'done', content: 'ok' });
-      const agent = new CodexProvider().setup({ name: 'review-adjudication', systemPrompt: 'current assignment' });
-      await agent.call('current reports and notes', {
-        cwd: directory, executionPhase: 1, compactionHandoffDirectory: join(parent, 'new-child'),
-      });
-      const [, input, developer] = callCodexCustom.mock.calls[0]!;
-      expect(JSON.parse(input)).toEqual({ taktCurrentInstructions: 'current assignment', userInstruction: 'current reports and notes' });
-      expect(developer).not.toContain('Current call artifact:');
-    } finally {
-      chmodSync(parent, 0o700);
-    }
-  });
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'continues with inline instructions when the artifact directory is not writable', async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'takt-codex-handoff-'));
+      directories.push(directory);
+      const parent = join(directory, 'unwritable');
+      mkdirSync(parent);
+      chmodSync(parent, 0o500);
+      try {
+        callCodexCustom.mockResolvedValue({ persona: 'review-adjudication', status: 'done', content: 'ok' });
+        const agent = new CodexProvider().setup({ name: 'review-adjudication', systemPrompt: 'current assignment' });
+        await agent.call('current reports and notes', {
+          cwd: directory, executionPhase: 1, compactionHandoffDirectory: join(parent, 'new-child'),
+        });
+        const [, input, developer] = callCodexCustom.mock.calls[0]!;
+        expect(JSON.parse(input)).toEqual({ taktCurrentInstructions: 'current assignment', userInstruction: 'current reports and notes' });
+        expect(developer).not.toContain('Current call artifact:');
+      } finally {
+        chmodSync(parent, 0o700);
+      }
+    },
+  );
 
   it('rejects a symlink in the artifact path before calling Codex', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'takt-codex-handoff-'));
@@ -72,9 +74,17 @@ describe('Codex Phase 1 compaction handoff', () => {
     const link = join(directory, 'link');
     symlinkSync(directory, link);
     const agent = new CodexProvider().setup({ name: 'review-adjudication', systemPrompt: 'current assignment' });
-    await expect(agent.call('current reports and notes', {
+    const onStream = vi.fn();
+    const result = await agent.call('current reports and notes', {
       cwd: directory, executionPhase: 1, compactionHandoffDirectory: link,
-    })).rejects.toThrow(/symlink/);
+      sessionId: 'existing-session', onStream,
+    });
+    expect(result).toMatchObject({ status: 'error', failureCategory: 'provider_error', error: expect.stringMatching(/symlink/) });
+    expect(onStream).toHaveBeenCalledTimes(1);
+    expect(onStream).toHaveBeenCalledWith({ type: 'result', data: {
+      result: result.error, error: result.error, success: false,
+      sessionId: 'existing-session', failureCategory: 'provider_error',
+    } });
     expect(callCodexCustom).not.toHaveBeenCalled();
   });
 });
