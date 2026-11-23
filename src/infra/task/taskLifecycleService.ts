@@ -1,4 +1,3 @@
-import { formatCodeBlock } from '../../shared/utils/markdown.js';
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskState } from './types.js';
 import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
@@ -88,8 +87,6 @@ export class TaskLifecycleService {
         ]),
         `Constraints:\n${formatGoalList(goal.constraints)}`,
         `Acceptance criteria:\n${formatGoalList(goal.acceptanceCriteria)}`,
-        ...Object.entries(goal.specifications ?? {}).map(([notation, text]) =>
-          formatCodeBlock(text, notation)),
       ]),
     ].join('\n\n');
     const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;
@@ -246,8 +243,8 @@ export class TaskLifecycleService {
     return toTaskInfo(this.projectDir, this.tasksFile, created);
   }
 
-  claimNextTasks(count: number): TaskInfo[] {
-    return this.claimPendingTasks(count).claimed;
+  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
+    return this.claimPendingTasks(count, undefined, goalSetupFailure).claimed;
   }
 
   claimTask(taskName: string, workerName: string): TaskClaimResult {
@@ -301,7 +298,11 @@ export class TaskLifecycleService {
     });
   }
 
-  private claimPendingTasks(count: number, selection?: { taskName: string; workerName: string }): { claimed: TaskInfo[]; failed: TaskState[] } {
+  private claimPendingTasks(
+    count: number,
+    selection?: { taskName: string; workerName: string },
+    goalSetupFailure?: (task: TaskInfo) => string | undefined,
+  ): { claimed: TaskInfo[]; failed: TaskState[] } {
     if (count <= 0) {
       return { claimed: [], failed: [] };
     }
@@ -340,6 +341,14 @@ export class TaskLifecycleService {
             failed.add(task.name);
             return this.buildUnreadableGoalTask(task, error, next);
           }
+          if (task.goal_id !== undefined && goalSetupFailure !== undefined) {
+            const reason = goalSetupFailure(info);
+            if (reason !== undefined) {
+              this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
+              failed.add(task.name);
+              return this.buildSetupFailedTaskRecord(task, next, reason);
+            }
+          }
           claimed.push(info);
           remaining--;
           return next;
@@ -357,6 +366,19 @@ export class TaskLifecycleService {
     }));
 
     return { claimed, failed: saved.tasks.filter((task) => failed.has(task.name)).map((task) => toTaskState(this.tasksFile, task)) };
+  }
+
+  private buildSetupFailedTaskRecord(task: TaskRecord, next: TaskRecord, reason: string): TaskRecord {
+    return buildTerminalTaskRecord(next, {
+      status: 'failed', completed_at: nowIso(), owner_pid: null,
+      failure: { error: reason },
+      run_slug: `setup-${randomUUID()}`,
+      completion: {
+        success: false, interrupted: false, workflowResult: 'error',
+        branch: task.branch, failureReason: reason,
+        shaUnavailableReason: 'Workflow execution did not start',
+      },
+    }, this.readTerminalRetryMetadata(task));
   }
 
   invalidatePendingGoalTasks(goalId: string): void {

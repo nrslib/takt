@@ -2,7 +2,11 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { isShallowReferenceError, runGitCommandAbortable } from '../infra/task/clone-exec.js';
+import {
+  fetchBaseBranchIntoIsolatedCloneAbortable,
+  isShallowReferenceError,
+  runGitCommandAbortable,
+} from '../infra/task/clone-exec.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -19,7 +23,22 @@ class FakeChildProcess extends EventEmitter {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it('runs isolated Git commands with the C locale so that stderr stays in English', async () => {
+  vi.stubEnv('LC_ALL', 'de_DE.UTF-8');
+  const child = new FakeChildProcess();
+  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  const pending = fetchBaseBranchIntoIsolatedCloneAbortable('/project', '/clone', 'main');
+  child.emit('close', 0);
+  await pending;
+  expect(spawn).toHaveBeenCalledWith(
+    'git',
+    expect.any(Array),
+    expect.objectContaining({ env: expect.objectContaining({ LC_ALL: 'C' }) }),
+  );
 });
 
 it('terminates a Git process group when its command timeout expires', async () => {

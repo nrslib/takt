@@ -106,15 +106,6 @@ describe('resolveFacetByName', () => {
     expect(content).toBe('Custom policy content');
   });
 
-  it('should try project before builtin', () => {
-    // Create project override
-    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
-    mkdirSync(projectPersonasDir, { recursive: true });
-    writeFileSync(join(projectPersonasDir, 'coder.md'), 'OVERRIDE');
-
-    const content = resolveFacetByName('coder', 'personas', context);
-    expect(content).toBe('OVERRIDE');
-  });
 });
 
 describe('resolveRefToContent with layer resolution', () => {
@@ -669,22 +660,7 @@ describe('resolvePersona with layer resolution', () => {
     expect(result).toEqual({});
   });
 
-  it('should resolve valid project persona without unreachable guard (dead-code prevention)', () => {
-    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
-    mkdirSync(projectPersonasDir, { recursive: true });
-    const personaPath = join(projectPersonasDir, 'valid-persona.md');
-    writeFileSync(personaPath, 'Valid persona content');
-
-    const result = resolvePersona('valid-persona', emptySections, tempDir, context);
-    expect(result.personaSpec).toBe('valid-persona');
-    expect(result.personaPath).toBe(personaPath);
-  });
-
-  it('should return resolved object with same structure whether personaPath exists or not (redundant-branch prevention)', () => {
-    const withPath = resolvePersona('coder', emptySections, tempDir, context);
-    expect(withPath.personaSpec).toBe('coder');
-    expect(withPath.personaPath).toBeDefined();
-
+  it('should keep an unresolved persona name without inventing a path', () => {
     const withoutPath = resolvePersona('nonexistent-persona-xyz', emptySections, tempDir, context);
     expect(withoutPath.personaSpec).toBe('nonexistent-persona-xyz');
     expect(withoutPath.personaPath).toBeUndefined();

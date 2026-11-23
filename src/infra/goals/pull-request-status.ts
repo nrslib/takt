@@ -7,7 +7,7 @@ export type GoalPullRequestStatus =
   | { status: 'available'; pullRequest: PrMergeStatus };
 
 export async function readGoalPullRequestStatus(
-  cwd: string, goal: Goal, signal: AbortSignal | undefined,
+  cwd: string, goal: Pick<Goal, 'pullRequest' | 'branch' | 'integrationBranch'>, signal: AbortSignal | undefined,
 ): Promise<GoalPullRequestStatus | undefined> {
   signal?.throwIfAborted();
   if (goal.pullRequest === undefined) return undefined;

@@ -30,6 +30,7 @@ export interface CodexCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  contextWindow?: number;
   reasoningEffort?: string;
   fastMode?: boolean;
   systemPrompt?: string;

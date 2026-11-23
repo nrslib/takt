@@ -27,6 +27,12 @@ import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
+export function renderGoalSpecificationNotice(paths: readonly string[] | undefined, language: Language): string {
+  if (!paths?.length) return '';
+  const label = language === 'ja' ? 'ゴールの保存仕様' : 'Saved goal specifications';
+  return `- ${label}: ${paths.map((path) => `\`${path}\``).join(', ')}`;
+}
+
 export function prepareReferenceContent(
   content: string,
   sourcePath: string | undefined,
@@ -250,6 +256,7 @@ export class InstructionBuilder {
         stepIteration: this.context.stepIteration,
       }, 1, language),
       workingDirectory: this.context.cwd,
+      goalSpecificationNotice: renderGoalSpecificationNotice(this.context.goalSpecificationPaths, language),
       hasGitRules,
       gitRules,
       editRule,
@@ -288,6 +295,10 @@ export class InstructionBuilder {
     );
     return {
       text,
+      requiredReferenceContents: [
+        ...(this.context.policySourcePath !== undefined && policyJoined.length > CONTEXT_MAX_CHARS ? [policyJoined] : []),
+        ...(this.context.knowledgeSourcePath !== undefined && knowledgeJoined.length > CONTEXT_MAX_CHARS ? [knowledgeJoined] : []),
+      ],
       injectedReports: [...referencedReports.values(), ...unreferencedDeclaredReports],
       reportInputs: {
         userInputs: [...this.context.userInputs],

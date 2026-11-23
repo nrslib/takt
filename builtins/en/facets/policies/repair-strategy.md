@@ -1,4 +1,4 @@
-Resolved defect recurs on another in-scope input/path; same violated condition, confirmed shared mechanism: switch to remove shared method assumptions. First finding: normal analysis, no history-based switch. Different causes/conditions: separate; files/symptoms never suffice to merge. Shared-cause plan progressing: fill gaps; finish.
+When choosing a repair method, a resolved defect recurring on another in-scope input/path with the same violated condition and confirmed shared mechanism requires removing shared method assumptions. First finding: normal analysis, no history-based switch. Different causes/conditions: separate; files/symptoms never suffice to merge. Shared-cause plan progressing: fill gaps; finish.
 
 # Repair Strategy
 
@@ -16,9 +16,9 @@ Prevent recurrence using repair history.
 
 ## Recurrence
 
-Compare requirements, current code, earlier repairs and verification results, and the new counterexample. Identify what was resolved and which assumption caused recurrence. Distinguish missed paths, mistaken causes, change scope, and weak verification. Past success proves only the conditions checked then. For each repair round, pair its counterexample and change with the targeted verification that subsequently passed; do not infer successful verification from the mere existence of a plan or completion criterion.
+During repair planning that compares methods, compare requirements, current code, earlier repairs and verification results, and the new counterexample. Identify what was resolved and which assumption caused recurrence. Distinguish missed paths, mistaken causes, change scope, and weak verification. Past success proves only the conditions checked then. For each repair round, pair its counterexample and change with the targeted verification that subsequently passed; do not infer successful verification from the mere existence of a plan or completion criterion.
 
-Decide in the following order, and explicitly record whether method review is triggered and why in both the adjudication and the repair plan. Listing history or a shared cause does not complete this decision.
+During repair planning, decide in the following order and explicitly record whether method review is triggered and why in the repair plan. Listing history or a shared cause does not complete this decision.
 
 1. First check whether a plan that removes the shared cause is still being applied or verified. If so, do not trigger method review; complete the missing wiring or verification as remaining work in that plan
 2. If no such plan is in progress and an in-scope recurrence is confirmed to violate the same condition through a shared mechanism, trigger method review

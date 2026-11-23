@@ -3,6 +3,7 @@ import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { epicVerificationRecovery } from '../../infra/epics/state.js';
 import type { PendingSummary } from '../../infra/conversations/schema.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalFinished } from '../../infra/goals/activity.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { buildGoalMemory, buildManagerGoalSummary } from '../manager/turnContext.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
@@ -55,13 +56,15 @@ export async function buildTurnBusinessContext(assignment: ConversationDisplayAs
       const tasks = new TaskRunner(repositoryDirectory).listTaskStateItems();
       const goals = [];
       let goalCount = 0;
+      let finishedGoalCount = 0;
       for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
+        if (isGoalFinished(goal)) { finishedGoalCount++; continue; }
         goalCount++;
         const summary = buildManagerGoalSummary(repositoryDirectory, goal, tasks);
         const bytes = Buffer.byteLength(JSON.stringify(summary));
         if (bytes <= remainingBytes) { goals.push(summary); remainingBytes -= bytes; }
       }
-      memories.push({ repositoryDirectory, goals, goalCount, diagnostics: [] });
+      memories.push({ repositoryDirectory, goals, goalCount, finishedGoalCount, diagnostics: [] });
     } catch (error) { memories.push({ repositoryDirectory, goals: undefined, diagnostics: [{ message: getErrorMessage(error) }] }); }
   }
   const epics: { epic: unknown; recovery: unknown[] }[] = [];

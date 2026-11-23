@@ -127,6 +127,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
   });
 
   it('should delegate decomposition and route provider tool activity through the leader deadline', async () => {
+    const openCodeExternalDirectories = ['/tmp/project/.takt/runs/sample/context'];
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
       status: 'done',
@@ -234,6 +235,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           );
           return {
             failureDir: '/tmp/project/.takt/runs/sample/failures',
+            openCodeExternalDirectories,
             onStream: leaderProviderStream,
             onActivity: leaderOnActivity,
           };
@@ -344,6 +346,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
+        openCodeExternalDirectories,
         inspectTools: ['read', 'glob'],
         abortSignal: leaderAbortController.signal,
         onStream: leaderProviderStream,
@@ -369,6 +372,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
+        openCodeExternalDirectories,
         onStream: leaderProviderStream,
         onActivity: leaderOnActivity,
       }),

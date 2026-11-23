@@ -39,6 +39,7 @@ interface RetryTaskRecordOptions {
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
+  runtimeAssignment?: string;
   taskDir?: string;
   resumeSource?: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
@@ -123,6 +124,7 @@ export function buildRetryTaskRecord(
   return {
     ...baseTask,
     ...(options.workflow ? { workflow: options.workflow } : {}),
+    ...(options.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
     ...taskSpecSource,
     status,
     worker_name: task.remote_assignment?.workerName,

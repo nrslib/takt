@@ -84,6 +84,7 @@ import {
 } from '../core/workflow/selector-contract.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildSessionKey } from '../core/workflow/session-key.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { MAX_EXPLICIT_PARALLEL_ERROR_RETRIES } from '../core/workflow/engine/ParallelRunner.js';
 import {
@@ -2307,22 +2308,20 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   });
 
   it('should save routed parallel sub-step sessions with the resolved provider key', async () => {
+    const reviewer = makeStep('api-review', {
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      providerRoutingPersonaKey: 'coder',
+      tags: ['implementation'],
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const codexSessionKey = buildSessionKey(reviewer, { provider: 'codex', model: 'gpt-5' });
     const config = buildDefaultWorkflowConfig({
       maxSteps: 1,
       initialStep: 'reviewers',
       steps: [
         makeStep('reviewers', {
-          parallel: [
-            makeStep('api-review', {
-              persona: 'coder',
-              personaDisplayName: 'coder',
-              providerRoutingPersonaKey: 'coder',
-              tags: ['implementation'],
-              rules: [
-                makeRule('approved', 'COMPLETE'),
-              ],
-            }),
-          ],
+          parallel: [reviewer],
           rules: [
             makeRule('all("approved")', 'COMPLETE'),
           ],
@@ -2350,27 +2349,26 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('session-codex-1');
+    expect(JSON.parse(codexSessionKey).slice(0, 3)).toEqual(['coder', 'codex', 'gpt-5']);
+    expect(state.personaSessions.get(codexSessionKey)).toBe('session-codex-1');
     expect(state.personaSessions.has('["coder","claude-sdk"]')).toBe(false);
   });
 
   it('should keep an existing parallel sub-step session when the response omits sessionId', async () => {
+    const reviewer = makeStep('api-review', {
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      providerRoutingPersonaKey: 'coder',
+      tags: ['implementation'],
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const codexSessionKey = buildSessionKey(reviewer, { provider: 'codex', model: 'gpt-5' });
     const config = buildDefaultWorkflowConfig({
       maxSteps: 1,
       initialStep: 'reviewers',
       steps: [
         makeStep('reviewers', {
-          parallel: [
-            makeStep('api-review', {
-              persona: 'coder',
-              personaDisplayName: 'coder',
-              providerRoutingPersonaKey: 'coder',
-              tags: ['implementation'],
-              rules: [
-                makeRule('approved', 'COMPLETE'),
-              ],
-            }),
-          ],
+          parallel: [reviewer],
           rules: [
             makeRule('all("approved")', 'COMPLETE'),
           ],
@@ -2381,9 +2379,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
-      initialSessions: {
-        '["coder","codex","gpt-5"]': 'existing-codex-session',
-      },
+      initialSessions: { [codexSessionKey]: 'existing-codex-session' },
       onSessionUpdate,
       providerRouting: {
         tags: {
@@ -2403,7 +2399,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('existing-codex-session');
+    expect(state.personaSessions.get(codexSessionKey)).toBe('existing-codex-session');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({ sessionId: 'existing-codex-session' });
     expect(onSessionUpdate).not.toHaveBeenCalled();
   });
 

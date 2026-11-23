@@ -48,7 +48,11 @@ export async function* readWatchGoals(cwd: string, onError: (error: unknown) => 
     if (!entry.isDirectory() || !z.uuid().safeParse(entry.name).success) continue;
     let goal;
     try { goal = await readWatchGoal(cwd, entry.name, reader); }
-    catch (error) { onError(error); continue; }
+    catch (error) {
+      // 列挙のあとに削除されたゴールは、読み取りの失敗ではなく無いものとして扱う。
+      if (!isMissing(error)) onError(error);
+      continue;
+    }
     yield goal;
   }
 }

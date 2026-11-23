@@ -16,7 +16,12 @@
 ## Repair History
 | Problem ID | Earlier Method and Assumptions | Resolved Conditions and Verification | Current Counterexample and Scope Evidence | Shared Cause and Remaining Assumption | Why Earlier Verification Missed It | Fixed-Version References | Actual Method and Fit to Latest Requirements / Adjudication |
 |------------|--------------------------------|--------------------------------------|------------------------------------------|---------------------------------------|------------------------------------|--------------------------| -------------------------- |
-| {Target ID, or N/A and reason} | {Earlier method and required assumptions} | {Checked inputs, paths, and results} | {New failure condition and requirement/code basis} | {Confirmed mechanism or unresolved hypotheses} | {Conditions not observed} | {Fixed paths and locations for the plan, repair, and verification from the same execution; note missing records} | {Actual method and evidence explaining its fit to the latest requirements and adjudication} |
+| {Target ID, or N/A and reason} | {Earlier method and assumptions analyzed from original records by repair planning, with the plan source} | {Checked inputs, paths, and results} | {New failure condition and requirement/code basis} | {Confirmed mechanism or unresolved hypotheses} | {Conditions not observed} | {Fixed paths and locations for the plan, repair, and verification from the same execution; note missing records} | {Actual method and evidence explaining its fit to the latest requirements and adjudication} |
+
+## Fixed-Version References
+| Problem ID | Execution Identity and Order | Plan, Repair, and Verification References | Missing or Incomplete Records |
+|------------|------------------------------|------------------------------------------|-------------------------------|
+| {Existing ID, or correspondence unverified} | {Supplied identity and order} | {Preserve supplied fixed paths and existing references} | {Supplied status, no history, or uncertain correspondence} |
 
 ## Unresolved Problems
 | Problem ID | Related Requirement or Finding | Violated Condition | Cause | Relevant Paths | Evidence | Completion Criteria | Required Action |
@@ -27,6 +32,11 @@
 | Problem ID | Unverified Acceptance Criterion | Requirement Basis | Repairs and Verification Completed in This Environment (Code State) | Where and How to Confirm | Evidence Needed to Decide |
 |------------|---------------------------------|-------------------|--------------------------------------------------------------------|--------------------------|---------------------------|
 | {Existing problem ID} | {Unverified criterion} | {Location in requirements or existing contracts} | {Completed repairs and verification and their code state recorded in the adjudication report} | {Confirmation destination and procedure} | {Result establishing fulfillment} |
+
+## Cannot Verify in This Environment
+| Finding ID / Source | Unverified Condition | Why It Cannot Be Verified in This Environment | Evidence Needed to Decide |
+|---------------------|----------------------|-----------------------------------------------|---------------------------|
+| {ID and source} | {Condition still needed to confirm or disprove the defect} | {Why the external environment cannot be provided and alternative evidence does not settle the matter} | {External observations or information needed to confirm or disprove the defect} |
 
 ## Reason the Decision Cannot Be Made (when BLOCKED)
 - {Requirement that current code and preceding reports cannot decide, required external decision or information, and why task-scope code changes cannot provide it}
@@ -39,3 +49,5 @@
 - Do not use the absence of test or build records alone as a reason for REJECT or BLOCKED
 
 - Omit Awaiting External Confirmation when there are no such items
+
+- Omit Cannot Verify in This Environment when there are no such items. Otherwise, preserve the unverified conditions, reasons verification is unavailable, and evidence needed from the adjudication report regardless of the verdict

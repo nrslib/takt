@@ -17,7 +17,7 @@ import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
 import { failInterruptedTasksWithGoalEvents } from './claimTasks.js';
-import { checkQueuedTaskProviders, checkPendingTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
+import { checkQueuedTaskProviders, checkPendingTaskProviders, runtimeAssignmentUnavailableReason, terminalProviderConfirmation } from './providerPreflight.js';
 
 export async function runAllTasks(
   cwd: string,
@@ -68,6 +68,8 @@ export async function runAllTasks(
       ? taskRunner.listFailedTasks() : [];
     for (const task of pendingTasks) {
       if (shutdownSignals.schedulingSignal.aborted) break;
+      if (task.data?.goal_id !== undefined
+        && runtimeAssignmentUnavailableReason(cwd, task.data) !== undefined) continue;
       await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
     }
     for (const task of failedTasks) {

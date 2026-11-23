@@ -65,6 +65,13 @@ describe('persisted ordinary task owner metadata', () => {
     expect(saved.owner_start_time).toBeNull();
   });
 
+  it('keeps the saved runtime assignment on retry unless a replacement is given', () => {
+    const task = { ...running(), runtime_assignment: 'local-slow' };
+    expect(buildRetryTaskRecord(task, 'pending', {})).toMatchObject({ runtime_assignment: 'local-slow' });
+    expect(buildRetryTaskRecord(task, 'pending', { runtimeAssignment: 'local-fast' }))
+      .toMatchObject({ runtime_assignment: 'local-fast' });
+  });
+
   it('clears the identity when a task becomes failed', () => {
     const failed = buildTerminalTaskRecord(running(), {
       status: 'failed', completed_at: '2026-10-05T01:00:00.000Z', owner_pid: null, failure: { error: 'interrupted' },

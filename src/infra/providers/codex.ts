@@ -12,9 +12,11 @@ import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
 import { buildCodexSessionConfig } from '../codex/session-config.js';
+import { readCodexModelContextWindow } from '../codex/model-context-window.js';
 import { prepareCodexMcpIsolation } from '../codex/mcp-isolation.js';
 import { createCodexMcpAdapter } from './mcp/codex.js';
 import { buildMcpServerSetIdentity } from '../config/runtime-provider/mcp-schema.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 import {
   assertOutputSchema,
   type AgentSetup,
@@ -33,6 +35,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    contextWindow: options.contextWindow,
     reasoningEffort: options.effort ?? providerCodexOptions?.reasoningEffort,
     fastMode: providerCodexOptions?.fastMode,
     permissionMode: options.permissionMode,
@@ -70,6 +73,12 @@ export class CodexProvider implements Provider {
   readonly supportsNativeImageInput = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
+  getContextWindowLimits(options: ProviderCallOptions) {
+    return readCodexModelContextWindow(
+      options.model, options.childProcessEnv, options.cwd, options.providerOptions?.codex?.configProfile,
+    );
+  }
+
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
@@ -99,14 +108,16 @@ export class CodexProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
+    const sessionInstructions = loadTemplate('codex_session_instructions', 'en');
     const call = async (
       prompt: string,
       options: ProviderCallOptions,
     ): Promise<AgentResponse> => {
       const codexOptions = toCodexOptions(options);
-      return systemPrompt
-        ? callCodexCustom(name, prompt, systemPrompt, codexOptions)
-        : callCodex(name, prompt, codexOptions);
+      return callCodexCustom(name, JSON.stringify({
+        taktCurrentInstructions: systemPrompt ?? null,
+        userInstruction: prompt,
+      }), sessionInstructions, codexOptions);
     };
     const recoverFromCompaction: NonNullable<ProviderAgent['recoverFromCompaction']> = async (
       prompt,
@@ -124,21 +135,63 @@ export class CodexProvider implements Provider {
           timestamp: new Date(),
         };
       }
-      return call([
-        'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',
-        '以下は compact 前の Phase 1 指示の全文であり、過去の会話の引用ではなく、現在実行すべき依頼です。',
-        '最初からやり直すのではなく、compact 前の進捗と収集済みの証拠を引き継いで、残りの作業だけを完了してください。同じ資料の読み取りや探索を繰り返さず、作業依頼を尋ね直さず、最終応答を返してください。',
-        prompt,
-      ].join('\n\n'), options);
+      return call(loadTemplate('codex_compaction_recovery', options.language ?? 'en', {
+        instruction: prompt,
+        assignment: options.compactionAssignment ?? name,
+        permissionMode: options.permissionMode ?? 'unspecified',
+        edit: options.edit === undefined ? 'unspecified' : String(options.edit),
+      }), options);
     };
-    return { call, recoverFromCompaction };
+    const assessCompactedResponse: NonNullable<ProviderAgent['assessCompactedResponse']> = async (
+      instruction,
+      response,
+      options,
+    ) => {
+      const assessor = this.setupIsolatedStructured({
+        name: 'compaction-completion-assessor',
+        systemPrompt: loadTemplate('codex_compaction_assessment', options.language ?? 'en'),
+      });
+      const assessment = await assessor.call(JSON.stringify({
+        currentAssignment: options.compactionAssignment ?? name,
+        currentInstructions: systemPrompt ?? null,
+        currentRequest: instruction,
+        permissionMode: options.permissionMode ?? null,
+        edit: options.edit ?? null,
+        candidateResponse: response.content,
+      }).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026'), {
+        ...options,
+        callerManagedSession: true,
+        onStream: () => options.onActivity?.(),
+        onActivity: options.onActivity,
+        outputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['decision'],
+          properties: { decision: { type: 'string', enum: ['complete', 'needs_recovery'] } },
+        },
+      });
+      if (assessment.status !== 'done') {
+        return {
+          decision: 'error',
+          error: assessment.error ?? 'Compaction completion assessment failed',
+          failureCategory: assessment.failureCategory ?? 'provider_error',
+          usage: assessment.providerUsage,
+        };
+      }
+      const decision = assessment.structuredOutput?.decision;
+      if (decision !== 'complete' && decision !== 'needs_recovery') {
+        return { decision: 'error', error: 'Compaction completion assessment returned an invalid decision', usage: assessment.providerUsage };
+      }
+      return { decision, usage: assessment.providerUsage };
+    };
+    return { call, recoverFromCompaction, assessCompactedResponse };
   }
 
   setupIsolatedStructured(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
     const call = async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
       // Isolated structured execution is intentionally strict-readonly and
-      // disables MCP. Clear both fields explicitly so a prepared runtime MCP
+      // disables MCP. Clear MCP inputs and policy so a prepared runtime MCP
       // configuration is never silently inherited by this provider path.
       const isolatedOptions: ProviderCallOptions = {
         ...options,
@@ -148,6 +201,7 @@ export class CodexProvider implements Provider {
         allowedTools: [],
         mcpServers: undefined,
         preparedMcp: undefined,
+        mcpOnlySideEffects: undefined,
         imageAttachments: undefined,
         outputSchema: assertOutputSchema(options.outputSchema, 'codex'),
       };

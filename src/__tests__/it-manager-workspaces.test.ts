@@ -340,7 +340,8 @@ describe('manager workspace storage and repository boundaries', () => {
       reply(repositoryB);
       expect((await submitAndWait(session, { kind: 'message', text: getLabel('manager.goSummaryRequest', 'ja'), display: false, requestProposal: true })).kind).toBe('reply');
       expect(session.getSnapshot().state!.pending!.repositoryDirectory).toBe(repositoryB);
-      const registered = await submitAndWait(session, { kind: 'approve_summary', revision: session.getSnapshot().state!.pending!.revision });
+      const registered = await submitAndWait(session, { kind: 'approve_summary', revision: session.getSnapshot().state!.pending!.revision,
+        conversationId: session.getSnapshot().state!.conversationId });
       expect(registered.kind).toBe('goal_registered');
       expect((await new GoalStore(repositoryA).list()).goals).toEqual([]);
       expect((await new GoalStore(repositoryB).list()).goals).toHaveLength(1);
@@ -349,7 +350,8 @@ describe('manager workspace storage and repository boundaries', () => {
       await submitAndWait(session, { kind: 'message', text: getLabel('manager.goSummaryRequest', 'ja'), display: false, requestProposal: true });
       const pending = session.getSnapshot().state!.pending!;
       await removeManagerRepository(await resolveCurrentManagerAssignment(identity, globalDirectory), repositoryC, globalDirectory);
-      expect((await submitAndWait(session, { kind: 'approve_summary', revision: pending.revision })).kind).toBe('error');
+      expect((await submitAndWait(session, { kind: 'approve_summary', revision: pending.revision,
+        conversationId: session.getSnapshot().state!.conversationId })).kind).toBe('error');
       expect((await new GoalStore(repositoryC).list()).goals).toEqual([]);
     } finally { await session.dispose(); }
   });
@@ -533,6 +535,12 @@ describe('manager workspace storage and repository boundaries', () => {
       if (currentAssignment.kind === 'daemon') throw new Error('Unexpected director assignment');
       await removeManagerRepository(currentAssignment, repositoryA, globalDirectory);
       expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([]);
+      const emptyWorkspaceAssignment = () => client.getSnapshot().items
+        .find((item) => item.kind === 'assignment')?.assignment;
+      await vi.waitFor(async () => {
+        await client.refresh();
+        expect(emptyWorkspaceAssignment()).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [] });
+      });
       await vi.waitFor(() => {
         const rows = app.lastFrame()!.split('\n');
         expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),

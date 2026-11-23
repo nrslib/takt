@@ -25,7 +25,11 @@ export interface ProviderGuardOptions {
   callTimeoutMs?: number;
 }
 
+export type ContextWindowSetting = 'auto' | number;
+
 export interface CodexProviderOptions {
+  /** Resolved runtime profile setting; not part of provider_options YAML. */
+  contextWindow?: ContextWindowSetting;
   baseUrl?: string;
   networkAccess?: boolean;
   permissionControl?: CodexPermissionControl;
@@ -78,6 +82,8 @@ export interface OpenCodeGuardOptions {
 }
 
 export interface OpenCodeProviderOptions {
+  /** Resolved runtime profile setting; not part of provider_options YAML. */
+  contextWindow?: ContextWindowSetting;
   networkAccess?: boolean;
   skills?: { enabled?: boolean };
   variant?: string;

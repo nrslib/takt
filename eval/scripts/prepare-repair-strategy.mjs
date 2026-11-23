@@ -101,7 +101,7 @@ export async function prepareRepairStrategy({ workRoot = join(repo, 'eval/.work'
             }).join('\n')
           : '';
         const previousDecision = hasHistory
-          ? '# 前回の裁定\nCODE-A と CODE-B は修正対象として採用し、それぞれの検証後に解消済みとした。履歴は以下。\n'
+          ? `# 前回の裁定\n${caseId === 'p1' ? '問題ID: P-1（CODE-A / CODE-B）\n' : ''}CODE-A と CODE-B は修正対象として採用し、それぞれの検証後に解消済みとした。履歴は以下。\n`
           : '# 前回の裁定\n前回の裁定と修正はない。\n';
         const resolution = (stage === 'plan' ? read(join(project, 'reports-seed/review-resolution.md')) : previousDecision)
           + `\n## 修正の経過\n${historyText}${migration}\n`;

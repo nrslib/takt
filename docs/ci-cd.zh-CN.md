@@ -2,7 +2,7 @@
 
 # CI/CD 集成
 
-TAKT 可以集成到 CI/CD 流水线中，自动执行任务、审查 PR 和生成代码。本指南介绍 GitHub Actions 的设置、pipeline 模式选项，以及其他 CI 系统的配置。
+本指南介绍如何从 CI/CD 流水线运行 TAKT，包括 GitHub Actions 示例、非交互模式选项，以及其他 CI 系统的配置。
 
 ## GitHub Actions
 

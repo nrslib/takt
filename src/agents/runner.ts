@@ -24,6 +24,8 @@ import {
   providerSupportsStrictMcpConfig,
 } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
+import type { ProviderUsageSnapshot } from '../core/models/response.js';
+import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
@@ -40,10 +42,59 @@ import {
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
 import { startProgressNotes } from '../infra/progress-notes/session.js';
+import type { StreamEvent } from '../shared/types/provider.js';
+import {
+  promoteContextWindow,
+  selectContextWindow,
+  type ContextWindowSelection,
+} from '../infra/providers/context-window.js';
+import type { Provider } from '../infra/providers/types.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
+const MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS = 3;
+const contextWindowSessions = new Map<string, ContextWindowSelection>();
+
+function contextWindowSessionKey(provider: ProviderType, options: ProviderCallOptions, sessionId: string): string {
+  return JSON.stringify([provider, options.cwd, options.model, sessionId]);
+}
+
+function withCompactionUsage(response: AgentResponse, usages: readonly (ProviderUsageSnapshot | undefined)[]): AgentResponse {
+  if (usages.length === 1) return response;
+  const known = usages.filter((usage): usage is ProviderUsageSnapshot => usage !== undefined);
+  if (known.length === 0) return response;
+  const complete = known.length === usages.length && known.every((usage) =>
+    !usage.usageMissing
+    && Number.isFinite(usage.inputTokens)
+    && Number.isFinite(usage.outputTokens)
+    && Number.isFinite(usage.totalTokens));
+  if (!complete) {
+    const reason = known.find((usage) => usage.usageMissing)?.reason ?? USAGE_MISSING_REASONS.NOT_AVAILABLE;
+    return { ...response, providerUsage: { usageMissing: true, reason } };
+  }
+  const sum = (field: 'inputTokens' | 'outputTokens' | 'totalTokens'): number =>
+    known.reduce((total, usage) => total + (usage[field] ?? 0), 0);
+  const sumOptional = (field: 'cachedInputTokens' | 'cacheCreationInputTokens' | 'cacheReadInputTokens'): number | undefined =>
+    known.every((usage) => Number.isFinite(usage[field]))
+      ? known.reduce((total, usage) => total + usage[field]!, 0)
+      : undefined;
+  const cachedInputTokens = sumOptional('cachedInputTokens');
+  const cacheCreationInputTokens = sumOptional('cacheCreationInputTokens');
+  const cacheReadInputTokens = sumOptional('cacheReadInputTokens');
+  return {
+    ...response,
+    providerUsage: {
+      usageMissing: false,
+      inputTokens: sum('inputTokens'),
+      outputTokens: sum('outputTokens'),
+      totalTokens: sum('totalTokens'),
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+      ...(cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens }),
+      ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
+    },
+  };
+}
 type RunnerHandoffOptions = RunAgentOptions;
 type AgentExecutionResolution = {
   readonly provider: ProviderType;
@@ -217,6 +268,9 @@ export class AgentRunner {
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
       executionPhase: options.executionPhase,
+      ...(options.workflowMeta?.context === undefined ? {} : {
+        compactionAssignment: options.workflowMeta.context.assignment.stepName,
+      }),
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -243,31 +297,99 @@ export class AgentRunner {
     agent: ProviderAgent,
     task: string,
     options: ProviderCallOptions,
-    recorder: RunAgentOptions['progressNotesRecorder'],
+    runOptions: RunAgentOptions,
+    providerName: ProviderType,
+    provider: Provider,
+    systemPrompt: string,
   ): Promise<AgentResponse> {
+    const recorder = runOptions.progressNotesRecorder;
+    const setting = providerName === 'codex'
+      ? options.providerOptions?.codex?.contextWindow
+      : providerName === 'opencode'
+        ? options.providerOptions?.opencode?.contextWindow
+        : undefined;
+    let selection: ContextWindowSelection | undefined;
+    if (providerName === 'codex' || providerName === 'opencode') {
+      const effectiveSetting = setting ?? 'auto';
+      let limits;
+      if (effectiveSetting === 'auto') {
+        try {
+          limits = await provider.getContextWindowLimits?.(options);
+        } catch (error) {
+          log.debug('Context window metadata unavailable', { provider: providerName, model: options.model, error: getErrorMessage(error) });
+        }
+      }
+      const fixedTexts = [
+        systemPrompt,
+        task,
+        ...(options.outputSchema === undefined ? [] : [JSON.stringify(options.outputSchema)]),
+        ...(runOptions.requiredReferenceContents ?? []),
+      ];
+      selection = selectContextWindow(effectiveSetting, limits, fixedTexts);
+      if (options.sessionId !== undefined && effectiveSetting === 'auto' && selection.reason !== 'unknown') {
+        const previous = contextWindowSessions.get(contextWindowSessionKey(providerName, options, options.sessionId));
+        const previousSize = previous?.stages[previous.stageIndex]?.size;
+        if (previousSize !== undefined && previousSize > selection.stages[selection.stageIndex]!.size) {
+          const stageIndex = selection.stages.findIndex((stage) => stage.size >= previousSize);
+          const boundedIndex = stageIndex === -1 ? selection.stages.length - 1 : stageIndex;
+          selection = {
+            ...selection,
+            stageIndex: boundedIndex,
+            ...(boundedIndex === 0 ? {} : { override: selection.stages[boundedIndex]!.size }),
+          };
+        }
+      }
+      log.info('Context window selection', {
+        provider: providerName,
+        model: options.model,
+        setting: effectiveSetting,
+        fixedTokens: selection.fixedTokens,
+        requiredTokens: selection.requiredTokens,
+        selected: selection.override ?? selection.stages[0]?.size,
+        effectiveCapacity: selection.stages[selection.stageIndex]?.effectiveSize,
+        reason: selection.reason,
+      });
+    }
+    const selectedOptions = selection?.override === undefined ? options : { ...options, contextWindow: selection.override };
+    const recordSelection = (sessionId: string | undefined, compacted: boolean): void => {
+      if (selection === undefined || selection.reason === 'manual' || sessionId === undefined) return;
+      if (compacted) {
+        const previous = selection;
+        selection = promoteContextWindow(selection);
+        if (selection !== previous) {
+          log.info('Context window promoted after compaction', {
+            provider: providerName, model: options.model, sessionId, selected: selection.override,
+          });
+        }
+      }
+      contextWindowSessions.set(contextWindowSessionKey(providerName, options, sessionId), selection);
+    };
     const recoverFromCompaction = agent.recoverFromCompaction;
     if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
-      const observedOptions = recorder === undefined ? options : {
-        ...options,
+      let compactionSessionId: string | undefined;
+      const observedOptions = {
+        ...selectedOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
-          recorder.observe(event);
+          recorder?.observe(event);
+          if (event.type === 'context_compacted') compactionSessionId = event.data.sessionId;
           options.onStream?.(event);
         },
       };
       const response = await agent.call(task, observedOptions);
       recorder?.finish(response);
+      const responseSessionId = response.sessionId ?? options.sessionId;
+      recordSelection(responseSessionId, compactionSessionId !== undefined && compactionSessionId === responseSessionId);
       return response;
     }
 
-    // Only recoveries that compact again without calling any tool count toward the limit, so a long
-    // review that keeps calling tools is not cut off at a total number of compactions.
-    const maxRecoveriesWithoutProgress = 3;
     let recovering = false;
     let recoveriesWithoutProgress = 0;
-    let currentOptions = options;
+    let currentOptions = selectedOptions;
+    const usages: (ProviderUsageSnapshot | undefined)[] = [];
     while (true) {
       let compactionDetected = false;
       let compactionSessionId: string | undefined;
+      let resultEvent: StreamEvent | undefined;
       let calledTool = false;
       const callOptions = {
         ...currentOptions,
@@ -276,53 +398,83 @@ export class AgentRunner {
           if (event.type === 'tool_use') {
             calledTool = true;
           }
-          // The adapter owns completion eligibility; context_compacted does not guarantee an automatic trigger.
           if (event.type === 'context_compacted') {
             compactionDetected = true;
             compactionSessionId = event.data.sessionId;
           }
-          if (
-            compactionDetected
-            && event.type === 'result'
-            && event.data.success
-            && (compactionSessionId === undefined || event.data.sessionId === compactionSessionId)
-          ) {
+          if (event.type === 'result') {
+            resultEvent = event;
             return;
           }
           currentOptions.onStream?.(event);
         },
       };
+      const instruction = recovering ? recorder.recoveryInstruction() : task;
       const response = recovering
-        ? await recoverFromCompaction.call(agent, recorder.recoveryInstruction(), callOptions)
-        : await agent.call(task, callOptions);
+        ? await recoverFromCompaction.call(agent, instruction, callOptions)
+        : await agent.call(instruction, callOptions);
       recorder.finish(response);
+      usages.push(response.providerUsage);
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
-      if (!compactionDetected || !compactionMatchesResponse || response.status !== 'done') {
-        return response;
+      const compactionMatchesPromotion = compactionSessionId !== undefined
+        && compactionSessionId === responseSessionId;
+      recordSelection(responseSessionId, compactionDetected && compactionMatchesPromotion);
+      if (selection?.override !== undefined) {
+        currentOptions = { ...currentOptions, contextWindow: selection.override };
       }
-
-      currentOptions = {
-        ...currentOptions,
-        sessionId: responseSessionId,
-      };
+      if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
+        if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
+        return withCompactionUsage(response, usages);
+      }
       if (recovering) {
         recoveriesWithoutProgress = calledTool ? 0 : recoveriesWithoutProgress + 1;
       }
-      if (recoveriesWithoutProgress === maxRecoveriesWithoutProgress) {
+
+      let needsRecovery: boolean = true;
+      if (agent.assessCompactedResponse !== undefined && responseSessionId !== undefined) {
+        let assessment: Awaited<ReturnType<NonNullable<ProviderAgent['assessCompactedResponse']>>>;
+        try {
+          assessment = await agent.assessCompactedResponse(instruction, response, callOptions);
+        } catch (cause) {
+          assessment = {
+            decision: 'error',
+            error: getErrorMessage(cause),
+            failureCategory: currentOptions.abortSignal?.aborted ? 'external_abort' : 'provider_error',
+          };
+        }
+        usages.push(assessment.usage);
+        if (assessment.decision === 'error') {
+          const error = assessment.error ?? 'Compaction completion assessment failed';
+          const failureCategory = assessment.failureCategory ?? 'provider_error';
+          currentOptions.onStream?.({
+            type: 'result',
+            data: { result: error, sessionId: responseSessionId ?? 'unknown', success: false, error, failureCategory },
+          });
+          return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory }, usages);
+        }
+        needsRecovery = assessment.decision === 'needs_recovery';
+      }
+      if (!needsRecovery) {
+        if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
+        return withCompactionUsage(response, usages);
+      }
+      if (recoveriesWithoutProgress === MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS) {
         const error = 'Provider compaction recovery limit reached';
         currentOptions.onStream?.({
           type: 'result',
           data: {
             result: error,
-            sessionId: currentOptions.sessionId ?? 'unknown',
+            sessionId: responseSessionId ?? 'unknown',
             success: false,
             error,
+            failureCategory: 'provider_error',
           },
         });
-        return { ...response, status: 'error', error };
+        return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory: 'provider_error' }, usages);
       }
+      currentOptions = { ...currentOptions, sessionId: responseSessionId };
       recovering = true;
     }
   }
@@ -428,7 +580,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+      return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -489,7 +641,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
       }
 
       if (options.personaPath) {
@@ -508,7 +660,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
       }
 
       if (personaSpec) {
@@ -532,7 +684,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -545,7 +697,7 @@ export class AgentRunner {
       });
       const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
+      return await AgentRunner.callAgent(agent, task, callOptions, options, resolution.provider, provider, systemPrompt);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }

@@ -52,6 +52,7 @@ vi.mock('../shared/utils/index.js', () => ({
   notifySuccess: mocks.notifySuccess,
   notifyError: mocks.notifyError,
   sendSlackNotification: mocks.sendSlackNotification,
+  createLogger: () => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), enter: vi.fn(), exit: vi.fn() }),
 }));
 
 import { watchTasks } from '../features/tasks/watch/index.js';

@@ -3,6 +3,7 @@ import { createConversationRuntime } from '../features/manager/conversationRunti
 import { deferred } from './helpers/daemon-turn.js';
 import { makeProvider } from './test-helpers.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createHash } from 'node:crypto';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), preflight: vi.fn(), dispose: vi.fn(), execute: vi.fn() }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
@@ -25,6 +26,19 @@ it('reuses compatible setup while resolving the current plan for every turn', as
   const first = await runtime.resolve(assignment, signal);
   expect(await runtime.resolve(assignment, signal)).toBe(first);
   expect(doubles.plan).toHaveBeenCalledTimes(2); expect(doubles.connect).toHaveBeenCalledOnce(); expect(doubles.preflight).toHaveBeenCalledOnce();
+});
+
+it('changes the Codex context key so a stored manager session from the prior contract is not resumed', async () => {
+  plan.ctx.providerType = 'codex';
+  const oldContextKey = createHash('sha256').update(JSON.stringify({
+    provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions,
+    mcp: plan.ctx.mcpServers, prompt: plan.strategy.systemPrompt, assignment,
+    language: plan.ctx.lang, aiReviewPermissions: plan.ctx.aiReviewPermissions,
+  })).digest('hex');
+
+  const current = await runtime.resolve(assignment, signal);
+
+  expect(current.contextKey).not.toBe(oldContextKey);
 });
 
 it('passes the current attachment provider and model overrides to plan resolution for each turn', async () => {

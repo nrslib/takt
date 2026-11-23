@@ -25,7 +25,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 ゴール操作は対象の cwd と goalId を使います。各道具の引数と返却値は公開された定義に従います。
 
 - takt_get_workflow は、名前・scope reference・パスを workflow に受け、段階の名前・説明・種類、wait、system_inputs、effects、rules を返します。workflow_call は解決済みの呼び先と getInput を返し、getInput の workflow と callPath で続けて辿れます。応答は 64 KiB 以内で、省略部分は offset / limit で取得できます。
-- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。
+- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。runtimeAssignment は省略でき、そのタスクの runtime assignment を選びます。指定する名前は、takt_list_runtime_assignments が返した名前に限ります。
 - takt_requeue_goal_task は failed / exceeded を保存位置から続けます。failed は startStep も指定でき、exceeded は保存位置からの再開を使います。保存位置の利用可否、理由、開始候補が応答に返ります。
 - takt_retry_goal_task は指示を更新し、同じ failed タスクを pending に戻します。
 - takt_remove_goal_task は理由を受け、pending の取消や停止済み・取り込み済み成果の片付けを行います。一時停止中の pending も取消対象です。未取り込みの完了成果の破棄には discardUnmerged: true を使います。実行中タスクの停止には takt_stop_goal_task を使います。cleanup の失敗は操作結果に現れます。
@@ -71,6 +71,6 @@ manager.notifications は question / awaiting_merge / completed / progress / blo
 
 取り込み先との衝突は pr_conflicting で届きます。同じ衝突の通知は状態の変化に対応し、解消後の再発も通知対象です。mergeable の UNKNOWN は判定保留の状態です。
 
-specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。PR の最終レビュー用タスクには保存仕様が自動で渡ります。
+specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。保存仕様は PR の最終レビューを含むゴールの各タスクの run に TAKT がファイルで自動的に渡し、各ステップの指示にパスを知らせます。指示書には仕様の全文を貼らず、そのタスクが担当する要件の識別子（受け入れ条件の ID など）を書きます。
 
 形式仕様が有効な場合、人が TUI または Slack の会話で /verify を送ると、現在の合意から仕様を生成して検査し、結果を同じ会話へ返します。保存済みのゴールと仕様は検証前の内容で保持されます。形式仕様の設定に応じて、検証の利用可否が応答に返ります。

@@ -574,6 +574,9 @@ export function mergeProviderOptions(
     if (layer.codex) {
       result.codex = {
         ...result.codex,
+        ...(layer.codex.contextWindow !== undefined
+          ? { contextWindow: layer.codex.contextWindow }
+          : {}),
         ...(layer.codex.baseUrl !== undefined
           ? { baseUrl: layer.codex.baseUrl }
           : {}),
@@ -632,6 +635,9 @@ export function mergeProviderOptions(
           };
       result.opencode = {
         ...result.opencode,
+        ...(layer.opencode.contextWindow !== undefined
+          ? { contextWindow: layer.opencode.contextWindow }
+          : {}),
         ...(layer.opencode.skills?.enabled !== undefined
           ? { skills: { enabled: layer.opencode.skills.enabled } }
           : {}),
@@ -1062,6 +1068,11 @@ export function resolveEffectiveProviderOptions(
     resolveProviderOptionOrigin(originResolver, 'claude.guards.callTimeoutMs', source),
   );
 
+  const codexContextWindow = selectProviderValueByScope(
+    resolvedConfigOptions.codex?.contextWindow,
+    personaOptions?.codex?.contextWindow,
+    stepOptions?.codex?.contextWindow,
+  );
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
     personaOptions?.codex?.networkAccess,
@@ -1114,6 +1125,11 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.guards?.callTimeoutMs,
     stepOptions?.codex?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
+  );
+  const opencodeContextWindow = selectProviderValueByScope(
+    resolvedConfigOptions.opencode?.contextWindow,
+    personaOptions?.opencode?.contextWindow,
+    stepOptions?.opencode?.contextWindow,
   );
   const opencodeSkillsEnabled = selectProviderValue(
     resolvedConfigOptions.opencode?.skills?.enabled,
@@ -1337,7 +1353,8 @@ export function resolveEffectiveProviderOptions(
   );
 
   const result: StepProviderOptions = {
-    ...(codexBaseUrl !== undefined
+    ...(codexContextWindow !== undefined
+      || codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
       || codexPermissionControl !== undefined
       || codexConfigProfile !== undefined
@@ -1348,6 +1365,7 @@ export function resolveEffectiveProviderOptions(
       || codexUserSkills !== undefined
       ? {
           codex: {
+            ...(codexContextWindow !== undefined ? { contextWindow: codexContextWindow } : {}),
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
@@ -1368,7 +1386,8 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(opencodeNetworkAccess !== undefined
+    ...(opencodeContextWindow !== undefined
+      || opencodeNetworkAccess !== undefined
       || opencodeSkillsEnabled !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
@@ -1380,6 +1399,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeGuardReasoningByteLimit !== undefined
       ? {
           opencode: {
+            ...(opencodeContextWindow !== undefined ? { contextWindow: opencodeContextWindow } : {}),
             ...(opencodeSkillsEnabled !== undefined ? { skills: { enabled: opencodeSkillsEnabled } } : {}),
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),

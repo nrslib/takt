@@ -15,8 +15,8 @@ export function ManagerSelectionDialog({ selection, lang }: {
     : selection.kind === 'action' ? selection.candidates.slice(selection.start, end).map((action) => ({
       key: action, text: getLabel(`manager.goalActions.${action}`, lang),
     })) : selection.candidates.slice(selection.start, end).map((goal) => {
-      const state = goal.executionStatus === 'paused' ? 'paused'
-        : goal.status === 'awaiting_merge' ? 'awaiting_merge' : 'active';
+      const state = goal.executionStatus === 'aborted' ? 'aborted' : goal.status === 'completed' ? 'completed'
+        : goal.executionStatus === 'paused' ? 'paused' : goal.status === 'awaiting_merge' ? 'awaiting_merge' : 'active';
       return {
         key: goal.id,
         text: `${formatGoalName(goal.objective)} — ${getLabel(`manager.goalStates.${state}`, lang)}`,

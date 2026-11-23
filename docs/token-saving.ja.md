@@ -21,7 +21,7 @@ npm run build
 npm run analyze:usage -- .takt/runs/<run>
 ```
 
-`step`、`phase`、`provider`、`model` ごとに比較します。workflow を変更する前に、レビューの反復、大きな `phase1_execute` プロンプト、使用量記録の欠落を確認してください。
+`step`、`phase`、`provider`、`model` ごとに比較します。workflow を変更する前に、レビューの繰り返しが多くないか、`phase1_execute` のプロンプトが大きくないか、使用量の記録に欠落がないかを確認してください。
 
 ## Workflow のコストを下げる
 

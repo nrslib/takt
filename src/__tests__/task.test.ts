@@ -1432,6 +1432,22 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.start_step).toBe('implement');
   });
 
+  it('should preserve runtime_assignment when requeueing a failed task', () => {
+    writeTasksFile(testDir, [createFailedRecord({ runtime_assignment: 'slow' })]);
+
+    runner.requeueFailedTask('task-a', 'implement', 'retry note');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.runtime_assignment).toBe('slow');
+    expect(runner.listTasks()[0]?.data).toMatchObject({ runtime_assignment: 'slow' });
+  });
+
+  it('should expose runtime_assignment on listed task state', () => {
+    writeTasksFile(testDir, [createFailedRecord({ runtime_assignment: 'slow' })]);
+
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ runtimeAssignment: 'slow' });
+  });
+
   it('should auto-requeue failed task and persist the first auto_requeue_count', () => {
     writeTasksFile(testDir, [createFailedRecord({})]);
 

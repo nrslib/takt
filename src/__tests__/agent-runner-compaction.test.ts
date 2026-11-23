@@ -71,6 +71,219 @@ describe('AgentRunner compaction recovery', () => {
     getProviderMock.mockReset();
   });
 
+  it('passes a fixed context window through and does not look up or promote it', async () => {
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      expect(options.contextWindow).toBe(400_000);
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-fixed' } });
+      return makeResponse('completed', 'window-fixed');
+    });
+    const getContextWindowLimits = vi.fn();
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-fixed',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-fixed',
+        providerOptions: { codex: { contextWindow: 400_000 } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first task', options);
+    await new AgentRunner().run(undefined, 'second task', options);
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(getContextWindowLimits).not.toHaveBeenCalled();
+  });
+
+  it('keeps auto promotion within its own provider session', async () => {
+    const windows: Array<[string | undefined, number | undefined]> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push([options.sessionId, options.contextWindow]);
+      if (options.sessionId === 'window-session-a' && windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: options.sessionId } });
+      }
+      return makeResponse('completed', options.sessionId!);
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-session-a',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-session',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first task', options);
+    await new AgentRunner().run(undefined, 'other session', { ...options, sessionId: 'window-session-b' });
+    await new AgentRunner().run(undefined, 'same session', options);
+
+    expect(windows).toEqual([
+      ['window-session-a', undefined],
+      ['window-session-b', undefined],
+      ['window-session-a', 500_000],
+    ]);
+  });
+
+  it('bounds a promoted session to the current native maximum', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length <= 2) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-shrinking' } });
+      }
+      return makeResponse('completed', 'window-shrinking');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 500_000 });
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-shrinking',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-shrinking',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', options);
+    expect(windows).toEqual([undefined, 500_000, 500_000]);
+  });
+
+  it('does not promote a new response session from a foreign compaction event', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'refused-session' } });
+      }
+      return makeResponse('completed', 'new-session');
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'refused-session',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-foreign',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', { ...options, sessionId: 'new-session' });
+    expect(windows).toEqual([undefined, undefined]);
+  });
+
+  it('does not reuse a promoted override when the current native default is unknown', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-unknown' } });
+      }
+      return makeResponse('completed', 'window-unknown');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce(undefined);
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-unknown',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-unknown',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first task', options);
+    await new AgentRunner().run(undefined, 'after config change', options);
+
+    expect(windows).toEqual([undefined, undefined]);
+  });
+
+  it('promotes the same provider session before recovery without changing its session ID', async () => {
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      expect(options.contextWindow).toBeUndefined();
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-recovery' } });
+      return makeResponse('needs recovery', 'window-recovery');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(
+      async (_task, options) => {
+        expect(options.contextWindow).toBe(500_000);
+        expect(options.sessionId).toBe('window-recovery');
+        return makeResponse('completed', 'window-recovery');
+      },
+    );
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'needs_recovery' }),
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000, effectivePercent: 95 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-recovery',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-recovery',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    const result = await new AgentRunner().run(undefined, 'short task', options);
+
+    expect(result.content).toBe('completed');
+    expect(call).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a completed response and its promoted capacity for the next call', async () => {
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      if (call.mock.calls.length === 1) {
+        expect(options.contextWindow).toBeUndefined();
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-complete' } });
+      } else {
+        expect(options.contextWindow).toBe(500_000);
+      }
+      return makeResponse('completed', 'window-complete');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'complete' }),
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000, effectivePercent: 95 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-complete',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-complete',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect((await new AgentRunner().run(undefined, 'short task', options)).content).toBe('completed');
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    await new AgentRunner().run(undefined, 'next phase', { ...options, executionPhase: 2 });
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   it('recovers once after repeated compaction events and returns only the recovery result', async () => {
     const order: string[] = [];
     const onStream = vi.fn();
@@ -120,6 +333,139 @@ describe('AgentRunner compaction recovery', () => {
         type: 'result',
         data: { result: 'recovered', sessionId: 'current-thread', success: true },
       },
+    ]]);
+  });
+
+  it.each([
+    'APPROVE: the assigned review is complete.',
+    'REJECT: the assigned review found a concrete defect in src/example.ts.',
+  ])('preserves a completed review response after compaction: %s', async (content) => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: content, sessionId: 'current-thread', success: true } });
+      return makeResponse(content, 'current-thread');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'complete' }),
+    );
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({ status: 'done', content, sessionId: 'current-thread' });
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(assessCompactedResponse).toHaveBeenCalledOnce();
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      { type: 'result', data: { result: content, sessionId: 'current-thread', success: true } },
+    ]]);
+  });
+
+  it.each([
+    {
+      name: 'all cache fields missing',
+      initialCache: {}, assessmentCache: {}, recoveryCache: {}, expectedCache: {},
+    },
+    {
+      name: 'one cache field missing from an attempt',
+      initialCache: { cachedInputTokens: 0, cacheCreationInputTokens: 2, cacheReadInputTokens: 3 },
+      assessmentCache: { cachedInputTokens: 1, cacheReadInputTokens: 0 },
+      recoveryCache: { cachedInputTokens: 2, cacheCreationInputTokens: 4, cacheReadInputTokens: 1 },
+      expectedCache: { cachedInputTokens: 3, cacheReadInputTokens: 4 },
+    },
+    {
+      name: 'all cache fields known including zero',
+      initialCache: { cachedInputTokens: 0, cacheCreationInputTokens: 2, cacheReadInputTokens: 0 },
+      assessmentCache: { cachedInputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 1 },
+      recoveryCache: { cachedInputTokens: 0, cacheCreationInputTokens: 1, cacheReadInputTokens: 4 },
+      expectedCache: { cachedInputTokens: 0, cacheCreationInputTokens: 3, cacheReadInputTokens: 5 },
+    },
+  ])('recovers a role-lost review with $name and keeps assessment output out of the result stream', async ({
+    initialCache, assessmentCache, recoveryCache, expectedCache,
+  }) => {
+    const onStream = vi.fn();
+    const recorder = { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'Review the remaining change' };
+    const lost = 'I cannot implement this fix because I only have read access.';
+    const reviewed = 'REJECT: src/example.ts has an unchecked failure path.';
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: lost, sessionId: 'current-thread', success: true } });
+      return { ...makeResponse(lost, 'current-thread'), providerUsage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, usageMissing: false, ...initialCache } };
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options) => {
+      options.onStream?.({ type: 'result', data: { result: reviewed, sessionId: 'current-thread', success: true } });
+      return { ...makeResponse(reviewed, 'current-thread'), providerUsage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, usageMissing: false, ...recoveryCache } };
+    });
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(async (_instruction, response) => ({
+      decision: response.content === lost ? 'needs_recovery' : 'complete',
+      usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5, usageMissing: false, ...assessmentCache },
+    }));
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream, progressNotesRecorder: recorder }));
+
+    expect(result).toMatchObject({ status: 'done', content: reviewed, sessionId: 'current-thread' });
+    expect(result.providerUsage).toEqual({
+      inputTokens: 21, outputTokens: 6, totalTokens: 27, usageMissing: false, ...expectedCache,
+    });
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction.mock.calls[0]![0]).toBe('Review the remaining change');
+    expect(assessCompactedResponse).toHaveBeenCalledOnce();
+    expect(recorder.finish).toHaveBeenCalledTimes(2);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      { type: 'result', data: { result: reviewed, sessionId: 'current-thread', success: true } },
+    ]]);
+  });
+
+  it('keeps recovering beyond three attempts when recoveries use tools and returns the completed review', async () => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: 'unresolved', sessionId: 'current-thread', success: true } });
+      return makeResponse('unresolved', 'current-thread');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options): Promise<AgentResponse> => {
+      const content = recoverFromCompaction.mock.calls.length === 5 ? 'REJECT: review complete' : 'unresolved';
+      options.onStream?.({ type: 'tool_use', data: { tool: 'Read', input: {}, id: 'read' } });
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: content, sessionId: 'current-thread', success: true } });
+      return makeResponse(content, 'current-thread');
+    });
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async (_instruction, response) => ({ decision: response.content === 'unresolved' ? 'needs_recovery' : 'complete' }),
+    );
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({ status: 'done', content: 'REJECT: review complete' });
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
+    expect(assessCompactedResponse).toHaveBeenCalledTimes(6);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      { type: 'result', data: { result: 'REJECT: review complete', success: true, sessionId: 'current-thread' } },
+    ]]);
+  });
+
+  it('reports assessment failure instead of accepting or replaying the candidate', async () => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: 'candidate', sessionId: 'current-thread', success: true } });
+      return makeResponse('candidate', 'current-thread');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'error', error: 'assessment unavailable', failureCategory: 'provider_error' }),
+    );
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({ status: 'error', error: 'assessment unavailable', sessionId: 'current-thread' });
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      expect.objectContaining({ type: 'result', data: expect.objectContaining({ success: false, error: 'assessment unavailable' }) }),
     ]]);
   });
 

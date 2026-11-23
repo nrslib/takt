@@ -3,6 +3,10 @@ import { z } from 'zod/v4';
 import {
   getWorkflowInputSchema, askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
+  listGoalProposalsInputSchema, approveGoalProposalInputSchema, rejectGoalProposalInputSchema,
+  getGoalProposalInputSchema,
+  enqueueGoalTaskInputSchema,
+  updateGoalBranchesInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -140,6 +144,34 @@ describe('MCP tool input schema', () => {
   });
 });
 
+describe('MCP goal task enqueue input', () => {
+  const goalEnqueue = {
+    cwd: '/repo',
+    goalId,
+    purpose: '目的',
+    task: 'タスク',
+    workflow: 'safe',
+  } as const;
+
+  it('accepts an omitted runtimeAssignment and a non-blank runtimeAssignment name', () => {
+    const omitted = enqueueGoalTaskInputSchema.parse(goalEnqueue);
+    expect(omitted).not.toHaveProperty('runtimeAssignment');
+    expect(enqueueGoalTaskInputSchema.parse({ ...goalEnqueue, runtimeAssignment: 'local-fast' }))
+      .toMatchObject({ runtimeAssignment: 'local-fast' });
+    expect(enqueueGoalTaskInputSchema.parse({ ...goalEnqueue, runtimeAssignment: '  local-fast  ' }))
+      .toMatchObject({ runtimeAssignment: 'local-fast' });
+  });
+
+  it.each(['', '   ', '\n\t'])('rejects a blank runtimeAssignment %j', (runtimeAssignment) => {
+    expect(enqueueGoalTaskInputSchema.safeParse({ ...goalEnqueue, runtimeAssignment }).success).toBe(false);
+  });
+
+  it('enforces the runtimeAssignment length boundary shared with workflow names', () => {
+    expect(enqueueGoalTaskInputSchema.safeParse({ ...goalEnqueue, runtimeAssignment: 'a'.repeat(128) }).success).toBe(true);
+    expect(enqueueGoalTaskInputSchema.safeParse({ ...goalEnqueue, runtimeAssignment: 'a'.repeat(129) }).success).toBe(false);
+  });
+});
+
 describe('MCP standalone inquiry inputs', () => {
   const identity = { cwd: '/repo', id: '650e8400-e29b-41d4-a716-446655440001' };
 
@@ -213,6 +245,57 @@ describe('MCP inquiry inputs', () => {
 });
 
 
+describe('MCP goal proposal inputs', () => {
+  const revision = 3;
+  const conversationId = 'manager-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+  it('reads goal proposals with only a project path', () => {
+    expect(listGoalProposalsInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
+    expect(listGoalProposalsInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+    expect(listGoalProposalsInputSchema.safeParse({ cwd: 'repo' }).success).toBe(false);
+  });
+
+  it('reads a goal proposal by owner conversation and an optional proposal field path', () => {
+    expect(getGoalProposalInputSchema.parse({ cwd: '/repo', conversationId })).toEqual({ cwd: '/repo', conversationId });
+    for (const path of ['summary.objective', 'summary.acceptanceCriteria.0', 'summary.specifications.gherkin', 'summary.startBranch']) {
+      expect(getGoalProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path, textOffset: 4096, maxBytes: 4096 }).success, path).toBe(true);
+    }
+    for (const path of ['repositoryDirectory', 'summary', 'summary.objective.0', 'summary.unknown']) {
+      expect(getGoalProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path }).success, path).toBe(false);
+    }
+    expect(getGoalProposalInputSchema.safeParse({ cwd: '/repo' }).success).toBe(false);
+  });
+
+  it('approves and rejects a goal proposal by project path, revision and owner conversation', () => {
+    expect(approveGoalProposalInputSchema.parse({ cwd: '/repo', revision, conversationId }))
+      .toEqual({ cwd: '/repo', revision, conversationId });
+    expect(rejectGoalProposalInputSchema.parse({ cwd: '/repo', revision, conversationId }))
+      .toEqual({ cwd: '/repo', revision, conversationId });
+  });
+
+  it('requires the owner conversation identifier on approvals and rejections', () => {
+    expect(approveGoalProposalInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+    expect(rejectGoalProposalInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+  });
+
+  it.each([0, -1, 1.5, '3', Number.MAX_SAFE_INTEGER + 1])('rejects a registration revision of %s', (invalid) => {
+    expect(approveGoalProposalInputSchema.safeParse({ cwd: '/repo', revision: invalid, conversationId }).success).toBe(false);
+    expect(rejectGoalProposalInputSchema.safeParse({ cwd: '/repo', revision: invalid, conversationId }).success).toBe(false);
+  });
+
+  it('exposes no pending-requirement or reason fields on the goal proposal tools', () => {
+    const approve = z.toJSONSchema(approveGoalProposalInputSchema, { io: 'input' });
+    const reject = z.toJSONSchema(rejectGoalProposalInputSchema, { io: 'input' });
+    for (const schema of [approve, reject]) {
+      expect(schema.required?.slice().sort()).toEqual(['conversationId', 'cwd', 'revision']);
+      expect(schema.additionalProperties).toBe(false);
+    }
+    expect(approve.properties).not.toHaveProperty('requirePending');
+    expect(reject.properties).not.toHaveProperty('reason');
+    expect(reject.properties).not.toHaveProperty('requirePending');
+  });
+});
+
 describe('workflow detail input', () => {
   it.each(['merge-prepare', '@example/workflows/merge-prepare', './workflows/prepare.yaml', '/tmp/prepare.yaml'])('accepts workflow identifier %s', (workflow) => {
     expect(getWorkflowInputSchema.parse({ cwd: '/repo', workflow })).toEqual({ cwd: '/repo', workflow });
@@ -223,5 +306,28 @@ describe('workflow detail input', () => {
     for (const patch of [{ cwd: '.' }, { workflow: ' ' }, { limit: 51 }, { offset: -1 }, { callPath: [-1] }, { callPath: ['review'] }]) {
       expect(getWorkflowInputSchema.safeParse({ cwd: '/repo', workflow: 'parent', ...patch }).success).toBe(false);
     }
+  });
+});
+
+describe('MCP goal branch correction inputs', () => {
+  it('corrects goal branches with a project path, goal, branch and reason', () => {
+    expect(updateGoalBranchesInputSchema.parse({
+      cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp', reason: '宛先が変わったため',
+    })).toEqual({ cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp', reason: '宛先が変わったため' });
+  });
+
+  it('requires the correction reason', () => {
+    expect(updateGoalBranchesInputSchema.safeParse({
+      cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp',
+    }).success).toBe(false);
+  });
+
+  it('rejects an invalid branch name and unknown fields', () => {
+    expect(updateGoalBranchesInputSchema.safeParse({
+      cwd: '/repo', goalId, integrationBranch: 'bad branch', reason: '理由',
+    }).success).toBe(false);
+    expect(updateGoalBranchesInputSchema.safeParse({
+      cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp', reason: '理由', targetBranch: 'main',
+    }).success).toBe(false);
   });
 });

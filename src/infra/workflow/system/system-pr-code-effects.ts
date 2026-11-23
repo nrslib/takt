@@ -137,7 +137,7 @@ export async function syncPrCloneEffect(
     }
     try {
       options.abortSignal?.throwIfAborted();
-      git(['merge', '--no-edit', baseRef]);
+      git(['merge', '--ff', '--no-edit', baseRef]);
     } catch (error) {
       abortMerge = () => { git(['merge', '--abort']); };
       if (git(['ls-files', '-u']) === '') {

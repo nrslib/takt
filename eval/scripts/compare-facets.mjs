@@ -57,7 +57,7 @@ function git(args) {
 
 function readCandidate(path) {
   const parts = path.split('/');
-  if (!/^builtins\/(ja|en)\/(facets\/.+\.md|(workflows|steps)\/[^/]+\.yaml)$/.test(path)
+  if (!/^builtins\/(ja|en)\/(facets\/.+\.md|(workflows|steps)\/[^/]+\.yaml|workflows\/rules\/[^/]+\.md)$/.test(path)
     || parts.some((part) => part === '..' || part === '.' || part === '')) {
     throw new Error(`Not a builtin facet, workflow or step: ${path}`);
   }

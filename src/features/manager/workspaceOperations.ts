@@ -1,6 +1,7 @@
 import { addWorkspaceRepository, createWorkspace, generateWorkspaceName, readWorkspace, removeWorkspaceRepository, renameWorkspace, type Workspace } from '../../infra/config/global/workspaceRegistry.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalFinished } from '../../infra/goals/activity.js';
 import { withWorkspaceEpicLock } from '../../infra/epics/lock.js';
 import { assertRepositoryHasNoActiveEpics } from '../../infra/epics/service.js';
 import type { ManagerAssignment } from './startupResolution.js';
@@ -24,7 +25,7 @@ export async function removeManagerRepository(assignment: ManagerAssignment, rep
     if (workspace === undefined || !workspace.repositoryDirectories.includes(repository)) throw new Error(`Repository is not assigned to this manager: ${repository}`);
     const { goals, errors } = await new GoalStore(repository).list();
     if (errors.length > 0) throw new Error(`Cannot read goals before removing repository: ${errors.map(({ goalId }) => goalId).join(', ')}`);
-    const unfinished = goals.filter((goal) => goal.status !== 'completed' && goal.executionStatus !== 'aborted');
+    const unfinished = goals.filter((goal) => !isGoalFinished(goal));
     if (unfinished.length > 0) throw new Error(`Repository has unfinished goals: ${unfinished.map((goal) => goal.id).join(', ')}`);
     await assertRepositoryHasNoActiveEpics({ globalConfigDirectory, workspaceId: assignment.workspaceId }, repository);
     return removeWorkspaceRepository(globalConfigDirectory, assignment.workspaceId, repository);

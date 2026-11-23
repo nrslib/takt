@@ -8,6 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, readdirSync
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveProviderAlias } from '../../../shared/types/provider.js';
+import { CODEX_SESSION_CONTRACT } from '../../../shared/codex-session-contract.js';
 import { writeFileAtomic } from '../../../shared/utils/atomic-file.js';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
 
@@ -98,6 +99,9 @@ function readSessionData(sessionPath: string, currentProvider?: string): Record<
     if (currentProvider && data.provider !== resolveProviderAlias(currentProvider)) {
       return {};
     }
+    if (resolveProviderAlias(currentProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT) {
+      return {};
+    }
     return data.personaSessions || {};
   } catch {
     return {};
@@ -131,7 +135,8 @@ function updateSessionData(
       const data = JSON.parse(content) as PersonaSessionData;
       existingProvider = data.provider;
       // If provider changed, discard old sessions
-      if (provider && existingProvider && existingProvider !== provider) {
+      if ((provider && existingProvider && existingProvider !== provider)
+        || ((provider ?? existingProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT)) {
         sessions = {};
       } else {
         sessions = data.personaSessions || {};
@@ -157,6 +162,7 @@ function updateSessionData(
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
     provider: provider ?? existingProvider,
+    ...((provider ?? existingProvider) === 'codex' ? { codexSessionContract: CODEX_SESSION_CONTRACT } : {}),
   };
   writeFileAtomic(sessionPath, JSON.stringify(data, null, 2), fileMode);
 }
@@ -211,6 +217,7 @@ export function savePersonaSessions(
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
     provider: resolveProviderAlias(provider),
+    ...(resolveProviderAlias(provider) === 'codex' ? { codexSessionContract: CODEX_SESSION_CONTRACT } : {}),
   };
   writeFileAtomic(path, JSON.stringify(data, null, 2), sessionFileMode(storageDirectory));
 }

@@ -155,8 +155,14 @@ export async function runWithWorkerPool(
     if (schedulingSignal.aborted || preparationFailure !== undefined
       || (claimRetryAt !== undefined && Date.now() < claimRetryAt)) return;
     try {
-      const attempted = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
+      const { attempted, setupFailedTaskNames } = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
         cwd, taskExecutionOptions);
+      if (mode === 'run') {
+        for (const taskName of setupFailedTaskNames) {
+          failCount++;
+          executedTaskNames.push(taskName);
+        }
+      }
       if (claimRetryAt !== undefined) {
         if (attempted) {
           claimRetryAt = undefined;
@@ -306,13 +312,13 @@ async function claimAvailableTasks(
   signal: AbortSignal,
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
-): Promise<boolean> {
-  if (signal.aborted || isInputWaiting()) return false;
+): Promise<{ attempted: boolean; setupFailedTaskNames: string[] }> {
+  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTaskNames: [] };
   const freeSlots = concurrency - activeCount - queue.length;
-  if (freeSlots <= 0) return false;
+  if (freeSlots <= 0) return { attempted: false, setupFailedTaskNames: [] };
   await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal);
-  if (signal.aborted || isInputWaiting()) return false;
-  const { tasks: newTasks } = claimTasksWithGoalCompletions(
+  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTaskNames: [] };
+  const { tasks: newTasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(
     taskRunner, freeSlots, cwd, signal,
   );
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
@@ -322,7 +328,7 @@ async function claimAvailableTasks(
   } else {
     log.trace('no_new_tasks');
   }
-  return true;
+  return { attempted: true, setupFailedTaskNames };
 }
 
 export function requeueExistingFailedTasks(
