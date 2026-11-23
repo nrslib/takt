@@ -28,6 +28,7 @@ import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
+import { progressNotesDirectory } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -271,6 +272,9 @@ export class AgentRunner {
       ...(options.workflowMeta?.context === undefined ? {} : {
         compactionAssignment: options.workflowMeta.context.assignment.stepName,
       }),
+      ...(options.executionPhase === 1 && options.progressNotes !== undefined
+        ? { compactionHandoffDirectory: progressNotesDirectory(options.progressNotes.reportDir) }
+        : {}),
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),

@@ -72,7 +72,9 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
   output_contracts: [...]      # 出力契約設定（任意）
   input_reports:               # 同じ workflow の完了済み step からレポートを受け取る（任意）
     from_step: remediation
+    # fallback_from_step: initial-reviewers # 主生成元が未実行の場合だけ選択
     reports: [fix-plan.md, fix-report.md] # または all
+    # previous_only: true       # 自己 step の前回完了版を選択。reports は名前を列挙する
   quality_gates: [...]         # agent step 用の品質 gate（文字列指示 / command gate、任意）
   rules: [...]                 # 遷移ルール（必須）
 ```

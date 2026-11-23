@@ -1,5 +1,6 @@
 import type { ResolvedReportReferenceScope } from './report-reference.js';
 import type { WorkflowStep } from '../../models/types.js';
+import type { Language } from '../../models/types.js';
 import type { ReportExecutionMetadata } from '../report-execution-store.js';
 import type { TaskReviewScope } from '../review-scope.js';
 
@@ -28,6 +29,8 @@ export interface InjectedReport {
   readonly execution?: ReportExecutionMetadata;
   readonly origin?: ReportExecutionMetadata;
   readonly path?: string;
+  /** A current host snapshot of a public report from a run without execution-version records. */
+  readonly legacyPublicBody?: true;
   readonly history?: string;
   readonly kind?: 'history';
   readonly reference: string;
@@ -38,15 +41,22 @@ export interface InjectedReport {
 
 export const CURRENT_REPORT_BODY_LIMIT = 8_000;
 
-export function renderCurrentReport(report: InjectedReport): string {
+export function renderCurrentReport(report: InjectedReport, language: Language = 'en'): string {
   if (report.content.length <= CURRENT_REPORT_BODY_LIMIT) return report.content;
   if (report.path === undefined) throw new Error(`A fixed version is required to truncate report "${report.reference}"`);
+  if (report.legacyPublicBody) {
+    const notice = language === 'ja'
+      ? `今回作成したsnapshot: \`${report.path}\`。元の完了実行の固定版と実行IDは未供給`
+      : `snapshot created for this call: \`${report.path}\`. Original completed execution version and ID not supplied`;
+    return `${report.content.slice(0, CURRENT_REPORT_BODY_LIMIT)}\n\n[${notice}]`;
+  }
   return `${report.content.slice(0, CURRENT_REPORT_BODY_LIMIT)}\n\n[Report truncated; full version: \`${report.path}\`]`;
 }
 
 export interface DeclaredReportInputs {
   readonly declaredNames: readonly string[];
   readonly reports: readonly InjectedReport[];
+  readonly unavailable?: readonly { readonly producer: string; readonly names: readonly string[] }[];
 }
 
 export interface PreparedInstruction {

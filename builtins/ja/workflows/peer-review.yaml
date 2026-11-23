@@ -226,6 +226,12 @@ steps:
         next: review-adjudication
   - name: review-adjudication
     input_reports:
+      - from_step: reviewers
+        fallback_from_step: initial-reviewers
+        reports: all
+      - from_step: review-adjudication
+        reports: [review-resolution.md]
+        previous_only: true
       - from_step: remediation
         reports: [fix-plan.md, fix-report.md, fix-verification.md]
         optional_if_unrun: true

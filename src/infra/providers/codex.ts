@@ -17,6 +17,7 @@ import { prepareCodexMcpIsolation } from '../codex/mcp-isolation.js';
 import { createCodexMcpAdapter } from './mcp/codex.js';
 import { buildMcpServerSetIdentity } from '../config/runtime-provider/mcp-schema.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { prepareCodexCallPacket } from '../codex/call-packet.js';
 import {
   assertOutputSchema,
   type AgentSetup,
@@ -108,16 +109,13 @@ export class CodexProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    const sessionInstructions = loadTemplate('codex_session_instructions', 'en');
     const call = async (
       prompt: string,
       options: ProviderCallOptions,
     ): Promise<AgentResponse> => {
       const codexOptions = toCodexOptions(options);
-      return callCodexCustom(name, JSON.stringify({
-        taktCurrentInstructions: systemPrompt ?? null,
-        userInstruction: prompt,
-      }), sessionInstructions, codexOptions);
+      const { input, developerInstructions } = prepareCodexCallPacket(systemPrompt, prompt, options);
+      return callCodexCustom(name, input, developerInstructions, codexOptions);
     };
     const recoverFromCompaction: NonNullable<ProviderAgent['recoverFromCompaction']> = async (
       prompt,
