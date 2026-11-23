@@ -295,6 +295,10 @@ export class InstructionBuilder {
     );
     return {
       text,
+      requiredReferenceContents: [
+        ...(this.context.policySourcePath !== undefined && policyJoined.length > CONTEXT_MAX_CHARS ? [policyJoined] : []),
+        ...(this.context.knowledgeSourcePath !== undefined && knowledgeJoined.length > CONTEXT_MAX_CHARS ? [knowledgeJoined] : []),
+      ],
       injectedReports: [...referencedReports.values(), ...unreferencedDeclaredReports],
       reportInputs: {
         userInputs: [...this.context.userInputs],

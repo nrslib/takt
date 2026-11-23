@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types/provider.js';
 import type { PermissionHandler, SkillPermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { PreparedProviderMcp } from './mcp/types.js';
+import type { ContextWindowLimits } from './context-window.js';
 
 export interface AgentSetup {
   name: string;
@@ -22,6 +23,8 @@ export interface ProviderImageAttachment {
 
 export interface ProviderCallOptions {
   cwd: string;
+  /** Effective native override selected for this call. */
+  contextWindow?: number;
   /** TAKT-owned external context directories OpenCode may read for this run. */
   openCodeExternalDirectories?: readonly string[];
   /** The caller owns session recovery; provider retries must not replay a turn. */
@@ -137,6 +140,7 @@ export interface Provider {
   getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   /** Verify runtime requirements before opening a session; omission means no startup checks are needed. */
   preflight?(options: ProviderCallOptions): Promise<void>;
+  getContextWindowLimits?(options: ProviderCallOptions): Promise<ContextWindowLimits | undefined>;
   setup(config: AgentSetup): ProviderAgent;
   setupIsolatedStructured?(config: AgentSetup): ProviderAgent;
   /** Resolves only when the session is safe to reuse; rejects on failure or unknown state. */

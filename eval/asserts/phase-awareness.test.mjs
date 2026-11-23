@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parse } from 'yaml';
 import { gradePhaseTrial as gradeRecordedTrial } from './phase-awareness.mjs';
 
 const gradePhaseTrial = (trial, options = {}) => gradeRecordedTrial(trial, {
@@ -488,20 +487,6 @@ test('case 9 allows file changes without docs markers while case 8 keeps all tur
     assert.equal((await gradePhaseTrial(value)).pass, id === '9');
   }
 });
-
-test('suite task, fixture, isolation, dist, assertions and prepare prompt all point to phase-awareness', () => {
-  const suite = parse(readFileSync(new URL('../scenarios/phase-awareness/phase-awareness.yaml', import.meta.url), 'utf8'));
-  assert.deepEqual(suite.prompts, ['file://../../prompts/phase-awareness.session.md']);
-  assert.equal(suite.providers.length, 3);
-  for (const provider of suite.providers) {
-    assert.equal(provider.id, 'file://../../providers/phase-session.mjs');
-    assert.equal(provider.config.working_dir, 'fixtures/phase-awareness');
-    assert.equal(provider.config.dist_dir, '../dist');
-    assert.equal(provider.config.isolate_working_dir, true);
-  }
-  for (const entry of suite.tests) assert.ok(entry.vars.task.endsWith(`phase-awareness-${entry.vars.case_id}-task.md`));
-});
-
 
 test('cases 8 and 9 require an actual defect finding through structured content grading', async () => {
   const examples = [

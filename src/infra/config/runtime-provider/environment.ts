@@ -624,8 +624,15 @@ function resolveProfileProviderOptions(
         capabilityContext?.workflowDir ?? capabilityContext?.projectDir ?? '',
         capabilityContext,
       );
+  const contextWindowOptions: StepProviderOptions | undefined = profile.contextWindow === undefined
+    ? undefined
+    : profile.provider === 'codex'
+      ? { codex: { contextWindow: profile.contextWindow } }
+      : profile.provider === 'opencode'
+        ? { opencode: { contextWindow: profile.contextWindow } }
+        : undefined;
   if (profile.options === undefined) {
-    return capabilityOptions;
+    return mergeProviderOptions(capabilityOptions, contextWindowOptions);
   }
   const rawKey = PROVIDER_OPTIONS_RAW_KEY[profile.provider as ProviderType];
   if (rawKey === undefined) {
@@ -648,6 +655,6 @@ function resolveProfileProviderOptions(
       };
   const validatedProfileOptions = StepProviderOptionsObjectSchema.parse({ [rawKey]: profile.options });
   const profileOptions = normalizeProviderOptions(validatedProfileOptions, normalizationOptions);
-  const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions);
+  const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions, contextWindowOptions);
   return mergedOptions;
 }

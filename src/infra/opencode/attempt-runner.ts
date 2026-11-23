@@ -1192,6 +1192,8 @@ export class OpenCodeAttemptRunner {
       options.skillsEnabled,
       executionContext,
       options.externalDirectoryAllowlist,
+      options.contextWindow,
+      options.cwd,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();

@@ -800,7 +800,7 @@ testing directive (`testing-proof-new-behavior`). Run them explicitly with
 They use Luna Max, an exact disposition assertion, and a semantic rubric. The
 rubric and independent fixture behavior tests are outside the model's isolated
 working directory. `npm run eval:prompts:contracts` verifies the fixture's actual
-retry behavior, shared finding-policy composition for both roles, and disposition
+retry behavior, snapshot isolation, and disposition
 parsing with Markdown decoration and conflicting-label rejection. These are individual agent evaluations with seeded reports,
 not an end-to-end review loop.
 
@@ -822,7 +822,7 @@ not an end-to-end review loop.
 Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max の結果を、判定役の gpt-6-sol low で比較します。
 両CLIの認証が必要なため、デフォルトの実行対象には含めません。
 `npm run eval:prompts:finding-realistic-premise` で、キャッシュを使わずに明示的に実行します。
-構成の確認は、build 後の `npm run eval:prompts:contracts` に含まれます。
+fixture の観測結果の確認は、build 後の `npm run eval:prompts:contracts` に含まれます。
 固定入力に対する各役割の判断を測る評価であり、ループ全体が収束するか、変更によって改善したかは別途実測する必要があります。
 
 The `instruction-research-handoff` suite evaluates the instruction-summary,

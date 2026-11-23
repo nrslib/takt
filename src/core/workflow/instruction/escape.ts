@@ -180,5 +180,5 @@ export function prepareTemplatePlaceholders(
     });
   }
 
-  return { text: result, injectedReports: [...injectedReports.values()] };
+  return { text: result, injectedReports: [...injectedReports.values()], requiredReferenceContents: [] };
 }

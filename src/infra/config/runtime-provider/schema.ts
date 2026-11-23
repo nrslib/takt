@@ -29,6 +29,7 @@ const ProfileSchema = z
   .object({
     provider: ProviderNameSchema.optional(),
     model: z.string().min(1).optional(),
+    context_window: z.union([z.literal('auto'), z.number().int().positive()]).optional(),
     options: ProfileOptionsSchema.optional(),
     capabilities: z.union([
       z.string().min(1),

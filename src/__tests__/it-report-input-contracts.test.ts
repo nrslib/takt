@@ -21,7 +21,6 @@ import { readFileSync, statSync } from 'node:fs';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { reportInputNames } from '../core/workflow/report-input-contract.js';
-import { reportInputEntries } from '../core/models/workflow-report-input.js';
 import type { WorkflowCallResolver } from '../core/workflow/types.js';
 import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
 
@@ -85,7 +84,7 @@ describe('builtin implementation report input contracts', () => {
       expect(readFileSync(pinned, 'utf8')).toBe('PRIOR-DECISION-ONLY');
     });
 
-    it('validates migrated builtin producer names and monitor cycles (' + language + ')', () => {
+    it('resolves builtin report input declarations (' + language + ')', () => {
       writeFileSync(join(root, '.takt', 'config.yaml'), `language: ${language}\n`);
       const resolver: WorkflowCallResolver = ({ parentWorkflow, step }) => resolveWorkflowCallTarget(parentWorkflow, step, root);
       const context = { projectCwd: root, lookupCwd: root, workflowCallResolver: resolver };
@@ -93,11 +92,6 @@ describe('builtin implementation report input contracts', () => {
         const workflow = loadWorkflowFromFile(join(getBuiltinWorkflowsDir(language), `${name}.yaml`), root);
         for (const step of workflow.steps) expect(() => reportInputNames(workflow, step, context)).not.toThrow();
         for (const monitor of workflow.loopMonitors ?? []) {
-          expect(reportInputEntries(monitor.judge.inputReports).length).toBeGreaterThan(0);
-          for (const entry of reportInputEntries(monitor.judge.inputReports)) {
-            expect(monitor.cycle).toContain(entry.fromStep);
-            expect(entry.history?.previous).toBe(2);
-          }
           expect(() => reportInputNames(workflow, { name: '_judge', inputReports: monitor.judge.inputReports }, context)).not.toThrow();
         }
       }

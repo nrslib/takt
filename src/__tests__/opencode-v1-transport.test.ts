@@ -26,6 +26,21 @@ function createClientMock(overrides: Record<string, unknown> = {}) {
 describe('OpenCode v1 model resolution', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('reads the effective output limit for the selected project and model', async () => {
+    const list = vi.fn().mockResolvedValue({ data: { all: [
+      { id: 'probe', models: { selected: { limit: { context: 272_000, output: 32_000 } } } },
+    ] } });
+    createClientMock({ provider: { list } });
+    const transport = await createV1Transport('http://localhost');
+    const signal = new AbortController().signal;
+
+    await expect(transport.getModelOutputLimit?.({ directory: '/work', providerID: 'probe', modelID: 'selected' }, { signal }))
+      .resolves.toBe(32_000);
+    expect(list).toHaveBeenCalledWith({ directory: '/work' }, { signal });
+    await expect(transport.getModelOutputLimit?.({ directory: '/work', providerID: 'probe', modelID: 'missing' }))
+      .rejects.toThrow('output limit is unavailable');
+  });
+
   it('uses the selected agent model before session state or the runtime default', async () => {
     const client = createClientMock({
       app: { agents: vi.fn().mockResolvedValue({ data: [{ name: 'takt', model: { providerID: 'probe', modelID: 'agent-model', variant: 'high' } }] }) },
