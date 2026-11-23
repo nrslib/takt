@@ -244,7 +244,10 @@ function resolveReportInputEntry(
     };
   });
   const availableReports = [...inheritedReports, ...reports];
-  return { declaredNames: availableReports.map(({ reference }) => reference), reports: availableReports };
+  return {
+    declaredNames: [...inheritedNames, ...reports.map(({ reference }) => reference)],
+    reports: availableReports,
+  };
 }
 
 export function resolveDeclaredReportInputs(

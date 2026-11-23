@@ -126,6 +126,67 @@ describe('declared report inputs', () => {
     } finally { warning.mockRestore(); }
   });
 
+  it.each(['explicit', 'all'] as const)(
+    'reserves a missing inherited report alongside a newly completed report (%s selection)', (selection) => {
+      const f = fixture();
+      f.child.steps.push(makeStep({ name: 'verify', outputContracts: [{ name: 'verification.md', format: 'Verification' }] }));
+      f.consumer.inputReports = {
+        fromStep: 'source', reports: selection === 'all' ? 'all' : ['review.md', 'verification.md'],
+      };
+      f.consumer.instruction = '{report:review.md}\n{report:verification.md}';
+      f.record(1, true);
+      const prefix = [buildWorkflowResumePointEntry(f.parent, 'source', 'workflow_call', 1, undefined, 1)];
+      const namespace = 'subworkflows/iteration-1--step-source--workflow-child';
+      const directory = join(f.reportDir, namespace);
+      const reviewIdentity = buildWorkflowStepParticipationIdentity(f.child.name, 'review', prefix);
+      const verificationIdentity = buildWorkflowStepParticipationIdentity(f.child.name, 'verify', prefix);
+      const writer = new ReportExecutionStore(f.reportDir);
+      const reviewExecution = writer.begin(reviewIdentity, 'review', directory, ['review.md']);
+      writer.capture(directory, 'review.md', 'SAVED-PLAN');
+      writer.finish(reviewExecution, true);
+      rmSync(writer.current(reviewIdentity, 'review.md')!.path);
+      rmSync(join(directory, 'review.md'));
+
+      const restored = new ReportExecutionStore(f.reportDir);
+      restored.restoreInheritedReports([
+        { identity: reviewIdentity, savedIdentity: reviewIdentity, reportName: 'review.md', reportPath: `${namespace}/review.md` },
+        { identity: verificationIdentity, savedIdentity: verificationIdentity, reportName: 'verification.md', reportPath: `${namespace}/verification.md` },
+      ]);
+      const verificationExecution = restored.begin(verificationIdentity, 'verify', directory, ['verification.md']);
+      writeFileSync(join(directory, 'verification.md'), 'VERIFIED');
+      restored.capture(directory, 'verification.md', 'VERIFIED');
+      restored.finish(verificationExecution, true);
+      f.sharedRuntime.workflowStepParticipationIndex!.record(f.child, 'verify', prefix, ['verification.md']);
+      f.sharedRuntime.reportExecutions = restored;
+      writeFileSync(join(f.reportDir, 'review.md'), 'OTHER-PLAN');
+      const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+      try {
+        const input = f.resolve()!;
+        expect.soft(input.declaredNames).toEqual(['review.md', 'verification.md']);
+        expect(input.reports.map(({ reference, content }) => ({ reference, content }))).toEqual([
+          { reference: 'verification.md', content: 'VERIFIED' },
+        ]);
+        expect(warning.mock.calls.some(([level, , message, data]) => level === 'WARN'
+          && message === 'Ignoring missing inherited report input'
+          && JSON.stringify(data).includes('review.md'))).toBe(true);
+
+        const prepared = new InstructionBuilder(f.consumer, makeInstructionContext({
+          reportDir: f.reportDir, declaredReportInputs: [input],
+        })).prepare();
+        expect.soft(prepared.injectedReports.find(({ reference }) => reference === 'review.md')).toEqual({
+          reference: 'review.md', scope: 'missing', content: formatMissingReportReference('review.md'),
+        });
+        expect(prepared.injectedReports.find(({ reference }) => reference === 'verification.md')).toMatchObject({
+          scope: 'declared-producer', content: 'VERIFIED',
+        });
+        expect.soft(prepared.text).toContain(formatMissingReportReference('review.md'));
+        expect(prepared.text).toContain('VERIFIED');
+        expect.soft(prepared.text).not.toContain('OTHER-PLAN');
+        expect(prepared.text).not.toContain('SAVED-PLAN');
+      } finally { warning.mockRestore(); }
+    },
+  );
+
   it.each(['ja', 'en'] as const)('marks a short legacy report as lacking its original fixed version and execution ID (%s)', (language) => {
     const f = fixture();
     f.record(1, true);
@@ -404,6 +465,17 @@ describe('declared report inputs', () => {
     });
     expect(f.resolvedText()).toContain('backend findings');
     expect(f.resolvedText()).not.toContain('unrelated security findings');
+    const input = f.resolve()!;
+    expect.soft(input.declaredNames).toEqual(['backend.md']);
+    writeFileSync(join(f.reportDir, 'security.md'), 'LOCAL-SECURITY');
+    const prepared = new InstructionBuilder(makeStep({ instruction: '{report:backend.md}\n{report:security.md}' }),
+      makeInstructionContext({ reportDir: f.reportDir, declaredReportInputs: [input] })).prepare();
+    expect(prepared.injectedReports.find(({ reference }) => reference === 'backend.md')).toMatchObject({
+      scope: 'declared-producer', content: 'backend findings',
+    });
+    expect.soft(prepared.injectedReports.find(({ reference }) => reference === 'security.md')).toMatchObject({
+      scope: 'step', content: 'LOCAL-SECURITY',
+    });
     f.state.dynamicParallelSelections.set(identity, {
       identity,
       step_name: 'reviewers',
