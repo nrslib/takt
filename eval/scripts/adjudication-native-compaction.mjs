@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveCodexHomeDirectory } from '../../dist/infra/codex/home.js';
 import { gradeAdjudicationAnswer } from './adjudication-handoff.mjs';
@@ -16,14 +16,29 @@ const MAX_DURATION_MS = 30 * 60_000;
 const sourceFiles = ['requirements.md', 'goalOperations.mjs', 'lifecycle.mjs', 'managerMcpConnection.mjs', 'workspaceRegistry.mjs'];
 const privateHistoryPath = /\.codex\/(?:sessions|memories)|session_index|state_5\.sqlite|rollout-|report-executions\/index\.json/i;
 const codexPath = /(?:^|[/'"`\s])\.codex(?=\/|['"`\s]|$)/g;
+const codexHomeVariable = /\$(?:CODEX_HOME|\{CODEX_HOME\})(?=\/|['"`\s]|$)/g;
 
-function isProhibited(input) {
+function isPrivateCodexSuffix(suffix) {
+  const path = suffix.replace(/^['"`]/, '');
+  const child = path.startsWith('/') ? path.slice(1).match(/^[^/'"`\s;|&]+/)?.[0] : undefined;
+  return !['skills', 'AGENTS.md'].includes(child) || /(?:^|\/)\.\.(?:\/|$)/.test(path);
+}
+
+function isProhibited(input, codexHome) {
   const command = String(input);
   if (privateHistoryPath.test(command)) return true;
   for (const match of command.matchAll(codexPath)) {
-    const suffix = command.slice(match.index + match[0].length);
-    const child = suffix.startsWith('/') ? suffix.slice(1).match(/^[^/'"`\s;|&]+/)?.[0] : undefined;
-    if (!['skills', 'AGENTS.md'].includes(child) || /(?:^|\/)\.\.(?:\/|$)/.test(suffix)) return true;
+    if (isPrivateCodexSuffix(command.slice(match.index + match[0].length))) return true;
+  }
+  for (const match of command.matchAll(codexHomeVariable)) {
+    if (isPrivateCodexSuffix(command.slice(match.index + match[0].length))) return true;
+  }
+  let offset = command.indexOf(codexHome);
+  while (offset !== -1) {
+    const suffix = command.slice(offset + codexHome.length);
+    const prefixBoundary = offset === 0 || /[='"`\s(]/.test(command[offset - 1]);
+    if (prefixBoundary && /^(?:\/|['"`\s]|$)/.test(suffix) && isPrivateCodexSuffix(suffix)) return true;
+    offset = command.indexOf(codexHome, offset + 1);
   }
   return false;
 }
@@ -101,12 +116,12 @@ function inspectOwnRollout(threadId, overridePath, codexHome, prepared) {
     if (event.type === 'compacted') compactions.push(event.timestamp);
     const item = event.payload;
     if (event.type !== 'response_item') continue;
-    if (item.type === 'custom_tool_call' && isProhibited(item.input ?? '')) diskExplorationCalls.push(item.name);
+    if (item.type === 'custom_tool_call' && isProhibited(item.input ?? '', codexHome)) diskExplorationCalls.push(item.name);
     if (item.type === 'custom_tool_call' || item.type === 'function_call') pendingCalls.set(item.call_id, item);
     if (item.type === 'function_call' && ['history', 'notes'].includes(item.namespace)) {
       calls.set(item.call_id, { namespace: item.namespace, name: item.name, at: event.timestamp });
     }
-    if (item.type === 'function_call' && isProhibited(item.arguments ?? '')) diskExplorationCalls.push(item.name);
+    if (item.type === 'function_call' && isProhibited(item.arguments ?? '', codexHome)) diskExplorationCalls.push(item.name);
     if (item.type === 'custom_tool_call_output' || item.type === 'function_call_output') {
       const text = decodedVisibleText(item.output);
       const original = pendingCalls.get(item.call_id);
@@ -137,7 +152,7 @@ function inspectOwnRollout(threadId, overridePath, codexHome, prepared) {
     visibleChunks, incompleteEvidenceCalls, sourceOutputMatches: [...sourceOutputMatches], artifactOutputAfterCompaction };
 }
 
-function inspectAppEvents(eventsPath, prepared) {
+function inspectAppEvents(eventsPath, prepared, codexHome) {
   const itemCompactions = new Map();
   const threadCompactions = new Map();
   const commandStarts = new Map();
@@ -173,7 +188,7 @@ function inspectAppEvents(eventsPath, prepared) {
     if (event.method === 'item/started' && item?.type === 'commandExecution') {
       toolCalls++;
       commandStarts.set(item.id, { command: item.command, afterCompaction: compacted });
-      if (isProhibited(item.command)) diskExplorationCalls.push(item.id);
+      if (isProhibited(item.command, codexHome)) diskExplorationCalls.push(item.id);
     }
     if (event.method === 'item/completed' && item?.type === 'commandExecution' && item.exitCode === 0) {
       const start = commandStarts.get(item.id);
@@ -191,8 +206,9 @@ function inspectAppEvents(eventsPath, prepared) {
 }
 
 export function evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath) {
-  const observed = inspectAppEvents(eventsPath, prepared);
-  const rollout = inspectOwnRollout(base.threadId, rolloutPath, base.codexHome ?? resolveCodexHomeDirectory(process.env), prepared);
+  const codexHome = base.codexHome ?? resolveCodexHomeDirectory(process.env);
+  const observed = inspectAppEvents(eventsPath, prepared, codexHome);
+  const rollout = inspectOwnRollout(base.threadId, rolloutPath, codexHome, prepared);
   const decisions = gradeAdjudicationAnswer(observed.answer);
   const sourceReads = sourceFiles.filter((file) => observed.sourceCommandSuccess.includes(file)
     && rollout.sourceOutputMatches?.includes(file));
@@ -220,7 +236,10 @@ export function gradeRecordedNative(preparedPath, model) {
   const previous = JSON.parse(readFileSync(join(output, 'grade.json'), 'utf8'));
   const rolloutPath = previous.rollout?.path;
   if (rolloutPath && !rolloutPath.endsWith(`-${previous.threadId}.jsonl`)) throw new Error('Recorded rollout does not match the trial thread');
-  const grade = evaluateNativeEvidence(prepared, previous, join(output, 'events.jsonl'), rolloutPath);
+  let recordedHome = rolloutPath;
+  for (let level = 0; level < 5 && recordedHome; level++) recordedHome = dirname(recordedHome);
+  const grade = evaluateNativeEvidence(prepared, { ...previous, codexHome: previous.codexHome ?? recordedHome },
+    join(output, 'events.jsonl'), rolloutPath);
   grade.regrade = { regradedAt: new Date().toISOString(), source: 'recorded app-server events and own rollout',
     graderSourceSha256: createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex') };
   writeFileSync(join(output, 'regrade.json'), JSON.stringify(grade, null, 2), { mode: 0o600 });
@@ -360,7 +379,7 @@ export async function runNative({ preparedPath, codexBin, model }) {
         toolCalls++;
         const { tool, arguments: args } = message.params;
         const input = JSON.stringify(args);
-        if (isProhibited(input)) stop('self-session exploration');
+        if (isProhibited(input, codexHome)) stop('self-session exploration');
         if (toolCalls > MAX_TOOLS) stop('tool cap');
         if (tool !== 'read_ci_evidence' || args === null || typeof args !== 'object' || Object.keys(args).length !== 0) {
           send({ id: message.id, result: { success: false, contentItems: [{ type: 'inputText', text: 'Invalid evidence request' }] } });
@@ -380,7 +399,7 @@ export async function runNative({ preparedPath, codexBin, model }) {
       if (message.method === 'item/started' && message.params?.item?.type === 'commandExecution') {
         toolCalls++;
         const command = message.params.item.command ?? '';
-        if (isProhibited(command)) stop('self-session exploration');
+        if (isProhibited(command, codexHome)) stop('self-session exploration');
         if (command.includes(prepared.artifact) && compacted === 0) packetReadBeforeCompaction = true;
         if (toolCalls > MAX_TOOLS) stop('tool cap');
       }

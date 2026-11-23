@@ -38,7 +38,9 @@ process.stdin.on('data', (chunk) => {
     if (msg.method === 'thread/start') send({ id: msg.id, result: { model: msg.params.model, thread: { id: 'thread-1' } } });
     if (msg.method === 'turn/start') {
       send({ id: msg.id, result: { turn: { id: 'turn-1' } } });
-      next();
+      if (process.env.TAKT_FAKE_UNSAFE_COMMAND) {
+        send({ method: 'item/started', params: { item: { type: 'commandExecution', id: 'unsafe', command: process.env.TAKT_FAKE_UNSAFE_COMMAND } } });
+      } else next();
     }
     if (msg.id >= 100 && msg.result) {
       if (read === 20 && !process.env.TAKT_FAKE_NO_COMPACTION) {
@@ -94,9 +96,15 @@ process.stdin.on('data', (chunk) => {
     process.env.TAKT_FAKE_VERSION = 'codex-cli 0.164.0-alpha.1';
     await assert.rejects(runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6-luna' }),
       /Managed Codex 0\.164\.0 is required/);
+    delete process.env.TAKT_FAKE_VERSION;
+    process.env.CODEX_HOME = join(temp, 'custom-codex-home');
+    process.env.TAKT_FAKE_UNSAFE_COMMAND = 'cat "$CODEX_HOME"/sessions/2026/11/23/*.jsonl';
+    const blocked = await runNative({ preparedPath: join(output, 'prepared.json'), codexBin: fake, model: 'gpt-6-luna' });
+    assert.equal(blocked.stoppedReason, 'self-session exploration');
   } finally {
     delete process.env.TAKT_FAKE_NO_COMPACTION;
     delete process.env.TAKT_FAKE_VERSION;
+    delete process.env.TAKT_FAKE_UNSAFE_COMMAND;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (cwd) rmSync(cwd, { recursive: true, force: true });
@@ -131,7 +139,8 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
   const prepared = { artifact: join(temp, 'packet.json'),
     input: JSON.stringify({ taktCurrentInstructions: '現在の担当はレビュー裁定のPhase 1。AC7とSTYLE2の採否を確かめる。',
       userInstruction: '裁定を続けてください。' }) };
-  const base = { threadId: 'trial-thread', readChunks: Array.from({ length: 36 }, (_, index) => index),
+  const base = { threadId: 'trial-thread', codexHome: join(temp, 'custom-codex-home'),
+    readChunks: Array.from({ length: 36 }, (_, index) => index),
     toolCalls: 42, stoppedReason: 'turn complete' };
   const files = ['requirements.md', 'goalOperations.mjs', 'lifecycle.mjs', 'managerMcpConnection.mjs', 'workspaceRegistry.mjs'];
   const source = files.map((file) => readFileSync(resolve('eval/fixtures/adjudication-handoff',
@@ -271,6 +280,27 @@ test('recorded grade separates continuity, packet recovery, and fully visible lo
       assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
         [], command);
     }
+    for (const command of ['cat "$CODEX_HOME"/sessions/2026/11/23/*.jsonl',
+      'rg --files ${CODEX_HOME}/sessions', `find ${base.codexHome} -type f`,
+      `cat ${base.codexHome}/sessions/2026/11/23/rollout.jsonl`]) {
+      rollout.at(-1).payload.input = command;
+      write();
+      assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
+        ['exec'], command);
+    }
+    for (const command of ['cat "$CODEX_HOME"/skills/coding/SKILL.md',
+      `rg --files ${base.codexHome}/skills`, `cat ${base.codexHome}/AGENTS.md`]) {
+      rollout.at(-1).payload.input = command;
+      write();
+      assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).rollout.diskExplorationCalls,
+        [], command);
+    }
+    rollout.pop();
+    events.push(rpc('item/started', { item: item('commandExecution', 'unsafe-custom',
+      { command: `find ${base.codexHome}/sessions -type f` }) }));
+    write();
+    assert.deepEqual(evaluateNativeEvidence(prepared, base, eventsPath, rolloutPath).diskExplorationCalls,
+      ['unsafe-custom']);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
