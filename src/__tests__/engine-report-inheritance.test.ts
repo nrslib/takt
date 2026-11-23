@@ -31,6 +31,7 @@ import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -487,7 +488,7 @@ describe('WorkflowEngine report inheritance', () => {
     expect(instruction).toContain(frontendContent);
   });
 
-  it('rejects missing workflow-call invocation state before a resumed fix agent starts', async () => {
+  it('warns and continues when the resumed workflow-call invocation is missing', async () => {
     const child: WorkflowConfig = {
       name: 'child-review',
       subworkflow: { callable: true },
@@ -509,7 +510,8 @@ describe('WorkflowEngine report inheritance', () => {
         }),
       ],
     };
-    expect(() => new WorkflowEngine(workflow, cwd, 'test task', {
+    const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    engine = new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
       startStep: 'fix',
       resumeSource: { sourceRunSlug, resumeMode: 'retry' },
@@ -529,10 +531,16 @@ describe('WorkflowEngine report inheritance', () => {
         workflow_step_participations: {},
       },
       workflowCallResolver: ({ step }) => step.call === 'child-review' ? child : null,
-    })).toThrow(
-      'Invalid review report discovery state: workflow_call_invocation_missing:delegate',
-    );
-    expect(runAgent).not.toHaveBeenCalled();
+    });
+    mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'fix complete' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls.some(([level, , message]) => level === 'WARN'
+      && message === 'Ignoring unavailable inherited report participation')).toBe(true);
   });
 
   it('preserves available reports and writes partial discovery diagnostics', async () => {

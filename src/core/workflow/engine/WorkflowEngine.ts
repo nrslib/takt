@@ -664,6 +664,7 @@ export class WorkflowEngine extends EventEmitter {
     }
     this.rebindResumeInvocationsForReportDiscovery();
     const reportNameResult = resolveInheritedReviewReportNamesWithDiagnostics(createReviewReportDiscoveryContext({
+      reportExecutions: this.sharedRuntime.reportExecutions,
       step: currentStep,
       workflow: this.config,
       workflowCallResolver: this.options.workflowCallResolver,

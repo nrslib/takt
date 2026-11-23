@@ -1,6 +1,6 @@
 import { getAllParallelSubSteps, type WorkflowConfig, type WorkflowResumePoint, type WorkflowResumePointEntry, type WorkflowStep } from '../models/types.js';
 import type { WorkflowCallResolver } from './types.js';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { parseWorkflowExecutionIdentity, serializeWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
 import { parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
 import { buildWorkflowResumePointEntry, getWorkflowReference } from './workflow-reference.js';
@@ -30,9 +30,19 @@ function findStep(workflow: WorkflowConfig, name: string, parallelParent?: strin
   return steps.find((step) => step.name === name);
 }
 
-function resolveChild(context: ResumeRecordContext, workflow: WorkflowConfig, step: WorkflowStep): WorkflowConfig | undefined {
-  if (step.kind !== 'workflow_call') return undefined;
-  return context.workflowCallResolver?.({ parentWorkflow: workflow, step, projectCwd: context.projectCwd, lookupCwd: context.lookupCwd }) ?? undefined;
+type ChildWorkflowResolution =
+  | { readonly kind: 'resolved'; readonly workflow: WorkflowConfig }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'failed'; readonly error: string };
+
+function resolveChild(context: ResumeRecordContext, workflow: WorkflowConfig, step: WorkflowStep): ChildWorkflowResolution {
+  if (step.kind !== 'workflow_call' || context.workflowCallResolver === undefined) return { kind: 'unavailable' };
+  try {
+    const child = context.workflowCallResolver({ parentWorkflow: workflow, step, projectCwd: context.projectCwd, lookupCwd: context.lookupCwd });
+    return child === null ? { kind: 'unavailable' } : { kind: 'resolved', workflow: child };
+  } catch (error) {
+    return { kind: 'failed', error: getErrorMessage(error) };
+  }
 }
 
 /** Saved hashes describe the source definition; names and call positions select its records. */
@@ -61,8 +71,8 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
         call.kind === 'workflow_call' ? call.instance : undefined));
       if (call.kind === 'workflow_call') {
         const child = resolveChild(context, workflow, step);
-        if (child === undefined) return undefined;
-        workflow = child;
+        if (child.kind !== 'resolved') return undefined;
+        workflow = child.workflow;
         parallelParent = undefined;
       } else if (call.kind === 'parallel') parallelParent = call.step;
     }
@@ -121,12 +131,17 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
     const parsed = parseWorkflowExecutionIdentity(identity)!;
     const target = locate(identity)!;
     const step = findStep(target.workflow, parsed.step, target.calls.at(-1)?.kind === 'parallel' ? target.calls.at(-1)!.step : undefined);
-    const child = step === undefined ? undefined : resolveChild(context, target.workflow, step);
+    const child = step === undefined ? { kind: 'unavailable' as const } : resolveChild(context, target.workflow, step);
     const namespace = parseWorkflowCallNamespaceSegment(record.report_namespace_segment);
-    if (namespace?.stepName !== parsed.step || namespace.iteration !== record.call_instance || child === undefined || namespace.workflowName !== child.name
+    if (step?.kind !== 'workflow_call' || namespace?.stepName !== parsed.step || namespace.iteration === '*'
+      || child.kind === 'resolved' && namespace.workflowName !== child.workflow.name
       || activeInvocations.has(identity) && activeInvocations.get(identity) !== record.call_instance) {
       log.warn('Ignoring unmatched inherited workflow invocation', { identity });
       invocations.delete(identity);
+    } else if (child.kind !== 'resolved') {
+      log.warn('Deferring inherited workflow invocation resolution to report discovery', {
+        identity, ...(child.kind === 'failed' ? { error: child.error } : {}),
+      });
     }
   }
   const namespaces = new Map<string, string[]>();
@@ -244,7 +259,10 @@ export function matchWorkflowResumeRecords(source: WorkflowResumePoint, context:
       ? undefined
       : Object.fromEntries(Object.entries(entry.step_iterations).filter(([name]) => !excluded.has(name)));
     const step = findStep(workflow, entry.step, parallelParent);
-    if (step !== undefined) workflow = resolveChild(context, workflow, step) ?? workflow;
+    if (step !== undefined) {
+      const child = resolveChild(context, workflow, step);
+      if (child.kind === 'resolved') workflow = child.workflow;
+    }
     parallelParent = entry.kind === 'parallel' ? entry.step : undefined;
     return stepIterations === undefined ? current : { ...current, step_iterations: stepIterations };
   });
@@ -276,7 +294,8 @@ export function collectWorkflowReportProducers(
     const reports = getReportFiles(step.outputContracts).map((reportName) => ({ identity, reportName }));
     if (step.parallel !== undefined) reports.push(...getAllParallelSubSteps(step.parallel).flatMap((child) => collect(workflow, child, calls, step.name)));
     if (step.kind === 'workflow_call') {
-      const child = resolveChild(context, workflow, step);
+      const resolution = resolveChild(context, workflow, step);
+      const child = resolution.kind === 'resolved' ? resolution.workflow : undefined;
       const participation = resolveReviewReportStepParticipation(step, workflow, calls, {
         activeWorkflowReference: getWorkflowReference(workflow), stepOutputNames: new Set(), restoredStepIterationNames: new Set(),
         workflowCallInvocations: { kind: 'exact', records: new Map(Object.entries(invocations)) },

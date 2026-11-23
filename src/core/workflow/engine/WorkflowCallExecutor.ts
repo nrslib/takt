@@ -455,8 +455,8 @@ export class WorkflowCallExecutor {
           );
         } else if ((this.deps.getOptions().resumePoint !== undefined || this.deps.getOptions().restartPoint !== undefined || this.deps.sharedRuntime.restartNavigator !== undefined)
           && existingNamespace?.stepName === step.name
-          && existingNamespace.workflowName === childWorkflow.name
-          && existingNamespace.iteration === occurrence) {
+          && existingNamespace.iteration !== '*'
+          && existingNamespace.workflowName === childWorkflow.name) {
           const savedOccurrence = existingNamespace.iteration;
           const sourceRecord = Object.entries(this.deps.sharedRuntime.resumeInvocationSource?.workflow_call_invocations ?? {})
             .find(([, record]) => record.report_namespace_segment === existing.report_namespace_segment);
@@ -466,7 +466,7 @@ export class WorkflowCallExecutor {
             : resumeStackSnapshot;
           const sameDefinitionNamespace = buildWorkflowCallSiteIdentity({
             stack: [...savedPrefix, buildWorkflowResumePointEntry(
-              parentConfig, step.name, 'workflow_call', savedOccurrence, this.deps.state.stepIterations, savedOccurrence,
+              parentConfig, step.name, 'workflow_call', savedOccurrence, this.deps.state.stepIterations, existing.call_instance,
             )],
             childWorkflow,
           }).runPathSegment;

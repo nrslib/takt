@@ -86,6 +86,7 @@ import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-c
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { buildSessionKey } from '../core/workflow/session-key.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 import { MAX_EXPLICIT_PARALLEL_ERROR_RETRIES } from '../core/workflow/engine/ParallelRunner.js';
 import {
   makeResponse,
@@ -2082,11 +2083,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.has('security')).toBe(false);
   });
 
-  it('should reject a mismatched workflow-call invocation before agent start', () => {
+  it('should discard a mismatched workflow-call invocation and continue before agent start', () => {
     const config = normalizeWorkflowConfig({
       name: 'workflow-call-invocation-mismatch',
       initial_step: 'delegate',
-      max_steps: 1,
+      max_steps: 3,
       steps: [{
         name: 'delegate',
         kind: 'workflow_call',
@@ -2094,12 +2095,21 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
       }],
     }, tmpDir);
+    const child = normalizeWorkflowConfig({
+      name: 'child',
+      subworkflow: { callable: true },
+      initial_step: 'review',
+      max_steps: 1,
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review', rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }, tmpDir);
     const invocationIdentity = buildWorkflowCallInvocationIdentity(config.name, 'delegate', []);
+    const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
 
-    expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
+      workflowCallResolver: ({ step }) => step.call === 'child' ? child : null,
       resumePoint: {
         version: 2,
         stack: [{
@@ -2120,9 +2130,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         },
         workflow_step_participations: {},
       },
-    })).toThrow('Workflow-call invocation identity does not match resume entry "delegate"');
+    });
 
     expect(runAgent).not.toHaveBeenCalled();
+    expect(warning.mock.calls.some(([level, , message]) => level === 'WARN'
+      && message === 'Ignoring unmatched inherited workflow invocation')).toBe(true);
+    engine.removeAllListeners();
+    warning.mockRestore();
   });
 
   it.each([

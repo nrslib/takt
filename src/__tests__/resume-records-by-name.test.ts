@@ -60,6 +60,18 @@ describe('resume records matched by name', () => {
     expect(matchWorkflowResumeRecords(f.point, f.context).inheritedReports).toEqual([]);
   });
 
+  it('drops an invocation with an unspecified namespace iteration', () => {
+    const f = fixture();
+    f.point.workflow_call_invocations[f.invocation]!.report_namespace_segment =
+      'iteration-*--step-delegate--workflow-child';
+
+    const result = matchWorkflowResumeRecords(f.point, f.context);
+
+    expect(result.point.workflow_call_invocations).toEqual({});
+    expect(result.point.workflow_step_participations).toEqual({});
+    expect(result.inheritedReports).toEqual([]);
+  });
+
   it('drops a workflow-call participation when its invocation was excluded', () => {
     const f = fixture();
     const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(f.root), 'delegate', []);
@@ -83,7 +95,7 @@ describe('resume records matched by name', () => {
     }).kind).toBe('not-participated');
   });
 
-  it.each([1, 2])('matches the saved call instance against namespace iteration %s', (iteration) => {
+  it.each([1, 2])('does not equate namespace iteration with call instance (%s)', (iteration) => {
     const f = fixture();
     f.point.workflow_call_invocations[f.invocation]!.report_namespace_segment =
       `iteration-${iteration}--step-delegate--workflow-child`;
@@ -92,17 +104,10 @@ describe('resume records matched by name', () => {
       const result = matchWorkflowResumeRecords(f.point, f.context);
       expect(result.point.stack[0]).toEqual(f.point.stack[0]);
       expect(result.point.stack[1]?.step).toBe('verify');
-      if (iteration === 1) {
-        expect(result.point.workflow_call_invocations[f.invocation]?.call_instance).toBe(1);
-        expect(result.inheritedReports[0]?.reportName).toBe('plan.md');
-      } else {
-        expect(result.point.workflow_call_invocations).toEqual({});
-        expect(result.point.workflow_step_participations).toEqual({});
-        expect(result.inheritedReports).toEqual([]);
-        expect(warning.mock.calls).toEqual(expect.arrayContaining([
-          ['WARN', expect.any(String), expect.any(String), expect.objectContaining({ identity: f.invocation })],
-        ]));
-      }
+      expect(result.point.workflow_call_invocations[f.invocation]?.call_instance).toBe(1);
+      expect(result.inheritedReports[0]?.reportName).toBe('plan.md');
+      expect(warning.mock.calls.some(([level, , message]) => level === 'WARN'
+        && message === 'Ignoring unmatched inherited workflow invocation')).toBe(false);
     } finally { warning.mockRestore(); }
   });
 

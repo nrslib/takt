@@ -187,6 +187,12 @@ function resolveReviewReportSourceStepGroups(
     const participation = resolveParticipation(candidate, context);
     if (participation.kind === 'not-participated') continue;
     if (participation.kind === 'invalid') {
+      if (context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+        getWorkflowReference(context.workflow), candidate.name, context.resumeStackPrefix,
+      ))) {
+        log.warn('Ignoring unavailable inherited report participation', { step: candidate.name });
+        continue;
+      }
       failures.push({ kind: 'fatal', reason: participation.reason });
       continue;
     }
