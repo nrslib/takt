@@ -485,10 +485,16 @@ function validateCompletionRetryOptIn(
 
 const WorkflowReportInputEntryRawSchema = z.object({
   from_step: WorkflowStepNameSchema,
+  fallback_from_step: WorkflowStepNameSchema.optional(),
   reports: z.union([z.literal('all'), z.array(z.string().min(1)).min(1)]),
   optional_if_unrun: z.literal(true).optional(),
+  previous_only: z.literal(true).optional(),
   history: z.object({ previous: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
-}).strict();
+}).strict().superRefine((input, ctx) => {
+  if (input.previous_only && (input.fallback_from_step || input.optional_if_unrun || input.reports === 'all')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'previous_only requires explicit reports and cannot use a fallback or optional_if_unrun' });
+  }
+});
 
 export const WorkflowReportInputRawSchema = z.union([
   WorkflowReportInputEntryRawSchema,

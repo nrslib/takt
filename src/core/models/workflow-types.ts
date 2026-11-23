@@ -219,8 +219,10 @@ export interface WorkflowCallInvocationRecord {
 
 export interface WorkflowReportInput {
   fromStep: string;
+  fallbackFromStep?: string;
   reports: readonly string[] | 'all';
   optionalIfUnrun?: true;
+  previousOnly?: true;
   history?: { previous: number };
 }
 
