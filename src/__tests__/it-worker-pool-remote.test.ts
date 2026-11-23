@@ -62,7 +62,8 @@ function filesContaining(directory: string, value: string): string[] {
 it('keeps communication failures retryable while returning a terminal reason for authentication rejection', async () => {
   const token = 'private-test-token';
   const errors = vi.fn();
-  const runtime = { receive: vi.fn(async (_token: string, _request: WorkerRequest, _sink: WorkerConnectionSink): Promise<void> => {
+  const runtime = { authenticate: vi.fn(async (_token: string): Promise<void> => {}),
+    receive: vi.fn(async (_token: string, _request: WorkerRequest, _sink: WorkerConnectionSink): Promise<void> => {
     throw new Error(`Storage failed with ${token}`);
   }), disconnect: vi.fn() };
   const server = await createWorkerServer({ host: '127.0.0.1', port: 0, runtime, onError: errors });
@@ -78,6 +79,18 @@ it('keeps communication failures retryable while returning a terminal reason for
     await vi.waitFor(() => expect(closed).toBe(true), { timeout: 5000 });
   };
   try {
+    runtime.authenticate.mockRejectedValueOnce(new Error(`Registry failed with ${token}`));
+    await open();
+    expect(runtime.authenticate).toHaveBeenCalledWith(token);
+    expect(runtime.receive).not.toHaveBeenCalled();
+    expect(responses).toEqual([]);
+    expect(errors).toHaveBeenCalledExactlyOnceWith(new Error('Worker communication failed'));
+    runtime.authenticate.mockRejectedValueOnce(new WorkerRejectedError('Worker token was removed'));
+    await open();
+    expect(runtime.receive).not.toHaveBeenCalled();
+    expect(responses).toEqual([{ kind: 'rejected', reason: 'Worker token was removed' }]);
+    expect(errors).toHaveBeenCalledOnce();
+    errors.mockClear(); responses.length = 0;
     await open();
     expect(responses).toEqual([]);
     expect(errors).toHaveBeenCalledExactlyOnceWith(new Error('Worker communication failed'));
@@ -394,6 +407,78 @@ async function fixture(options: { origin?: string; version?: string; workerConcu
     },
   };
 }
+
+it.each(['unregistered', 'removed'].flatMap((condition) => [false, true].map((sendFrame) => ({ condition, sendFrame }))))(
+  'rejects $condition tokens and closes the socket with an unfinished request (sendFrame=$sendFrame)', async ({ condition, sendFrame }) => {
+    const f = await fixture();
+    const socket = connect({ host: '127.0.0.1', port: f.port });
+    let received = ''; let closed = false;
+    const errors = vi.fn();
+    socket.on('data', (bytes: Buffer) => { received += bytes.toString(); });
+    socket.once('close', () => { closed = true; });
+    socket.on('error', errors);
+    try {
+      let token = f.registered.token;
+      if (condition === 'unregistered') token = token.slice(0, -2) + 'xx';
+      else await f.registry.remove('w1');
+      socket.write(['POST /worker HTTP/1.1', 'Host: localhost', `Authorization: Bearer ${token}`,
+        'Content-Type: application/x-ndjson', 'Transfer-Encoding: chunked', 'Connection: keep-alive', '', ''].join('\r\n'));
+      if (sendFrame) {
+        const frame = JSON.stringify({ kind: 'connect', protocolVersion: 1, requestId: randomUUID(),
+          workerId: 'w1', registrationGeneration: f.registered.registration.registrationGeneration,
+          version: packageVersion, canExecute: true, active: [] }) + '\n';
+        socket.write(`${Buffer.byteLength(frame).toString(16)}\r\n${frame}\r\n`);
+      }
+      await vi.waitFor(() => expect(received).toContain('"kind":"rejected"'), { timeout: 5000 });
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 5000 });
+      const responses = received.split('\n').map((line) => {
+        try { return WorkerResponseSchema.safeParse(JSON.parse(line)); } catch { return undefined; }
+      }).flatMap((parsed) => parsed?.success ? [parsed.data] : []);
+      expect(responses).toEqual([{ kind: 'rejected', reason: expect.stringMatching(/not registered|removed/i) }]);
+      expect(received).not.toContain(token);
+      expect(errors).not.toHaveBeenCalled();
+      expect(f.store.read().tasks[0]!.status).toBe('pending');
+    } finally { socket.destroy(); await f.close(); }
+  },
+);
+
+it.each([false, true])('rechecks registration on connect after header authentication (removed=%s)', async (removed) => {
+  const f = await fixture();
+  const authenticated = deferred<void>();
+  const authenticate = RemoteWorkerRuntime.prototype.authenticate;
+  const authentication = vi.spyOn(RemoteWorkerRuntime.prototype, 'authenticate').mockImplementation(async function (this: RemoteWorkerRuntime, token) {
+    await authenticate.call(this, token);
+    authenticated.resolve();
+  });
+  const responses: WorkerResponse[] = [];
+  const transport = connectWorkerTransport({ url: new URL(`http://127.0.0.1:${f.port}`), token: f.registered.token,
+    onResponse: (response) => responses.push(response) });
+  let closed = false;
+  void transport.closed.then(() => { closed = true; });
+  try {
+    await authenticated.promise;
+    expect(closed).toBe(false);
+    expect(f.requests).toEqual([]);
+    expect(responses).toEqual([]);
+    expect(f.store.read().tasks[0]!.status).toBe('pending');
+    if (removed) await f.registry.remove('w1');
+    const message = <T extends object>(body: T) => ({ protocolVersion: 1 as const, requestId: randomUUID(), workerId: 'w1',
+      registrationGeneration: f.registered.registration.registrationGeneration, ...body });
+    transport.send(message({ kind: 'connect' as const, version: packageVersion, canExecute: false, active: [] }));
+    if (removed) {
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 5000 });
+      expect(responses).toEqual([{ kind: 'rejected', reason: expect.stringMatching(/not registered|removed/i) }]);
+    } else {
+      await vi.waitFor(() => expect(responses).toContainEqual(expect.objectContaining({ kind: 'connected' })), { timeout: 5000 });
+      for (let count = 0; count < 2; count++) {
+        const heartbeat = message({ kind: 'heartbeat' as const, active: [] }); transport.send(heartbeat);
+        await vi.waitFor(() => expect(responses).toContainEqual(expect.objectContaining({ kind: 'heartbeat', requestId: heartbeat.requestId })), { timeout: 5000 });
+      }
+      expect(closed).toBe(false);
+    }
+    expect(f.store.read().tasks[0]!.status).toBe('pending');
+  } finally { authentication.mockRestore(); transport.close(); await f.close(); }
+});
 
 it('authenticates a separate worker process and persists its assignment and worker name through the task list', async () => {
   const f = await fixture();
@@ -872,7 +957,18 @@ isolatedWorkerTest.each(['requeue', 'retry'] as const)('resumes a failed clone o
       ? await requeueTaktGoalTask(input, {}, new AbortController().signal)
       : await retryTaktGoalTask({ ...input, task: 'Corrected remote instructions', startStep: 'verify' }, {}, new AbortController().signal);
     expect(result.isError, firstTextContent(result.content)).not.toBe(true);
-    await vi.waitFor(() => expect(worker.calls().some((call) => call.pid !== failed.first.pid)).toBe(true), { timeout: 20_000 });
+    try {
+      await vi.waitFor(() => expect(worker.calls().some((call) => call.pid !== failed.first.pid)).toBe(true), { timeout: 20_000 });
+    } catch (error) {
+      throw new Error('Remote retry did not start: ' + JSON.stringify({ operation, tasks: f.store.read().tasks.map((task) => ({ status: task.status, failure: task.failure,
+        assignment: task.remote_assignment })), requests: f.requests.map((request) => ({ kind: request.kind,
+          ...(request.kind === 'execution' ? { command: request.command.kind } : {}),
+          ...('operation' in request ? { operation: request.operation, exists: request.exists, error: request.error } : {}) })),
+        responses: f.responses.map((response) => ({ kind: response.kind,
+          ...(response.kind === 'execution' ? { response: response.response.kind } : {}),
+          ...('operation' in response ? { operation: response.operation } : {}) })),
+        output: worker.output() }), { cause: error });
+    }
     const resumed = worker.calls().find((call) => call.pid !== failed.first.pid)!;
     expect(worker.child.pid).toBe(parentPid);
     expect(resumed).toMatchObject({ cwd: failed.verification.cwd, denied: 'EPERM' });
@@ -1684,7 +1780,7 @@ it.each(['unregistered', 'removed', 'version'] as const)('prints a reason and ex
     await vi.waitFor(() => expect(worker.exit()).not.toBeUndefined(), { timeout: 20_000 });
     expect(worker.exit()).not.toBe(0);
     expect(worker.output()).toMatch(condition === 'version' ? /version/i : /not registered|removed/i);
-    expect(f.requests.some((request) => request.kind === 'connect')).toBe(true);
+    if (condition === 'version') expect(f.requests.some((request) => request.kind === 'connect')).toBe(true);
     expect(f.responses.length).toBeGreaterThan(0);
     expect(f.responses.every((response) => response.kind === 'rejected')).toBe(true);
     expect(f.responses).not.toContainEqual(expect.objectContaining({ assignment: expect.anything() }));

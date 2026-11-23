@@ -173,16 +173,34 @@ jobs:
       - run: npm run build
       - run: npm run ${{ matrix.script }}
 
+  heavy_it_worker_remote:
+    name: Remote worker isolation (macOS)
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- src/__tests__/it-worker-pool-remote.test.ts
+
   heavy_it:
     name: test:it:heavy
     runs-on: ubuntu-latest
-    needs: [heavy_it_shard, heavy_it_serial]
+    needs: [heavy_it_shard, heavy_it_serial, heavy_it_worker_remote]
     if: ${{ always() && github.event_name == 'pull_request' }}
     permissions:
       contents: read
     steps:
       - run: |
-          if [ "${{ needs.heavy_it_shard.result }}" != "success" ] || [ "${{ needs.heavy_it_serial.result }}" != "success" ]; then
+          if [ "${{ needs.heavy_it_shard.result }}" != "success" ] || [ "${{ needs.heavy_it_serial.result }}" != "success" ] || [ "${{ needs.heavy_it_worker_remote.result }}" != "success" ]; then
             echo "Heavy integration jobs did not all succeed"
             exit 1
           fi

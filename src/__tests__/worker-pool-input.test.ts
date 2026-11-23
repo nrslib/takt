@@ -11,7 +11,7 @@ import { resolveOpenCodeStreamLimits } from '../infra/opencode/OpenCodeStreamHan
 
 const launches = vi.hoisted(() => ({ codex: vi.fn(), claude: vi.fn(), headless: vi.fn(), terminal: vi.fn(),
   cursor: vi.fn(), copilot: vi.fn(), kiro: vi.fn(), devin: vi.fn(), session: vi.fn() }));
-vi.mock('../infra/codex/index.js', async (original) => ({ ...await original<typeof import('../infra/codex/index.js')>(), callCodex: launches.codex }));
+vi.mock('../infra/codex/index.js', async (original) => ({ ...await original<typeof import('../infra/codex/index.js')>(), callCodexCustom: launches.codex }));
 vi.mock('../infra/claude/client.js', async (original) => ({ ...await original<typeof import('../infra/claude/client.js')>(), callClaude: launches.claude }));
 vi.mock('../infra/claude-headless/client.js', async (original) => ({ ...await original<typeof import('../infra/claude-headless/client.js')>(), callClaudeHeadless: launches.headless }));
 vi.mock('../infra/claude-terminal/client.js', async (original) => ({ ...await original<typeof import('../infra/claude-terminal/client.js')>(), callClaudeTerminal: launches.terminal }));
@@ -149,7 +149,13 @@ it.each(['/daemon-cli-A', '/daemon-cli-C'])('passes the daemon CLI paths to ever
     for (const [provider, launch, option] of providers) {
       launches[launch].mockResolvedValue({ persona: 'agent', status: 'done', content: 'done', timestamp: new Date() });
       await provider.setup({ name: 'agent' }).call('work', { cwd: '/worker/clone' });
-      expect(launches[launch]).toHaveBeenCalledWith('agent', 'work', expect.objectContaining({ [option]: path }));
+      if (launch === 'codex') {
+        expect(launches.codex).toHaveBeenCalledWith('agent', expect.any(String), expect.any(String),
+          expect.objectContaining({ [option]: path }));
+        expect(JSON.parse(launches.codex.mock.calls[0]![1] as string)).toEqual({
+          userInstruction: 'work', taktCurrentInstructions: null,
+        });
+      } else expect(launches[launch]).toHaveBeenCalledWith('agent', 'work', expect.objectContaining({ [option]: path }));
     }
     launches.session.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
     await (await import('../infra/kiro/sessionExistence.js')).kiroSessionExists('/worker/clone', '12345678-1234-1234-1234-123456789abc');

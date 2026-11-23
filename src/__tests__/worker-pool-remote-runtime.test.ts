@@ -111,6 +111,32 @@ function fixture() {
 
 const receiveCases = ['connect', 'heartbeat', 'complete', 'pull', 'check'] as const;
 
+it('authenticates without registering a connection or changing task dispatch', async () => {
+  const f = fixture(); const runtime = f.makeRuntime();
+  try {
+    await runtime.authenticate('test-w1');
+    expect(doubles.authorize).toHaveBeenCalledExactlyOnceWith('w1');
+    expect(runtime.connectionCount).toBe(0);
+    expect(f.pool.setRemoteWorkers).not.toHaveBeenCalled();
+    expect(f.pool.dispatch).not.toHaveBeenCalled();
+    expect(f.pool.pull).not.toHaveBeenCalled();
+    expect(f.operations).toEqual([]);
+    expect(f.messages).toEqual([]);
+  } finally { await runtime.close(); }
+});
+
+it.each(['unregistered', 'removed', 'stopped'] as const)('rejects %s at connection authentication', async (condition) => {
+  const f = fixture(); const runtime = f.makeRuntime();
+  try {
+    if (condition === 'removed') f.remove();
+    if (condition === 'stopped') await runtime.close();
+    await expect(runtime.authenticate(condition === 'unregistered' ? 'unknown' : 'test-w1')).rejects.toBeInstanceOf(WorkerRejectedError);
+    expect(runtime.connectionCount).toBe(0);
+    expect(f.pool.dispatch).not.toHaveBeenCalled();
+    expect(f.messages).toEqual([]);
+  } finally { await runtime.close(); }
+});
+
 it.each([
   'valid', 'before-expiry', 'worker', 'connection-generation', 'assignment-worker', 'assignment-generation',
   'projectId', 'taskName', 'executionId', 'assignmentGeneration', 'missing-record',

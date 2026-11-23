@@ -23,7 +23,8 @@ async function* frames(stream: AsyncIterable<Uint8Array>): AsyncGenerator<unknow
 
 export async function createWorkerServer(input: {
   host: string; port: number;
-  runtime: { receive(token: string, request: WorkerRequest, sink: WorkerConnectionSink): Promise<void>; disconnect(sink: WorkerConnectionSink): void };
+  runtime: { authenticate(token: string): Promise<void>;
+    receive(token: string, request: WorkerRequest, sink: WorkerConnectionSink): Promise<void>; disconnect(sink: WorkerConnectionSink): void };
   onError(error: unknown): void;
 }) {
   const connections = new Set<WorkerConnectionSink>();
@@ -35,6 +36,7 @@ export async function createWorkerServer(input: {
     }
     response.setHeader('content-type', 'application/x-ndjson');
     let ended = false;
+    let authenticated = false;
     let workerId: string | undefined;
     const disconnected = (): void => {
       ended = true;
@@ -54,6 +56,8 @@ export async function createWorkerServer(input: {
       fail(error) {
         if (ended) return;
         if (error instanceof WorkerRejectedError) {
+          // An unfinished unauthenticated request must not retain a socket after its rejection is flushed.
+          if (!authenticated) response.once('finish', () => { request.destroy(); });
           sink.send({ kind: 'rejected', reason: error.message });
           sink.close();
         } else {
@@ -70,6 +74,8 @@ export async function createWorkerServer(input: {
       const authorization = request.headers.authorization;
       if (authorization === undefined || !authorization.startsWith('Bearer ')) throw new WorkerRejectedError('Worker token is required');
       const token = authorization.slice(7);
+      await input.runtime.authenticate(token);
+      authenticated = true;
       let connected = false;
       // Keep the response writable when message validation or authentication rejects a frame.
       for await (const value of frames(request.iterator({ destroyOnReturn: false }))) {

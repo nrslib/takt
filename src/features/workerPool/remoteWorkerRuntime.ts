@@ -152,6 +152,13 @@ export class RemoteWorkerRuntime {
       registrationGeneration: identity.registrationGeneration } as const;
   }
 
+  authenticate(token: string): Promise<void> {
+    return this.serialize(async () => {
+      if (this.closed) throw new WorkerRejectedError('Daemon worker listener is stopping');
+      await this.registry.authorize(token, async () => {});
+    });
+  }
+
   receive(token: string, request: WorkerRequest, sink: WorkerConnectionSink): Promise<void> {
     return this.serialize(async () => {
       if (this.closed) throw new WorkerRejectedError('Daemon worker listener is stopping');
