@@ -166,15 +166,17 @@ export class ConversationStateStore {
     }, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
-  async create(input: ConversationRecord): Promise<ConversationTurnState> {
+  async create(input: ConversationRecord, signal: AbortSignal = new AbortController().signal): Promise<ConversationTurnState> {
+    signal.throwIfAborted();
     const record = ConversationRecordSchema.parse(input);
     return this.lock.exclusive(`${this.path(record.id)}.lock`, async () => {
       const existing = await this.load(record.id);
+      signal.throwIfAborted();
       if (existing !== undefined) return this.state(existing);
       const stored: StoredConversation = { record, metadata: { version: 0, receipts: [] } };
-      await this.write(stored);
+      await this.write(stored, signal);
       return this.state(stored);
-    }, { signal: new AbortController().signal, timeoutMs: 5000 });
+    }, { signal, timeoutMs: 5000 });
   }
 
   private async write(stored: StoredConversation, signal?: AbortSignal): Promise<void> {

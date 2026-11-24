@@ -44,7 +44,12 @@ describe('owned manager MCP sessions', () => {
     doubles.transportClose.mockResolvedValue(undefined);
   });
   const request = async (headers: Record<string, string>): Promise<number> => new Promise((resolve) => {
-    const res = { writeHead: vi.fn(), end: () => resolve(res.writeHead.mock.calls[0]![0]) };
+    const events = new EventEmitter();
+    const res = Object.assign(events, { writableFinished: false, destroyed: false, headersSent: false,
+      writeHead: vi.fn(),
+      end() { this.headersSent = true; this.writableFinished = true; events.emit('finish'); events.emit('close'); resolve(this.writeHead.mock.calls[0]![0]); return this; },
+      destroy() { this.destroyed = true; events.emit('close'); return this; },
+    });
     doubles.request({ method: 'POST', url: '/', headers, resume: vi.fn() }, res);
   });
 

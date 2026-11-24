@@ -82,6 +82,8 @@ const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('add_director_manager'), repositoryDirectory: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('fire_director_manager'), managerId: z.string().regex(/^manager-[a-f0-9]{64}$/) }).strict(),
   z.object({ kind: z.literal('publish_epic_events'), workspaceId: z.uuid(), epicId: z.uuid(), reason: z.string().trim().min(1) }).strict(),
   WaitCommandInputSchema.extend({ kind: z.literal('wait_command') }).strict(),
   z.object({ kind: z.literal('publish_workspace_inquiry_answer'), questionId: z.uuid() }).strict(),
@@ -96,6 +98,7 @@ const admission = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rejected'), reason: z.enum(['capacity', 'storage', 'stopping']) }).strict(),
 ]);
 const stateReply = z.discriminatedUnion('kind', [
+  z.object({ kind: z.enum(['director_manager_added', 'director_manager_fired']), managerId: z.string().regex(/^manager-[a-f0-9]{64}$/) }).strict(),
   z.object({ kind: z.literal('epic_events_published') }).strict(),
   z.object({ kind: z.literal('wait_command_registered'), id: z.uuid() }).strict(),
   z.object({ kind: z.literal('state_saved'), version, duplicate: z.boolean() }).strict(),
@@ -124,6 +127,7 @@ const childMessage = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('turn_finished'), turn: TurnIdentitySchema, outcome }).strict(),
   z.object({ ...common, kind: z.literal('shutdown_complete') }).strict(),
   z.object({ ...common, kind: z.literal('daemon_request'), turn: TurnIdentitySchema, requestId: id, request: stateRequest }).strict(),
+  z.object({ ...common, kind: z.literal('cancel_daemon_request'), turn: TurnIdentitySchema, requestId: id }).strict(),
 ]);
 export type DaemonProcessMessage = z.infer<typeof daemonMessage>;
 export type TurnProcessMessage = z.infer<typeof childMessage>;

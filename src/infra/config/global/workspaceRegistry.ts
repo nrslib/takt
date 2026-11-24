@@ -4,6 +4,9 @@ import { basename, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { writeFileAtomic } from '../project/sessionStore.js';
 import { resolveGitRepositoryDirectory } from '../../task/repositoryDirectory.js';
+import { conversationId } from '../../conversations/identity.js';
+import { withManagerLifecycleLock } from '../../conversations/managerLifecycleLock.js';
+import { withRepositoryAssignmentLocks } from '../../conversations/assignmentLock.js';
 
 const WORKSPACE_FILE_NAME = 'workspace.json';
 const WorkspaceIdSchema = z.uuid();
@@ -84,8 +87,10 @@ export async function createWorkspace(options: {
 }): Promise<Workspace> {
   const repositoryDirectories = [...new Set(await Promise.all(options.repositoryDirectories.map(resolveGitRepositoryDirectory)))];
   const workspace = WorkspaceSchema.parse({ id: randomUUID(), name: options.name, repositoryDirectories });
-  for (const directory of repositoryDirectories) await assertUnassigned(options.globalConfigDirectory, directory, workspace.id);
-  return writeWorkspace(options.globalConfigDirectory, workspace);
+  return withRepositoryAssignmentLocks(options.globalConfigDirectory, repositoryDirectories, new AbortController().signal, async () => {
+    for (const directory of repositoryDirectories) await assertUnassigned(options.globalConfigDirectory, directory, workspace.id);
+    return writeWorkspace(options.globalConfigDirectory, workspace);
+  });
 }
 
 export function generateWorkspaceName(repositoryDirectories: readonly string[]): string {
@@ -94,19 +99,30 @@ export function generateWorkspaceName(repositoryDirectories: readonly string[]):
 
 export async function addWorkspaceRepository(globalConfigDirectory: string, id: string, repositoryDirectory: string): Promise<Workspace> {
   const directory = await resolveGitRepositoryDirectory(repositoryDirectory);
-  const workspace = await requireWorkspace(globalConfigDirectory, id);
-  await assertUnassigned(globalConfigDirectory, directory, id);
-  if (workspace.repositoryDirectories.includes(directory)) return workspace;
-  return writeWorkspace(globalConfigDirectory, { ...workspace, repositoryDirectories: [...workspace.repositoryDirectories, directory] });
-}
-
-export async function removeWorkspaceRepository(globalConfigDirectory: string, id: string, repositoryDirectory: string): Promise<Workspace> {
-  const workspace = await requireWorkspace(globalConfigDirectory, id);
-  return writeWorkspace(globalConfigDirectory, {
-    ...workspace, repositoryDirectories: workspace.repositoryDirectories.filter((directory) => directory !== repositoryDirectory),
+  return updateWorkspace(globalConfigDirectory, id, [directory], async (workspace) => {
+    await assertUnassigned(globalConfigDirectory, directory, id);
+    return workspace.repositoryDirectories.includes(directory) ? workspace
+      : { ...workspace, repositoryDirectories: [...workspace.repositoryDirectories, directory] };
   });
 }
 
+export async function removeWorkspaceRepository(globalConfigDirectory: string, id: string, repositoryDirectory: string): Promise<Workspace> {
+  return updateWorkspace(globalConfigDirectory, id, [repositoryDirectory], async (workspace) => ({
+    ...workspace, repositoryDirectories: workspace.repositoryDirectories.filter((directory) => directory !== repositoryDirectory),
+  }));
+}
+
 export async function renameWorkspace(globalConfigDirectory: string, id: string, name: string): Promise<Workspace> {
-  return writeWorkspace(globalConfigDirectory, { ...await requireWorkspace(globalConfigDirectory, id), name });
+  return updateWorkspace(globalConfigDirectory, id, [], async (workspace) => ({ ...workspace, name }));
+}
+
+async function updateWorkspace(globalConfigDirectory: string, id: string, repositories: readonly string[],
+  update: (workspace: Workspace) => Promise<Workspace>): Promise<Workspace> {
+  const managerId = conversationId({ kind: 'workspace', workspaceId: WorkspaceIdSchema.parse(id) });
+  const signal = new AbortController().signal;
+  return withManagerLifecycleLock(globalConfigDirectory, managerId, signal, () => withRepositoryAssignmentLocks(globalConfigDirectory, repositories, signal, async () => {
+    const workspace = await requireWorkspace(globalConfigDirectory, id);
+    const updated = await update(workspace);
+    return updated === workspace ? workspace : writeWorkspace(globalConfigDirectory, updated);
+  }));
 }

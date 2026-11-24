@@ -104,6 +104,33 @@ afterEach(async () => {
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
+it('cancels conversation creation before publication and permits a later retry', async () => {
+  const directory = await root(); const store = new ConversationStateStore(directory); const controller = new AbortController();
+  injection.beforeSync = async () => { controller.abort(); };
+  await expect(store.create(record(), controller.signal)).rejects.toThrow();
+  expect(await store.read(id)).toBeUndefined();
+  expect((await readdir(join(directory, 'conversations'))).some((name) => name.endsWith('.tmp'))).toBe(false);
+  injection.beforeSync = undefined;
+  await store.create(record());
+  expect((await store.read(id))?.record).toEqual(record());
+});
+
+it('stops a conversation creation waiting for its storage lock when its request is cancelled', async () => {
+  const directory = await root(); await ensurePrivateDirectory(join(directory, 'conversations'));
+  const path = join(directory, 'conversations', `${id}.json.lock`);
+  const unlock = await new FileAsyncLock().acquire(path, io());
+  const attempted = deferred<void>(); const acquire = FileAsyncLock.prototype.acquire;
+  vi.spyOn(FileAsyncLock.prototype, 'acquire').mockImplementation(function(this: FileAsyncLock, ...args) {
+    attempted.resolve(); return acquire.apply(this, args);
+  });
+  const store = new ConversationStateStore(directory); const controller = new AbortController();
+  const rejected = expect(store.create(record(), controller.signal)).rejects.toThrow();
+  try {
+    await attempted.promise; controller.abort(); await rejected;
+    expect(await store.read(id)).toBeUndefined();
+  } finally { await unlock(); }
+});
+
 async function patrolRecords(directory: string) {
   const { FilePatrolRecords } = await import('../infra/daemon/patrolRecords.js');
   return new FilePatrolRecords(directory);
