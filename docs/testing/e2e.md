@@ -4,6 +4,8 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 
 daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起動、manager・director のターン子、manager の HTTP MCP 呼出し、会話の保存と再起動後の復元、停止を確認する。実 PTY では manager の複数行下書きへの BEL/ST（ESC \\）終端の分割 OSC 1337 画像挿入、カーソル位置と末尾本文の保持、不正画像の通知、provider 境界での永続パスの読取と切断後の画像保持も確認する。node-pty と build 済み dist が必要。実 provider、OS clipboard、GitHub は使わない。
 
+画像入力の検証では、不正画像の通知後に送った本文だけの二件目が provider へ届き、画像を引き継がないことも確認する。
+
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。

@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_proce
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, dirname, join, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, relative, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify } from 'yaml';
 import { createTaktMcpServer } from '../features/mcp/server.js';
@@ -34,8 +34,9 @@ import { ConversationImageStore } from '../infra/conversations/imageAttachments.
 import * as privateFiles from '../infra/daemon/privateFile.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
-import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from '../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution, stageTaskSpecForExecution, restageTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+import { registerManagerImageRun } from '../features/tasks/managerImageAttachments.js';
 
 type SandboxResult = Pick<SpawnSyncReturns<string>, 'status' | 'signal' | 'error' | 'stdout' | 'stderr'>;
 const sandboxProbeOutput = 'takt-sandbox-probe-ok';
@@ -49,14 +50,9 @@ const outputlessSandbox: SandboxResult = {
 
 function sandboxUnavailableReason(result: SandboxResult): string | undefined {
   // Observed when Codex's Seatbelt sandbox is started inside another Seatbelt sandbox.
-  if (result.error === undefined && result.signal === null && result.status === 71 && result.stdout === ''
+  if (process.platform === 'darwin' && result.error === undefined && result.signal === null && result.status === 71 && result.stdout === ''
     && result.stderr.trim() === unavailableSandbox.stderr.trim()) {
     return result.stderr.trim();
-  }
-  // A probe independent of image access must execute before image failures can be meaningful.
-  if (result.error === undefined && result.signal === null && result.status === 0
-    && result.stdout.trim() !== sandboxProbeOutput) {
-    return 'Sandbox probe did not produce the expected output';
   }
   return undefined;
 }
@@ -119,22 +115,22 @@ describe('sandbox subprocess diagnostics', () => {
   });
 
   it('recognizes the observed sandbox initialization denial and preserves its reason', () => {
-    expect(sandboxUnavailableReason(unavailableSandbox)).toBe(unavailableSandbox.stderr.trim());
-    expect(expectSandboxImageRead(unavailableSandbox, undefined, expected, 'image read'))
-      .toContain(unavailableSandbox.stderr.trim());
+    if (process.platform === 'darwin') {
+      expect(sandboxUnavailableReason(unavailableSandbox)).toBe(unavailableSandbox.stderr.trim());
+      expect(expectSandboxImageRead(unavailableSandbox, undefined, expected, 'image read'))
+        .toContain(unavailableSandbox.stderr.trim());
+    } else {
+      expect(sandboxUnavailableReason(unavailableSandbox)).toBeUndefined();
+      expect(() => expectSandboxImageRead(unavailableSandbox, undefined, expected, 'image read')).toThrow();
+    }
   });
 
   it.each(['', ' \n', 'unexpected probe output'].flatMap((stdout) =>
     ['', outputlessSandbox.stderr].map((stderr) => ({ stdout, stderr }))))(
-    'recognizes a zero-exit probe with invalid output as unavailable and preserves diagnostics: %j', ({ stdout, stderr }) => {
+    'rejects a zero-exit probe with invalid output: %j', ({ stdout, stderr }) => {
       const probe = result({ stdout, stderr });
-      const reason = sandboxUnavailableReason(probe);
-      expect(reason).toEqual(expect.any(String));
-      expect(reason).not.toBe('');
-      const diagnostic = expectSandboxImageRead(probe, undefined, expected, 'image read');
-      expect(diagnostic).toContain(reason);
-      expect(diagnostic).toContain('status=0');
-      expect(diagnostic).toContain(`stderr=${JSON.stringify(stderr)}`);
+      expect(sandboxUnavailableReason(probe)).toBeUndefined();
+      expect(() => expectSandboxImageRead(probe, undefined, expected, 'image read')).toThrow();
     });
 
   it.each([
@@ -273,6 +269,31 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     return saved;
   }
 
+  it('keeps the turn image source when a workspace is created before task registration', async () => {
+    const f = await prepareManagerImage();
+    const second = join(root, 'second-project');
+    mkdirSync(second);
+    execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: second, stdio: 'pipe' });
+    const added = await client.callTool({ name: 'takt_add_workspace_repository', arguments: { repositoryDirectory: second } });
+    expect(added.isError, firstTextContent(added.content)).not.toBe(true);
+    const saved = await enqueueImageTask(`Inspect image: \`${f.image.path}\``, 'Inspect the supplied image');
+    const workflow = (await new ConversationImageStore(cwd, f.id).read()).workflows?.[0];
+    expect(workflow?.imageIds).toEqual([f.image.id]);
+    expect(readFileSync(join(cwd, saved.taskDir!, 'attachments', 'image-1.png'))).toEqual(png);
+  });
+
+  it('registers and stages manager images in a custom runs directory', async () => {
+    const f = await prepareManagerImage();
+    const saved = await enqueueImageTask(`Inspect image: \`${f.image.path}\``, 'Inspect in central run');
+    const paths = buildRunPathsFromRunsDirectory(join(root, 'central-runs'), 'custom-image-run');
+    const sourceTaskDir = join(cwd, saved.taskDir!);
+    await registerManagerImageRun(sourceTaskDir, paths);
+    stageTaskSpecForExecution(resolveTaskSpecForExecution(cwd, cwd, saved.taskDir!, paths.slug, paths), paths);
+    expect((await new ConversationImageStore(cwd, f.id).read()).workflows?.[0]?.copies)
+      .toEqual([{ root: paths.runRootAbs, taskDirectory: paths.contextTaskAbs }]);
+    expect(readFileSync(join(paths.contextTaskAbs, 'attachments', 'image-1.png'))).toEqual(png);
+  });
+
   function observeWorkflowReads(sandbox: boolean, probeOverride?: SandboxResult) {
     let home: string | undefined;
     const reads: { cwd: string; order: string; imagePath?: string; bytes?: Buffer; sandboxProbe?: SandboxResult; sandboxResult?: SandboxResult; options: ProviderCallOptions }[] = [];
@@ -338,8 +359,7 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
 
   it.each([
     { mode: 'real sandbox', probeOverride: undefined },
-    { mode: 'unavailable sandbox', probeOverride: unavailableSandbox },
-    { mode: 'zero-exit outputless sandbox', probeOverride: outputlessSandbox },
+    ...(process.platform === 'darwin' ? [{ mode: 'unavailable sandbox', probeOverride: unavailableSandbox }] : []),
   ])(
     'reads only the selected manager image from a private clone copy in a read-only sandbox through retry and requeue ($mode)', async ({ probeOverride }) => {
     const f = await prepareManagerImage();
@@ -385,8 +405,10 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
       const imagePath = read!.imagePath!;
       expect(relative(read!.cwd, imagePath)).toMatch(/^\.takt[/\\]runs[/\\]/u);
       expect(imagePath).not.toBe(f.image.path);
-      expect(statSync(imagePath).mode & 0o777).toBe(0o600);
-      expect(statSync(dirname(imagePath)).mode & 0o777).toBe(0o700);
+      if (process.platform !== 'win32') {
+        expect(statSync(imagePath).mode & 0o777).toBe(0o600);
+        expect(statSync(dirname(imagePath)).mode & 0o777).toBe(0o700);
+      }
       expect(readdirSync(dirname(imagePath))).toEqual(['image-1.png']);
       expect(execFileSync('git', ['ls-files', '--', relative(read!.cwd, imagePath)], { cwd: read!.cwd, encoding: 'utf8' })).toBe('');
       execFileSync('git', ['check-ignore', '--', relative(read!.cwd, imagePath)], { cwd: read!.cwd, stdio: 'pipe' });
@@ -394,8 +416,10 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     }
     const canonical = join(cwd, saved.taskDir!, 'attachments', 'image-1.png');
     expect(readFileSync(canonical)).toEqual(png);
-    expect(statSync(canonical).mode & 0o777).toBe(0o600);
-    expect(statSync(dirname(canonical)).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') {
+      expect(statSync(canonical).mode & 0o777).toBe(0o600);
+      expect(statSync(dirname(canonical)).mode & 0o777).toBe(0o700);
+    }
     execFileSync('git', ['check-ignore', '--', relative(cwd, canonical)], { cwd, stdio: 'pipe' });
     const removed = await client.callTool({ name: 'takt_remove_goal_task', arguments: {
       cwd, goalId, taskName: saved.name, reason: 'No further retry is needed',
@@ -415,7 +439,7 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
   it('removes sandbox homes even when client cleanup fails', async () => {
     const f = await prepareManagerImage();
     await enqueueImageTask(`Inspect image: \`${f.image.path}\``, 'Inspect image before cleanup failure');
-    observeWorkflowReads(true, outputlessSandbox);
+    observeWorkflowReads(true, process.platform === 'darwin' ? unavailableSandbox : undefined);
     await executeEnqueuedTask();
     const homes = [...sandboxHomes];
     expect(homes).toHaveLength(1);
@@ -450,8 +474,8 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
       const source = await temporary.saveImage(secondBytes, 'image/png');
       secondImage = await first.images.prepare(workspaceRoot, workspaceId, randomUUID(), source.tempPath);
     } finally { temporary.cleanup(); }
-    expect(first.image.path.endsWith('/image-1.png')).toBe(true);
-    expect(secondImage.path.endsWith('/image-1.png')).toBe(true);
+    expect(basename(first.image.path)).toBe('image-1.png');
+    expect(basename(secondImage.path)).toBe('image-1.png');
     expect(secondImage.path).not.toBe(first.image.path);
     await client.close(); await server.close();
     server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd, managerAssignment: assignment });
@@ -615,8 +639,9 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
 
   it.each(['before publication', 'after publication'] as const)('reconciles manager image reservations when enqueue fails %s', async (phase) => {
     const f = await prepareManagerImage();
+    let imageLockReleasedAtWorkLog = false;
     if (phase === 'after publication') vi.spyOn(GoalStore.prototype, 'update').mockImplementationOnce(async () => {
-      expect(existsSync(join(cwd, '.takt', 'manager-images', f.id, '.lock'))).toBe(false);
+      imageLockReleasedAtWorkLog = !existsSync(join(cwd, '.takt', 'manager-images', f.id, '.lock'));
       throw new Error('Injected work log failure');
     });
     const result = await enqueueTaktGoalTask({ cwd, goalId, purpose: 'Inspect selected screen',
@@ -630,6 +655,9 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
       },
     }, new AbortController().signal);
     expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toContain(phase === 'after publication'
+      ? 'Injected work log failure' : 'Injected enqueue publication failure');
+    if (phase === 'after publication') expect(imageLockReleasedAtWorkLog).toBe(true);
     const records = new TaskStore(cwd).read().tasks;
     const metadata = await new ConversationImageStore(cwd, f.id).read();
     if (phase === 'before publication') {
@@ -686,8 +714,10 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     restageTaskSpecForExecution(resolveTaskSpecForExecution(cwd, cwd, saved.taskDir!, paths.slug), paths);
     const stagedImage = join(paths.contextTaskAbs, 'attachments', 'image-1.png');
     expect(readFileSync(stagedImage)).toEqual(png);
-    expect(statSync(stagedImage).mode & 0o777).toBe(0o600);
-    expect(statSync(dirname(stagedImage)).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') {
+      expect(statSync(stagedImage).mode & 0o777).toBe(0o600);
+      expect(statSync(dirname(stagedImage)).mode & 0o777).toBe(0o700);
+    }
     expect(readFileSync(paths.contextTaskOrderAbs, 'utf8')).toContain('Additional instructions');
 
     writeFileSync(join(cwd, saved.taskDir!, 'attachments', 'image-1.png'), Buffer.concat([png, Buffer.from('changed')]));

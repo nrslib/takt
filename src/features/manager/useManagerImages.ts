@@ -8,8 +8,8 @@ import { resolveReferencedImageAttachments } from '../../shared/utils/imageAttac
 import type { ManagerImageAttachmentReference, StoredImageAttachment } from '../../shared/types/image-attachments.js';
 
 export function useManagerImages(input: {
-  lang: 'ja' | 'en'; enabled: boolean;
-  client: Pick<ConversationIpcClient, 'prepareImage' | 'getImageDirectory'>;
+  lang: 'ja' | 'en'; enabled: boolean; connection: 'connecting' | 'connected' | 'disconnected';
+  client: Pick<ConversationIpcClient, 'prepareImage' | 'getImageDirectory' | 'subscribe' | 'getSnapshot'>;
   insert(text: string): void; notice(message: string | null): void;
 }) {
   const stores = useRef(new Map<string, Promise<ImageAttachmentStore>>());
@@ -19,7 +19,15 @@ export function useManagerImages(input: {
   const stopped = useRef(false);
   const stopping = useRef<Promise<void> | undefined>(undefined);
   const pending = useRef(new Set<PendingWork>());
-  const images = useRef(new Map<string, { image: ManagerImageAttachmentReference; source: StoredImageAttachment }>());
+  const epoch = useRef(0);
+  const previousConnection = useRef(input.connection);
+  const observeConnection = (connection: typeof input.connection): void => {
+    if (previousConnection.current === 'connected' && connection !== 'connected') epoch.current++;
+    previousConnection.current = connection;
+  };
+  observeConnection(input.connection);
+  useEffect(() => input.client.subscribe(() => observeConnection(input.client.getSnapshot().connection)), [input.client]);
+  const images = useRef(new Map<string, { image: ManagerImageAttachmentReference; source: StoredImageAttachment; epoch: number }>());
   const getStore = async (client: typeof input.client): Promise<ImageAttachmentStore> => {
     const root = await client.getImageDirectory();
     if (stopped.current) throw new Error('Image input stopped');
@@ -44,7 +52,7 @@ export function useManagerImages(input: {
     const source = store.listAttachments().find((image) => image.placeholder === placeholder);
     if (source === undefined) throw new Error('Missing pasted image');
     const image = await client.prepareImage(source.tempPath);
-    if (!stopped.current) images.current.set(image.placeholder, { image, source });
+    if (!stopped.current) images.current.set(image.placeholder, { image, source, epoch: epoch.current });
     return image.placeholder;
   };
   const sealImages = (): void => { for (const store of ownedStores.current) store.seal(); };
@@ -88,9 +96,20 @@ export function useManagerImages(input: {
     defer(action: () => void) {
       void awaitPendingWork(pending.current).then(() => { if (!stopped.current) action(); });
     },
-    ids(text: string): string[] {
-      const referenced = resolveReferencedImageAttachments(text, [...images.current.values()].map(({ image, source }) => ({ ...source, placeholder: image.placeholder })));
-      return referenced.map(({ placeholder }) => images.current.get(placeholder)!.image.id);
+    async resolve(text: string): Promise<{ text: string; ids: string[] }> {
+      const referenced = resolveReferencedImageAttachments(text, [...images.current].map(([placeholder, { source }]) => ({ ...source, placeholder })));
+      const replacements = new Map<string, string>();
+      const ids: string[] = [];
+      for (const { placeholder } of referenced) {
+        const entry = images.current.get(placeholder)!;
+        if (entry.epoch !== epoch.current) {
+          entry.image = await latest.current.client.prepareImage(entry.source.tempPath);
+          entry.epoch = epoch.current;
+        }
+        replacements.set(placeholder, entry.image.placeholder);
+        ids.push(entry.image.id);
+      }
+      return { text: text.replace(/\[Image #\d+\]/gu, (placeholder) => replacements.get(placeholder) ?? placeholder), ids };
     },
     stop,
   };

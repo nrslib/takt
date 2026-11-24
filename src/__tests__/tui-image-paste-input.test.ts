@@ -171,6 +171,18 @@ describe('inline image paste reassembly', () => {
     expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
   });
 
+  it('keeps discarding a malformed manager image across control bytes until its terminator', () => {
+    let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    result = consumeImagePasteInput(result.buffer, '1337;File=inline=1:AAAA', true);
+    result = consumeImagePasteInput(result.buffer, '\nBBBB', true);
+    expect(result.outcome).toEqual({ kind: 'error', rest: '', consumed: true });
+    expect(result.buffer.discarding).toBe(true);
+    result = consumeImagePasteInput(result.buffer, 'CCCC', true);
+    expect(result.outcome).toEqual({ kind: 'pending' });
+    result = consumeImagePasteInput(result.buffer, '\u0007after', true);
+    expect(result.outcome).toEqual({ kind: 'passthrough', text: 'after', consumed: true });
+  });
+
   it('discards the remainder of an oversized manager image until its terminator without dropping trailing text', () => {
     let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
     result = consumeImagePasteInput(result.buffer, `1337;File=inline=1:${'A'.repeat(MAX_PENDING_INLINE_IMAGE_CHARS)}`, true);

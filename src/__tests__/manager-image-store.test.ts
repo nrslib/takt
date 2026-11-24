@@ -39,7 +39,7 @@ it.each(['ordinary', 'publication'] as const)('uses the same private lock with t
   expect(chosen).toHaveBeenCalledExactlyOnceWith(join(cwd, '.takt', 'manager-images', cid, '.lock'), action,
     { signal: expect.any(AbortSignal), timeoutMs: 5000 });
   expect(other).not.toHaveBeenCalled();
-  expect(io.chmod).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid), 0o700);
+  if (process.platform !== 'win32') expect(io.chmod).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid), 0o700);
 });
 
 it('restores the image metadata and derives only managed attachment paths', async () => {
@@ -75,7 +75,7 @@ it('publishes validated metadata inside the private conversation directory', asy
   const metadata = { images: [image], lastIndex: 1 };
   await images.exclusive(() => images.save(metadata));
   expect(write).toHaveBeenCalledExactlyOnceWith(join(cwd, '.takt', 'manager-images', cid, 'images.json'), JSON.stringify(metadata));
-  expect(io.chmod).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid), 0o700);
+  if (process.platform !== 'win32') expect(io.chmod).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid), 0o700);
 });
 
 it.each(['id', 'placeholder', 'fileName'] as const)('rejects duplicate metadata %s values before publication', async (field) => {

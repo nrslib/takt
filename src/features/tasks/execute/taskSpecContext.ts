@@ -99,9 +99,11 @@ export function stageTaskSpecForExecution(
     );
   }
   const managerTask = readManagerImageTask(taskSpec.sourceTaskDir) !== undefined;
-  const root = path.resolve(runPaths.runRootAbs, '..', '..', '..');
+  const root = runPaths.runRootAbs;
   if (managerTask) {
-    ensurePrivateImageDirectory(root, runPaths.contextTaskAbs);
+    let existing = root;
+    while (!fs.existsSync(existing)) existing = path.dirname(existing);
+    ensurePrivateImageDirectory(existing, runPaths.contextTaskAbs);
     if (fs.readdirSync(runPaths.contextTaskAbs).length !== 0) throw new Error('Manager image run context already exists');
   }
   try {
@@ -128,7 +130,7 @@ export function restageTaskSpecForExecution(
   runPaths: RunPaths,
 ): void {
   if (readManagerImageTask(taskSpec.sourceTaskDir) !== undefined) {
-    const root = path.resolve(runPaths.runRootAbs, '..', '..', '..');
+    const root = runPaths.runRootAbs;
     ensurePrivateImageDirectory(root, runPaths.contextTaskAbs);
     assertTaskAttachmentsMatchManifest(taskSpec.sourceTaskDir, taskSpec.attachmentManifest);
     assertTaskAttachmentsMatchManifest(runPaths.contextTaskAbs, taskSpec.attachmentManifest);

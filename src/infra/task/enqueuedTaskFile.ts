@@ -84,7 +84,7 @@ export async function saveEnqueuedTaskFile(
         deduplicateActiveTargets: options?.deduplicateActiveTargets,
       });
     } catch (error) {
-      cleanupTaskSpecDirectory(preparedSpec.taskDir);
+      if (publicationScope === undefined) cleanupTaskSpecDirectory(preparedSpec.taskDir);
       throw error;
     }
     const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');

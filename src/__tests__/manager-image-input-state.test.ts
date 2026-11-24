@@ -9,6 +9,7 @@ import { deferred } from './helpers/daemon-turn.js';
 const doubles = vi.hoisted(() => ({
   save: vi.fn(), cleanup: vi.fn(), seal: vi.fn(), list: vi.fn(), select: vi.fn(),
   prepare: vi.fn(), root: vi.fn(), ensure: vi.fn(), createStore: vi.fn(), insert: vi.fn(), notice: vi.fn(), effect: vi.fn(),
+  connection: 'connected' as 'connecting' | 'connected' | 'disconnected', listener: undefined as (() => void) | undefined,
   pasteInput: undefined as ImagePasteInput | undefined,
 }));
 vi.mock('react', () => ({
@@ -34,14 +35,18 @@ const stored: StoredImageAttachment = { placeholder: '[Image #1]', tempPath: '/t
 const image = { id: '11111111-1111-4111-8111-111111111111', placeholder: '[Image #7]', path: '/persistent/image-7.png' };
 beforeEach(() => {
   vi.clearAllMocks(); doubles.pasteInput = undefined;
+  doubles.connection = 'connected'; doubles.listener = undefined;
   doubles.save.mockResolvedValue(stored); doubles.list.mockReturnValue([stored]);
   doubles.prepare.mockResolvedValue(image); doubles.select.mockReturnValue([{ placeholder: image.placeholder, path: stored.tempPath }]);
   doubles.root.mockReset().mockResolvedValue('/repo');
   doubles.ensure.mockReset().mockResolvedValue('/repo/.takt/tmp/images');
   doubles.createStore.mockReset().mockImplementation(() => ({ saveImage: doubles.save, listAttachments: doubles.list, cleanup: doubles.cleanup, seal: doubles.seal }));
 });
-const create = () => useManagerImages({ lang: 'en', enabled: true,
-  client: { prepareImage: doubles.prepare, getImageDirectory: doubles.root }, insert: doubles.insert, notice: doubles.notice });
+const create = () => useManagerImages({ lang: 'en', enabled: true, connection: 'connected',
+  client: { prepareImage: doubles.prepare, getImageDirectory: doubles.root,
+    getSnapshot: () => ({ connection: doubles.connection, readStatus: 'complete', state: null, items: [], error: null }),
+    subscribe: (listener) => { doubles.listener = listener; return () => { doubles.listener = undefined; }; } },
+  insert: doubles.insert, notice: doubles.notice });
 
 it('prepares the shared store image and maps its returned placeholder to its persistent image ID', async () => {
   const images = create();
@@ -50,8 +55,23 @@ it('prepares the shared store image and maps its returned placeholder to its per
   expect(doubles.createStore).toHaveBeenCalledExactlyOnceWith('/repo');
   expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/repo', ['.takt', 'tmp', 'images']);
   expect(doubles.ensure.mock.invocationCallOrder[0]).toBeLessThan(doubles.save.mock.invocationCallOrder[0]!);
-  expect(images.ids('Inspect ' + image.placeholder)).toEqual([image.id]);
+  expect(await images.resolve('Inspect ' + image.placeholder)).toEqual({ text: 'Inspect ' + image.placeholder, ids: [image.id] });
   expect(doubles.select).toHaveBeenCalledExactlyOnceWith('Inspect ' + image.placeholder, [{ ...stored, placeholder: image.placeholder }]);
+});
+
+it('reprepares a draft after a rapid disconnect and reconnect without an intervening render', async () => {
+  const images = create();
+  const subscribe = doubles.effect.mock.calls[0]![0] as () => () => void;
+  const unsubscribe = subscribe();
+  try {
+    await doubles.pasteInput!.sink.saveInlineImage({ data: Buffer.from('png'), mimeType: 'image/png' });
+    doubles.connection = 'disconnected'; doubles.listener!();
+    doubles.connection = 'connected'; doubles.listener!();
+    const resumed = { id: '22222222-2222-4222-8222-222222222222', placeholder: '[Image #8]', path: '/persistent/image-8.png' };
+    doubles.prepare.mockResolvedValueOnce(resumed);
+    expect(await images.resolve('Inspect ' + image.placeholder)).toEqual({ text: 'Inspect ' + resumed.placeholder, ids: [resumed.id] });
+    expect(doubles.prepare).toHaveBeenCalledTimes(2);
+  } finally { unsubscribe(); }
 });
 
 it('does not resolve or create image storage for an unused connection, including when it stops', async () => {

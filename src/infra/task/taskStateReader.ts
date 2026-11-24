@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
@@ -18,12 +18,15 @@ const TasksSchema = z.object({ tasks: z.array(WatchTaskSchema) });
 export type WatchTask = z.infer<typeof WatchTaskSchema>;
 
 export async function readWatchTasks(cwd: string): Promise<readonly WatchTask[]> {
-  let text;
-  try { text = await readFile(join(cwd, '.takt', TASKS_FILE_NAME), 'utf8'); }
+  const path = join(cwd, '.takt', TASKS_FILE_NAME);
+  let stat;
+  try { stat = await lstat(path); }
   catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
   }
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe tasks.yaml');
+  const text = await readFile(path, 'utf8');
   const document = parseDocument(text);
   if (document.errors.length > 0) throw document.errors[0];
   return TasksSchema.parse(document.toJS({ maxAliasCount: 0 })).tasks;

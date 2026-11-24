@@ -167,6 +167,7 @@ export function createTaktMcpServer(
   };
   const globalConfigDirectory = getGlobalConfigDir();
   let managerIdentity: ManagerAssignmentIdentity = options.managerAssignment ?? { kind: 'repository', repositoryDirectory: operationDeps.allowedProjectRoot! };
+  const turnImageIdentity = managerIdentity;
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
   const projectInput = <T extends { cwd: string }>(input: T, currentDeps: McpOperationDependencies): T =>
     options.toolSet === 'manager' ? { ...input, cwd: currentDeps.allowedProjectRoot! } : input;
@@ -190,7 +191,7 @@ export function createTaktMcpServer(
           const deps = {
             ...currentDeps,
             ...(useWorkflowConfig ? {
-              managerImageSource: { root: await managerImageDirectory(managerIdentity, globalConfigDirectory), conversationId: conversationId(managerIdentity) },
+              managerImageSource: { root: await managerImageDirectory(turnImageIdentity, globalConfigDirectory), conversationId: conversationId(turnImageIdentity) },
             } : {}),
             ...(useWorkflowConfig ? {
               managerWorkflows: resolveManagerWorkflowSelection(projectCwd, resolveManagerConfig(projectCwd), resolveConfigValue(projectCwd, 'language')).workflows,

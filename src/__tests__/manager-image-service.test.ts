@@ -132,13 +132,26 @@ it('keeps connected drafts during cleanup and removes them after their owner dis
   state.metadata = { images: [stored(), other], lastIndex: 2 };
   const images = new ManagerImageAttachments({ hasImageReference: async () => false });
 
-  await images.cleanup(cwd, cid, [imageId]);
+  await images.cleanup(cwd, cid, () => [imageId]);
   expect(state.metadata.images).toEqual([other]);
   expect(state.unlink).toHaveBeenCalledExactlyOnceWith(path());
 
-  await images.cleanup(cwd, cid, []);
+  await images.cleanup(cwd, cid, () => []);
   expect(state.metadata.images).toEqual([]);
   expect(state.unlink.mock.calls).toEqual([[path()], [path('image-2.png')]]);
+});
+
+it('checks current connection owners after reading image metadata', async () => {
+  state.metadata = { images: [stored()], lastIndex: 1 };
+  const images = new ManagerImageAttachments({ hasImageReference: async () => false });
+  let connected: string[] = [];
+  const cleanup = images.cleanup(cwd, cid, () => connected);
+  connected = [owner];
+
+  await cleanup;
+
+  expect(state.metadata.images).toEqual([stored()]);
+  expect(state.unlink).not.toHaveBeenCalled();
 });
 
 it('rejects unavailable image bytes when resolving an existing ID and returns nothing for no IDs', async () => {

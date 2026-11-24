@@ -105,6 +105,56 @@ it('restores an accepted message after detaching and settling before reattachmen
   } finally { release.resolve(); }
 });
 
+it('reprepares an unsent image after a real attachment detach and accepts the draft on reconnect', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('draft screenshot')]);
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const source = await temporary.saveImage(png, 'image/png');
+    const first = await open();
+    const image = await fixture.input.prepareImage({ attachmentId: first.attachmentId, sourcePath: source.tempPath });
+    fixture.input.detach(first.attachmentId);
+    await vi.waitFor(async () => expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' }));
+    const reopened = await open();
+    const prepared = await fixture.input.prepareImage({ attachmentId: reopened.attachmentId, sourcePath: source.tempPath });
+    expect(prepared.id).not.toBe(image.id);
+    expect(await fixture.input.submit({ attachmentId: reopened.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Inspect ' + prepared.placeholder, imageAttachmentIds: [prepared.id],
+      } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect(execute.mock.calls.at(-1)![0].imageAttachments).toEqual([prepared]);
+  } finally { temporary.cleanup(); }
+});
+
+it('waits for a conversation save before deciding whether an image is unreferenced', async () => {
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const port = await open();
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    const images = new ManagerImageAttachments(fixture.events);
+    const referenceCheck = deferred<void>();
+    const actualReferenceCheck = fixture.events.hasImageReference.bind(fixture.events);
+    vi.spyOn(fixture.events, 'hasImageReference').mockImplementation((...args) => {
+      referenceCheck.resolve();
+      return actualReferenceCheck(...args);
+    });
+    let finished = false;
+    let releasing!: Promise<void>;
+    await fixture.store.withConversationLock(id, async () => {
+      releasing = images.release(repository, id, port.attachmentId).then(() => { finished = true; });
+      await referenceCheck.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+      const path = join(getGlobalConfigDir(), 'conversations', `${id}.json`);
+      const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...saved, sessionId: 'saved-session', sessionImageAttachmentIds: [image.id] }));
+    });
+    await releasing;
+    expect(await readFile(image.path)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  } finally { temporary.cleanup(); }
+});
+
 it('retains an image for a resumed provider session and releases it when that session context changes', async () => {
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('session screenshot')]);
   const temporary = createSessionImageAttachmentStore(repository);

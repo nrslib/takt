@@ -41,5 +41,5 @@ export function useManagerEpics(epics: readonly EpicSnapshot[]) {
       if (next !== undefined) update({ kind: 'detail', key: snapshotItemKey(next), offset: 0 });
     }
   };
-  return { navigation, index, selected, open, close, handleInput };
+  return { navigation, index, selected, open, close, handleInput, isOpen: () => current.current !== null };
 }

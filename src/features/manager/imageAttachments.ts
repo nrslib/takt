@@ -59,10 +59,10 @@ export async function resolveManagerImages(cwd: string, conversationId: string, 
 export class ManagerImageAttachments {
   constructor(private readonly references: ManagerImageReferences) {}
 
-  async cleanup(cwd: string, conversationId: string, connectedOwners: readonly string[]): Promise<void> {
+  async cleanup(cwd: string, conversationId: string, connectedOwners: () => readonly string[]): Promise<void> {
     const metadata = await new ConversationImageStore(cwd, conversationId).read();
     const owners = new Set([...metadata.images, ...metadata.deleting ?? []].map((image) => image.owner));
-    for (const owner of owners) if (!connectedOwners.includes(owner)) await this.release(cwd, conversationId, owner);
+    for (const owner of owners) await this.release(cwd, conversationId, owner, () => connectedOwners().includes(owner));
   }
 
   async prepare(cwd: string, conversationId: string, owner: string, sourcePath: string): Promise<ManagerImageAttachmentReference> {
@@ -106,9 +106,10 @@ export class ManagerImageAttachments {
     });
   }
 
-  async release(cwd: string, conversationId: string, owner: string): Promise<void> {
+  async release(cwd: string, conversationId: string, owner: string, isConnected: () => boolean = () => false): Promise<void> {
     const store = new ConversationImageStore(cwd, conversationId);
     await store.exclusive(async () => {
+      if (isConnected()) return;
       let metadata = await store.read();
       const workflows = [];
       for (const workflow of metadata.workflows ?? []) {
@@ -120,9 +121,11 @@ export class ManagerImageAttachments {
         const taskSuffix = relative(taskRoot, workflow.taskDirectory);
         if (taskSuffix === '' || taskSuffix === '..' || taskSuffix.split(sep).length !== 1) throw new Error('Invalid manager image task directory');
         const fileNames = [...metadata.images, ...metadata.deleting ?? []].filter((image) => workflow.imageIds.includes(image.id)).map((image) => image.fileName);
-        for (const copy of [{ root: workflow.repositoryDirectory, taskDirectory: workflow.taskDirectory }, ...workflow.copies]) {
+        for (const [index, copy] of [{ root: workflow.repositoryDirectory, taskDirectory: workflow.taskDirectory }, ...workflow.copies].entries()) {
           const suffix = relative(copy.root, copy.taskDirectory);
-          if (!suffix.startsWith('.takt' + sep) || suffix.split(sep).includes('..')) throw new Error('Invalid manager image copy directory');
+          const parts = suffix.split(sep);
+          if (parts.includes('..') || (index === 0 ? !suffix.startsWith(join('.takt', 'tasks') + sep)
+            : suffix !== join('context', 'task'))) throw new Error('Invalid manager image copy directory');
           for (const fileName of fileNames) await removePrivateImageCopy(copy.root, join(copy.taskDirectory, 'attachments', fileName));
         }
       }

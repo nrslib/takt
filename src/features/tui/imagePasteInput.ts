@@ -117,7 +117,7 @@ export function consumeImagePasteInput(
   if (buffer.discarding) {
     const end = imageTerminator(chunk, rejectInvalidImages);
     if (end >= 0) return release(chunk.slice(end + 1), true);
-    if (chunk === '' || endsHold(chunk)) return { buffer: createImagePasteBuffer(), outcome: { kind: 'none' } };
+    if (chunk === '') return { buffer: createImagePasteBuffer(), outcome: { kind: 'none' } };
     return { buffer, outcome: { kind: 'pending' } };
   }
   if (buffer.held === '') {
@@ -134,8 +134,8 @@ export function consumeImagePasteInput(
       const end = imageTerminator(accumulated, true);
       // Controls after a complete image belong to its trailing text, not its payload.
       if (end < 0 || endsHold(accumulated.slice(0, end))) {
-        return { buffer: createImagePasteBuffer(), outcome: { kind: 'error',
-          rest: end < 0 ? '' : accumulated.slice(end + 1), consumed: chunk.length > 1 } };
+        return { buffer: end < 0 && chunk !== '' ? { held: '', discarding: true } : createImagePasteBuffer(), outcome: { kind: 'error',
+          rest: end < 0 ? '' : accumulated.slice(end + 1), consumed: chunk.length > 0 } };
       }
     } else return release(buffer.held, false);
   }

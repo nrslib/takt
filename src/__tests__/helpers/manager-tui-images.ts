@@ -92,8 +92,31 @@ it('waits for clipboard image preparation before submitting the same draft exact
   }
 });
 
+it('routes deferred Ctrl+T then Enter to the epic screen before a rerender', async () => {
+  const context = mountImages();
+  const preparation = deferred<{ id: string; placeholder: string; path: string }>();
+  context.client.prepareImage.mockReturnValueOnce(preparation.promise);
+  try {
+    context.app.stdin.write('Draft');
+    await waitFor(() => expect(promptFrame(context)).toContain('Draft'));
+    context.app.stdin.write('\x16');
+    await waitFor(() => expect(context.client.prepareImage).toHaveBeenCalledOnce());
+    context.app.stdin.write('\x14');
+    context.app.stdin.write(ENTER);
+    preparation.resolve({ id: imageId, placeholder: '[Image #1]', path: '/private/manager-images/image-1.png' });
+    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.epics.workspaceRequired', 'en')));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(context.client.submit).not.toHaveBeenCalled();
+  } finally {
+    preparation.resolve({ id: imageId, placeholder: '[Image #1]', path: '/private/manager-images/image-1.png' });
+  }
+});
+
 it('keeps a prepared image draft on the same mounted screen across disconnect and reconnect', async () => {
   const context = mountImages();
+  const resumedId = '22222222-2222-4222-8222-222222222222';
+  context.client.prepareImage.mockResolvedValueOnce({ id: imageId, placeholder: '[Image #1]', path: '/private/manager-images/image-1.png' });
+  context.client.prepareImage.mockResolvedValueOnce({ id: resumedId, placeholder: '[Image #2]', path: '/private/manager-images/image-2.png' });
   context.app.stdin.write('Inspect ');
   await waitFor(() => expect(promptFrame(context)).toContain('Inspect '));
   context.app.stdin.write('\x16');
@@ -106,9 +129,10 @@ it('keeps a prepared image draft on the same mounted screen across disconnect an
   context.app.stdin.write(ENTER);
 
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'message', text: 'Inspect [Image #1]', imageAttachmentIds: [imageId] },
+    { kind: 'message', text: 'Inspect [Image #2]', imageAttachmentIds: [resumedId] },
   ]));
-  expect(context.client.prepareImage).toHaveBeenCalledOnce();
+  expect(context.client.prepareImage).toHaveBeenCalledTimes(2);
+  expect(context.client.prepareImage.mock.calls[1]![0]).toBe(context.client.prepareImage.mock.calls[0]![0]);
 });
 
 it('keeps consecutive prepared image numbers and associates only referenced images with each submitted message', async () => {

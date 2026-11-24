@@ -6,7 +6,7 @@ import { conversationId } from '../../src/infra/conversations/identity.js';
 import { ConversationImageStore } from '../../src/infra/conversations/imageAttachments.js';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { createIsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env.js';
 import { createLocalRepo } from '../helpers/test-repo.js';
 
@@ -27,7 +27,7 @@ MockProvider.prototype.setup = function(config) {
   return { ...agent, call: async (prompt, options) => {
     const metadata = /Image attachments: (\\[.*\\])/u.exec(prompt)?.[1];
     const images = metadata === undefined ? [] : JSON.parse(metadata);
-    const text = JSON.parse(prompt.split('\\n').find((line) => line.startsWith('{"speaker":'))).text;
+    const text = JSON.parse(prompt.split('\\n').findLast((line) => line.startsWith('{"speaker":'))).text;
     appendFileSync(${JSON.stringify(observed)}, JSON.stringify({ text, images: images.map(({ id, path }) => ({ id, path,
       readable: readFileSync(path).equals(Buffer.from(${JSON.stringify(png.toString('base64'))}, 'base64')),
       native: options.imageAttachments !== undefined })) }) + '\\n');
@@ -66,6 +66,11 @@ MockProvider.prototype.setup = function(config) {
     expect((await session.visibleScreen()).join('\n')).not.toContain('1337;File');
     session.write('\r');
     await session.waitForScreen('text-only draft submitted after image failure', (screen) => screen.includes('Discuss your goal'));
+    await vi.waitFor(() => {
+      const turns = readFileSync(observed, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(turns).toHaveLength(2);
+      expect(turns[1]).toEqual({ text: '本文', images: [] });
+    });
     session.write('\x03'); expect(await session.waitForExit()).toBe(0);
     expect((await images.read()).images).toEqual(saved);
     expect(readFileSync(images.path(saved[0]!.fileName))).toEqual(png);

@@ -225,10 +225,12 @@ it('persists a private image reference and restores its original path and bytes 
   const resolved = await resolveManagerImages(f.cwd, f.id, [image.id]);
   expect(resolved).toEqual([image]);
   expect(readFileSync(resolved[0]!.path)).toEqual(png);
-  expect(statSync(image.path).mode & 0o777).toBe(0o600);
   const directory = join(f.cwd, '.takt', 'manager-images', f.id);
-  expect(statSync(directory).mode & 0o777).toBe(0o700);
-  expect(statSync(join(directory, 'attachments')).mode & 0o777).toBe(0o700);
+  if (process.platform !== 'win32') {
+    expect(statSync(image.path).mode & 0o777).toBe(0o600);
+    expect(statSync(directory).mode & 0o777).toBe(0o700);
+    expect(statSync(join(directory, 'attachments')).mode & 0o777).toBe(0o700);
+  }
   const metadata = JSON.parse(readFileSync(join(directory, 'images.json'), 'utf8'));
   expect(metadata.images).toEqual([{ id: image.id, owner: f.owner, placeholder: image.placeholder, fileName: 'image-1.png' }]);
   const pending = [];
@@ -293,9 +295,10 @@ it('stores workspace temporary and persistent images under the same private root
   expect(image.path).toBe(join(root, '.takt', 'manager-images', f.id, 'attachments', 'image-1.png'));
   expect(readFileSync(image.path)).toEqual(png);
   for (const path of [join(config, 'workspaces'), root, join(root, '.takt'), join(root, '.takt', 'manager-images')]) {
-    expect(statSync(path).mode & 0o777).toBe(0o700);
+    expect(statSync(path).isDirectory()).toBe(true);
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o700);
   }
-  expect(statSync(image.path).mode & 0o777).toBe(0o600);
+  if (process.platform !== 'win32') expect(statSync(image.path).mode & 0o777).toBe(0o600);
   const outside = join(f.cwd, 'outside.png'); writeFileSync(outside, png);
   await expect(f.images.prepare(root, f.id, f.owner, outside)).rejects.toThrow();
   expect(await resolveManagerImages(root, f.id, [image.id])).toEqual([image]);

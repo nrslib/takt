@@ -127,7 +127,7 @@ export async function startDaemon(options: {
     for await (const record of store.iterate()) {
       if (record.assignment.kind === 'daemon') continue;
       const root = await managerImageDirectory(record.assignment, directory);
-      await images.cleanup(root, record.id, input.connectedImageOwners(record.id));
+      await images.cleanup(root, record.id, () => input.connectedImageOwners(record.id));
     }
   };
   let closing: Promise<void> | undefined;

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod/v4';
 import type { RunPaths } from '../../core/workflow/run/run-paths.js';
 import { ConversationImageStore } from '../../infra/conversations/imageAttachments.js';
@@ -86,9 +86,9 @@ export async function registerManagerImageRun(sourceTaskDir: string, paths: RunP
     const workflow = metadata.workflows?.find((workflow) => workflow.id === task.referenceId);
     if (workflow === undefined || workflow.taskDirectory !== sourceTaskDir
       || task.images.some((image) => !metadata.images.some((stored) => stored.id === image.id))) throw new Error('Manager image reference was released');
-    const runRoot = resolve(paths.runRootAbs, '..', '..', '..');
+    const runRoot = resolve(paths.runRootAbs);
     const suffix = relative(runRoot, paths.contextTaskAbs);
-    if (!suffix.startsWith(join('.takt', 'runs') + sep) || suffix.split(sep).includes('..')) throw new Error('Invalid manager image run context');
+    if (suffix !== join('context', 'task')) throw new Error('Invalid manager image run context');
     if (workflow.copies.some((copy) => copy.taskDirectory === paths.contextTaskAbs)) return;
     await store.save({ ...metadata, workflows: metadata.workflows!.map((entry) => entry.id !== workflow.id ? entry
       : { ...entry, copies: [...entry.copies, { root: runRoot, taskDirectory: paths.contextTaskAbs }] }) });

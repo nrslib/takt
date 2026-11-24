@@ -66,6 +66,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const editorRef = useRef(createEditorState(''));
+  const currentInputHandlers = useRef<{ pasteText(text: string): void; handleInput(input: string, key: import('ink').Key): void } | null>(null);
   const [editor, setEditor] = useState(editorRef.current);
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
@@ -354,14 +355,22 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
     if (summaryRequest) setSummarizing(true);
     resetChoice();
-    const imageAttachmentIds = images.ids(text);
-    void send({ kind: 'message', ...(imageAttachmentIds.length === 0 ? {} : { imageAttachmentIds }), text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
-      ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
-      (id) => {
-        if (summaryRequest) summaryOperation.current = id;
-        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
-      })
-      .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
+    void (async () => {
+      try {
+        const resolved = await images.resolve(text);
+        const id = await send({ kind: 'message', ...(resolved.ids.length === 0 ? {} : { imageAttachmentIds: resolved.ids }),
+          text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : resolved.text,
+          ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
+        (accepted) => {
+          if (summaryRequest) summaryOperation.current = accepted;
+          if (text.trim() === CLEAR_COMMAND) clearOperation.current = accepted;
+        });
+        if (id === null && summaryRequest) setSummarizing(false);
+      } catch (error) {
+        append(getErrorMessage(error));
+        if (summaryRequest) setSummarizing(false);
+      }
+    })();
   };
   const changeGoal = async (kind: GoalOperation, target: ManagerGoalConfirmationTarget['goal'], confirmed = false, retry = false): Promise<void> => {
     const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
@@ -417,7 +426,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const visibleEditor = answerTarget === null ? editor : answerEditor;
   const conversationInput = !epicsOpen && answerTarget === null && selection.selection === null && abortTarget === null;
   const [imageNotice, setImageNotice] = useState<string | null>(null);
-  const images = useManagerImages({ lang, client, enabled: conversationInput && !exiting.current,
+  const images = useManagerImages({ lang, client, connection: snapshot.connection, enabled: conversationInput && !exiting.current,
     insert: (text) => { edit(applyEditorKey(editorRef.current, { kind: 'insert', text })); slashCompletion.reset(); },
     notice: setImageNotice,
   });
@@ -525,7 +534,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [toolTurn]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
-    edit: answerTarget === null ? edit : editAnswer, submit, images,
+    edit: answerTarget === null ? edit : editAnswer, submit, images, currentHandlers: currentInputHandlers,
     onExit: () => { void images.stop().then(onExit); }, contentWidth, canApprove,
     abortTurn: () => {
       const running = latest.current.state?.running;
@@ -535,7 +544,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     confirmGoalOperation: (target) => changeGoal(target.kind, target.goal, true, target.retry), saveAnswer, register, openMenu,
-    epicsOpen, openEpics,
+    isEpicsOpen: epics.isOpen, openEpics,
     handleEpicInput: (key) => epics.handleInput(key, Math.max(0, epicDetailLines.length - epicPageRows), epicPageRows),
     slashCompletion,
     browseTools: (direction) => {

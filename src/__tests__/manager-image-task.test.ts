@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { ConversationImageMetadata } from '../infra/conversations/imageAttachments.js';
 import { withManagerImageTask, readManagerImageTask, registerManagerImageRun, normalizeManagerImageTaskOrder,
   copyPrivateTaskAttachments, replacePrivateStagedOrder } from '../features/tasks/managerImageAttachments.js';
-import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from '../core/workflow/run/run-paths.js';
 import type { SaveEnqueuedTaskFile } from '../infra/task/enqueueService.js';
 import { conversationId } from '../infra/conversations/identity.js';
 
@@ -113,9 +113,16 @@ it('registers each run copy once before staging and rejects a released workflow 
   const paths = buildRunPaths(root, 'image-run');
   await registerManagerImageRun(taskDirectory, paths);
   await registerManagerImageRun(taskDirectory, paths);
-  expect(io.metadata.workflows[0]!.copies).toEqual([{ root, taskDirectory: paths.contextTaskAbs }]);
+  expect(io.metadata.workflows[0]!.copies).toEqual([{ root: paths.runRootAbs, taskDirectory: paths.contextTaskAbs }]);
   io.metadata.workflows = [];
   await expect(registerManagerImageRun(taskDirectory, paths)).rejects.toThrow();
+});
+
+it('registers image copies when the run directory is outside the project', async () => {
+  io.metadata.workflows = [{ id: referenceId, repositoryDirectory: root, taskDirectory, imageIds: [id], copies: [] }];
+  const paths = buildRunPathsFromRunsDirectory(resolve('/managed/central-runs'), 'image-run');
+  await registerManagerImageRun(taskDirectory, paths);
+  expect(io.metadata.workflows[0]!.copies).toEqual([{ root: paths.runRootAbs, taskDirectory: paths.contextTaskAbs }]);
 });
 
 it('copies the recorded image bytes privately and rejects a different image with the same filename', () => {

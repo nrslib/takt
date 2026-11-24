@@ -12,17 +12,18 @@ function fixture() {
   hooks.input.mockClear(); hooks.paste.mockClear();
   const options: Parameters<typeof useManagerInput>[0] = {
     images: { paste: { routeInput: vi.fn(() => false), flushPending: vi.fn(), captureClipboard: vi.fn() },
-      hasPending: () => false, defer: (action) => action(), ids: () => [], stop: async () => {} },
+      hasPending: () => false, defer: (action) => action(), resolve: async (text) => ({ text, ids: [] }), stop: async () => {} },
+    currentHandlers: { current: null },
     exiting: { current: false }, active: { current: true }, registering: { current: false }, savingAnswer: { current: null }, editorRef: { current: createEditorState('answer') },
     edit: vi.fn(), submit: vi.fn(), abortTurn: vi.fn(), onExit: vi.fn(), browseTools: vi.fn(), contentWidth: 80, canApprove: true,
     abortConfirmation: { abortTarget: null, setAbortTarget: vi.fn(), handleInput: vi.fn() },
     questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
     summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
-    selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn() },
+    selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn(), isOpen: vi.fn(() => false) },
     selectTarget: vi.fn(), confirmGoalOperation: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
     onInputUnavailable: vi.fn(), openMenu: vi.fn(), slashCompletion: { completions: [], completionIndex: 0, reset: vi.fn(), handleInput: vi.fn(() => false) },
-    epicsOpen: false, openEpics: vi.fn(), handleEpicInput: vi.fn(),
+    isEpicsOpen: vi.fn(() => false), openEpics: vi.fn(), handleEpicInput: vi.fn(),
   };
   return { options, bind() {
     useManagerInput(options);
@@ -87,6 +88,24 @@ it('submits a new human message and opens read menus during a model turn', () =>
   expect(vi.mocked(f.options.openMenu).mock.calls).toEqual([['answer'], ['goal']]);
 });
 
+it('replays deferred keys against the latest screen state', () => {
+  const f = fixture();
+  const deferred: (() => void)[] = [];
+  let pending = true;
+  f.options.images.hasPending = () => pending;
+  f.options.images.defer = (action) => { deferred.push(action); };
+  f.options.openEpics = vi.fn(() => vi.mocked(f.options.isEpicsOpen).mockReturnValue(true));
+  const input = f.bind();
+  input('t', { ...key, ctrl: true });
+  input('', { ...key, return: true });
+  pending = false;
+  deferred.shift()!();
+  expect(f.options.openEpics).toHaveBeenCalledOnce();
+  deferred.shift()!();
+  expect(f.options.handleEpicInput).toHaveBeenCalledOnce();
+  expect(f.options.submit).not.toHaveBeenCalled();
+});
+
 
 it('submits /verify from the TUI without dismissing the pending proposal while typing', () => {
   const f = fixture();
@@ -105,7 +124,7 @@ it('submits /verify from the TUI without dismissing the pending proposal while t
 
 it('routes Ctrl+T to Epics before turn interruption and blocks pasted conversation input while browsing', () => {
   const f = fixture();
-  f.options.epicsOpen = true;
+  vi.mocked(f.options.isEpicsOpen).mockReturnValue(true);
   const input = f.bind();
   input('', { ...key, escape: true });
   expect(f.options.handleEpicInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ escape: true }));
