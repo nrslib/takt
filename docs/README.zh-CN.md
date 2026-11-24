@@ -299,8 +299,27 @@ steps:
 | `takt workflow doctor` | 验证 workflow 定义 |
 | `takt workflow inspect` | 检查 workflow 的配置与解析来源 |
 | `takt repertoire add` | 从 GitHub 安装 repertoire package |
+| `takt daemon stop` | 停止后台 daemon |
+| `takt caccia` | 处理 PR 的 CodeRabbit 审查讨论 |
+| `takt resume` | 恢复最近失败或中止的直接运行 |
+| `takt clear` | 清除智能体对话 session |
+| `takt reset config` | 备份全局配置并恢复模板 |
+| `takt reset categories` | 恢复 builtin workflow 分类 |
+| `takt prompt` | 预览各 step 组装后的 prompt |
+| `takt export-cc` | 将 workflow 和 agent 导出为 Claude Code skill |
+| `takt export-codex` | 将 workflow 和 agent 导出为 Codex skill |
+| `takt catalog` | 列出可用 facet |
+| `takt workflow bundle attach` | 从历史源码为旧格式 run 附加 workflow bundle |
+| `takt metrics review` | 显示审查质量指标 |
+| `takt purge` | 删除旧分析事件文件 |
+| `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` | 查看或修改本地路由事件记录 |
+| `takt repertoire remove`、`takt repertoire list` | 删除或列出已安装的 repertoire package |
 
 manager 对话由 daemon 处理，关闭 TUI 后工作仍会继续。为同一个仓库或 workspace 重新打开 TUI，即可继续同一对话。目标注册、恢复对话和中断处理的详情请参阅[目标管理（英文）](./goal-management.md)。使用 `takt daemon stop` 可停止 daemon。
+
+manager 支持粘贴图片，并随对话保存被引用的图片。如果 manager 在任务指令中引用已保存的图片路径，TAKT 会将图片复制到任务附件中，供 workflow 读取。已结束的目标不再加入活动目标上下文；可以使用 `Ctrl+G` 找到并删除它们。
+
+在 `config.yaml` 的 `manager.runtime_assignments` 中列出 manager 可为每个任务选择的 runtime assignment。名称对应 `runtime.yaml` 的 `provider.assignments`，重试或重新排队时保留任务的选择。使用 `manager.refresh_interval_ms` 或 `TAKT_MANAGER_REFRESH_INTERVAL_MS` 调整 TUI 刷新间隔。详情请参阅[目标管理（英文）](./goal-management.md)和[配置指南](./configuration.zh-CN.md)。
 
 manager 是实验性功能，行为、设置和保存的数据格式可能随时更改。它会自动将任务加入队列并执行，因此会产生 provider API 费用。
 
@@ -470,6 +489,8 @@ hooks、MCP server 等在 sandbox 之外运行的进程不会被阻止。
 ### 专用 provider 配置（`runtime.yaml`）
 
 provider、model、provider options、自动路由和内部 agent 分配可以放入专用层：`~/.takt/runtime.yaml` 与 `<project>/.takt/runtime.yaml`，项目层优先。`runtime.yaml` 是配置层默认值；CLI 和环境变量覆盖仍然可用。workflow YAML 不能设置 provider/model/options/routing；已移除的字段会在加载时失败并给出迁移提示。
+
+Codex 和 OpenCode profile 支持 `context_window: auto`、固定正整数或 `{ initial: 500000, auto_expand: true }`。自动选择和扩展使用已确认的模型上限；无法确认时，`auto` 保留 provider 原生默认值。指定数字可固定容量。详情请参阅[配置指南](./configuration.zh-CN.md)。
 
 Companion reviewer 默认禁用。要启用它们，请在 `runtime.yaml` 设置顶层策略：
 
