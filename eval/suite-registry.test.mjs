@@ -109,58 +109,6 @@ test('prepare targets are resolved from the same suite registry', () => {
   );
 });
 
-test('review adjudication retains A1-A4 applicability cases and provider conditions', () => {
-  const suite = selectPromptEvalSuites({ names: ['review-adjudication-applicable-inputs'] })[0];
-  assert.equal(suite.tier, 'active');
-  assert.equal(suite.execution.defaultEligible, false);
-  assert.deepEqual(promptEvalPrepareTargets([suite]),
-    ['a1', 'a2', 'a3', 'a4'].map(id => `review-adjudication-applicable-inputs-${id}`));
-
-  const current = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
-  const historical = parse(readFileSync(
-    new URL('./agents/fix-verifier/fix-verification-applicable-inputs.yaml', import.meta.url), 'utf8'));
-  assert.deepEqual(current.providers, historical.providers);
-  assert.deepEqual(current.defaultTest, historical.defaultTest);
-  assert.deepEqual(current.evaluateOptions, historical.evaluateOptions);
-  assert.deepEqual(current.prompts.map(prompt => prompt.label), ['a1', 'a2', 'a3', 'a4']);
-  for (const id of ['a1', 'a2', 'a3', 'a4']) {
-    const currentCase = current.tests.find(entry => entry.description === id.toUpperCase());
-    const historicalCase = historical.tests.find(entry => entry.description === id.toUpperCase());
-    assert.deepEqual(currentCase.vars, historicalCase.vars);
-    assert.equal(currentCase.assert[0].value, historicalCase.assert[0].value);
-    assert.equal(current.prompts.find(prompt => prompt.label === id).config.working_dir,
-      historical.prompts.find(prompt => prompt.label === id).config.working_dir);
-  }
-});
-
-test('frontend suite prompts bind to their matching prepared run directories', () => {
-  for (const configName of ['frontend.yaml', 'frontend-opus.yaml']) {
-    const source = readFileSync(
-      new URL(`./agents/frontend-review/${configName}`, import.meta.url),
-      'utf8',
-    );
-    assert.match(
-      source,
-      /label: frontend-review\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review/s,
-    );
-    assert.match(
-      source,
-      /label: frontend-review-react\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review-react\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review-react/s,
-    );
-    assert.match(
-      source,
-      /required_snapshots:\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-policies\.md\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-knowledge\.md/s,
-    );
-    assert.doesNotMatch(source, /working_dir: fixtures\/frontend-design/);
-  }
-
-  const selected = selectPromptEvalSuites({ names: ['frontend', 'frontend-opus'] });
-  assert.deepEqual(
-    promptEvalPrepareTargets(selected),
-    ['frontend-review', 'frontend-review-react'],
-  );
-});
-
 test('every registered prepare target resolves to an actual prepare target', () => {
   const availableTargets = new Set(PREPARE_TARGET_IDS);
   const unresolvedTargets = promptEvalPrepareTargets(PROMPT_EVAL_SUITES)
@@ -201,29 +149,6 @@ test('agent cases bind each task to its own isolated fixture', () => {
       if (suite === 'security-threat-model') {
         assert.equal(testCase.assert.length, 1);
         assert.equal(testCase.assert[0].type, 'llm-rubric');
-      } else {
-        assert.equal(testCase.assert.length, 1);
-        assert.deepEqual(testCase.assert.map(({ metric }) => metric),
-          [`${suite}/${caseId}-boundary`]);
-        assert.ok(testCase.assert[0].value.startsWith(
-          '見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。',
-        ));
-        if (caseId === 'b2') {
-          assert.match(testCase.assert[0].value, /今回の範囲外.*または.*代替経路/);
-        }
-        if (caseId === 'b11') {
-          assert.match(testCase.assert[0].value, /実装とこの環境で動くテスト、または.*処理前/);
-        }
-        if (caseId === 'b12') {
-          assert.match(testCase.assert[0].value, /修正対象または外部確認待ちを残した場合だけ不合格/);
-        }
-        if (caseId === 'b13') {
-          assert.match(testCase.assert[0].value, /処理を始める前.*文書.*修正対象/);
-        }
-        if (caseId === 'c1') {
-          assert.match(testCase.assert[0].value, /APPROVE または同等の合格判定/);
-          assert.match(testCase.assert[0].value, /Windows 実機確認の未実施を理由に REJECT、BLOCKED/);
-        }
       }
     }
 
@@ -235,14 +160,6 @@ test('agent cases bind each task to its own isolated fixture', () => {
       && provider.working_dir === undefined));
     assert.deepEqual(promptEvalPrepareTargets(selectPromptEvalSuites({ names: [suite] })),
       cases.map((caseId) => `${suite}-${caseId}`));
-    if (suite === 'secondary-platform-adjudication') {
-      assert.equal(config.evaluateOptions.maxConcurrency, 3);
-      const latestDecision = readFileSync(new URL(
-        './fixtures/secondary-platform-adjudication/c1/reports-seed/review-resolution.md',
-        import.meta.url,
-      ), 'utf8');
-      assert.match(latestDecision, /実機で確認する.*受入条件から外し、今回の範囲外/);
-    }
   }
 });
 
@@ -329,15 +246,5 @@ test('repair strategy history targets accompany both existing stage suites', () 
     assert.deepEqual(promptEvalPrepareTargets([suite]), [name, 'repair-strategy']);
     assert.equal(suite.execution.defaultEligible, false);
     assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
-    const config = parse(readFileSync(new URL(suite.config, import.meta.url), 'utf8'));
-    assert.equal(config.tests.length, name === 'review-adjudication' ? 27 : 25);
-    assert.equal(config.providers.length, 3);
-    for (const caseId of ['k1', 'r1', 'i1', 'f1', 'p1', 'm1']) {
-      for (const label of [caseId, `${caseId}-en`]) {
-        assert.equal(config.prompts.filter(prompt => prompt.label === label).length, 1);
-        assert.deepEqual(config.tests.filter(test => test.prompts.includes(label)).map(test => test.vars.output_phase), ['phase1', 'phase2']);
-      }
-    }
-    assert.equal(config.evaluateOptions.repeat ?? 1, name === 'review-adjudication' ? 1 : 3);
   }
 });

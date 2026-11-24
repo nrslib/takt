@@ -24,6 +24,16 @@ export async function createV1Transport(baseUrl: string): Promise<ManagedOpenCod
   const { modules, directory, stale } = await loadManagedSdk('opencode');
   const { createOpencodeClient } = modules[0];
   const client = Object.assign(createOpencodeClient({ baseUrl }), { sdkState: { directory, stale } }) as V1Client & Partial<ManagedOpenCodeTransport>;
+  client.getModelOutputLimit = async (input, options): Promise<number> => {
+    const result = await client.provider.list({ directory: input.directory }, options);
+    if (result.error !== undefined) throw new Error('OpenCode v1 provider metadata lookup failed', { cause: result.error });
+    const provider = result.data?.all?.find((candidate) => candidate.id === input.providerID);
+    const output = provider?.models?.[input.modelID]?.limit?.output;
+    if (typeof output !== 'number' || !Number.isSafeInteger(output) || output <= 0) {
+      throw new Error(`OpenCode v1 output limit is unavailable for ${input.providerID}/${input.modelID}`);
+    }
+    return output;
+  };
   client.resolveModel = async (input, options): Promise<OpenCodeResolvedModel> => {
     if (input.agent !== undefined) {
       const agents = await client.app.agents({ directory: input.directory }, options);

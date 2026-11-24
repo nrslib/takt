@@ -600,6 +600,7 @@ describe('DeepSeek Harness Git plugin resolution', () => {
       await waitForFile(startedMarker);
       controller.abort(new Error('cancelled during clone'));
       await expect(resolving).rejects.toThrow('cancelled during clone');
+      await waitForFile(stoppedMarker);
       expect(await readFile(stoppedMarker, 'utf8')).toBe('stopped');
       expect((await readdir(tmpdir())).filter((entry) => entry.startsWith('takt-deepseek-plugin-')))
         .toEqual(directoriesBefore);

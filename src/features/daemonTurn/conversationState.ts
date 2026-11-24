@@ -17,6 +17,7 @@ export class TurnConversationState {
       ...(fields.proposal === undefined ? {} : { revision: fields.proposal.revision, pending: fields.proposal.pending }),
       ...(fields.approval === undefined ? {} : { approval: fields.approval }),
       ...(fields.interruptedMessage === undefined ? {} : { interruptedMessage: fields.interruptedMessage }),
+      ...(fields.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: fields.interruptedImageAttachmentIds }),
     };
   }
 

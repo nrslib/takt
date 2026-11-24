@@ -487,6 +487,7 @@ export interface OpenCodeCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  contextWindow?: number;
   /** Workflow-only permission to resolve an omitted model through OpenCode. */
   allowDefaultModel?: boolean;
   systemPrompt?: string;

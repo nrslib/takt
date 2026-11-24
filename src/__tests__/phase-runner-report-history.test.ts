@@ -464,4 +464,22 @@ describe('runReportPhase report history behavior', () => {
     const archivedContent = readFileSync(versionedFiles[0]!, 'utf-8');
     expect(archivedContent).toBe('First report from new session');
   });
+
+  it('uses the saved Phase 1 result to start a full report request when an old session key is unavailable', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('review.md');
+    const ctx = createContext(reportDir, { lastResponse: 'Saved Phase 1 finding', initialSessionId: null, primaryProvider: 'codex' });
+    queueRunAgentResponses([{
+      persona: 'reviewers', status: 'done', content: 'Report from new session',
+      sessionId: 'new-codex-session', timestamp: new Date(),
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const [, instruction, options] = vi.mocked(runAgent).mock.calls[0]!;
+    expect(options?.sessionId).toBeUndefined();
+    expect(instruction).toContain('Saved Phase 1 finding');
+    expect(instruction).toContain('review.md');
+    expect(readFileSync(join(reportDir, 'review.md'), 'utf-8')).toBe('Report from new session');
+  });
 });

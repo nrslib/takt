@@ -1,3 +1,5 @@
+import type { ManagerImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import type { ManagerRuntimeAssignment } from './runtimeAssignmentSelection.js';
 import type { TurnEvent } from '../../core/daemon/events.js';
 import { loadTemplate, renderTemplate } from '../../shared/prompts/index.js';
 import { buildManagerEventPrompt } from '../daemon/inboxEvent.js';
@@ -10,6 +12,7 @@ interface ManagerSystemPromptInput {
   repository: string;
   mainMerge: string;
   concurrency: number;
+  runtimeAssignments: readonly { repositoryDirectory: string; assignments: readonly ManagerRuntimeAssignment[] }[];
 }
 
 export function buildManagerSystemPrompt(input: ManagerSystemPromptInput): string {
@@ -28,6 +31,7 @@ export function buildManagerSystemPrompt(input: ManagerSystemPromptInput): strin
       specificationConfiguration: JSON.stringify(specificationConfiguration),
       mainMerge: JSON.stringify(input.mainMerge),
       concurrency: String(input.concurrency),
+      runtimeAssignments: JSON.stringify(input.runtimeAssignments),
     }).trim(),
   ].join('\n\n');
 }
@@ -37,6 +41,7 @@ export function buildManagerTurnPrompt(input: {
   event: TurnEvent & { unreadableGoalIds?: readonly string[] };
   question?: string;
   interruptedMessage?: string | null;
+  imageAttachments?: readonly ManagerImageAttachmentReference[];
 }): string {
   const { lang, event } = input;
   let kind: string = event.kind;
@@ -65,5 +70,6 @@ export function buildManagerTurnPrompt(input: {
   return [
     ...(input.interruptedMessage == null ? [] : [renderTemplate(loadTemplate('manager_turn_interrupted', lang).trim(), { body: input.interruptedMessage })]),
     loadTemplate('manager_turn', lang, { [kind]: true, body }).trim(),
+    ...(input.imageAttachments?.length ? [`Image attachments: ${JSON.stringify(input.imageAttachments)}`] : []),
   ].join('\n\n');
 }

@@ -1,3 +1,4 @@
+import { managerImageDirectory, resolveManagerImages } from './imageAttachments.js';
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
@@ -80,6 +81,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
+        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary' || command.kind === 'propose_summary')
+          && command.conversationId !== input.turn.conversationId) throw new ConversationError('invalid_assignment');
         if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
           if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
           return { kind: 'completed', result: { kind: 'notice', message: '' } };
@@ -149,7 +152,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
         if (clear) {
           return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
-            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+            change: state.change({ session: { ...state.current.session, sessionId: null,
+              ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) }, interruptedMessage: null,
+              ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) }) };
         }
         let verification: ManagerTurnInput['verify'];
         if (verify) {
@@ -165,9 +170,24 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             kind: 'reply', message: getLabel('interactive.ui.verifyUnavailable', language),
           } };
         }
-        if (human && command.kind !== 'approve_summary' && !verify) {
+        if (human && command.kind !== 'approve_summary' && command.kind !== 'propose_summary' && !verify) {
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
           await state.save({ proposal: { revision: nextRevision(state.current.revision), pending: null } });
+        }
+        if (assignment.kind !== 'daemon' && command.kind === 'propose_summary') {
+          if (priorPending !== null) throw new ConversationError('proposal_pending');
+          const requested = command.repositoryDirectory
+            ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
+          if (requested === undefined) throw new ConversationError('invalid_assignment');
+          const repositoryDirectory = await resolveAssignedProjectRoot(requested, assignment);
+          if (!assignment.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
+          validateManagerSummary(command.summary);
+          validateGoalBranchReferences(repositoryDirectory, command.summary.startBranch, command.summary.integrationBranch);
+          const revision = nextRevision(state.current.revision);
+          await state.save({ proposal: { revision,
+            pending: { revision, repositoryDirectory, summary: command.summary } } });
+          return { kind: 'completed', result: { kind: 'proposal_created', proposal: { revision, repositoryDirectory },
+            message: getLabel('manager.conversation.proposed', language) } };
         }
         if (human && command.kind === 'approve_summary') {
           const existing = state.current.approval;
@@ -230,11 +250,14 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           try {
             if (!patrol) {
               const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
-                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey;
-              // fingerprint のない旧状態は保存済みセッションを引き継ぎ、次回から変更を検出する。
+                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey
+                || resolved.provider === 'codex' && state.current.session.contextKey === undefined && state.current.session.sessionId !== null;
+              // Codex の旧状態は固定 developer 契約を持たないため、fingerprint がなければ再開しない。
               if (changed || state.current.session.contextKey === undefined || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
                 await state.save({ session: { provider: resolved.provider, model: resolved.model,
                   sessionId: changed ? null : state.current.session.sessionId,
+                  ...(assignment.kind === 'daemon' ? {} : changed ? { imageAttachmentIds: [] }
+                    : state.current.session.imageAttachmentIds === undefined ? {} : { imageAttachmentIds: state.current.session.imageAttachmentIds }),
                   contextKey: resolved.contextKey,
                   ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
               }
@@ -244,10 +267,21 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const question = event.kind === 'inquiry_answered'
               ? eventGoal?.goal.questions?.find(({ id }) => id === event.questionId)?.body : undefined;
-            const prompt = buildManagerTurnPrompt({ lang: language, event: promptEvent, question,
+            const imageIds = [...new Set([
+              ...(human && command.kind === 'message' ? command.imageAttachmentIds ?? [] : []),
+              ...(patrol || verify ? [] : state.current.interruptedImageAttachmentIds ?? []),
+            ])];
+            const imageAttachments = imageIds.length === 0 ? [] : await resolveManagerImages(
+              await managerImageDirectory(identity, configDirectory), input.turn.conversationId, imageIds);
+            if (!patrol && assignment.kind !== 'daemon' && imageIds.length > 0 && state.current.session.imageAttachmentIds !== undefined) {
+              await state.save({ session: { ...state.current.session,
+                imageAttachmentIds: [...new Set([...state.current.session.imageAttachmentIds, ...imageIds])] } });
+            }
+            const prompt = buildManagerTurnPrompt({ ...(imageAttachments.length === 0 ? {} : { imageAttachments }), lang: language, event: promptEvent, question,
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
+              ...(imageAttachments.length === 0 ? {} : { imageAttachments }),
               requestDaemon: io.request,
               operationId: input.turn.operationId,
               ...(verification === undefined ? {} : { verify: verification }),
@@ -263,7 +297,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
                 } as IdentifiedToolActivityEvent });
               },
               patrol,
-              recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
+              recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null,
+                ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) } }) },
             });
             if (verify) verificationMessage = output.message;
             interruptedMessageDelivered = interruptedMessage != null && !verify;
@@ -296,8 +331,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
-              session: { ...state.current.session, sessionId: output.sessionId ?? null },
-              ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
+              session: { ...state.current.session, sessionId: output.sessionId ?? null,
+                ...(assignment.kind === 'daemon' || state.current.session.imageAttachmentIds === undefined && state.current.session.sessionId !== null ? {}
+                  : { imageAttachmentIds: output.sessionId === undefined ? []
+                    : [...new Set([...(state.current.session.imageAttachmentIds ?? []), ...imageIds])] }) },
+              ...(interruptedMessageDelivered ? { interruptedMessage: null,
+                ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) } : {}),
               ...(human && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
             }) }) };
           } finally { await resolved.release?.(); }
@@ -335,14 +374,19 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
           return { kind: 'interrupted', ...(verificationMessage === undefined ? {} : { message: verificationMessage }), ...(human && command.kind === 'message' && !verify
             ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
-              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
+              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}`,
+              ...(command.imageAttachmentIds === undefined && state.current.interruptedImageAttachmentIds === undefined ? {} : {
+                interruptedImageAttachmentIds: [...new Set([...(interruptedMessageDelivered ? [] : state.current.interruptedImageAttachmentIds ?? []),
+                  ...command.imageAttachmentIds ?? []])],
+              }) }) } : {}) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
           const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error, input.turn.operationId);
           if (notice !== undefined) io.progress(notice);
         }
         return { kind: 'completed', result: conversationErrorResult(error, language),
-          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null }) } : {}) };
+          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null,
+            ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) }) } : {}) };
       } finally {
         if (assignment.kind !== 'daemon' && command.kind === 'message') {
           for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);

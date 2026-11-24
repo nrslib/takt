@@ -14,6 +14,7 @@ import {
   appendRetryNote, persistFailedTaskRetry, type FailedTaskRetryPersistenceOptions,
 } from '../tasks/taskRetryPersistence.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
+import { validateTaskRuntimeAssignmentForSave } from '../../infra/config/runtime-provider/invocation.js';
 import { goalWrite } from './goalWrite.js';
 import type { McpOperationDependencies } from './operations.js';
 import type { RequeueGoalTaskInput, RetryGoalTaskInput } from './goalTaskRetrySchemas.js';
@@ -64,6 +65,7 @@ function prepareRetry(
     const additional = (input as RequeueGoalTaskInput).retryNote;
     return { kind: 'exceeded', options: {
       ...(additional === undefined ? {} : { retryNote: appendRetryNote(task.data?.retry_note, additional) }),
+      ...(input.runtimeAssignment === undefined ? {} : { runtimeAssignment: input.runtimeAssignment }),
     } };
   }
   const preparation = prepareFailedTaskRetry(task, input.cwd);
@@ -84,7 +86,7 @@ function prepareRetry(
     task, projectDir: input.cwd, worktreePath: preparation.worktreePath, freshStart: preparation.freshStart,
     startStep: start.startStep, resumePoint: start.resumePoint, restartPoint: start.restartPoint,
     sourceResumePoint: start.sourceResumePoint,
-    retryNote, workflow: context.workflowOverride,
+    retryNote, workflow: context.workflowOverride, runtimeAssignment: input.runtimeAssignment,
     taskDir: kind === 'retry' ? task.taskDir : undefined, sourceRunSlug: preparation.matchedRunSlug,
     ...(kind === 'retry' ? { revisedOrder: {
       content: (input as RetryGoalTaskInput).task, lang: resolveConfigValue(input.cwd, 'language'),
@@ -104,11 +106,18 @@ async function retryGoalTask(
       const runner = new TaskRunner(input.cwd);
       const target = runner.listTaskStateItems().find((task) => task.name === input.taskName);
       if (target === undefined || target.goalId !== goal.id) throw new Error('Task does not belong to this goal');
-      const result = { taskName: input.taskName, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), status: target.status };
+      const result = { taskName: input.taskName, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), status: target.status, ...(target.runtimeAssignment === undefined ? {} : { runtimeAssignment: target.runtimeAssignment }) };
       if (target.status === 'pending' || target.status === 'running' || target.status === 'completed') return result;
       if (goal.status !== 'created' && !(target.mergeTask === true && goal.status === 'awaiting_merge')) throw new Error('Goal cannot accept work');
       if (target.status !== 'failed' && !(kind === 'requeue' && target.status === 'exceeded')) {
         throw new Error(`Task cannot ${kind} from status: ${target.status}`);
+      }
+      if (input.runtimeAssignment !== undefined) {
+        if (deps.managerRuntimeAssignments !== undefined
+          && !deps.managerRuntimeAssignments.some(({ name }) => name === input.runtimeAssignment)) {
+          throw new Error(`Runtime assignment "${input.runtimeAssignment}" is not allowed for manager tasks. Allowed runtime assignments: ${deps.managerRuntimeAssignments.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.runtime_assignments in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
+        }
+        validateTaskRuntimeAssignmentForSave(input.cwd, input.runtimeAssignment);
       }
       const prepared = prepareRetry(input, kind, runner);
       signal.throwIfAborted();
@@ -117,9 +126,11 @@ async function retryGoalTask(
       queued = true;
       await store.update(goal.id, (current) => appendGoalWorkLog(current, {
         summary: `${kind === 'retry' ? 'Retried with corrected instructions' : 'Requeued'} ${input.taskName}`
-          + (prepared.kind === 'failed' ? `\n${prepared.startDescription}` : ''),
+          + (prepared.kind === 'failed' ? `\n${prepared.startDescription}` : '')
+          + (input.runtimeAssignment === undefined ? '' : `\nRuntime assignment: ${input.runtimeAssignment}`),
       }));
       return { ...result, status: 'pending',
+        ...(input.runtimeAssignment === undefined ? {} : { runtimeAssignment: input.runtimeAssignment }),
         ...(prepared.kind === 'failed' ? { retryStart: prepared.startDescription } : {}),
       };
     }, `Goal task ${kind} failed`, kind);

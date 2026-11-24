@@ -1,15 +1,17 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { ManagerConversationAssignmentSchema } from '../../infra/conversations/schema.js';
+import { ConversationIdSchema, ManagerConversationAssignmentSchema } from '../../infra/conversations/schema.js';
+import { GoalSummarySchema } from '../../infra/goals/schema.js';
 
 export const CLEAR_COMMAND = '/clear';
 
 const id = z.uuid();
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const ConversationCommandSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('message'), text: z.string().min(1), display: z.boolean().optional(), requestProposal: z.boolean().optional() }).strict(),
-  z.object({ kind: z.literal('approve_summary'), revision, requirePending: z.boolean().optional() }).strict(),
-  z.object({ kind: z.literal('dismiss_summary'), revision }).strict(),
+  z.object({ kind: z.literal('message'), text: z.string().min(1), display: z.boolean().optional(), requestProposal: z.boolean().optional(), imageAttachmentIds: z.array(id).refine((ids) => new Set(ids).size === ids.length).optional() }).strict(),
+  z.object({ kind: z.literal('approve_summary'), revision, conversationId: ConversationIdSchema, requirePending: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('dismiss_summary'), revision, conversationId: ConversationIdSchema }).strict(),
+  z.object({ kind: z.literal('propose_summary'), conversationId: ConversationIdSchema, repositoryDirectory: z.string().refine(isAbsolute).optional(), summary: GoalSummarySchema }).strict(),
   z.object({ kind: z.literal('answer_question'), questionId: id,
     target: z.union([
       z.object({ goalId: id, repositoryDirectory: z.string().refine(isAbsolute) }).strict(),

@@ -1,6 +1,7 @@
 import { tellDirectorManager } from '../features/director/tellManager.js';
 import type { DaemonStateReply } from '../core/daemon/processProtocol.js';
 import { expect, it, vi } from 'vitest';
+import { ManagerImageAttachments } from '../features/manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../features/manager/daemonConversationPort.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import type { DaemonIngress } from '../core/daemon/ports.js';
@@ -8,6 +9,7 @@ import type { ConversationSnapshot } from '../core/daemon/messages.js';
 import type { Admission } from '../core/daemon/events.js';
 import type { SnapshotRead } from '../features/manager/conversationPort.js';
 import { ToolActivityHistory } from '../shared/tool-activity/history.js';
+import { conversationId } from '../infra/conversations/identity.js';
 
 function gate<T>() {
   let resolve!: (value: T) => void;
@@ -26,7 +28,7 @@ async function fixture(kind: 'repository' | 'daemon' = 'repository') {
   const loadSnapshot = vi.fn(async () => snapshot());
   const ingress: DaemonIngress = { accept: vi.fn().mockResolvedValue({ kind: 'accepted', eventId: 'event', operationId: 'queued', acceptedSequence: 2 }),
     snapshot: vi.fn(async (_id, request) => { const read = await loadSnapshot(); request?.capture?.(read); return read; }), control: vi.fn().mockResolvedValue({ kind: 'interrupted' }) };
-  const port = createDaemonConversationInput({ ingress, resolveAssignment: async (assignment) => assignment });
+  const port = createDaemonConversationInput({ configDirectory: '/config', images: new ManagerImageAttachments({ hasImageReference: async () => false }), onImageCleanupError: (error: unknown) => { throw error; }, ingress, resolveAssignment: async (assignment) => assignment });
   const opened = await port.open({ ...selected, agentOverrides: { provider: 'codex', model: 'selected-model' } }, delivery);
   const submit = (text: string, requestId: string) => port.submit({ attachmentId: opened.attachmentId, requestId, speaker: selected.speaker,
     command: { kind: 'message', text } });
@@ -269,23 +271,52 @@ it('admits approval with its revision and routes inquiry answers to the human qu
     summary: { objective: 'Current proposal', outOfScope: [], acceptanceCriteria: ['Ready'], constraints: [] } };
   f.loadSnapshot.mockResolvedValueOnce(snapshot);
   await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'approval', speaker: f.selected.speaker,
-    command: { kind: 'approve_summary', revision: 3, requirePending: true } });
+    command: { kind: 'approve_summary', revision: 3, requirePending: true, conversationId: f.selected.conversationId } });
   expect(f.ingress.accept).toHaveBeenCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'human_command',
-    command: { kind: 'approve_summary', revision: 3, requirePending: true } }) }));
+    command: { kind: 'approve_summary', revision: 3, requirePending: true, conversationId: f.selected.conversationId } }) }));
   await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'answer', speaker: f.selected.speaker,
     command: { kind: 'answer_question', questionId: '11111111-1111-4111-8111-111111111111',
       target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: '/repo' } }, answer: { text: 'answer' } } });
   expect(f.ingress.accept).toHaveBeenLastCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'inquiry_answer' }) }));
 });
 
+it.each(['approve_summary', 'dismiss_summary'] as const)(
+  'rejects a %s command whose conversationId differs from the attached conversation before durable admission',
+  async (kind) => {
+    const f = await fixture();
+    const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+    snapshot.turnState.pending = { revision: 3, repositoryDirectory: '/repo',
+      summary: { objective: 'Current proposal', outOfScope: [], acceptanceCriteria: ['Ready'], constraints: [] } };
+    vi.mocked(f.ingress.snapshot).mockResolvedValue(snapshot);
+    const foreign = conversationId({ kind: 'repository', repositoryDirectory: '/other' });
+
+    expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: kind, speaker: f.selected.speaker,
+      command: { kind, revision: 3, conversationId: foreign } })).toMatchObject({ kind: 'error', code: 'invalid_assignment' });
+    expect(f.ingress.accept).not.toHaveBeenCalled();
+  },
+);
+
 it('rejects a withdrawn or replaced proposal before durable admission', async () => {
   const f = await fixture();
-  for (const command of [{ kind: 'approve_summary' as const, revision: 3, requirePending: true },
-    { kind: 'dismiss_summary' as const, revision: 2 }]) {
+  for (const command of [{ kind: 'approve_summary' as const, revision: 3, requirePending: true, conversationId: f.selected.conversationId },
+    { kind: 'dismiss_summary' as const, revision: 2, conversationId: f.selected.conversationId }]) {
     expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: command.kind,
       speaker: f.selected.speaker, command })).toMatchObject({ kind: 'error', code: 'stale_summary' });
   }
   expect(f.ingress.accept).not.toHaveBeenCalled();
+});
+
+it('rejects a re-approval of a registered revision only when the proposal must still be pending', async () => {
+  const f = await fixture();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  snapshot.turnState.approval = { revision: 3, goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: '/repo', state: 'registered' };
+  vi.mocked(f.ingress.snapshot).mockResolvedValue(snapshot);
+  const approve = (requirePending: boolean) => f.port.submit({ attachmentId: f.opened.attachmentId, requestId: `approve-${requirePending}`,
+    speaker: f.selected.speaker, command: { kind: 'approve_summary', revision: 3, requirePending, conversationId: f.selected.conversationId } });
+
+  expect(await approve(true)).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  expect(f.ingress.accept).not.toHaveBeenCalled();
+  expect(await approve(false)).toMatchObject({ kind: 'accepted' });
 });
 
 it('admits director messages through the bus and waits for durable admission without self IPC', async () => {

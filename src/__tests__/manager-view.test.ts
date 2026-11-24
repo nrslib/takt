@@ -13,7 +13,7 @@ import { measureWidth } from '../shared/utils/grapheme.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../features/tui/terminalColors.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { approveSummary, cwd, DOWN, ENTER, ESC, ManagerClientDouble, mount, promptFrame, QUESTION_MENU, showProposal, typeAndSubmit, waitFor } from './helpers/manager-tui-fixtures.js';
+import { approveSummary, cwd, DOWN, ENTER, ESC, ManagerClientDouble, managerConversationId, mount, promptFrame, QUESTION_MENU, showProposal, typeAndSubmit, waitFor } from './helpers/manager-tui-fixtures.js';
 
 vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
   const actual = await original<typeof import('../features/tui/TranscriptEntryView.js')>();
@@ -835,6 +835,9 @@ it('ends the goal proposal request when its live result arrives after the snapsh
   const context = mount('en');
   const { app, client } = context;
   await typeAndSubmit(context, '/make-goal');
+  await waitFor(() => expect(client.commands()).toEqual([{
+    kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true,
+  }]));
   const operationId = await client.operation();
   const state = client.getSnapshot().state!;
   client.change({ state: { ...state, running: { operationId, generation: 1, kind: 'message' } } });
@@ -865,6 +868,7 @@ it('accepts another registration when the live result of an approval arrives aft
   await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summary.confirmation', 'en')));
   approveSummary(context);
   await waitFor(() => expect(client.commands()).toEqual([
-    { kind: 'approve_summary', revision: 4 }, { kind: 'approve_summary', revision: 4 },
+    { kind: 'approve_summary', revision: 4, conversationId: managerConversationId },
+    { kind: 'approve_summary', revision: 4, conversationId: managerConversationId },
   ]));
 });

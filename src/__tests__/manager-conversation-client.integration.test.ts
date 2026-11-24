@@ -1,11 +1,13 @@
 import { connectConversationIpc } from '../features/daemon/conversationReadiness.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import * as daemonFiles from '../infra/daemon/privateFile.js';
-import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as net from 'node:net';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
+import { createSessionImageAttachmentStore } from '../features/interactive/imageAttachments.js';
+import { readClipboardImage } from '../features/interactive/clipboardImage.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
@@ -51,6 +53,7 @@ import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '
 import { completedEpicGoal, epicDefinition, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
+vi.mock('../features/interactive/clipboardImage.js', () => ({ readClipboardImage: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.ensure }));
 vi.mock('../infra/daemon/owner.js', async (original) => ({ ...await original<typeof import('../infra/daemon/owner.js')>(), isDaemonOwnerRunning: () => true }));
@@ -154,6 +157,99 @@ async function browseToolPage(app: ReturnType<typeof render>, key: string): Prom
   await waitFor(() => expect(currentToolPage().state).not.toEqual(before.state));
   return toolRows();
 }
+
+it('prepares a real image over IPC and delivers its durable path and bytes with the accepted message', async () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const temporary = createSessionImageAttachmentStore(repository);
+  const source = await temporary.saveImage(png, 'image/png');
+  const calls = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt, options) => {
+    expect(prompt).toContain('Inspect [Image #1]');
+    expect(prompt).toContain(prepared.path);
+    expect(options.imageAttachments).toBeUndefined();
+    expect(readFileSync(prepared.path)).toEqual(png);
+    return toolReply('Image received');
+  });
+  useToolProvider(calls);
+  await client.connect(); await complete();
+  const prepared = await client.prepareImage(source.tempPath);
+  expect(prepared).toEqual({ id: expect.any(String), path: expect.stringContaining('.takt/manager-images/'), placeholder: '[Image #1]' });
+  temporary.cleanup();
+  const accepted = await client.submit({ kind: 'message', text: 'Inspect ' + prepared.placeholder, imageAttachmentIds: [prepared.id] });
+  expect(accepted.kind).toBe('accepted');
+  await waitFor(() => expect(calls).toHaveBeenCalledOnce());
+  await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+  client.close();
+  await fixture.close();
+  expect(readFileSync(prepared.path)).toEqual(png);
+});
+
+it.each(['clipboard', 'split OSC'] as const)('keeps %s image delivery on the same mounted workspace TUI after removing its startup repository', async (gesture) => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  vi.mocked(readClipboardImage).mockResolvedValue({ data: png, mimeType: 'image/png' });
+  const secondRepository = join(directory, 'second-repository'); mkdirSync(secondRepository);
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Image workspace',
+    repositoryDirectories: [repository, secondRepository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
+  doubles.assignment.mockImplementation(async () => assignment);
+  client.close(); client = new ConversationIpcClient(assignment, { provider: 'mock' });
+  const root = join(directory, 'workspaces', workspace.id);
+  const calls = vi.fn<ProviderAgent['call']>();
+  calls.mockImplementation(async (prompt, options) => {
+    const number = calls.mock.calls.length;
+    const path = join(root, '.takt', 'manager-images', conversationId(assignment), 'attachments', `image-${number}.png`);
+    expect(prompt).toContain(`前\n[Image #${number}]${gesture === 'split OSC' ? '末尾' : ''}後`);
+    expect(prompt).toContain(path);
+    expect(options.imageAttachments).toBeUndefined();
+    expect(readFileSync(path)).toEqual(png);
+    return toolReply('Image received');
+  });
+  useToolProvider(calls);
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  expect(existsSync(join(root, '.takt'))).toBe(false);
+  const prepare = vi.spyOn(client, 'prepareImage');
+  for (const number of [1, 2]) {
+    if (number === 2) {
+      const updated = await removeManagerRepository(assignment, repository, directory);
+      assignment = { ...assignment, repositoryDirectories: updated.repositoryDirectories };
+      expect(updated.repositoryDirectories).toEqual([secondRepository]);
+      await client.refresh(); await complete();
+    }
+    app.stdin.write('\x1b[200~前\n後\x1b[201~');
+    await waitFor(() => expect(app.lastFrame()).toContain('後'));
+    app.stdin.write('\x01');
+    if (gesture === 'clipboard') app.stdin.write('\x16');
+    else {
+      const payload = `1337;File=inline=1:${png.toString('base64')}`;
+      app.stdin.write('\x1b]'); app.stdin.write(payload.slice(0, 20)); app.stdin.write(payload.slice(20));
+      app.stdin.write('\x07末尾');
+    }
+    await waitFor(() => expect(app.lastFrame()).toContain(`[Image #${number}]${gesture === 'split OSC' ? '末尾' : ''}後`));
+    expect(prepare).toHaveBeenCalledTimes(number);
+    expect(prepare.mock.calls[number - 1]![0]).toContain(join(root, '.takt', 'tmp', 'images'));
+    app.stdin.write('\r');
+    await waitFor(() => expect(calls).toHaveBeenCalledTimes(number));
+    await fixture.settled();
+  }
+});
+
+it('removes a prepared but unsent image when its IPC connection detaches', async () => {
+  const temporary = createSessionImageAttachmentStore(repository);
+  const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png');
+  await client.connect(); await complete();
+  const prepared = await client.prepareImage(source.tempPath);
+  client.close();
+  await waitFor(() => expect(() => readFileSync(prepared.path)).toThrow());
+  temporary.cleanup();
+});
+
+it('rejects preparation while disconnected and rejects a source outside the managed temporary directory over IPC', async () => {
+  const path = join(repository, 'not-a-managed-image.png'); writeFileSync(path, 'text');
+  await expect(client.prepareImage(path)).rejects.toThrow('disconnected');
+  await client.connect(); await complete();
+  await expect(client.prepareImage(path)).rejects.toThrow();
+  expect(execute).not.toHaveBeenCalled();
+});
 
 it.each(['before publication', 'after publication'])(
   'keeps completed history when a snapshot starts %s of the completion event', async (timing) => {
@@ -445,7 +541,7 @@ it('retains the received start and completion times once after compact display a
   }));
   await client.connect(); await complete();
   const pending = client.getSnapshot().state!.pending!;
-  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision, conversationId: client.getSnapshot().state!.conversationId }); await fixture.settled();
   await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
   const app = await snapshotView();
   vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(32); app.stdout.emit('resize');
@@ -487,7 +583,7 @@ it.each([5, 6])('fits a %s line draft and expanded results while resizing the sa
   }));
   await client.connect(); await complete();
   const pending = client.getSnapshot().state!.pending!;
-  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision, conversationId: client.getSnapshot().state!.conversationId }); await fixture.settled();
   await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
   const app = await snapshotView(); const submit = vi.spyOn(client, 'submit');
   const lines = Array.from({ length: lineCount }, (_, index) => `下書き${index + 1}を保持`);
@@ -974,7 +1070,7 @@ it.each([32, 40])('reserves wrapped control hints and the draft before filling t
   }));
   await client.connect(); await complete();
   const pending = client.getSnapshot().state!.pending!;
-  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision, conversationId: client.getSnapshot().state!.conversationId }); await fixture.settled();
   await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
   const app = await snapshotView();
   try {
@@ -1770,7 +1866,7 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     expect.soft(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
-    await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
+    await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4, conversationId: conversationRecord(repository).id }, undefined));
     expect(connection.mock.calls.filter(([bytes]) => String(bytes).includes('"kind":"approve_summary"'))).toHaveLength(1);
     const record = conversationRecord(repository);
     await waitFor(async () => expect((await new ConversationStateStore(directory).read(record.id))?.record?.approval)
@@ -1818,7 +1914,7 @@ it('does not send approval before the initial transfer ends and enables it on th
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledOnce());
-    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
+    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4, conversationId: conversationRecord(repository).id });
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
   } finally { released.release(); app.unmount(); }
 });
@@ -1876,7 +1972,7 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledOnce());
-    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
+    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4, conversationId: conversationRecord(repository).id });
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
   } finally { released.release(); await refreshing?.catch(() => {}); app.unmount(); }
 });
@@ -1963,14 +2059,14 @@ it.each([
     expect(transfer.indexOf('response')).toBeLessThan(transfer.indexOf('transfer_start'));
     expect(transfer.indexOf('transfer_start')).toBeLessThan(transfer.indexOf('transfer_end'));
     expect(transfer).not.toContain('cancel');
-    expect(submissions.mock.calls.map(([command]) => command)).toEqual([{ kind, revision: 4 }]);
+    expect(submissions.mock.calls.map(([command]) => command)).toEqual([{ kind, revision: 4, conversationId: selected.conversationId }]);
     expect((await fixture.store.read(selected.conversationId))?.record?.approval).toBeNull();
     expect(registration).not.toHaveBeenCalled();
     expect((await new GoalStore(repository).list()).goals).toEqual([]);
     if (kind === 'approve_summary') { app.stdin.write('\x1b[A'); app.stdin.write('\r'); }
     else app.stdin.write('\x1b[27u');
     await waitFor(() => expect(submissions).toHaveBeenCalledTimes(2));
-    expect(submissions.mock.calls[1]![0]).toEqual({ kind, revision: 5 });
+    expect(submissions.mock.calls[1]![0]).toEqual({ kind, revision: 5, conversationId: selected.conversationId });
     expect(await submissions.mock.results[1]!.value).toMatchObject({ kind: 'accepted' });
     await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending: null, running: null }));
     if (kind === 'approve_summary') {

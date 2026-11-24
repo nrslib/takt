@@ -344,12 +344,9 @@ export class CodexClient {
   ): Promise<AgentResponse> {
     let threadId = options.sessionId;
 
-    const fullPrompt = options.systemPrompt
-      ? `${options.systemPrompt}\n\n${prompt}`
-      : prompt;
     let input: Input;
     try {
-      input = buildCodexInput(fullPrompt, options.imageAttachments);
+      input = buildCodexInput(prompt, options.imageAttachments);
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
       const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
@@ -377,7 +374,7 @@ export class CodexClient {
       );
       return errorResponse;
     }
-    const { config: codexConfig, env: codexEnvironment } = sessionConfig;
+    const { config: codexConfig, env: codexEnvironment, configOverrides: permissionConfigOverrides } = sessionConfig;
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
@@ -388,8 +385,8 @@ export class CodexClient {
     let mcpExclusions: string[] = [];
     let rolloutObservation: Awaited<ReturnType<typeof createCodexRolloutObservation>>;
     try {
-      isolation = options.mcpOnlySideEffects
-        ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
+      isolation = options.mcpOnlySideEffects || options.internalAgentIsolation === 'strict-readonly'
+        ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment, permissionConfigOverrides)
         : undefined;
       if (isolation === undefined) {
         mcpExclusions = await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment);
@@ -434,7 +431,9 @@ export class CodexClient {
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(isolation === undefined ? {
           env: codexEnvironment, config: codexConfig,
-          ...(mcpExclusions.length === 0 ? {} : { configOverrides: mcpExclusions }),
+          ...(permissionConfigOverrides.length === 0 && mcpExclusions.length === 0
+            ? {}
+            : { configOverrides: [...permissionConfigOverrides, ...mcpExclusions] }),
           ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
         } : isolation),
       };

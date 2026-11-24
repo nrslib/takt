@@ -31,7 +31,7 @@
 
 TAKT is an open-source CLI that turns AI coding agents into repeatable development workflows. Define planning, implementation, review, fix loops, human checkpoints, permissions, and output contracts in YAML, then run tasks with isolated worktrees and traceable logs.
 
-Instead of asking one agent to remember the whole process, TAKT gives each step its own role, context, and transition rules. Agents can code, but the workflow decides what happens next.
+TAKT gives each step its own role, context, and transition rules. The workflow manages both the coding work and the transition to the next phase.
 
 ![TAKT workflow control for AI coding agents](./docs/assets/description/01-hero.png)
 
@@ -42,7 +42,7 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 
 **T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with review loops, managed prompts, and per-step permissions.
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. YAML workflow files define the planning, implementation, review, and fix loops. Each agent works with its assigned role, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -54,9 +54,7 @@ AI coding agents do not automatically create a stable development process. In lo
 
 Adding more rules to prompts, `CLAUDE.md`, or skills can help, but it cannot enforce the process. Whether the rules are followed is still left to the agent's behavior.
 
-TAKT treats AI agents as something to be controlled from the outside, not simply trusted.
-
-Workflows define the phases, and each step receives its own persona, policy, knowledge, instruction, and output contract. TAKT manages implementation, review, fix, and re-review flows declaratively. By separating responsibilities, knowledge, and constraints, then giving each agent only what it needs for the current step, TAKT improves task quality without bloating context.
+TAKT controls agent work through the phases defined in a workflow. Each step receives its own persona, policy, knowledge, instruction, and output contract. The workflow specifies the order of implementation, review, fixes, and re-review, including where to return when fixes are needed. By separating responsibilities, knowledge, and constraints, then giving each agent only what it needs for the current step, TAKT improves task quality without bloating context.
 
 Reviews cannot be silently skipped. Findings route work back to fix steps, and human judgment can be requested when needed. Tasks run in isolated worktrees, and each step leaves logs and reports so the path from task to PR remains traceable.
 
@@ -291,7 +289,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
-| `takt manager` | Open the experimental goal conversation TUI connected to the daemon. Use `Ctrl+R` for inquiries and `Ctrl+G` for ongoing goals; both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑↓` to choose **Register goal** or **Return to conversation without registering**, then press `Enter`. The default returns to the conversation and dismisses the proposal. Select **Register goal** to register it. Typing `/` shows `/make-goal` as a completion candidate; `Tab` accepts it. Send `/clear` to start the conversation over: manager's AI begins a new session and earlier messages are no longer shown, while goals and proposals stay as they are. Other input starting with `/` is sent as a regular message. If material is insufficient, continue the conversation. To add, remove, or rename a managed repository, ask in the conversation. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, manager starts the daemon if needed and waits until it is ready; the daemon admits, saves, routes, and observes events; each conversation has a child process for its turns. Stop the daemon with `takt daemon stop` |
+| `takt manager` | Open the experimental goal conversation TUI to discuss, queue, and run tasks with AI. See [Goal Management](./docs/goal-management.md) |
 | `takt director` | Open the experimental conversation TUI for oversight across managers; see [Director](#director-experimental) |
 | `takt list` | Manage task branches (merge, retry, requeue, stop, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
@@ -303,18 +301,31 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt workflow doctor` | Validate workflow definitions |
 | `takt workflow inspect` | Inspect a workflow's configuration and resolution sources |
 | `takt repertoire add` | Install a repertoire package from GitHub |
+| `takt daemon stop` | Stop the background daemon |
+| `takt caccia` | Handle CodeRabbit review threads for a PR |
+| `takt resume` | Resume the latest failed or aborted direct run |
+| `takt clear` | Clear agent conversation sessions |
+| `takt reset config` | Restore the global configuration template with a backup |
+| `takt reset categories` | Restore builtin workflow categories |
+| `takt prompt` | Preview each step's assembled prompts |
+| `takt export-cc` | Export workflows and agents as a Claude Code skill |
+| `takt export-codex` | Export workflows and agents as a Codex skill |
+| `takt catalog` | List available facets |
+| `takt workflow bundle attach` | Attach a historical workflow bundle to a legacy run |
+| `takt metrics review` | Show review quality metrics |
+| `takt purge` | Remove old analytics event files |
+| `takt telemetry status`, `takt telemetry enable`, `takt telemetry disable` | Inspect or change local routing event recording |
+| `takt repertoire remove`, `takt repertoire list` | Remove or list installed repertoire packages |
 
-Manager conversations run in the daemon; the TUI sends requests and displays results. Once a turn is accepted, it continues in the daemon even if you close the TUI. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. Any goal proposal awaiting approval is shown again and can be registered by selecting **Register goal** and pressing `Enter`.
+Manager conversations run in the daemon, so work continues after you close the TUI. Reopen it for the same repository or workspace to continue the conversation. See [Goal Management](./docs/goal-management.md) for goal registration, conversation recovery, and interruption. Use `takt daemon stop` to stop the daemon.
 
-When you reopen the TUI, previous messages, completed tool history, and replies are shown again in the conversation log, in that order for each turn. Thinking and text shown between tool calls are not shown again. Conversation history is managed by the provider's session. TAKT saves message text and full results in `daemon-events` and retains them after completion. These records are not automatically deleted. Pending goal summaries and goal records are saved separately.
+Manager accepts pasted images and keeps referenced images with the conversation. When manager includes a saved image path in a task's instructions, TAKT copies the image into the task's attachments for the workflow to read. Finished goals stay out of the active goal context; use `Ctrl+G` to find them and choose Delete.
 
-The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. After failure or interruption, manager checks current state and side effects, then decides whether to resume, correct and retry, or submit new work.
+Set `manager.runtime_assignments` in `config.yaml` to list the runtime assignments manager may choose for each task. The names refer to `provider.assignments` in `runtime.yaml`; a task keeps its selected assignment when retried or requeued. `manager.refresh_interval_ms` or `TAKT_MANAGER_REFRESH_INTERVAL_MS` controls the TUI refresh interval. See [Goal Management](./docs/goal-management.md) and the [configuration guide](./docs/configuration.md).
 
-The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. To stop it explicitly, use `takt daemon stop`.
+Manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, incurring provider API costs.
 
 **Slack conversations:** You can also talk to the same manager conversation from a configured Slack channel. Replies stay in the thread where you sent the message; TUI replies are not forwarded to Slack. See [Slack conversations with manager](./docs/configuration.md#slack-conversations-with-manager) for the Socket Mode App manifest, token environment variables, repository settings, and how to answer inquiries. Completion notices continue to use the separate `TAKT_NOTIFY_WEBHOOK` Incoming Webhook.
-
-In a conversation thread, send `/make-goal` to create a proposal. Use **Register goal** or **Return to conversation without registering**; buttons on an outdated proposal no longer work.
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
@@ -322,7 +333,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
 At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
 
-Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
+Deletion targets the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. For clone tasks, it also targets the branch with the same name in the original repository using `git branch -d`. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed. See [Task Management](./docs/task-management.md) for branch-retention conditions and other details.
 
 ```bash
 # Preview matching tasks, then delete them after checking the list
@@ -341,23 +352,15 @@ and `/go`.
 
 TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks. Use `takt run` or `takt watch` to execute pending tasks.
 
-`takt_cleanup_tasks` previews filtered tasks before deletion. It requires an absolute `cwd` and a `reason`. Optional inputs are `statuses` (one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`; `running` is not allowed), `goalId`, `branch`, and `confirm` (default `false`). At least one of `statuses`, `goalId`, or `branch` is required.
-
-Omitting `confirm` or setting it to `false` returns only the matching list without deleting anything. Only `confirm: true` deletes tasks, with the same deletion scope as `takt list`. This tool is available only in the `all` tool set, not in `read-only` or `manager`; `manager` has the separate `takt_remove_goal_task` tool.
-
-`takt_stop_goal_task` is available in the `manager` and `all` tool sets. Pass an absolute `cwd`. From one task item returned by `takt_list_tasks`, pass its `name` value as `taskName` and use its `goalId` and `executionId`. The owner PID must be alive. When an owner start time is saved, the current start time must be available and match it. Without a saved start time, matching goalId, taskName and executionId, running status, and a live owner PID are sufficient to accept the request. Mismatched identities, non-running tasks, and ended owners are rejected with a reason and no stop request is saved. The tool only saves the request; the task stays `running` while its worker polls every 500 ms and aborts itself. After execution and cleanup finish, the worker saves `failed` with a task stop reason, distinct from a goal abort. Other tasks and the goal remain active. Repeated requests return the saved request only if the same execution is still `running` and its owner can be verified when the request is evaluated; retries use a new execution ID.
-
-Before processing each project's events, the daemon recovers interrupted tasks to `failed` and creates goal-task completion events, even when no pending tasks exist. Recovery requires an absent or dead owner PID, or a known mismatch between the saved and current owner start times. A live PID with unavailable saved or current owner identity is left running.
+The MCP tool `takt_cleanup_tasks` lets you preview matching tasks before deleting them. `takt_stop_goal_task` requests a stop for one running goal task while other tasks and the goal continue. See [Task Management](./docs/task-management.md) and [Goal Management](./docs/goal-management.md) for arguments, deletion scope, and behavior after a stop or interruption.
 
 The ordinary `takt` assistant conversation has the same read-only task-state view when its provider supports MCP. Use `/go` to turn a new task into an execution or queued task, `/tell` to select and confirm an additional instruction for a running worktree clone, and `/requeue` or `/retry` to return a failed task to the queue after confirmation.
 
 ### Manager judgment and work
 
-Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers, preserving configured provider options. Permissions default to `auto`. For Claude (`claude` / `claude-sdk`) and Codex, set `manager.permission` or provider-specific `manager.provider_permissions` to `full` for unrestricted execution. Other providers behave like `full` under `auto`. A provider-specific `manager.provider_permissions` entry takes precedence over `manager.permission`, so an `auto` entry keeps that provider in `auto` even when `manager.permission: full` is set. There is no separate manager-specific permission judge, read-scope review or execution control based on saved approvals. Use `manager.workflows` and `manager.default_workflow` to select the workflows available for new development tasks; see the [configuration guide](./docs/configuration.md#manager-task-workflows).
+Manager investigates, implements, verifies, performs Git operations, and delegates work as needed to complete assigned goals. It uses normal provider tools and assigned MCP servers, preserving configured provider options. Permissions default to `auto`. See the [configuration guide](./docs/configuration.md#manager-task-workflows) for permissions and task workflow selection.
 
-Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. PR merge instructions include deletion of that PR branch; instructions already given are not reconfirmed. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
-
-Legacy `manager.sensitive_paths` and runtime `provider.targets.internal_agents.manager-permission-judge` are deprecated. Existing configuration files remain readable, but these settings are ignored and have no effect. Old permission Markdown and approval answers do not decide execution. Historical inquiry records remain readable and withdrawable.
+Merges, force pushes, and deletion of remote branches or unsaved work follow explicit human instructions. See [Goal Management](./docs/goal-management.md) for how instructions are handled, secret protection, and migration from legacy settings.
 
 
 ### Instant exec mode
@@ -400,8 +403,10 @@ language: en        # en or ja
 ```
 
 Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
-files under `.takt/runs/<run>/`. Resume and requeue preserve the applicable run
-state and reports.
+files under `.takt/runs/<run>/`. Resuming partway through a workflow uses the saved
+results and reports for the selected position. Requeueing from the beginning does
+not resume the previous execution state. See [Task Management](./docs/task-management.md)
+for the details of what is inherited.
 
 To select providers or models for individual steps, configure auto routing. Run `takt telemetry enable` to record routing decisions locally. See the [Configuration Guide](./docs/configuration.md) for details.
 
@@ -445,6 +450,8 @@ or `<project>/.takt/runtime.yaml`; the project settings take precedence. Use
 this to keep execution settings separate from workflow definitions. When
 switching to `runtime.yaml`, do not mix in legacy provider settings. See the
 [Configuration Guide](./docs/configuration.md) for migration steps.
+
+Codex and OpenCode profiles accept `context_window: auto`, a fixed positive integer, or `{ initial: 500000, auto_expand: true }`. Automatic selection and expansion use confirmed model limits; `auto` keeps native defaults when those limits cannot be confirmed. A fixed number keeps the capacity fixed. See [context window selection](./docs/configuration.md).
 
 Companion reviewers are disabled by default. Enable them with the top-level
 `companion.enabled: true` policy in `runtime.yaml`; global and project policies

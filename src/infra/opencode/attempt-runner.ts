@@ -1192,6 +1192,8 @@ export class OpenCodeAttemptRunner {
       options.skillsEnabled,
       executionContext,
       options.externalDirectoryAllowlist,
+      options.contextWindow,
+      options.cwd,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -2295,6 +2297,7 @@ export class OpenCodeAttemptRunner {
         agentType,
         attempt,
         errorMessage: sanitizeAttemptError(errorMessage),
+        error: sanitizeAttemptError(message),
       });
       await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();

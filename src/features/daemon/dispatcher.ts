@@ -486,9 +486,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       && event.kind === 'human_command' && event.command.kind === 'message'
       && (event.command.text.trim() !== '/verify' || active.turn.conversationId === conversationId({ kind: 'daemon' }))) {
       outcome = { ...outcome, change: {
-        // 子の変更結果がなくても、保存時に最新の版へ載せ直す本文だけの変更を確定する。
+        // 子の変更結果がなくても、本文と画像参照を保存時に最新の版へ載せ直す。
         operationId: active.turn.operationId, expectedVersion: 0, ...outcome.change,
         interruptedMessage: event.command.text,
+        ...(event.command.imageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: event.command.imageAttachmentIds }),
       } };
     }
     active.phase = 'settling';

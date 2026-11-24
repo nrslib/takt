@@ -14,6 +14,7 @@ import { loadFormalSpecVerifierConstraints } from '../interactive/formalSpecProm
 import { buildManagerSystemPrompt } from './conversationPrompt.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { resolveManagerWorkflowSelection } from './workflowSelection.js';
+import { resolveManagerRuntimeAssignmentSelection } from './runtimeAssignmentSelection.js';
 import { warn } from '../../shared/ui/index.js';
 import { invalidateGlobalConfigCache, loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
 import { loadGlobalConfigTraceState } from '../../infra/config/global/globalConfigCore.js';
@@ -86,11 +87,21 @@ function buildManagerConversationPlan(
     }));
   const managerConfig = resolveManagerConfig(cwd, resolved.provider);
   const workflowSelection = resolveManagerWorkflowSelection(cwd, managerConfig, lang);
+  const runtimeAssignments = [];
   for (const repositoryDirectory of new Set([cwd, ...(input.repositoryDirectories ?? [])])) {
     const selection = resolve(repositoryDirectory) === resolve(cwd) ? workflowSelection
       : withRepositoryConfig(repositoryDirectory, () => resolveManagerWorkflowSelection(repositoryDirectory, resolveManagerConfig(repositoryDirectory), lang));
     for (const name of selection.missingWorkflows) {
       warn(`Manager workflow not found: ${name}; ignored in ${repositoryDirectory}. Check manager.workflows in config.yaml.`);
+    }
+    const runtimeAssignmentSelection = resolve(repositoryDirectory) === resolve(cwd)
+      ? resolveManagerRuntimeAssignmentSelection(cwd, managerConfig)
+      : withRepositoryConfig(repositoryDirectory, () => resolveManagerRuntimeAssignmentSelection(repositoryDirectory, resolveManagerConfig(repositoryDirectory)));
+    if (runtimeAssignmentSelection.runtimeAssignments.length > 0) {
+      runtimeAssignments.push({ repositoryDirectory, assignments: runtimeAssignmentSelection.runtimeAssignments });
+    }
+    for (const name of runtimeAssignmentSelection.missingRuntimeAssignments) {
+      warn(`Manager runtime assignment not found: ${name}; ignored in ${repositoryDirectory}. Check manager.runtime_assignments in config.yaml and provider.assignments in runtime.yaml.`);
     }
   }
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
@@ -110,6 +121,7 @@ function buildManagerConversationPlan(
         formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang), repository: cwd,
         mainMerge: managerConfig.mainMerge,
         concurrency: resolveConfigValue(cwd, 'concurrency'),
+        runtimeAssignments,
       }),
     },
   };

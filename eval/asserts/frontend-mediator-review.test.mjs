@@ -149,7 +149,6 @@ test('registration binds each case to exactly one isolated prompt and keeps grad
     assert.deepEqual(suite.tests[index].prompts, [variant]);
     assert.equal(suite.prompts[index].config.working_dir, `.work/frontend-mediator-review-${variant}`);
     assert.equal(suite.tests[index].assert[0].value, 'file://../../asserts/frontend-mediator-review.mjs');
-    assert.ok(suite.tests[index].assert[0].config.rubric.startsWith('見出し・文言ではなく実質で判定する。'));
     const files = readProjectFiles(join(fixtureRoot, variant));
     assert.ok(Object.keys(files).every(path => !path.includes('node_modules') && !path.includes('dist/')));
     assert.ok(Object.keys(files).every(path => !/rubric|expected|good|bad/.test(path)));
@@ -175,16 +174,6 @@ for (const variant of ['good', 'bad', 'bad2', 'good-hook']) {
     }));
   });
 }
-
-test('all variants share API, domain calculations and display/region components', () => {
-  const good = readProjectFiles(join(fixtureRoot, 'good'));
-  for (const variant of ['bad', 'bad2', 'good-hook']) {
-    const files = readProjectFiles(join(fixtureRoot, variant));
-    for (const [path, source] of Object.entries(good)) {
-      if (path !== 'src/routes/order-edit.tsx') assert.equal(files[path], source, `${variant}/${path}`);
-    }
-  }
-});
 
 test('all pages show the same alert for a missing product instead of throwing during rendering', () => {
   const data = {

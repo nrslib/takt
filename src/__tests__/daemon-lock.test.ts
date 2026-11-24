@@ -49,6 +49,103 @@ beforeEach(async () => {
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
+describe('FileAsyncLock acquisition-only deadline', () => {
+  it('keeps the file and local queue held while an acquired action exceeds the acquisition deadline', async () => {
+    const entered = deferred<void>(); const release = deferred<void>();
+    const first = new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => {
+      entered.resolve(); await release.promise; return 42;
+    }, options());
+    await entered.promise;
+    const action = vi.fn(async () => 2);
+    const second = new FileAsyncLock().exclusive(path, action, { ...options(), timeoutMs: 20000 });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(files.has(path)).toBe(true);
+    expect(action).not.toHaveBeenCalled();
+    release.resolve();
+    expect(await first).toBe(42);
+    expect(await second).toBe(2);
+    expect(files.size).toBe(0);
+  });
+
+  it.each(['abort', 'deadline'] as const)('does not start a local waiter after acquisition %s', async (kind) => {
+    const entered = deferred<void>(); const release = deferred<void>();
+    const holder = new FileAsyncLock().exclusive(path, async () => { entered.resolve(); await release.promise; }, options());
+    await entered.promise;
+    const abort = new AbortController(); const action = vi.fn(async () => 2);
+    const waiting = new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, action, { signal: abort.signal, timeoutMs: 100 });
+    const rejected = expect(waiting).rejects.toMatchObject({ name: kind === 'abort' ? 'AbortError' : 'TimeoutError' });
+    if (kind === 'abort') abort.abort(); else await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(action).not.toHaveBeenCalled();
+    expect(files.has(path)).toBe(true);
+    release.resolve(); await holder;
+    expect(await new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => 3, options())).toBe(3);
+  });
+
+  it('checks the deadline after writing the ownership file and before starting the action', async () => {
+    const written = deferred<void>(); const finish = deferred<void>();
+    vi.mocked(open).mockResolvedValueOnce({
+      chmod: async () => {}, close: async () => {},
+      writeFile: async (content: Buffer) => { files.set(path, content); written.resolve(); await finish.promise; },
+    } as unknown as Awaited<ReturnType<typeof open>>);
+    const action = vi.fn(async () => 1);
+    const waiting = new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, action, { ...options(), timeoutMs: 100 });
+    const rejected = expect(waiting).rejects.toMatchObject({ name: 'TimeoutError' });
+    await written.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    finish.resolve(); await rejected;
+    expect(action).not.toHaveBeenCalled();
+    expect(files.has(path)).toBe(false);
+    expect(await new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => 2, options())).toBe(2);
+  });
+
+  it('bounds acquisition of a foreign file lock without removing its live owner', async () => {
+    const content = Buffer.from(JSON.stringify({ pid: 123456, startTime: 'foreign-start' }));
+    files.set(path, content);
+    vi.mocked(observeProcess).mockResolvedValue({ kind: 'alive', owner: { pid: 123456, startTime: 'foreign-start' } });
+    const action = vi.fn(async () => 1);
+    const waiting = new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, action, { ...options(), timeoutMs: 100 });
+    const rejected = expect(waiting).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(100); await rejected;
+    expect(action).not.toHaveBeenCalled();
+    expect(files.get(path)).toEqual(content);
+    files.delete(path);
+    expect(await new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => 2, options())).toBe(2);
+  });
+
+  it('propagates an action failure after its acquisition deadline and releases the lock', async () => {
+    const failure = new Error('publication failed');
+    await expect(new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => {
+      await vi.advanceTimersByTimeAsync(6000); throw failure;
+    }, options())).rejects.toBe(failure);
+    expect(files.size).toBe(0);
+    expect(await new FileAsyncLock().exclusive(path, async () => 2, options())).toBe(2);
+  });
+
+  it.each([false, true])('propagates release failure and aggregates a simultaneous action failure (%s)', async (actionFails) => {
+    const actionFailure = new Error('publication failed'); const releaseFailure = new Error('unlink failed');
+    vi.mocked(unlink).mockRejectedValueOnce(releaseFailure);
+    const waiting = new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+      if (actionFails) throw actionFailure;
+      return 42;
+    }, options());
+    if (actionFails) await expect(waiting).rejects.toMatchObject({ errors: [actionFailure, releaseFailure] });
+    else await expect(waiting).rejects.toBe(releaseFailure);
+    files.clear();
+    expect(await new FileAsyncLock().exclusive(path, async () => 2, options())).toBe(2);
+  });
+
+  it('rejects ownership changes even after an acquisition-only action succeeds', async () => {
+    const other = Buffer.from('another owner');
+    await expect(new FileAsyncLock().exclusiveWithAcquisitionTimeout(path, async () => {
+      files.set(path, other); return 42;
+    }, options())).rejects.toThrow();
+    expect(files.get(path)).toEqual(other);
+    expect(unlink).not.toHaveBeenCalled();
+  });
+});
+
 describe('FileAsyncLock contention', () => {
   it('limits acquisition without expiring a held operation and keeps contenders waiting', async () => {
     const lock = new FileAsyncLock();

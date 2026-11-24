@@ -238,7 +238,7 @@ export class GlobalConfigManager {
       },
       manager: parsed.manager === undefined ? undefined : {
         permission: parsed.manager.permission, providerPermissions: parsed.manager.provider_permissions,
-        patrolInterval: parsed.manager.patrol_interval, autoRun: parsed.manager.auto_run, preserveGoalWorktree: parsed.manager.preserve_goal_worktree, workflows: parsed.manager.workflows, notifications: parsed.manager.notifications,
+        patrolInterval: parsed.manager.patrol_interval, refreshIntervalMs: parsed.manager.refresh_interval_ms, autoRun: parsed.manager.auto_run, preserveGoalWorktree: parsed.manager.preserve_goal_worktree, workflows: parsed.manager.workflows, runtimeAssignments: parsed.manager.runtime_assignments, notifications: parsed.manager.notifications,
       },
       merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),

@@ -2541,7 +2541,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge failed', 'fatal: refusing to merge unrelated histories');
       }
       return '';
@@ -2568,7 +2568,7 @@ describe('DefaultSystemStepServices', () => {
     );
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
-      ['merge', 'refs/remotes/origin/improve'],
+      ['merge', '--ff', '--no-edit', 'refs/remotes/origin/improve'],
       expect.any(Object),
     );
   });
@@ -2764,7 +2764,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -2801,7 +2801,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -2840,7 +2840,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       if (argsArr[0] === 'merge' && argsArr[1] === '--abort') {
@@ -2937,7 +2937,7 @@ describe('DefaultSystemStepServices', () => {
       (args) => args[0] === 'fetch' && args[1] === '/repo' && args[2] === 'refs/remotes/origin/improve:refs/remotes/origin/improve',
     );
     const baseMerge = findGitCallIndex(
-      (args) => args[0] === 'merge' && args[1] === 'refs/remotes/origin/improve',
+      (args) => args[0] === 'merge' && args[1] === '--ff',
     );
     expect(headFetchProject).toBeGreaterThanOrEqual(0);
     expect(headFetchProject).toBeLessThan(headFetchWorktree);
@@ -3077,7 +3077,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -3130,7 +3130,7 @@ describe('DefaultSystemStepServices', () => {
     });
     expect(mockAgentCall).not.toHaveBeenCalled();
     expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === '--ff-only')).toBeGreaterThanOrEqual(0);
-    expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === 'refs/remotes/origin/improve')).toBeGreaterThanOrEqual(0);
+    expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === '--ff')).toBeGreaterThanOrEqual(0);
   });
 
   it('runs resolve_conflicts_with_ai on a PR-scoped clone when cwd is not on the PR head branch', async () => {
@@ -3148,7 +3148,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -3206,7 +3206,7 @@ describe('DefaultSystemStepServices', () => {
     let baseMergeCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         baseMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
@@ -3257,7 +3257,7 @@ describe('DefaultSystemStepServices', () => {
     let baseMergeCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         baseMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
@@ -3331,7 +3331,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       if (argsArr[0] === 'merge' && argsArr[1] === '--abort') {
@@ -3378,7 +3378,7 @@ describe('DefaultSystemStepServices', () => {
     let conflictMergeCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         conflictMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
@@ -3429,7 +3429,7 @@ describe('DefaultSystemStepServices', () => {
     let mergeBaseCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         mergeBaseCalls += 1;
         if (mergeBaseCalls === 1) {
           throw createCommandError('merge in progress', 'fatal: You have not concluded your merge (MERGE_HEAD exists)');

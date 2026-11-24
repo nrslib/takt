@@ -8,4 +8,4 @@ Do not edit source code in this step. Check reported blockers against the actual
 
 Read the fixed paths in the supplied history lists and compare earlier plans and results by execution identity and order. Do not fill missing or incomplete entries with another version, and preserve the repair targets selected by the current decision.
 
-Also read the repair history in the current review-resolution.md and its fixed-version references. Reconcile the latest requirements and decision, the earlier method, and current code. Record revised methods and verification approaches against the original acceptance criteria.
+Read the original plans, repairs, and verification directly from the fixed-version references in the current review-resolution.md and supplied history lists, and analyze the history. Reconcile the latest requirements and decision, the earlier method, and current code. Record revised methods and verification approaches against the original acceptance criteria.

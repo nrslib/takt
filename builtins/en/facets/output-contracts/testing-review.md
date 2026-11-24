@@ -36,9 +36,11 @@ For every finding that requests a test, record the observable contract to preser
 {{include:output-contracts/base-review-verification-evidence}}
 
 ## Unverified Scope
-| Item | Reason | Impact on Decision |
-|------|--------|--------------------|
-| {Unverified scope, or "none"} | {Reason it was not verified} | {APPROVE allowed / REJECT reason} |
+| Item | Classification | Reason | Impact on Decision |
+|------|----------------|--------|--------------------|
+| {Unverified scope or plan caveat, or "none"} | Unverified Scope / plan-caveat-carry-forward | {Reason it was not verified, or evidence and next stage responsible for the carry-forward} | {APPROVE allowed / REJECT reason / excluded from decision} |
+
+For a plan-caveat carry-forward, record the evidence and the next stage responsible for it in the reason column. Entries with this classification do not count as issues, do not trigger REJECT, and are not repair targets.
 
 ## Rejection Gate
 {{include:output-contracts/base-review-rejection-gate}}

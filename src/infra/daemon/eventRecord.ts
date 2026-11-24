@@ -107,25 +107,39 @@ function normalizeStoredWorkspaceAnswer(saved: AcceptedEvent): AcceptedEvent {
     || saved.occurredAt !== answer.answer.answeredAt) return saved;
   return { ...saved, event: { ...event, inquiryAnswer: answer } };
 }
+// conversationId が必須になる前に保存された承認・却下は、保存イベント自身の会話を宛先として補う。
+const storedSummaryCommand = z.object({
+  conversationId: id,
+  event: z.object({
+    kind: z.literal('human_command'),
+    command: z.object({ kind: z.enum(['approve_summary', 'dismiss_summary']), conversationId: z.undefined().optional() }).passthrough(),
+  }).passthrough(),
+}).passthrough().transform((saved) => ({
+  ...saved, event: { ...saved.event, command: { ...saved.event.command, conversationId: saved.conversationId } },
+}));
 const storedEvent = z.preprocess((input) => {
   if (typeof input !== 'object' || input === null || !('event' in input)) return input;
   const answer = storedAnswer.safeParse(input.event);
-  return answer.success ? { ...input, event: answer.data } : input;
+  if (answer.success) return { ...input, event: answer.data };
+  const summary = storedSummaryCommand.safeParse(input);
+  return summary.success ? summary.data : input;
 }, storedAcceptedEvent).transform(normalizeStoredWorkspaceAnswer);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string();
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
-  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
+  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), imageAttachmentIds: z.array(z.uuid()).optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessage: text.nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
   || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: text }).strict(),
   z.object({ kind: z.literal('notice'), message: text }).strict(),
+  z.object({ kind: z.literal('proposal_created'), proposal: z.object({ revision: version, repositoryDirectory: text }).strict(), message: text }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: text }).strict(),
   z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional(), permissionAppended: z.boolean().optional() }).strict()

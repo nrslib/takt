@@ -18,6 +18,8 @@ import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { stringify as stringifyYaml } from 'yaml';
+import type { ManagerRuntimeAssignmentsConfig } from '../core/models/config-types.js';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { connectTestManagerMcp } from './helpers/manager-mcp.js';
 import { createTaktMcpServer,type TaktMcpToolSet } from '../features/mcp/server.js';
@@ -27,7 +29,7 @@ import { loadWorkflowByIdentifier,resolveWorkflowCallTarget } from '../infra/con
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getGlobalConfigDir, getRepertoireDir } from '../infra/config/paths.js';
-import { saveGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { invalidateGlobalConfigCache, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { GoalStore } from '../infra/goals/store.js';
 import * as goalBranchSync from '../infra/goals/branch-sync.js';
 import { isGoalContentIncluded } from '../infra/goals/git-command.js';
@@ -229,6 +231,10 @@ describe('manager goal task enqueue', () => {
 
   function savedGoalWork(): Array<{ taskName: string; purpose: string }> {
     return new TaskRunner(cwd).listTaskStateItems().filter((task) => task.goalId === goalId).map((task) => ({ taskName: task.name, purpose: task.goalPurpose! }));
+  }
+
+  async function savedWorkLog(): Promise<string> {
+    return JSON.stringify((await new GoalStore(cwd).get(goalId)).workLog);
   }
 
   it('rejects a missing goal without saving a task', async () => {
@@ -558,6 +564,206 @@ describe('manager goal task enqueue', () => {
         workflows: expect.arrayContaining([expect.objectContaining({ name: 'safe', description: 'fixture safe' })]),
       });
       expect(pendingTasks()).toEqual([]);
+    });
+  });
+
+  function writeRuntimeAssignments(names: string[]): void {
+    // runtime.yaml の provider セクションと config.yaml の旧 provider 設定は併存できないため、
+    // 旧設定を外して runtime-v1 の assignments だけを定義する。
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), [
+      'branch_name_strategy: romaji', 'base_branch: release',
+      'manager:', '  workflows: all', '  auto_run: false',
+    ].join('\n'));
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), stringifyYaml({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'mock', model: 'base-model' },
+          localFast: { provider: 'mock', model: 'local-fast-model' },
+          localSlow: { provider: 'mock', model: 'local-slow-model' },
+        },
+        targets: { internal_agents: { selector: { profile: 'base' } } },
+        assignments: Object.fromEntries(names.map((name) => [name, {
+          defaults: { profile: name === 'local-fast' ? 'localFast' : 'localSlow' },
+        }])),
+      },
+    }));
+  }
+
+  function configureManagerRuntimeAssignments(runtimeAssignments: ManagerRuntimeAssignmentsConfig): void {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: {
+      autoRun: false, workflows: ['safe'],
+      ...(runtimeAssignments.length === 0 ? {} : { runtimeAssignments }),
+    } });
+  }
+
+  it('lists workflows even when runtime.yaml is malformed while listing runtime assignments fails', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), 'provider: [unterminated\n');
+    invalidateResolvedConfigCache(cwd);
+    await withServer(cwd, 'manager', async (client) => {
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(listed.isError, firstTextContent(listed.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(listed.content)).workflows.map((workflow: { name: string }) => workflow.name)).toContain('safe');
+      const assignments = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+      expect(assignments.isError).toBe(true);
+      expect(firstTextContent(assignments.content)).toContain('Runtime assignment list failed:');
+    });
+  });
+
+  it('lists only the runtime assignments configured for manager tasks with their usage descriptions', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    configureManagerRuntimeAssignments([{ 'local-fast': 'Fast local model' }]);
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_list_runtime_assignments');
+      const result = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content)).runtimeAssignments).toEqual([
+        { name: 'local-fast', usageDescription: 'Fast local model' },
+      ]);
+      expect(pendingTasks()).toEqual([]);
+    });
+  });
+
+  it('returns an empty runtime assignment list when manager runtime assignments are not configured', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments([]);
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const body = JSON.parse(firstTextContent(result.content)) as { runtimeAssignments: unknown[] };
+      expect(body.runtimeAssignments).toEqual([]);
+    });
+  });
+
+  it('resolves runtime assignment candidates from the current global configuration after its cache is built', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: ['safe'] } });
+    const globalConfigPath = join(getGlobalConfigDir(), 'config.yaml');
+    const writeGlobalRuntimeAssignments = (runtimeAssignments: ManagerRuntimeAssignmentsConfig): void => {
+      writeFileSync(globalConfigPath, stringifyYaml({ manager: { runtime_assignments: runtimeAssignments } }));
+    };
+    writeGlobalRuntimeAssignments(['local-fast']);
+    invalidateGlobalConfigCache();
+    await withServer(cwd, 'manager', async (client) => {
+      const list = async () => {
+        const result = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        return (JSON.parse(firstTextContent(result.content)) as { runtimeAssignments: Array<{ name: string }> })
+          .runtimeAssignments.map(({ name }) => name);
+      };
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_list_runtime_assignments');
+      expect((await enqueue(client, { workKey: 'stale', runtimeAssignment: 'local-fast' })).isError).toBeUndefined();
+      expect(pendingTasks().map(({ data }) => data?.runtime_assignment)).toEqual(['local-fast']);
+
+      writeGlobalRuntimeAssignments(['local-slow']);
+      const rejected = await enqueue(client, { workKey: 'updated', runtimeAssignment: 'local-fast' });
+      expect(rejected.isError).toBe(true);
+      expect(firstTextContent(rejected.content)).toContain('is not allowed for manager tasks');
+      expect((await enqueue(client, { workKey: 'updated', runtimeAssignment: 'local-slow' })).isError).toBeUndefined();
+      expect(pendingTasks().map(({ data }) => data?.runtime_assignment).sort()).toEqual(['local-fast', 'local-slow']);
+
+      writeGlobalRuntimeAssignments(['local-fast']);
+      expect(await list()).toEqual(['local-fast']);
+    });
+  });
+
+  it('saves a candidate runtime assignment on the task and returns it in the task list summary', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    await withEnqueue(async (client) => {
+      expect((await enqueue(client, { workKey: 'with-runtime', runtimeAssignment: 'local-fast' })).isError).toBeUndefined();
+      expect(pendingTasks()[0]!.data).toMatchObject({ runtime_assignment: 'local-fast' });
+      const listed = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+      expect(listed.isError).toBeUndefined();
+      const { tasks } = JSON.parse(firstTextContent(listed.content)) as { tasks: Array<{ runtimeAssignment?: string }> };
+      expect(tasks).toEqual([expect.objectContaining({ runtimeAssignment: 'local-fast' })]);
+    });
+  });
+
+  it('rejects a runtime assignment outside the manager candidates without saving the task', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    await withEnqueue(async (client) => {
+      const before = await savedWorkLog();
+      const result = await enqueue(client, { workKey: 'outside', runtimeAssignment: 'local-slow' });
+      expect(result.isError).toBe(true);
+      const reason = firstTextContent(result.content);
+      expect(reason).toContain('is not allowed for manager tasks');
+      expect(reason).toContain('local-fast');
+      expect(pendingTasks()).toEqual([]);
+      expect(savedGoalWork()).toEqual([]);
+      expect(await savedWorkLog()).toEqual(before);
+    });
+  });
+
+  it('rejects an out-of-candidate runtime assignment resubmitted with an existing work key', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    await withEnqueue(async (client) => {
+      const created = await enqueue(client, { workKey: 'repeated', runtimeAssignment: 'local-fast' });
+      expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+      const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+      expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+
+      const before = await savedWorkLog();
+      const repeated = await enqueue(client, { workKey: 'repeated', runtimeAssignment: 'local-slow' });
+
+      expect(repeated.isError).toBe(true);
+      const reason = firstTextContent(repeated.content);
+      expect(reason).toContain('is not allowed for manager tasks');
+      expect(reason).toContain('local-fast');
+      expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+      expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
+      expect(await savedWorkLog()).toEqual(before);
+    });
+  });
+
+  it('returns the existing task on a resubmission with an allowed runtime assignment without creating a duplicate', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    configureManagerRuntimeAssignments(['local-fast', 'local-slow']);
+    await withEnqueue(async (client) => {
+      const created = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+      expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+      const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+
+      const before = await savedWorkLog();
+      const repeated = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-slow' });
+
+      expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe', runtimeAssignment: 'local-fast' });
+      expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+      expect(pendingTasks()[0]!.data).toMatchObject({ runtime_assignment: 'local-fast' });
+      expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
+      expect(await savedWorkLog()).toEqual(before);
+    });
+  });
+
+  it('rejects any runtime assignment with an explicit empty-candidate message when none are configured', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments([]);
+    await withEnqueue(async (client) => {
+      const result = await enqueue(client, { workKey: 'no-candidates', runtimeAssignment: 'local-fast' });
+      expect(result.isError).toBe(true);
+      const reason = firstTextContent(result.content);
+      expect(reason).toContain('is not allowed for manager tasks');
+      expect(reason).toContain('Allowed runtime assignments: (none)');
+      expect(pendingTasks()).toEqual([]);
+    });
+  });
+
+  it('omits the runtime assignment key when the submission does not specify one', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    await withEnqueue(async (client) => {
+      const result = await enqueue(client, { workKey: 'omitted' });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(pendingTasks()[0]!.data).not.toHaveProperty('runtime_assignment');
+      const listed = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+      const { tasks } = JSON.parse(firstTextContent(listed.content)) as { tasks: Array<Record<string, unknown>> };
+      expect(tasks[0]).not.toHaveProperty('runtimeAssignment');
     });
   });
 
@@ -2197,8 +2403,8 @@ describe('goal PR publication and merge through manager MCP', () => {
       const list = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
       expect(get.isError).toBeUndefined();
       expect(list.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(get.content))).toMatchObject({ goal: { id: goalId, pullRequest } });
-      expect(JSON.parse(firstTextContent(list.content))).toMatchObject({ goals: [expect.objectContaining({ id: goalId, pullRequest })] });
+      expect(JSON.parse(firstTextContent(get.content))).toMatchObject({ goal: { id: goalId, pullRequest: { ...pullRequest, state: 'open' } } });
+      expect(JSON.parse(firstTextContent(list.content))).toMatchObject({ goals: [expect.objectContaining({ id: goalId, pullRequest: { ...pullRequest, state: 'open' } })] });
     });
   });
 
@@ -2415,6 +2621,56 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(prs).toEqual([]);
     });
   });
+
+  it('corrects the saved integration branch and completes the goal once its content is included in the corrected branch', async () => {
+    vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await complete(client)).isError).toBeUndefined();
+      const store = new GoalStore(cwd);
+      expect(await store.get(goalId)).toMatchObject({ status: 'awaiting_merge', integrationBranch: 'main', completion: { goalSha: sha, targetBranch: 'main' } });
+      const main = git(cwd, ['rev-parse', 'main']);
+      git(cwd, ['update-ref', 'refs/heads/release', sha]);
+      const check = () => client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
+      expect(JSON.parse(firstTextContent((await check()).content))).toMatchObject({ included: false });
+
+      const reason = 'プルリクエストの宛先が release に変わったため';
+      const corrected = await client.callTool({ name: 'takt_update_goal_branches', arguments: { cwd, goalId, integrationBranch: 'release', reason } });
+
+      expect(corrected.isError, firstTextContent(corrected.content)).toBeUndefined();
+      const saved = await store.get(goalId);
+      expect(saved).toMatchObject({ status: 'awaiting_merge', integrationBranch: 'release', completion: { goalSha: sha, targetBranch: 'release', summary } });
+      expect(saved.completion?.targetSha).toBeUndefined();
+      expect(saved.workLog.at(-1)?.summary).toBe(reason);
+      expect(JSON.parse(firstTextContent(corrected.content))).toMatchObject({ goal: { integrationBranch: 'release' }, workLogEntryId: saved.workLog.at(-1)!.id });
+
+      const completed = await check();
+      expect(completed.isError, firstTextContent(completed.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(completed.content))).toMatchObject({ included: true, goal: { status: 'completed' } });
+      expect(await store.get(goalId)).toMatchObject({ status: 'completed', completion: { targetBranch: 'release', targetSha: sha } });
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(main);
+    });
+  });
+
+  it.each(['completed', 'paused', 'aborted', 'goal branch', 'invalid branch', 'missing reason', 'unknown field', 'outside repository'] as const)(
+    'rejects goal branch correction for %s without changing the goal', async (condition) => {
+      await saveWaitingGoal();
+      const store = new GoalStore(cwd);
+      if (condition === 'completed') await store.update(goalId, (goal) => ({ ...goal, status: 'completed', completion: { ...goal.completion!, targetSha: sha } }));
+      if (condition === 'paused' || condition === 'aborted') await store.update(goalId, (goal) => ({ ...goal, executionStatus: condition }));
+      const before = await store.get(goalId);
+      const overrides = condition === 'goal branch' ? { integrationBranch: branch }
+        : condition === 'invalid branch' ? { integrationBranch: 'bad branch' }
+        : condition === 'missing reason' ? { reason: undefined }
+          : condition === 'unknown field' ? { targetBranch: 'release' }
+            : condition === 'outside repository' ? { cwd: tmpdir() } : {};
+      await withServer(cwd, 'manager', async (client) => {
+        const result = await client.callTool({ name: 'takt_update_goal_branches',
+          arguments: { cwd, goalId, integrationBranch: 'release', reason: '宛先の訂正', ...overrides } });
+        expect(result.isError).toBe(true);
+      });
+      expect(await store.get(goalId)).toEqual(before);
+    },
+  );
 
   it('publishes completion and reopen tool guidance for resubmission and included evidence correction', async () => {
     await withServer(cwd, 'manager', async (client) => {

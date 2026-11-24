@@ -51,6 +51,71 @@ describe('event driven daemon dispatcher', () => {
         .toMatchObject({ kind: 'delivery' });
     } finally { await h.dispatcher.control({ kind: 'stop' }); }
   });
+  it('restores queued image messages in order with their own attachment IDs and does not replay them again', async () => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const first = await storedDispatcher(h, new FileEventStore(directory));
+    const imageA = '11111111-1111-4111-8111-111111111111';
+    const imageB = '22222222-2222-4222-8222-222222222222';
+    const messageA = { kind: 'message' as const, text: 'First image [Image #1]', imageAttachmentIds: [imageA] };
+    const messageB = { kind: 'message' as const, text: 'Second image [Image #2]', imageAttachmentIds: [imageB] };
+    const queued = [messageA, messageB].map((command, index) => ({ ...input(`image-${index}`), event: {
+      kind: 'human_command' as const, command, speaker: { namespace: 'test', id: 'operator' },
+    } }));
+    try {
+      await first.dispatcher.accept(input('blocking-turn'));
+      await first.runner.started(1);
+      for (const event of queued) expect(await first.dispatcher.accept(event)).toMatchObject({ kind: 'accepted' });
+      expect(first.runner.calls).toHaveLength(1);
+    } finally { await first.dispatcher.control({ kind: 'stop' }); }
+
+    const restarted = await storedDispatcher(h, new FileEventStore(directory));
+    try {
+      for (const [index, expected] of queued.entries()) {
+        const running = await restarted.runner.started(index + 1);
+        expect(running.input.event.event).toEqual(expected.event);
+        const delivered = parseDaemonProcessMessage({ protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'image-launch',
+          kind: 'start_turn', input: running.input }, 'image-launch');
+        expect(delivered).toMatchObject({ kind: 'start_turn', input: { event: { event: expected.event } } });
+        await restarted.runner.finish(running);
+      }
+      expect(restarted.runner.calls).toHaveLength(2);
+    } finally { await restarted.dispatcher.control({ kind: 'stop' }); }
+
+    const restoredAgain = await storedDispatcher(h, new FileEventStore(directory));
+    try {
+      for (const event of queued) expect(await restoredAgain.dispatcher.accept(event)).toMatchObject({ kind: 'accepted' });
+      await restoredAgain.dispatcher.drain();
+      expect(restoredAgain.runner.calls).toHaveLength(0);
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { await restoredAgain.dispatcher.control({ kind: 'stop' }); }
+  });
+  it.each([false, true])('persists interrupted image references when the child omits interruption fields (session change=%s)', async (withSessionChange) => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const { dispatcher, runner } = await storedDispatcher(h, new FileEventStore(directory));
+    const imageId = '11111111-1111-4111-8111-111111111111';
+    const command = { kind: 'message' as const, text: 'Inspect [Image #1]', imageAttachmentIds: [imageId] };
+    try {
+      await dispatcher.accept({ ...input('interrupted-image'), event: {
+        kind: 'human_command', command, speaker: { namespace: 'test', id: 'operator' },
+      } });
+      const active = await runner.started(1);
+      expect(await dispatcher.control(interrupt(active.turn))).toEqual({ kind: 'interrupted' });
+      const sessionChange = withSessionChange ? { operationId: 'child-change', expectedVersion: 0,
+        session: { ...turnState().session, sessionId: 'saved-session' } } : undefined;
+      await runner.finish(active, { kind: 'interrupted', ...(sessionChange === undefined ? {} : { change: sessionChange }) });
+      const expected = { kind: 'interrupted', change: {
+        operationId: active.turn.operationId, expectedVersion: 0, ...sessionChange,
+        interruptedMessage: command.text, interruptedImageAttachmentIds: [imageId],
+      } };
+      expect(h.applied.get(active.turn.operationId)?.outcome).toEqual(expected);
+      expect(await new FileEventStore(directory).readTurns(active.turn.conversationId)).toEqual([
+        expect.objectContaining({ operationId: active.turn.operationId, outcome: expected }),
+      ]);
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { await dispatcher.control({ kind: 'stop' }); }
+  });
   it('delivers a pending progress backlog in FIFO order', async () => {
     const h = await harness(); await h.dispatcher.accept(input('fifo-progress'));
     const active = await h.runner.started(1);

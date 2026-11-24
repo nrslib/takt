@@ -28,6 +28,33 @@ it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blan
     }
   },
 );
+it.each([
+  { global: ['slow'], project: ['fast'], expected: ['fast'] },
+  { global: ['slow'], project: undefined, expected: ['slow'] },
+  { global: undefined, project: undefined, expected: undefined },
+])('replaces the global manager runtime assignment selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { runtimeAssignments: global } });
+  doubles.project.mockReturnValue({ manager: { runtimeAssignments: project } });
+  expect(resolveManagerConfig('/project').runtimeAssignments).toEqual(expected);
+});
+it('accepts manager runtime assignments at both scopes', () => {
+  const runtime_assignments = ['fast', { slow: 'Slow-path tasks' }];
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { runtime_assignments } }).manager?.runtime_assignments).toEqual(runtime_assignments);
+  }
+});
+it.each(['all', [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ fast: 'Fast', slow: 'Slow' }]])(
+  'rejects malformed manager runtime assignments %j at both scopes', (runtime_assignments) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { runtime_assignments } }).success).toBe(false);
+    }
+  },
+);
+it('tracks manager runtime assignments at both scopes', async () => {
+  const { getGlobalTracedSchema, getProjectTracedSchema } = await import('../infra/config/traced/tracedConfigSchema.js');
+  expect(Object.keys(getProjectTracedSchema())).toContain('manager.runtime_assignments');
+  expect(Object.keys(getGlobalTracedSchema())).toContain('manager.runtime_assignments');
+});
 it('defaults to automatic execution, goal worktree cleanup, and approval for main merges', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, preserveGoalWorktree: false, mainMerge: 'approve' });
 });
@@ -226,4 +253,21 @@ it('serializes manager patrol configuration while leaving director patrol disabl
   expect(parsed.manager).toMatchObject({ auto_run: false, preserve_goal_worktree: true });
   expect(parsed.manager).toHaveProperty('patrol_interval', 1800);
   expect(parsed.director).not.toHaveProperty('patrol_interval');
+});
+it.each([2000, 1, 2147483647])('accepts refresh_interval_ms=%s at both scopes', (refresh_interval_ms) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { refresh_interval_ms } }).manager?.refresh_interval_ms).toBe(refresh_interval_ms);
+  }
+});
+it.each([0, -100, 1.5, 2147483648, '2000', null])('rejects invalid refresh_interval_ms=%j at both scopes', (refresh_interval_ms) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { refresh_interval_ms } }).success).toBe(false);
+  }
+});
+it('resolves the manager refresh interval with project before global and a 500ms default', () => {
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(500);
+  doubles.global.mockReturnValue({ manager: { refreshIntervalMs: 2000 } });
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(2000);
+  doubles.project.mockReturnValue({ manager: { refreshIntervalMs: 3000 } });
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(3000);
 });

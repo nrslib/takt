@@ -7,6 +7,7 @@ import { SlackInquiryBindings } from '../infra/slack/inquiryBindings.js';
 import { randomUUID } from 'node:crypto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createDaemonSlackPorts } from '../features/daemon/slackPorts.js';
+import { ManagerImageAttachments } from '../features/manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../features/manager/daemonConversationPort.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
@@ -84,12 +85,12 @@ beforeEach(async () => {
       return snapshot;
     }),
   };
-  input = createDaemonConversationInput({ ingress, resolveAssignment: async (selected) => selected });
+  input = createDaemonConversationInput({ configDirectory: process.env.TAKT_CONFIG_DIR!, images: new ManagerImageAttachments({ hasImageReference: async () => false }), onImageCleanupError: (error: unknown) => { throw error; }, ingress, resolveAssignment: async (selected) => selected });
   slack = await createDaemonSlackPorts({ configDirectory: process.env.TAKT_CONFIG_DIR!, input,
     repositories: [{ repositoryDirectory, resolveAssignment: async () => assignment, channelId: 'C1', allowedUserIds: ['U1', 'U2'], language: 'en' }],
     tokens: { appToken: 'fake-app', botToken: 'fake-bot' }, clientFactory: createSlackClient });
 });
-afterEach(async () => { await slack.close(); input.close(); });
+afterEach(async () => { await slack.close(); await input.close(); });
 function message(text: string, ts = '1700000000.000002', extra: Record<string, unknown> = {}): SlackEvent {
   return { type: 'events_api', body: { team_id: 'T1', event: { type: 'message', channel: 'C1', user: 'U1',
     ts, thread_ts: '1700000000.000001', text, ...extra } } };
@@ -264,7 +265,7 @@ it('accepts Slack and TUI commands and reads and interrupts while another save i
   const opened = await input.open(selected, { deliver: async () => ({ kind: 'delivered' }) });
   await emit(message('next', '1700000000.000003'));
   expect(await input.submit({ attachmentId: opened.attachmentId, requestId: 'approve', speaker: selected.speaker,
-    command: { kind: 'approve_summary', revision: 4 } })).toMatchObject({ kind: 'accepted' });
+    command: { kind: 'approve_summary', revision: 4, conversationId: id } })).toMatchObject({ kind: 'accepted' });
   expect((await input.snapshot(opened.attachmentId)).operationId).toBe(operationId);
   await input.submit({ attachmentId: opened.attachmentId, requestId: 'stop', speaker: selected.speaker,
     command: { kind: 'abort_turn', operationId, generation: 5 } });
@@ -315,7 +316,7 @@ it('keeps approval revision and conversation identity through a Slack button', a
   await emit({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C1' }, user: { id: 'U1' },
     container: { type: 'message', channel_id: 'C1', message_ts: 'proposal' }, message: { ts: 'proposal', thread_ts: 'origin' },
     actions: [{ type: 'button', action_id: 'takt_goal_approve', value: JSON.stringify({ conversationId: id, revision: 4 }) }] } });
-  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, requirePending: true } });
+  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, conversationId: id, requirePending: true } });
   expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: 'origin' }));
 });
 it('reports failed persistence without claiming business acceptance or retrying', async () => {

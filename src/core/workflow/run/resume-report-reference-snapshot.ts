@@ -24,6 +24,7 @@ import {
   type ResumeReportSnapshotConsumerEntry,
 } from './resume-report-snapshot.js';
 import { buildResumeReportConsumerKeyFromStack } from './resume-report-consumer.js';
+import { matchWorkflowResumeRecords } from '../workflow-resume-records.js';
 
 interface BuildResumeReportSnapshotConsumerOptions {
   readonly cwd: string;
@@ -178,6 +179,11 @@ function resolveResumeLocation(options: BuildResumeReportSnapshotConsumerOptions
 export function buildResumeReportSnapshotConsumerEntry(
   options: BuildResumeReportSnapshotConsumerOptions,
 ): ResumeReportSnapshotConsumerEntry | undefined {
+  const sourceConsumerKey = buildResumeReportConsumerKeyFromStack(options.resumePoint.stack);
+  options = { ...options, resumePoint: matchWorkflowResumeRecords(options.resumePoint, {
+    workflow: options.workflow, workflowCallResolver: options.workflowCallResolver,
+    projectCwd: options.projectCwd, lookupCwd: options.cwd,
+  }).point };
   const consumerKey = buildResumeReportConsumerKeyFromStack(options.resumePoint.stack);
   const location = resolveResumeLocation(options);
   if (consumerKey === undefined || location === undefined) {
@@ -185,7 +191,7 @@ export function buildResumeReportSnapshotConsumerEntry(
   }
   const inheritedConsumer = readResumeReportSnapshotManifest(options.cwd, options.sourceRunSlug, options.runsDirectory)
     ?.resumeReportConsumers
-    ?.find((consumer) => consumer.consumerKey === consumerKey);
+    ?.find((consumer) => consumer.consumerKey === sourceConsumerKey);
   const reportDirectories = [...new Set([
     location.reportDirectory,
     ...(inheritedConsumer?.reportDirectories ?? []),

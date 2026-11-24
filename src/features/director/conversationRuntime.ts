@@ -7,6 +7,7 @@ import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME, DIRECTOR_TOOL_ALLOWL
 import { startLocalMcpConnection } from '../mcp/localConnection.js';
 import { createDirectorTurnExecutor } from './turnExecutor.js';
 import { getDirectorOutputSchema } from './turnResponse.js';
+import { CODEX_SESSION_CONTRACT } from '../../shared/codex-session-contract.js';
 
 export async function prepareDirectorTurn(
   configDirectory: string,
@@ -36,6 +37,7 @@ export async function prepareDirectorTurn(
     return { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
       contextKey: createHash('sha256').update(JSON.stringify({
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions, prompt: plan.systemPrompt,
+        ...(plan.ctx.providerType === 'codex' ? { sessionContract: CODEX_SESSION_CONTRACT } : {}),
       })).digest('hex'), executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
         try { return await executor.execute(turn); }
         finally { await dispose(); }

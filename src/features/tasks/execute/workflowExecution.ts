@@ -1,4 +1,5 @@
 import { isQuietMode } from '../../../shared/context.js';
+import { registerManagerImageRun } from '../managerImageAttachments.js';
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
@@ -79,6 +80,7 @@ import {
   reportWorkflowFailure,
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { stageGoalSpecificationsForExecution } from './goalSpecificationContext.js';
 import { persistDeliveredLiveInstructions } from './liveInterventionPersistence.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
 import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
@@ -278,6 +280,7 @@ async function executeWorkflowInternal(
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
+  let goalSpecificationPaths: string[];
   let executionBundle: ReturnType<typeof loadWorkflowExecutionBundle>;
   let runtimeReportDiagnostics: ReturnType<typeof validateWorkflowReportReferences>;
   const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
@@ -300,8 +303,10 @@ async function executeWorkflowInternal(
       throw new Error(errors.map(({ message }) => message).join('\n'));
     }
     if (options.taskSpec !== undefined) {
+      await registerManagerImageRun(options.taskSpec.sourceTaskDir, activeRun.runPaths);
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
+    goalSpecificationPaths = stageGoalSpecificationsForExecution(options.projectCwd, options.goalId, activeRun.runPaths);
     bootstrap = await createWorkflowExecutionBootstrap(
       bundledWorkflowConfig,
       task,
@@ -473,6 +478,7 @@ async function executeWorkflowInternal(
         onAskUserQuestion: options.onAskUserQuestion ?? createDenyAskUserQuestionHandler(),
         ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
         projectCwd: options.projectCwd,
+        goalSpecificationPaths,
         ...(liveIntervention === undefined ? {} : {
           liveIntervention,
           onLiveInterventionWarning: (count: number) => {

@@ -25,6 +25,12 @@ it('finds a previously submitted work key in tasks.yaml and leaves it unchanged'
   expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined();
   expect(doubles.enqueue).not.toHaveBeenCalled(); expect(doubles.update).not.toHaveBeenCalled();
 });
+it('does not reuse an existing task with a different explicit work key', async () => {
+  doubles.states.mockReturnValue([{ name: 'task-a', goalId: goal.id, goalWorkKey: 'csv', status: 'completed', workflow: 'safe' }]);
+  expect((await enqueueTaktGoalTask({ ...input, workKey: 'csv-review' }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  expect(doubles.update).toHaveBeenCalledOnce();
+});
 it('lets the manager decide which work can proceed while a question is pending', async () => {
   goal.questions = [{ id: '550e8400-e29b-41d4-a716-446655440001', recipient: 'human', body: '確認', status: 'pending' }];
   expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined(); expect(doubles.enqueue).toHaveBeenCalledOnce();

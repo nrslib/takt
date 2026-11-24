@@ -195,6 +195,7 @@ function buildCompanionExecutionUnitKey(input: {
 }
 
 export interface StepExecutorDeps {
+  readonly goalSpecificationPaths?: readonly string[];
   readonly reportReferenceObserver?: ReportReferenceObserver;
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
@@ -296,6 +297,7 @@ export interface PreparedNormalStepExecution {
   readonly phase1Instruction: string;
   readonly instructionWithoutLiveIntervention: string;
   readonly injectedReports: readonly InjectedReport[];
+  readonly requiredReferenceContents?: readonly string[];
   readonly reportInputs?: Phase1ReportInputs;
   readonly reviewScope: TaskReviewScope;
   readonly priorStepResponseText?: string;
@@ -1235,6 +1237,7 @@ export class StepExecutor {
         ? instructionWithoutLiveIntervention
         : this.appendLiveInterventionInstruction(instructionWithoutLiveIntervention, liveInterventionDelivery),
       injectedReports: instruction.injectedReports,
+      requiredReferenceContents: instruction.requiredReferenceContents,
       reportInputs: instruction.reportInputs,
       reviewScope: instruction.reviewScope,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
@@ -1606,6 +1609,7 @@ export class StepExecutor {
     const reviewScope = this.deps.getReviewScope();
     const instruction = new InstructionBuilder(step, {
       task,
+      goalSpecificationPaths: this.deps.goalSpecificationPaths,
       iteration: state.iteration,
       maxSteps,
       stepIteration,
@@ -1899,6 +1903,7 @@ export class StepExecutor {
       : {
         text: preparedExecution.phase1Instruction,
         injectedReports: preparedExecution.injectedReports,
+        requiredReferenceContents: preparedExecution.requiredReferenceContents,
         reportInputs: preparedExecution.reportInputs,
         reviewScope: preparedExecution.reviewScope,
       };
@@ -1924,6 +1929,7 @@ export class StepExecutor {
     }
     const builtAgentOptions: RunAgentOptions = {
       ...this.deps.optionsBuilder.buildAgentOptions(executableStep, executionRuntime),
+      requiredReferenceContents: preparedInstruction.requiredReferenceContents,
       progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(executableStep, preparedInstruction.reviewScope),
     };
     const sessionKey = buildSessionKey(executableStep, {

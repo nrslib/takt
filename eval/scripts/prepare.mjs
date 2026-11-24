@@ -52,6 +52,14 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...["input-local","input-external","local-condition","long-condition","quality","misdirected-evidence"].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `adjudication-scope-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/adjudication-scope/${caseId}`,
+    ...(language === 'en' ? { fixtureOverlay: `eval/fixtures/adjudication-scope/en/${caseId}` } : {}),
+    projectFromFixture: true, copyFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'], reportFile: 'review-resolution.md',
+  }))),
   ...ADJUDICATOR_TARGETS.map((id) => ({
     id, workflow: 'peer-review', step: 'review-adjudication',
     fixture: `eval/.work/${id}`, projectFromFixture: true,
@@ -1233,6 +1241,7 @@ async function main() {
     step: stepName,
     monitorCycle,
     fixture,
+    fixtureOverlay,
     mutable,
     workflowCallVars,
     projectFromFixture,
@@ -1268,6 +1277,12 @@ async function main() {
       rmSync(runDir, { recursive: true, force: true });
       mkdirSync(dirname(runDir), { recursive: true });
       cpSync(fixtureDir, runDir, { recursive: true });
+    }
+    if (fixtureOverlay !== undefined) {
+      if (!copyFixture && !mutable) {
+        throw new Error(`Target "${id}" requires a copied fixture for fixtureOverlay`);
+      }
+      cpSync(resolve(repoRoot, fixtureOverlay), runDir, { recursive: true });
     }
     if (fixtureConfig !== undefined) {
       if (!projectFromFixture || (!copyFixture && !mutable)) {

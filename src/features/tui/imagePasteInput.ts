@@ -33,6 +33,7 @@ export type ImagePasteOutcome =
   | { readonly kind: 'pending' }
   /** A complete inline image, plus the bytes that followed it in the event. */
   | { readonly kind: 'image'; readonly image: PastedImage; readonly rest: string }
+  | { readonly kind: 'error'; readonly rest: string; readonly consumed?: boolean }
   /**
    * Held bytes that are not an image after all; the caller types them.
    * `consumed` is false when the event that ended the hold was not part of the
@@ -43,6 +44,7 @@ export type ImagePasteOutcome =
 export interface ImagePasteBuffer {
   /** Bytes withheld from the editor because they may still open an image. */
   readonly held: string;
+  readonly discarding?: boolean;
 }
 
 export interface ImagePasteResult {
@@ -58,8 +60,13 @@ function release(text: string, consumed: boolean): ImagePasteResult {
   return { buffer: createImagePasteBuffer(), outcome: { kind: 'passthrough', text, consumed } };
 }
 
-/** The only control byte an OSC 1337 sequence carries: its terminator. */
 const BELL = '\u0007';
+
+function imageTerminator(text: string, restoreStringTerminator: boolean): number {
+  const bell = text.indexOf(BELL);
+  const st = restoreStringTerminator ? text.indexOf('\\') : -1;
+  return bell < 0 ? st : st < 0 ? bell : Math.min(bell, st);
+}
 
 /**
  * Any other control character ends the hold, because none of them can appear
@@ -85,6 +92,15 @@ function isMarkerPrefix(text: string): boolean {
   return text.length < INLINE_IMAGE_MARKER.length && INLINE_IMAGE_MARKER.startsWith(text);
 }
 
+function hasInlineImageParam(text: string): boolean {
+  if (!text.startsWith(INLINE_IMAGE_MARKER)) return false;
+  const payload = text.slice(INLINE_IMAGE_MARKER.length);
+  const separator = payload.indexOf(':');
+  const terminator = imageTerminator(payload, true);
+  const headerEnd = separator < 0 ? terminator : terminator < 0 ? separator : Math.min(separator, terminator);
+  return payload.slice(0, headerEnd < 0 ? undefined : headerEnd).split(';').includes('inline=1');
+}
+
 /**
  * Reads one key event against the buffer.
  *
@@ -94,13 +110,25 @@ function isMarkerPrefix(text: string): boolean {
  * An event whose text carries a control character other than the sequence's own
  * terminator (Enter, Ctrl+J) is treated the same way and reported as unconsumed.
  *
- * Never throws: a malformed or oversized sequence is returned as `passthrough`
- * so the held bytes reach the editor instead of being dropped.
+ * Never throws: by default malformed or oversized sequences pass through.
+ * Manager callers opt into rejecting recognized image payloads instead.
  */
 export function consumeImagePasteInput(
   buffer: ImagePasteBuffer,
   chunk: string,
+  rejectInvalidImages = false,
 ): ImagePasteResult {
+  const invalid = (text: string): ImagePasteResult => {
+    const end = imageTerminator(text, rejectInvalidImages);
+    return { buffer: end < 0 ? { held: '', discarding: true } : createImagePasteBuffer(),
+      outcome: { kind: 'error', rest: end < 0 ? '' : text.slice(end + 1) } };
+  };
+  if (buffer.discarding) {
+    const end = imageTerminator(chunk, rejectInvalidImages);
+    if (end >= 0) return release(chunk.slice(end + 1), true);
+    if (chunk === '') return { buffer: createImagePasteBuffer(), outcome: { kind: 'none' } };
+    return { buffer, outcome: { kind: 'pending' } };
+  }
   if (buffer.held === '') {
     // Only the lone opener starts a hold; anything else is ordinary input.
     return chunk === OSC_OPENER_EVENT
@@ -108,12 +136,19 @@ export function consumeImagePasteInput(
       : { buffer, outcome: { kind: 'none' } };
   }
 
-  if (chunk === '' || endsHold(chunk)) {
-    return release(buffer.held, false);
-  }
-
   const accumulated = buffer.held + chunk;
+  if (chunk === '' || endsHold(chunk)) {
+    if (rejectInvalidImages && hasInlineImageParam(accumulated)) {
+      const end = imageTerminator(accumulated, true);
+      // Controls after a complete image belong to its trailing text, not its payload.
+      if (end < 0 || endsHold(accumulated.slice(0, end))) {
+        return { buffer: end < 0 && chunk !== '' ? { held: '', discarding: true } : createImagePasteBuffer(), outcome: { kind: 'error',
+          rest: end < 0 ? '' : accumulated.slice(end + 1), consumed: chunk.length > 0 } };
+      }
+    } else return release(buffer.held, false);
+  }
   if (accumulated.length > MAX_PENDING_INLINE_IMAGE_CHARS) {
+    if (rejectInvalidImages && hasInlineImageParam(accumulated)) return invalid(accumulated);
     return release(accumulated, true);
   }
   if (isMarkerPrefix(accumulated)) {
@@ -123,21 +158,24 @@ export function consumeImagePasteInput(
     return release(accumulated, true);
   }
 
-  // The parser expects the ESC that Ink stripped, so it is put back and every
-  // offset it reports runs one byte ahead of the held text.
-  const sequence = OSC_IMAGE_PREFIX + accumulated.slice(INLINE_IMAGE_MARKER.length);
+  // Ink strips both OSC escapes. Only manager's recognized OSC context restores
+  // ST; ordinary TUI input keeps its existing classification.
+  const end = imageTerminator(accumulated, rejectInvalidImages);
+  const restoreST = end >= 0 && accumulated[end] === '\\';
+  const normalized = restoreST ? accumulated.slice(0, end) + '\x1b' + accumulated.slice(end) : accumulated;
+  const sequence = OSC_IMAGE_PREFIX + normalized.slice(INLINE_IMAGE_MARKER.length);
   let parsed: ReturnType<typeof parseInlineImageSequence>;
   try {
     parsed = parseInlineImageSequence(sequence, 0);
   } catch {
-    return release(accumulated, true);
+    return rejectInvalidImages ? invalid(accumulated) : release(accumulated, true);
   }
 
   if (parsed.status === 'incomplete') {
     return { buffer: { held: accumulated }, outcome: { kind: 'pending' } };
   }
   if (parsed.status === 'passthrough') {
-    return release(accumulated, true);
+    return rejectInvalidImages && hasInlineImageParam(accumulated) ? invalid(accumulated) : release(accumulated, true);
   }
 
   return {
@@ -145,7 +183,7 @@ export function consumeImagePasteInput(
     outcome: {
       kind: 'image',
       image: parsed.image,
-      rest: accumulated.slice(parsed.sequenceEnd - STRIPPED_ESCAPE_LENGTH),
+      rest: accumulated.slice(parsed.sequenceEnd - STRIPPED_ESCAPE_LENGTH - (restoreST ? 1 : 0)),
     },
   };
 }

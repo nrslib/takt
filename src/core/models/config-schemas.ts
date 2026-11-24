@@ -162,6 +162,13 @@ const ManagerWorkflowEntrySchema = z.union([
   }).pipe(z.record(z.string().trim().min(1), z.string())),
 ]);
 
+const ManagerRuntimeAssignmentEntrySchema = z.union([
+  z.string().trim().min(1),
+  z.record(z.string(), z.string()).refine((entry) => Object.keys(entry).length === 1, {
+    message: 'A manager runtime assignment entry must contain exactly one name and description pair',
+  }).pipe(z.record(z.string().trim().min(1), z.string())),
+]);
+
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
@@ -170,6 +177,7 @@ const ProjectConfigObjectBaseSchema = z.object({
     auto_run: z.boolean().optional(),
     preserve_goal_worktree: z.boolean().optional(),
     workflows: z.union([z.literal('all'), z.array(ManagerWorkflowEntrySchema)]).optional(),
+    runtime_assignments: z.array(ManagerRuntimeAssignmentEntrySchema).optional(),
     // Deprecated: accepted for existing configuration files and ignored.
     sensitive_paths: z.unknown().optional(),
     notifications: z.object({
@@ -181,6 +189,8 @@ const ProjectConfigObjectBaseSchema = z.object({
       custom: z.boolean().optional(),
     }).strict().optional(),
     patrol_interval: z.number().int().positive().optional(),
+    // Node.js timers clamp delays above 2^31 - 1 to 1ms, so larger values are rejected.
+    refresh_interval_ms: z.number().int().positive().max(2_147_483_647).optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),

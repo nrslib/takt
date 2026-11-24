@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 const endpoint = { teamId: 'T1', channelId: 'C0123', userId: 'U0AAA', parentTs: '1700000000.000001' };
 function fixture(language: 'ja' | 'en' = 'ja') {
-  const input: ConversationInput = { open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
+  const input: ConversationInput = { prepareImage: vi.fn<ConversationInput['prepareImage']>().mockRejectedValue(new Error('Images are not supported by Slack')), open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
   const client: SlackClient = { start: vi.fn(), postMessage: vi.fn().mockResolvedValue({ kind: 'delivered', parentTs: endpoint.parentTs }),
     updateMessage: vi.fn<SlackClient['updateMessage']>().mockResolvedValue({ kind: 'delivered' }), postThreadMessage: vi.fn().mockResolvedValue({ kind: 'delivered' }), stopAccepting: vi.fn(), close: vi.fn() };
   const resolveAssignment = vi.fn<() => Promise<ManagerAssignment>>(async () => ({ kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] }));

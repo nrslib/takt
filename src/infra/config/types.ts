@@ -13,4 +13,6 @@ export interface PersonaSessionData {
   updatedAt: string;
   /** Provider that created these sessions (claude, codex, etc.) */
   provider?: string;
+  /** Version of the Codex developer contract when provider is codex. */
+  codexSessionContract?: string;
 }

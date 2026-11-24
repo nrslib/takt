@@ -17,7 +17,9 @@
 | Apalache | 首次执行 `quint verify` 时由 Quint 下载 | `~/.quint/`（可用 `QUINT_HOME` 更改） |
 | Alloy Analyzer 6.2.0 JAR | 首次进行 Alloy 验证时由 TAKT 下载并校验 SHA-256 | 项目内的 `.takt/cache/alloy/6.2.0/alloy.jar` |
 
-用于时态属性的 TLC 包含在 Apalache 发行包中，无需单独安装。下载只发生一次且需要网络访问，之后的 `/verify` 可离线运行。
+用于时态属性的 TLC 包含在 Apalache 发行包中，无需单独安装。每个文件首次下载时都需要网络访问。预先下载所需各验证器的文件后，验证器本身可以在本地离线运行。只验证 Quint 不会下载 Alloy JAR。
+
+`/verify` 生成规范和解释结果时会调用配置的 Assistant provider。使用云端 provider 时，这些阶段需要网络连接。要离线运行整个 `/verify` 流程，Assistant 配置也必须支持离线使用。
 
 在无法访问网络的环境中使用 Alloy 时，请通过 `TAKT_ALLOY_JAR` 环境变量指定本地已有的 Alloy JAR。相对路径以项目目录为基准解析。
 
@@ -44,11 +46,12 @@ assistant:
 1. `parse` 检查语法。
 2. `typecheck` 检查类型和效果。
 3. `run` 模拟 1 个样本、最多 20 步。仅在找到包含 `init` 和 `step` action 的主模块，且选定的验证目标位于该模块中时执行。
-4. 若有 Java 17 或更高版本，则以 20 步为上限执行 `quint verify`。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索。
+4. 主模块包含 `run` 声明时，在模拟成功后使用 `quint test` 检查这些场景。
+5. 前面的阶段全部通过且有 Java 17 或更高版本时，执行 `quint verify`。默认的 Apalache 后端最多检查 20 步。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索，不受 20 步上限限制。
 
 对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `run` 和 `check` 命令都会执行，也支持只有 `run` 的模型。
 
-`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
+`parse`、`typecheck`、`run`、`test` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
 
 ### Alloy 并发与 JVM 设置
 

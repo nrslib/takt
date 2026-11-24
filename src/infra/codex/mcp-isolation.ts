@@ -58,7 +58,7 @@ function tomlValue(value: unknown): string {
   throw new Error('Unsupported Codex config override value');
 }
 
-function serializeCodexConfig(config: Record<string, unknown>): string[] {
+export function serializeCodexConfig(config: Record<string, unknown>): string[] {
   const overrides: string[] = [];
   const flatten = (value: unknown, path: string[]): void => {
     if (value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
@@ -96,6 +96,7 @@ export async function prepareCodexMcpIsolation(
   options: CodexCallOptions,
   codexConfig: NonNullable<CodexOptions['config']>,
   environment: Record<string, string>,
+  permissionConfigOverrides: readonly string[],
 ): Promise<{ codexPathOverride: string; env: Record<string, string>; configOverrides: string[] }> {
   const codexEnvironment = { ...environment };
   if (!codexEnvironment.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
@@ -138,13 +139,15 @@ export async function prepareCodexMcpIsolation(
   ];
   const json = await runCodexMcpList({
     executablePath: codexPathOverride, cwd: options.cwd, env: codexEnvironment,
-    configOverrides: sessionOverrides, abortSignal: options.abortSignal,
+    configOverrides: sessionOverrides, configProfile: options.configProfile,
+    abortSignal: options.abortSignal,
   });
   const ownServers = options.preparedMcp?.config?.mcp_servers ?? {};
   // CLI paths split on dots without parsing quoted keys. Serialize unusual names as one table,
   // including TAKT's servers, since a later override of the whole table would replace earlier ones.
   const configOverrides = [
     ...sessionOverrides, ...serializeCodexConfig({ mcp_servers: buildCodexIsolatedMcpServers(json, ownServers) }),
+    ...permissionConfigOverrides,
   ];
   return { codexPathOverride, env: codexEnvironment, configOverrides };
 }

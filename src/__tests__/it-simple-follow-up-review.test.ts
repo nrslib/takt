@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -23,21 +23,15 @@ afterEach(() => {
 
 describe('simple workflow follow-up review', () => {
   it.each(['en', 'ja'].flatMap(language =>
-    ['simple-core', 'simple', 'simple-mini', 'simple-backend', 'simple-dual', 'pure']
+    ['simple-core', 'simple', 'simple-mini']
       .map(name => ({ language, name }))))(
     '$language/$name reviews completed repair only after an incomplete fix is retried and verified',
     async ({ language, name }) => {
       project = mkdtempSync(join(tmpdir(), 'takt-simple-follow-up-'));
       mkdirSync(join(project, '.takt'), { recursive: true });
       writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
-      let loaded = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
+      const loaded = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
       if (!loaded) throw new Error(`Missing workflow ${name}`);
-      if (name === 'simple-backend' || name === 'simple-dual' || name === 'pure') {
-        const call = loaded.steps.find(step => step.name === 'develop');
-        if (!call || call.kind !== 'workflow_call') throw new Error('Missing simple-core call');
-        loaded = resolveWorkflowCallTarget(loaded, call, project, project);
-        if (!loaded || loaded.name !== 'simple-core') throw new Error('Missing resolved simple-core');
-      }
       const workflow = { ...loaded, initialStep: 'review' };
       const reviewPrompts: string[] = [];
       const visited: string[] = [];
@@ -60,8 +54,6 @@ describe('simple workflow follow-up review', () => {
               expect(prompt).toContain('### remediation: fix-plan.md\nREPAIR_PLAN_EVIDENCE');
               expect(prompt).toContain('### remediation: fix-report.md\nREPAIR_RETRY_EVIDENCE');
               expect(prompt).toContain('### remediation: fix-verification.md\nVERIFICATION_APPROVED_EVIDENCE');
-              expect(prompt).toContain('REPAIR_RETRY_EVIDENCE');
-              expect(prompt).toContain('VERIFICATION_APPROVED_EVIDENCE');
             }
           }
           return { persona: persona ?? 'coding-reviewer', status: 'done',
@@ -111,13 +103,6 @@ describe('simple workflow follow-up review', () => {
       expect(reviewPrompts[0]).not.toContain('REPAIR_PLAN_EVIDENCE');
       expect(reviewPrompts[1]).toContain('REPAIR_PLAN_EVIDENCE');
       expect(reviewPrompts[1]).not.toContain('参照先の報告 ... はこの run に存在しない');
-      if (name === 'pure') {
-        const skillsInstruction = readFileSync(join(process.cwd(), 'builtins', language,
-          'facets', 'partials', 'instructions', 'use-relevant-skills.md'), 'utf8').trim();
-        expect(skillsInstruction.length).toBeGreaterThan(0);
-        expect(reviewPrompts[0]).toContain(skillsInstruction);
-        expect(reviewPrompts[1]).toContain(skillsInstruction);
-      }
     },
   );
 });

@@ -1,4 +1,5 @@
 import { useInput, usePaste, type Key } from 'ink';
+import type { useManagerImages } from './useManagerImages.js';
 import type { RefObject } from 'react';
 import { applyEditorKey, commitEditorInput, replaceEditorText, type EditorState } from '../tui/editorState.js';
 import type { useSlashCompletion } from '../tui/useSlashCompletion.js';
@@ -14,8 +15,10 @@ export const MAKE_GOAL_COMMAND = '/make-goal';
 export function useManagerInput({
   exiting, active, registering, savingAnswer, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, confirmGoalOperation, saveAnswer, register, onInputUnavailable,
-  openMenu, slashCompletion, epicsOpen, openEpics, handleEpicInput, browseTools,
+  openMenu, slashCompletion, isEpicsOpen, openEpics, handleEpicInput, browseTools, images, currentHandlers,
 }: {
+  images: ReturnType<typeof useManagerImages>;
+  currentHandlers: RefObject<{ pasteText(text: string): void; handleInput(input: string, key: Key): void } | null>;
   exiting: RefObject<boolean>;
   active: RefObject<boolean>;
   registering: RefObject<boolean>;
@@ -37,7 +40,7 @@ export function useManagerInput({
   register: (revision: number) => Promise<void>;
   onInputUnavailable: (confirming: ManagerGoalConfirmationTarget['kind']) => void;
   openMenu: (kind: ManagerSelectionCommand) => void;
-  epicsOpen: boolean;
+  isEpicsOpen: () => boolean;
   openEpics: () => void;
   handleEpicInput: (key: Key) => void;
   slashCompletion: ReturnType<typeof useSlashCompletion>;
@@ -48,7 +51,7 @@ export function useManagerInput({
   const { pending, setPending } = summaryApproval;
   const editDraft = (next: EditorState): void => {
     if (!registering.current && pending !== null
-      && answerTarget === null && selection.selection === null && abortTarget === null
+      && answerTarget === null && !selection.isOpen() && abortTarget === null
       && next.text !== editorRef.current.text
       && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify', CLEAR_COMMAND].some((command) => command.startsWith(next.text.trim())))) {
       summaryApproval.dismiss(pending);
@@ -58,20 +61,30 @@ export function useManagerInput({
   };
   const insertText = (text: string, kind: 'insert' | 'paste' = 'insert'): void => {
     if (exiting.current || savingAnswer.current) return;
-    if (selection.selection !== null || epicsOpen) return;
+    if (selection.isOpen() || isEpicsOpen()) return;
     if (abortTarget !== null) { onInputUnavailable(abortTarget.kind); return; }
     if (answerTarget !== null) questionAnswer.switchToFreeText();
     editDraft(applyEditorKey(editorRef.current, { kind, text }));
   };
-  usePaste((text) => insertText(text, 'paste'));
-  useInput((input, key) => {
+  const pasteText = (text: string): void => {
+    if (images.hasPending()) { images.defer(() => currentHandlers.current?.pasteText(text)); return; }
+    images.paste.flushPending();
+    insertText(text, 'paste');
+  };
+  usePaste(pasteText);
+  const handleInput = (input: string, key: Key): void => {
     if (exiting.current) return;
     if (key.ctrl && input === 'c') {
       exiting.current = true;
       onExit();
       return;
     }
+    if (images.hasPending()) { images.defer(() => currentHandlers.current?.handleInput(input, key)); return; }
     if (savingAnswer.current) return;
+    if (answerTarget === null && !selection.isOpen() && abortTarget === null && !isEpicsOpen()) {
+      if (images.paste.routeInput(input, key)) return;
+      if (key.ctrl && input === 'v') { images.paste.captureClipboard(); return; }
+    }
     if (key.ctrl && input === 't') {
       openEpics();
       return;
@@ -80,11 +93,11 @@ export function useManagerInput({
       openMenu(input === 'r' ? 'answer' : 'goal');
       return;
     }
-    if (epicsOpen) {
+    if (isEpicsOpen()) {
       handleEpicInput(key);
       return;
     }
-    if (selection.selection !== null) {
+    if (selection.isOpen()) {
       selection.handleInput(key, selectTarget);
       return;
     }
@@ -142,5 +155,7 @@ export function useManagerInput({
       if (editKey.kind === 'insert') insertText(editKey.text);
       else editDraft(applyEditorKey(editorRef.current, editKey));
     }
-  });
+  };
+  currentHandlers.current = { pasteText, handleInput };
+  useInput(handleInput);
 }

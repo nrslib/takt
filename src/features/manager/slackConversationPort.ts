@@ -209,8 +209,8 @@ export function createSlackConversationPort(options: {
         if (fields === undefined) return;
         const revision = fields.revision;
         const command: ConversationCommand = actionId === SLACK_GOAL_APPROVE
-          ? { kind: 'approve_summary', revision, requirePending: true }
-          : { kind: 'dismiss_summary', revision };
+          ? { kind: 'approve_summary', revision, conversationId, requirePending: true }
+          : { kind: 'dismiss_summary', revision, conversationId };
         await submitCommand(endpoint, command, false, fields.conversationId, requestId);
         return;
       }

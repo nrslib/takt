@@ -2,6 +2,8 @@ import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 import { truncateUtf8, sliceUtf8 } from '../../shared/utils/utf8.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 
+export type GoalPullRequestState = 'open' | 'merged' | 'closed';
+
 function preview(value: string) {
   return truncateUtf8(value, 256).value;
 }
@@ -38,14 +40,15 @@ export function questionSummary(question: GoalQuestion) {
     ...(answer === undefined ? {} : { answer: { ...answer, text: preview(answer.text) } }) };
 }
 
-export function goalSummary(goal: Goal) {
+export function goalSummary(goal: Goal, pullRequestState?: GoalPullRequestState) {
   // 巡回では状態・完成手順を先に返し、未回答質問と最近の作業記録を少数残す。
   const questions = goal.questions ?? [];
   const pending = questions.filter((question) => question.status === 'pending');
   return {
     id: goal.id, creationOrigin: goal.creationOrigin, questionRoute: goal.questionRoute, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
-    ...(goal.pullRequest === undefined ? {} : { pullRequest: goal.pullRequest }),
+    ...(goal.pullRequest === undefined ? {} : { pullRequest: {
+      ...goal.pullRequest, ...(pullRequestState === undefined ? {} : { state: pullRequestState }) } }),
     ...(goal.completion === undefined ? {} : { completion: completionSummary(goal.completion) }),
     objective: preview(goal.objective), acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion,
     questions: pending.slice(0, 3).map(questionSummary),

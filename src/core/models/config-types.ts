@@ -19,6 +19,7 @@ export type ManagerNotificationKind = typeof MANAGER_NOTIFICATION_KINDS[number];
 export type ManagerNotifications = Partial<Record<ManagerNotificationKind, boolean>>;
 export type ManagerPermission = 'auto' | 'full';
 export type ManagerWorkflowsConfig = 'all' | (string | Record<string, string>)[];
+export type ManagerRuntimeAssignmentsConfig = (string | Record<string, string>)[];
 export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
 
 export interface AutoRoutingCandidate {
@@ -358,7 +359,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications;
+  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications;
     slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
@@ -452,7 +453,7 @@ export interface ProjectConfig {
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
   /** @globalOnly */
   director?: { slack?: { channelId: string; allowedUserIds: string[] } };
-  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; notifications?: ManagerNotifications };
+  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; notifications?: ManagerNotifications };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */

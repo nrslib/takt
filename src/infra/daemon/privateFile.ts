@@ -71,6 +71,22 @@ export async function appendPrivateFile(path: string, content: string): Promise<
   }
 }
 
+/** Publishes a new private image without replacing an existing file. */
+export async function writeNewPrivateFile(path: string, content: Uint8Array): Promise<void> {
+  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+  try {
+    try { await file.writeFile(content); await file.sync(); }
+    finally { await file.close(); }
+    if (process.platform !== 'win32') {
+      const parent = await open(dirname(path), 'r');
+      try { await parent.sync(); } finally { await parent.close(); }
+    }
+  } catch (error) {
+    await unlink(path);
+    throw error;
+  }
+}
+
 export async function writePrivateFile(path: string, content: string | Uint8Array, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
   const directory = dirname(path);

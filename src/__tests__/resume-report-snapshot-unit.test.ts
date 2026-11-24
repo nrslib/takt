@@ -3,6 +3,9 @@ import type { Stats } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { PrivateDirectoryReadSnapshot } from '../shared/utils/private-file.js';
+import { DebugLogger } from '../shared/utils/debug.js';
+import { buildResumeReportConsumerKey } from '../core/workflow/run/resume-report-consumer.js';
+import { makeWorkflowResumePointEntry } from './test-helpers.js';
 
 type Entry = { stat: Stats; content?: Buffer };
 
@@ -111,6 +114,7 @@ describe('resume report snapshot with isolated filesystem dependencies', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     io.entries.clear();
   });
 
@@ -202,6 +206,46 @@ describe('resume report snapshot with isolated filesystem dependencies', () => {
     expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toMatchObject({
       version, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', files: [],
     });
+  });
+
+  it('drops only persisted consumers without call instances and retains files, skipped entries and valid mappings', () => {
+    addFile('plan.md', 'plan');
+    addSpecial('link', 0o120777);
+    const manifest = inheritResumeReportSnapshot(options);
+    const call = makeWorkflowResumePointEntry({ workflow: 'parent', workflow_ref: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 });
+    const currentKey = buildResumeReportConsumerKey('child', 'consume', [call]);
+    const rootKey = buildResumeReportConsumerKey('parent', 'consume', []);
+    const legacyKey = JSON.stringify({ workflow: 'child', step: 'consume', calls: [{ workflow: 'parent', step: 'delegate', kind: 'workflow_call' }] });
+    const consumer = (consumerKey: string) => ({ consumerKey, reportDirectories: [''], references: [{ reference: 'plan.md', path: 'plan.md' }] });
+    const validConsumers = [consumer(currentKey), consumer(rootKey)];
+    const path = join(targetReports, RESUME_ARTIFACTS_FILE_NAME);
+    io.entries.set(path, {
+      stat: stat(0o100600),
+      content: Buffer.from(JSON.stringify({ ...manifest, resumeReportConsumers: [validConsumers[0], consumer(legacyKey), validConsumers[1]] })),
+    });
+    const warnings = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+
+    const restored = readResumeReportSnapshotManifest(cwd, 'target-run');
+
+    expect(restored).toEqual({ ...manifest, resumeReportConsumers: validConsumers });
+    expect(warnings.mock.calls.filter(([level, component]) => level === 'WARN' && component === 'resume-report-snapshot'))
+      .toEqual([[expect.any(String), 'resume-report-snapshot', expect.any(String), { consumerKey: legacyKey }]]);
+  });
+
+  it.each(['directory', 'reference'])('still rejects an invalid %s in a legacy consumer', (invalid) => {
+    addFile('plan.md', 'plan');
+    const manifest = inheritResumeReportSnapshot(options);
+    const path = join(targetReports, RESUME_ARTIFACTS_FILE_NAME);
+    io.entries.set(path, {
+      stat: stat(0o100600),
+      content: Buffer.from(JSON.stringify({ ...manifest, resumeReportConsumers: [{
+        consumerKey: JSON.stringify({ workflow: 'child', step: 'consume', calls: [{ workflow: 'parent', step: 'delegate', kind: 'workflow_call' }] }),
+        reportDirectories: invalid === 'directory' ? ['../outside'] : [''],
+        references: [{ reference: 'plan.md', path: invalid === 'reference' ? 'missing.md' : 'plan.md' }],
+      }] })),
+    });
+
+    expect(() => readResumeReportSnapshotManifest(cwd, 'target-run')).toThrow();
   });
 
   it.each(['source run', 'reports directory', 'directory traversal', 'regular file read'])('rejects unavailable %s without publishing reports', (failure) => {

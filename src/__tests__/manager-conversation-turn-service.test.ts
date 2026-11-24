@@ -88,6 +88,8 @@ function humanMessage(text: string, requestProposal?: boolean): TurnEvent {
     ...(requestProposal === undefined ? {} : { requestProposal }) }, speaker: { namespace: 'human', id: 'test' } };
 }
 
+const turnConversationId = conversationId({ kind: 'repository', repositoryDirectory: '/repository' });
+
 it('uses the daemon turn identity for tool events while preserving call and provider tool identities', async () => {
   const f = fixture();
   const event = { type: 'tool_use' as const, data: { id: 'provider-tool', tool: 'Read', input: { file_path: 'a.ts' } },
@@ -508,7 +510,7 @@ it('retains interrupted context when a command is rejected and a patrol does not
   const controller = new AbortController(); f.interruptNext(controller);
   await f.run(humanMessage('interrupted request'), controller);
   expect(await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'dismiss_summary', revision: f.state().revision } })).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'stale_summary' } });
+    command: { kind: 'dismiss_summary', revision: f.state().revision, conversationId: turnConversationId } })).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'stale_summary' } });
   doubles.findGoal.mockReturnValue({ ...goalRecord(), executionStatus: 'paused' });
   await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] });
   expect(f.execute).toHaveBeenCalledOnce();
@@ -533,12 +535,12 @@ it.each([
   expect(f.execute.mock.calls[2]![0].prompt).toContain('interrupted with changed selection');
 });
 
-it('returns a system notice after dismissing a registration proposal without invoking AI', async () => {
+it('returns a system notice after dismissing a goal proposal without invoking AI', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
     summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
   f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'dismiss_summary', revision: 1 } };
+    command: { kind: 'dismiss_summary', revision: 1, conversationId: turnConversationId } };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
     kind: 'notice', message: getLabel('manager.conversation.dismissed', 'en'),
   } });
@@ -546,19 +548,70 @@ it('returns a system notice after dismissing a registration proposal without inv
   expect(f.execute).not.toHaveBeenCalled();
 });
 
-it('clears only the session ID and interrupted message on /clear without invoking AI', async () => {
+it('stores a proposed registration summary as the pending proposal without invoking AI', async () => {
+  const f = fixture();
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'proposal_created', proposal: { revision: f.input.state.revision + 1, repositoryDirectory: '/repository' },
+    message: getLabel('manager.conversation.proposed', 'en'),
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: f.input.state.revision + 1,
+      pending: { revision: f.input.state.revision + 1, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('assigns the first revision when creating a goal proposal on a fresh conversation', async () => {
+  const f = fixture();
+  f.input.state.revision = 0;
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'proposal_created', proposal: { revision: 1, repositoryDirectory: '/repository' },
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: 1, pending: { revision: 1, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('refuses to create a goal proposal while another proposal is pending', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId,
+      summary: { objective: 'another goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'proposal_pending' } });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('clears interrupted input references on /clear without invoking AI (daemon: %s)', async (daemon) => {
+  const f = fixture();
+  if (daemon) {
+    const id = conversationId({ kind: 'daemon' });
+    f.input.state.assignment = { kind: 'daemon' };
+    f.input.turn.conversationId = id;
+    f.input.event.conversationId = id;
+  }
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
     summary: { objective: 'kept goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
-  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' } };
+  const imageId = randomUUID();
+  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' }, imageAttachmentIds: [imageId] };
   f.input.state.interruptedMessage = 'undelivered request';
+  f.input.state.interruptedImageAttachmentIds = [imageId];
   f.input.event.event = humanMessage(' /clear ');
 
   const outcome = await f.service.execute(f.input, f.io);
 
   expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', 'en') } });
   expect(outcome.change).toEqual({ operationId: expect.any(String), expectedVersion: f.input.state.version,
-    session: { ...f.input.state.session, sessionId: null }, interruptedMessage: null });
+    session: { ...f.input.state.session, sessionId: null, imageAttachmentIds: daemon ? [imageId] : [] }, interruptedMessage: null,
+    interruptedImageAttachmentIds: [] });
   expect(f.request).not.toHaveBeenCalled();
   expect(f.resolve).not.toHaveBeenCalled();
   expect(f.execute).not.toHaveBeenCalled();
@@ -701,18 +754,33 @@ it('saves an explicitly requested proposal and registers it only after approval'
   expect(doubles.register).not.toHaveBeenCalled();
   doubles.register.mockResolvedValue({ ...goalRecord(), ...summary });
   expect(await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'approve_summary', revision: pending.revision } })).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered' } });
+    command: { kind: 'approve_summary', revision: pending.revision, conversationId: turnConversationId } })).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered' } });
   expect(doubles.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
     ...summary, creationOrigin: 'manager',
   }), expect.any(AbortSignal));
   expect(f.state()).toMatchObject({ pending: null, approval: { state: 'registered', revision: pending.revision } });
 });
 
+it.each(['approve_summary', 'dismiss_summary'] as const)(
+  'rejects a %s command whose conversationId is not this conversation and neither registers nor dismisses',
+  async (kind) => {
+    const f = fixture();
+    f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+      summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+    f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+      command: { kind, revision: 1, conversationId: conversationId({ kind: 'repository', repositoryDirectory: '/other' }) } };
+
+    expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
+    expect(doubles.register).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+  },
+);
+
 it('saves approval reservation before registering a goal and uses the returned state version for completion', async () => {
   const f = fixture(); const confirmation = deferred<void>(); const requested = deferred<DaemonStateRequest>();
   const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   f.request.mockImplementation(async (request) => {
     requested.resolve(request); await confirmation.promise;
     return { kind: 'state_saved', version: 42, duplicate: false };
@@ -752,7 +820,7 @@ it('uses the canonical destination repository for workspace approval locking and
 it('never creates a goal if the reservation is rejected', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   f.request.mockResolvedValue({ kind: 'error', code: 'version_conflict', message: 'conflict' });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(doubles.register).not.toHaveBeenCalled();
@@ -781,7 +849,7 @@ it('releases a persisted reservation after an invalid local branch fails validat
     objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [], startBranch: 'origin/main',
   } };
   f.input.state.approval = { state: 'reserved', revision: 1, goalId, repositoryDirectory: '/repository' };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   doubles.validateBranches.mockImplementation((_cwd: string, startBranch: string | undefined) => {
     if (startBranch === 'origin/main') throw new Error('Unable to resolve local branch "origin/main" to a commit');
   });
@@ -809,7 +877,7 @@ it('resumes a saved goal when its approved branch disappears before approval is 
     outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
   } };
   f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   doubles.findGoal.mockReturnValue(goal);
   doubles.register.mockResolvedValue(goal);
   doubles.validateBranches.mockImplementation(() => { throw new Error('Unable to resolve the deleted branch'); });
@@ -831,7 +899,7 @@ it('validates approved branches when only the reserved goal branch remains', asy
     outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
   } };
   f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   doubles.findGoal.mockReturnValue(undefined);
   doubles.register.mockRejectedValue(new Error('A branch for this reservation requires reconciliation'));
   doubles.artifacts.mockResolvedValue(true);
@@ -847,7 +915,7 @@ it('clears a new reservation when registration fails before leaving a goal or br
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
     objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
   } };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   doubles.register.mockRejectedValue(new Error('registration failed before creating artifacts'));
   doubles.artifacts.mockResolvedValue(false);
 
@@ -862,7 +930,7 @@ it('keeps the reservation when registration fails after leaving a goal or branch
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
     objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
   } };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   doubles.register.mockRejectedValue(new Error('registration failed after creating artifacts'));
   doubles.artifacts.mockResolvedValue(true);
 
@@ -886,7 +954,7 @@ it('keeps the reservation and reports reconciliation failure when registration a
   doubles.artifacts.mockRejectedValue(reconciliationError);
 
   const outcome = await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'approve_summary', revision: pending.revision } });
+    command: { kind: 'approve_summary', revision: pending.revision, conversationId: turnConversationId } });
 
   expect(doubles.register).toHaveBeenCalledOnce();
   expect(doubles.artifacts).toHaveBeenCalledExactlyOnceWith('/repository', f.state().approval?.goalId);
@@ -937,7 +1005,7 @@ it.each(['task_completed', 'pr_changed'] as const)('notifies the event repositor
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/second', goalId, failure, f.input.turn.operationId);
 });
-it('does not turn an event response into a human registration proposal', async () => {
+it('does not turn an event response into a human goal proposal', async () => {
   const f = fixture(); f.input.event.lane = 'other';
   f.input.event.event = { kind: 'director_message', directorConversationId: 'director', text: 'check goals' };
   f.execute.mockResolvedValue({ message: 'reply', sessionId: 'next', assignment: undefined,
@@ -1159,7 +1227,7 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
 });
 
 
-it('routes only a human /verify to verification and preserves the current registration proposal', async () => {
+it('routes only a human /verify to verification and preserves the current goal proposal', async () => {
   const f = fixture();
   const pending = { revision: f.input.state.revision, repositoryDirectory: '/repository', summary: {
     objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [], specifications: { quint: 'module csv {}' },

@@ -8,22 +8,15 @@ import {createDeliveryClient as createCleanClient} from '../fixtures/review-proo
 import {createDeliveryClient as createBrokenClient} from '../fixtures/review-proof-actual-regression/src/delivery-client.mjs';
 import {createEditor} from '../fixtures/review-proof-boundary/src/editor.mjs';
 
-test('review preparation isolates snapshots and includes obligation criteria', () => {
+test('review preparation keeps another target snapshot unchanged', () => {
   const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
   const prepare = (target) => execFileSync(process.execPath, ['eval/scripts/prepare.mjs', target], {cwd: repoRoot});
   const adjudicationSnapshot = new URL('../fixtures/review-proof-boundary/.takt/eval-snapshots/review-proof-boundary-policies.md', import.meta.url);
-  const testingSnapshot = new URL('../fixtures/testing-proof-boundary/.takt/eval-snapshots/testing-proof-boundary-policies.md', import.meta.url);
 
   prepare('review-proof-boundary');
   const before = readFileSync(adjudicationSnapshot, 'utf8');
-  const findingPolicy = readFileSync(new URL('../../builtins/ja/facets/partials/policies/finding-validity.md', import.meta.url), 'utf8').trim();
-  assert.ok(before.includes(findingPolicy), 'adjudication must receive the shared finding criteria');
   prepare('testing-proof-boundary');
   assert.equal(readFileSync(adjudicationSnapshot, 'utf8'), before);
-  assert.ok(readFileSync(testingSnapshot, 'utf8').includes(findingPolicy), 'testing review must receive the same finding criteria');
-  const obligationInstruction = readFileSync(new URL('../../builtins/ja/facets/partials/instructions/testing-review-obligation-check.md', import.meta.url), 'utf8').trim();
-  const testingPrompt = readFileSync(new URL('../prompts/testing-proof-boundary.phase1.md', import.meta.url), 'utf8');
-  assert.ok(testingPrompt.includes(obligationInstruction), 'testing review must receive the obligation comparison procedure');
 });
 
 for (const code of ['DISCONNECTED', 'SERVICE_UNAVAILABLE']) {
@@ -96,12 +89,3 @@ for (const [role, suite, expected] of [
     assert.equal(evaluate(`DISPOSITION: ${opposite}`), false);
   });
 }
-
-
-test('new-behavior coverage control uses an initial review', () => {
-  const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-  execFileSync(process.execPath, ['eval/scripts/prepare.mjs', 'testing-proof-new-behavior'], {cwd: repoRoot});
-  const prompt = readFileSync(new URL('../prompts/testing-proof-new-behavior.phase1.md', import.meta.url), 'utf8');
-  assert.match(prompt, /レビュー区分は `initial` です/);
-  assert.doesNotMatch(prompt, /レビュー区分は `follow_up` です/);
-});

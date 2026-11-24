@@ -1,3 +1,4 @@
+import { useManagerImages } from './useManagerImages.js';
 import { basename } from 'node:path';
 import { Box, Text, useStdout } from 'ink';
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
@@ -27,7 +28,7 @@ import { resolveSlashCompletions } from '../tui/slashCompletion.js';
 import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
-import { createEditorState, type EditorState } from '../tui/editorState.js';
+import { applyEditorKey, createEditorState, type EditorState } from '../tui/editorState.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText, toSingleLineText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -49,11 +50,15 @@ const MIN_STATUS_HEADING_WIDTH = 12;
 /** 画面とスクロールバックを消し、カーソルを左上へ戻す。 */
 const CLEAR_TERMINAL = '\x1b[2J\x1b[3J\x1b[H';
 
-export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
+const DEFAULT_MANAGER_REFRESH_INTERVAL_MS = 500;
+
+export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment, refreshIntervalMs = DEFAULT_MANAGER_REFRESH_INTERVAL_MS }: {
   assignment: ManagerExecutionContext['assignment'];
   cwd: string; lang: 'en' | 'ja';
-  client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close'>;
+  client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close' | 'prepareImage' | 'getImageDirectory'>;
   onExit: () => void; initialDiagnostics: readonly string[];
+  /** 接続中の定期 refresh の間隔（ミリ秒）。設定 manager.refresh_interval_ms と環境変数 TAKT_MANAGER_REFRESH_INTERVAL_MS で変更できる。操作直後の refresh は待たずに即時に行う。 */
+  refreshIntervalMs?: number;
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
@@ -61,6 +66,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const editorRef = useRef(createEditorState(''));
+  const currentInputHandlers = useRef<{ pasteText(text: string): void; handleInput(input: string, key: import('ink').Key): void } | null>(null);
   const [editor, setEditor] = useState(editorRef.current);
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
@@ -72,6 +78,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [toolView, setToolView] = useState(createToolActivityViewState);
   const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
+  const messageQueue = useRef(Promise.resolve());
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
   const clearOperation = useRef<string | null>(null);
@@ -176,7 +183,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
     dismissSummary: async (revision) => {
-      if (await send({ kind: 'dismiss_summary', revision }) === null) {
+      const conversationId = client.getSnapshot().state?.conversationId;
+      if (conversationId === undefined) return;
+      if (await send({ kind: 'dismiss_summary', revision, conversationId }) === null) {
         setPending(client.getSnapshot().state?.pending ?? null);
       }
     } });
@@ -331,28 +340,36 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (latest.current.connection === 'connected' && latest.current.readStatus !== 'reading') {
         void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       }
-    }, 500);
+    }, refreshIntervalMs);
     return () => { mounted.current = false; clearInterval(timer); unsubscribeState(); unsubscribe(); client.close(); };
   }, [client]);
   const register = async (revision: number): Promise<void> => {
     const current = client.getSnapshot();
     if (current.connection !== 'connected' || current.readStatus !== 'complete'
       || registering.current || current.state?.pending?.revision !== revision) return;
+    const conversationId = current.state.conversationId;
     registering.current = true;
     resetChoice();
-    if (await send({ kind: 'approve_summary', revision }) === null) registering.current = false;
+    if (await send({ kind: 'approve_summary', revision, conversationId }) === null) registering.current = false;
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
     if (summaryRequest) setSummarizing(true);
     resetChoice();
-    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
-      ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
-      (id) => {
-        if (summaryRequest) summaryOperation.current = id;
-        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
-      })
-      .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
+    const sending = messageQueue.current.then(async () => {
+      const resolved = await images.resolve(text);
+      void send({ kind: 'message', ...(resolved.ids.length === 0 ? {} : { imageAttachmentIds: resolved.ids }),
+        text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : resolved.text,
+        ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
+      (accepted) => {
+        if (summaryRequest) summaryOperation.current = accepted;
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = accepted;
+      }).then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
+    });
+    messageQueue.current = sending.catch((error: unknown) => {
+      append(getErrorMessage(error));
+      if (summaryRequest) setSummarizing(false);
+    });
   };
   const changeGoal = async (kind: GoalOperation, target: ManagerGoalConfirmationTarget['goal'], confirmed = false, retry = false): Promise<void> => {
     const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
@@ -407,6 +424,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
   const conversationInput = !epicsOpen && answerTarget === null && selection.selection === null && abortTarget === null;
+  const [imageNotice, setImageNotice] = useState<string | null>(null);
+  const images = useManagerImages({ lang, client, connection: snapshot.connection, enabled: conversationInput && !exiting.current,
+    insert: (text) => { edit(applyEditorKey(editorRef.current, { kind: 'insert', text })); slashCompletion.reset(); },
+    notice: setImageNotice,
+  });
   const summaryVisible = !epicsOpen && !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
@@ -511,7 +533,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [toolTurn]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
-    edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
+    edit: answerTarget === null ? edit : editAnswer, submit, images, currentHandlers: currentInputHandlers,
+    onExit: () => { void images.stop().then(onExit); }, contentWidth, canApprove,
     abortTurn: () => {
       const running = latest.current.state?.running;
       if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation }, () => {
@@ -520,7 +543,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     confirmGoalOperation: (target) => changeGoal(target.kind, target.goal, true, target.retry), saveAnswer, register, openMenu,
-    epicsOpen, openEpics,
+    isEpicsOpen: epics.isOpen, openEpics,
     handleEpicInput: (key) => epics.handleInput(key, Math.max(0, epicDetailLines.length - epicPageRows), epicPageRows),
     slashCompletion,
     browseTools: (direction) => {
@@ -555,6 +578,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
+    {imageNotice !== null && <Text color="red">{imageNotice}</Text>}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     {queueRows > 0 && <QueueView heading={queueHeading}
       lines={queuedMessages.slice(0, queueRows - 1).map((message) => sanitizeSensitiveText(message))} />}

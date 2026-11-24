@@ -104,6 +104,8 @@ Section maps are optional. Facets can be referenced directly by bare name (e.g.,
 
 `instruction` accepts either one scalar value or a non-empty ordered array. Each array item may be a facet key/path or inline text; items are resolved in place and joined with `\n\n---\n\n`, preserving an explicit boundary between elements. In a callable workflow, an array item may also be `{ $param: name }` for an `instruction` `facet_ref` or `facet_ref[]` parameter. A `facet_ref[]` value is spliced at that position without changing the surrounding order. The scalar form keeps its existing behavior.
 
+For `policy` and `knowledge`, facets with identical content after `$param` substitution and `include` / `extends` expansion are included only once: the first occurrence is kept, preserving order. This applies regardless of reference names, paths, or whether the content comes from a file or an inline definition. References to the same real path are both retained when their source layers resolve `include` / `extends` differently and produce different content. Repeated `instruction` entries and repeated `{{include:...}}` directives within a facet are preserved.
+
 ### Workflow-wide rules (`all_steps.rules`)
 
 Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
@@ -525,7 +527,7 @@ Named pools are discovered with the same layering as step fragments:
 
 Bare names resolve the first matching `<name>.yaml` before `<name>.yml` in each layer. `@owner/repo/name` selects a repertoire package explicitly. Absolute paths, directory traversal, nested paths, root-escaping symlinks, non-regular files, unreadable files, and oversize files are rejected. Provenance and dependency resources are tracked so `doctor`, `preview`, `eject`, and `repertoire install` / `remove` can follow them.
 
-#### Candidate contract
+#### Candidate requirements
 
 Every candidate in a pool shares the same shape:
 
@@ -545,9 +547,9 @@ Every candidate in a pool shares the same shape:
 - A candidate may represent a single facet or a small bundle of facets.
 - The selector can choose multiple candidates.
 - An empty selection means "no additional facet is needed" and is valid.
-- The pool author's contract is that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
+- Pool authors must ensure that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
 
-#### Selector contract
+#### Selector behavior
 
 When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile in a fresh session. It runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`.
 
@@ -665,7 +667,7 @@ The selector guidance references the workflow's existing persona and instruction
 #### Packages, eject, and authoring tools
 
 - Repertoire packages can install and remove `facet-pools/`, and package-local / scoped pools resolve through the same lookup order as step fragments.
-- `takt eject <workflow>` copies referenced external pools and the facet dependencies they own, following the existing eject contract for collision handling and existing-user-file priority.
+- `takt eject <workflow>` copies referenced external pools and the facets they depend on, using the existing collision handling and priority for existing user files.
 - `takt workflow doctor` validates pools, candidates, and facet references.
 - `takt workflow inspect <workflow>` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
@@ -756,7 +758,7 @@ A `workflow_call` step does not accept provider, model, provider-options, or rou
 overrides. The child inherits the already-resolved runtime context from its parent; configure
 provider targets, profiles, options, and routing in `runtime.yaml`.
 
-`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
+`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own. Executable steps in the root and descendant workflows consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
 
 A `workflow_call` step may also declare scalar `vars` for execution context that is not a facet reference. Strings, finite numbers, and booleans are inherited through nested workflow calls; a nested call overrides a key by declaring it again. Agent instruction facets read a value with `{var:name}`. A missing value renders as `unspecified`, so an instruction can define a safe fallback explicitly.
 
@@ -924,6 +926,8 @@ An agent step, `workflow_call`, or parallel parent/sub-step can declare report i
 
 `reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. `{report:filename}` inserts a selected report's body at that position, even when another report with the same name exists in the consumer's local or ancestor scope. If `reports: all` selects several reports with that name, a single `{report:filename}` is ambiguous and fails. Selected reports without a placeholder are appended to the agent's Phase 1 instruction. Names selected across declared producers must be unique, including `reports: all` and optional unrun sources; doctor and runtime reject ambiguous declarations even without a placeholder. A `workflow_call` passes the same selected inputs to its child agents, including through nested calls. A parallel parent's declaration applies to its children unless a child declares its own inputs. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Before the source runs, its contracted report names are reserved, so `{report:filename}` cannot fall back to an unrelated local or ancestor report of the same name. Once the source starts, its reports are required.
 
+`fallback_from_step` selects a completed report from another step with the same report contract only while `from_step` has not run. An incomplete or missing report after the primary source starts still fails. `previous_only: true` with the consumer's own step as `from_step` selects the latest completed report before the current execution. It marks an absent previous version as unavailable. `previous_only` requires explicit report names and cannot be combined with `fallback_from_step` or `optional_if_unrun`.
+
 Multiple producers can be declared as a nonempty array. The single-object form remains supported. Each entry independently applies `optional_if_unrun` and `history`:
 
 ```yaml
@@ -936,9 +940,11 @@ input_reports:
     optional_if_unrun: true
 ```
 
-`{report:filename}` inserts at most 8,000 UTF-16 code units of the current body. Longer bodies include an omission notice and the exact immutable version path for reading the remainder. This code constant also applies to automatically appended current reports; it is not configurable in YAML.
+`{report:filename}` inserts at most 8,000 UTF-16 code units of the current body. Longer bodies include an omission notice and the exact immutable version path for reading the remainder. The immutable path and execution identity of completed reports are supplied regardless of body length. This code constant also applies to automatically appended current reports; it is not configurable in YAML.
 
 `history: {previous: N}` selects up to N completed executions before the current execution from the same producer and execution lineage. N is a nonnegative safe integer; zero selects no previous executions. `{report_history:filename}` inserts an oldest-first list, never past bodies. Every row gives the execution identity, order, completion status, producer, and immutable version path. Plans and reports from the same execution share its identity. All selected rows are supplied, with no additional list limit. Insufficient history, incomplete executions, and missing reports are identified; gaps are not filled with unrelated or older versions. Parallel execution, nested calls, and resume preserve these identities and versions. Old runs without execution records have unavailable history; timestamps are not used to infer it. Unreferenced declared history is appended automatically.
+
+A completed public report from an old run without execution records still supplies its body. TAKT marks the original completed execution version and ID as unavailable. A path created for a long body is labeled as a snapshot for this input, separate from a version fixed by the original execution.
 
 Inputs requesting history also include current execution records. Start and completion orders use a counter shared by the execution lineage. Alongside the call execution identity, each report's actual producer has its own start and completion orders, allowing comparison of verification start against repair completion. Missing orders are marked unavailable.
 
@@ -1001,9 +1007,9 @@ The effective tool list may be narrower than configured. When `edit: false`, or 
 
 The Pi provider maps generic `Read`, `Glob`, `Grep`, `Edit`, `Write`, and `Bash` names to Pi SDK tools. Pi does not support TAKT MCP servers or structured output; step-level MCP settings are dropped, while session-level MCP settings require a provider that supports them. `max_turns` is ignored for Pi calls.
 
-With TAKT-managed Codex permissions, an explicit `edit: false` prevents writes in Phase 1 regardless of the resolved permission mode. With `network_access: true`, TAKT passes a read-only permission profile that enables network access; otherwise it uses the `read-only` sandbox. With `permission_control: codex`, Codex's own settings determine both permissions, even with `edit: false`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) always use the `read-only` sandbox and disable network access, including with delegated permissions. Common permission resolution and other providers keep their existing behavior. See [Codex permission control](./configuration.md#codex-permission-control-permission_control).
+With TAKT-managed Codex permissions, an explicit `edit: false` prevents writes in Phase 1 regardless of the resolved permission mode. With `network_access: true`, TAKT passes a read-only permission profile that enables network access; otherwise it uses the `read-only` sandbox. With `permission_control: codex`, Codex's own settings determine both permissions, even with `edit: false`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) remain managed by TAKT even with delegated permissions. Without `readonly_permission_base`, they use the `read-only` sandbox and disable network access; with it, TAKT uses a permission profile that extends the base with read-only filesystem access and network disabled. Common permission resolution and other providers keep their existing behavior. See [Codex permission control](./configuration.md#codex-permission-control-permission_control).
 
-TAKT-managed Codex calls also pass `--ignore-rules` for writable steps and for new and resumed sessions, so user or project execpolicy `.rules` cannot bypass the configured sandbox. Delegated Codex calls retain those rules except in Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls), which always disable them and prohibit writes and network access. A selected `config_profile` continues to apply alongside `--ignore-rules` in Phase 2 and these internal calls.
+TAKT-managed Codex calls also pass `--ignore-rules` for writable steps and for new and resumed sessions, so user or project execpolicy `.rules` cannot bypass the configured sandbox. Delegated Codex calls retain those rules except in Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls), which always disable them and prohibit writes and network access. A selected `config_profile` continues to apply alongside `--ignore-rules` in Phase 2 and these internal calls. When `readonly_permission_base` is set, TAKT also omits `--sandbox`.
 
 ## Workflow-level Configuration
 
@@ -1265,11 +1271,11 @@ Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, t
 
 ## Best Practices
 
-1. **Keep iterations reasonable** — 10-30 is typical for development workflows
-2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code. When delegating permission control to Codex, also disable writes in Codex itself
-3. **Use descriptive step names** — Makes logs easier to read
-4. **Test workflows incrementally** — Start simple, add complexity
-5. **Customize with `takt eject <workflow>`** — Copy a builtin workflow and edit it
+1. Set a reasonable iteration count. Development workflows typically use 10-30.
+2. Use `edit: false` for review steps to prevent reviewers from modifying code. When delegating permission control to Codex, also disable writes in Codex itself.
+3. Use descriptive step names to make logs easier to read.
+4. Test workflows incrementally, starting with a simple structure and adding complexity.
+5. Customize a builtin workflow by copying it with `takt eject <workflow>` and editing it.
 
 ## PR status and system-step waits
 

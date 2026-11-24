@@ -1,11 +1,12 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalAnswerInputSchema, GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
+import { GoalAnswerInputSchema, GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalSummarySchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
 } from '../tasks/taskContextValidation.js';
+import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 
 const MCP_TASK_MAX_LENGTH = 128 * 1024;
 const MCP_WORKFLOW_MAX_LENGTH = 128;
@@ -104,6 +105,12 @@ export const reopenGoalInputSchema = goalWriteInputSchema.extend({
   reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for reopening the goal. Saved in the work log without trimming.'),
 });
 export type ReopenGoalInput = z.infer<typeof reopenGoalInputSchema>;
+export const updateGoalBranchesInputSchema = goalWriteInputSchema.extend({
+  integrationBranch: GoalSummarySchema.shape.integrationBranch.unwrap()
+    .describe('Corrected destination branch for the goal pull request. Must differ from the goal branch. Saved as the goal integration branch and, when completion evidence is saved, as the completion target branch.'),
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for correcting the saved branches. Saved in the work log without trimming.'),
+});
+export type UpdateGoalBranchesInput = z.infer<typeof updateGoalBranchesInputSchema>;
 export const getGoalInputSchema = goalWriteInputSchema.extend({
   path: z.string().max(512).regex(/^(createdAt|objective|outOfScope|acceptanceCriteria|specifications|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|gherkin|quint|alloy|body|summary|humanChecks|number|url|error|goalSha|recordedAt|id|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
     .describe('Saved field path, for example workLog.0.summary or completion.summary. Array indices refer to saved order.'),
@@ -118,6 +125,8 @@ export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
   task: taskContentSchema.describe('Self-contained instructions for ready goal work.'),
   workflow: workflowSchema.describe('Workflow name, scope reference or file path selected by the manager.'),
+  runtimeAssignment: z.string().trim().min(1).max(MCP_WORKFLOW_MAX_LENGTH).optional()
+    .describe('Runtime assignment name from takt_list_runtime_assignments. Omit to use the default selection.'),
   autoPr: z.boolean().optional().describe('Push and create a PR after successful worktree execution. Omission saves false.'),
   shouldPublishBranchToOrigin: z.boolean().optional().describe('Publish the task branch to origin. Omission saves false; autoPr true also publishes it.'),
 });
@@ -141,6 +150,37 @@ export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
 });
 export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
+const goalProposalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager conversation holds its pending goal proposal.'),
+}).strict();
+export const listGoalProposalsInputSchema = goalProposalIdentityInputSchema;
+const goalProposalRevisionSchema = z.number().int().safe().positive()
+  .describe('Revision of the pending goal proposal returned by takt_list_goal_proposals.');
+const goalProposalOwnerSchema = {
+  conversationId: ConversationIdSchema.describe('conversationId of the proposal returned by takt_list_goal_proposals. The request is refused unless it identifies the conversation that owns the pending proposal.'),
+};
+export const getGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  ...goalProposalOwnerSchema,
+  path: z.string().max(128).regex(/^summary\.(objective|startBranch|integrationBranch|(outOfScope|acceptanceCriteria|constraints)(\.\d+)?|specifications\.(gherkin|quint|alloy))$/).optional()
+    .describe('Proposal field path from the fields list of takt_list_goal_proposals, for example summary.objective or summary.acceptanceCriteria.0. Array indices refer to saved order.'),
+  limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
+});
+export const approveGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  revision: goalProposalRevisionSchema,
+  ...goalProposalOwnerSchema,
+});
+export const rejectGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  revision: goalProposalRevisionSchema,
+  ...goalProposalOwnerSchema,
+});
+export const createGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  summary: GoalSummarySchema.describe('Contents of the goal proposal to create, in the same shape as the summary a manager presents for registration: objective, outOfScope, acceptanceCriteria (at least one), constraints, optional specifications (gherkin, quint, alloy), and optional startBranch and integrationBranch.'),
+});
+export type ListGoalProposalsInput = z.infer<typeof listGoalProposalsInputSchema>;
+export type GetGoalProposalInput = z.infer<typeof getGoalProposalInputSchema>;
+export type ApproveGoalProposalInput = z.infer<typeof approveGoalProposalInputSchema>;
+export type RejectGoalProposalInput = z.infer<typeof rejectGoalProposalInputSchema>;
+export type CreateGoalProposalInput = z.infer<typeof createGoalProposalInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();

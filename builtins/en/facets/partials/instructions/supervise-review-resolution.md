@@ -29,4 +29,6 @@ Do not request or inspect machine-gate execution status, results, or logs, inclu
 
 Record the decision, evidence, and any required repair targets completely.
 
-Retain the repair history and fixed-version references recorded in review-resolution.md, and record how the actual method matches the latest requirements and decision. Reconcile changed verification approaches with the original acceptance criteria.
+Retain the fixed-version references in review-resolution.md. Record repair history analyzed from original records by repair planning with its plan source, and how the actual method matches the latest requirements and decision. Reconcile changed verification approaches with the original acceptance criteria.
+
+Carry forward the unverified conditions, reasons they cannot be verified in this environment, and evidence needed to decide from Cannot Verify in This Environment in the adjudication report into the final validation report, and relate them to the requirements fulfillment judgment.

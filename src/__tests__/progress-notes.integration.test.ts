@@ -22,6 +22,7 @@ import { isDynamicParallelSubSteps } from '../core/models/types.js';
 import { createDynamicParallelSelectionSnapshot } from '../core/workflow/dynamic-parallel/snapshot.js';
 import { fileURLToPath } from 'node:url';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { buildSessionKey } from '../core/workflow/session-key.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { collectTaskReviewScope, createTaskReviewScopeResolver, resolveReviewScopeBaseRange } from '../core/workflow/review-scope.js';
@@ -51,6 +52,15 @@ function response(status: 'done' | 'error'): AgentResponse {
 function progressNotesData(prompt: string): string | undefined {
   const match = prompt.match(/<progress_notes_data>\s*([\s\S]*?)\s*<\/progress_notes_data>/);
   return match === null ? undefined : (JSON.parse(match[1]!) as { log: string }).log;
+}
+function providerPrompt(name: string, prompt: string): string {
+  if (name !== 'codex') return prompt;
+  const envelope: unknown = JSON.parse(prompt);
+  expect(envelope).toEqual({
+    taktCurrentInstructions: expect.stringContaining('progress_notes_data'),
+    userInstruction: expect.any(String),
+  });
+  return (envelope as { userInstruction: string }).userInstruction;
 }
 function leaveNote(options: ProviderCallOptions, note: string = progress): void {
   options.onStream?.({ type: 'text', data: { text: `${note}\n` } });
@@ -333,7 +343,7 @@ describe('progress notes across provider attempts', () => {
     const received: Array<string | undefined> = [];
     clientMock.mockImplementation(async (_name: string, prompt: string, optionsOrPrompt: ProviderCallOptions | string, customOptions?: ProviderCallOptions) => {
       const callOptions = typeof optionsOrPrompt === 'string' ? customOptions! : optionsOrPrompt;
-      received.push(progressNotesData(prompt));
+      received.push(progressNotesData(providerPrompt(name, prompt)));
       expect(callOptions.permissionMode).toBe('readonly');
       expect(callOptions.preparedMcp).toBeUndefined();
       leaveNote(callOptions);
@@ -354,11 +364,14 @@ describe('progress notes across provider attempts', () => {
     clientMock.mockImplementation(async (_name: string, prompt: string, optionsOrPrompt: ProviderCallOptions | string, customOptions?: ProviderCallOptions) => {
       const callOptions = typeof optionsOrPrompt === 'string' ? customOptions! : optionsOrPrompt;
       calls++;
+      if (name === 'codex' && callOptions.outputSchema !== undefined) {
+        return { ...response('done'), structuredOutput: { decision: 'needs_recovery' } };
+      }
       if (calls === 1) {
         leaveNote(callOptions, laterProgress);
         callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
       } else {
-        expect(progressNotesData(prompt)).toContain(laterProgress);
+        expect(progressNotesData(providerPrompt(name, prompt))).toContain(laterProgress);
         expect(callOptions.sessionId).toBe('thread');
         expect(callOptions.permissionMode).toBe('readonly');
       }
@@ -366,11 +379,11 @@ describe('progress notes across provider attempts', () => {
     });
     const result = await runAgent(undefined, originalInstruction, { ...options, resolvedProvider: name });
     expect(result.status).toBe('done');
-    expect(calls).toBe(2);
+    expect(calls).toBe(name === 'codex' ? 3 : 2);
     const agent = implementation.setup({ name: 'coding-review' });
     const missingSession = await agent.recoverFromCompaction!(originalInstruction, { cwd, permissionMode: 'readonly' });
     expect(missingSession.status).toBe('error');
-    expect(calls).toBe(2);
+    expect(calls).toBe(name === 'codex' ? 3 : 2);
   });
 
   it('does not invent automatic recovery on real unsupported adapters, and keeps DeepSeek readonly fail-closed', async () => {
@@ -1199,6 +1212,13 @@ describe('progress notes across provider attempts', () => {
         { name: 'reviewers', kind: 'workflow_call', call: 'review-child', rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] },
       ],
     }, cwd);
+    const reviewerSessionKey = buildSessionKey({
+      name: reviewer.name,
+      personaDisplayName: reviewer.name,
+      edit: reviewer.edit,
+      instruction: reviewer.instruction,
+      passPreviousResponse: true,
+    }, { provider: 'codex', model: 'test' });
     const phase1Sessions: Array<string | undefined> = [];
     const reportSessions: Array<string | undefined> = [];
     const normalSessions: Array<string | undefined> = [];
@@ -1243,7 +1263,7 @@ describe('progress notes across provider attempts', () => {
     }));
     const engine = new WorkflowEngine(parent, cwd, 'Review validation and its fix', {
       projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: `session-${mode}`,
-      initialSessions: { '["coding-review","codex","test"]': 'stale-thread' },
+      initialSessions: { [reviewerSessionKey]: 'stale-thread' },
       workflowCallResolver: ({ step }) => reviewWorkflow(step.name === 'initial-reviewers'
         ? 'Initial validation review' : 'Follow-up validation review after the fix'),
     });
@@ -1254,7 +1274,7 @@ describe('progress notes across provider attempts', () => {
       const effectiveFollowUpSession = followUpSession ?? 'fresh-thread';
       expect(reportSessions).toEqual(['fresh-thread', effectiveFollowUpSession]);
       expect(normalSessions).toEqual([undefined, 'coder-thread']);
-      expect(state.personaSessions.get('["coding-review","codex","test"]')).toBe(effectiveFollowUpSession);
+      expect(state.personaSessions.get(reviewerSessionKey)).toBe(effectiveFollowUpSession);
     } finally { engine.removeAllListeners(); }
   });
 

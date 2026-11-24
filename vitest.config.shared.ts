@@ -49,6 +49,8 @@ export const itSerialTestGlobs = [
   ...itSerialWorkflowLoaderTestGlobs,
 ];
 
+export const unitTestExcludes = [...itTestGlobs, ...itSerialTestGlobs];
+
 // Some workflow tests spawn processes and perform fsync-heavy persistence.
 // Keep one sufficiently large ceiling for every platform and runner.
 const testTimeout = 120_000;

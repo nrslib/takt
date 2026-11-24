@@ -38,7 +38,7 @@ import {
 import { buildGitRules } from '../instruction/instruction-context.js';
 import type { InstructionContext } from '../instruction/instruction-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
-import { preparePreviousResponseContent } from '../instruction/InstructionBuilder.js';
+import { preparePreviousResponseContent, renderGoalSpecificationNotice } from '../instruction/InstructionBuilder.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
 import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
@@ -57,6 +57,7 @@ import {
 const log = createLogger('arpeggio-runner');
 
 export interface ArpeggioRunnerDeps {
+  readonly goalSpecificationPaths?: readonly string[];
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly liveIntervention?: LiveInterventionChannel;
@@ -312,6 +313,7 @@ function buildArpeggioPrompt(
   return [
     phaseContext,
     gitRules,
+    renderGoalSpecificationNotice(instructionContext.goalSpecificationPaths, language),
     renderedRules.noticeAfterExecutionRules,
     renderedRules.afterExecutionRules,
     fallbackNotice,
@@ -385,6 +387,7 @@ export class ArpeggioRunner {
         )
       : undefined;
     const instructionContext: InstructionContext = {
+      goalSpecificationPaths: this.deps.goalSpecificationPaths,
       workflowAssignment: agentOptions.workflowMeta?.context?.assignment,
       task: this.deps.getTask(),
       iteration: state.iteration,

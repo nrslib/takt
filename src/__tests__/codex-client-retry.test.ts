@@ -2112,6 +2112,13 @@ describe('CodexClient retry', () => {
       {
         type: 'events',
         events: [
+          { type: 'item.completed', item: { id: 'assessment-1', type: 'agent_message', text: '{"decision":"needs_recovery"}' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
           { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'verification completed' } },
           { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 2 } },
         ],
@@ -2144,20 +2151,20 @@ describe('CodexClient retry', () => {
       content: 'verification completed',
       sessionId: 'thread-compacted',
     });
-    expect(runPlanIndex).toBe(2);
-    expect(startThreadCalls).toHaveLength(1);
+    expect(runPlanIndex).toBe(3);
+    expect(startThreadCalls).toHaveLength(2);
     expect(resumeThreadCalls).toEqual([{
       threadId: 'thread-compacted',
       options: startThreadCalls[0],
     }]);
-    expect(codexConstructorCalls[1]).toEqual(codexConstructorCalls[0]);
-    expect(runStreamedInputs).toHaveLength(2);
-    // Codex prefixes the system prompt, which always carries the progress notes guidance.
-    expect(runStreamedInputs[0]).toMatch(/\n\noriginal Phase 1 instruction$/);
-    expect(runStreamedInputs[1]).toContain(
-      'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',
-    );
-    expect(runStreamedInputs[1]).toContain('original Phase 1 instruction');
+    expect(codexConstructorCalls[2]).toEqual(codexConstructorCalls[0]);
+    expect(runStreamedInputs).toHaveLength(3);
+    const firstInput = JSON.parse(runStreamedInputs[0] as string) as { taktCurrentInstructions: string; userInstruction: string };
+    const recoveryInput = JSON.parse(runStreamedInputs[2] as string) as { taktCurrentInstructions: string; userInstruction: string };
+    expect(firstInput.userInstruction).toBe('original Phase 1 instruction');
+    expect(recoveryInput.userInstruction).toContain('original Phase 1 instruction');
+    expect(recoveryInput.taktCurrentInstructions).toBe(firstInput.taktCurrentInstructions);
+    expect(codexConstructorCalls[0]?.config).toHaveProperty('developer_instructions');
     expect(onStream).toHaveBeenCalledWith({
       type: 'context_compacted',
       data: { sessionId: 'thread-compacted' },
@@ -2173,6 +2180,7 @@ describe('CodexClient retry', () => {
 
   it('破棄した thread の compacted 通知で safety refusal 後の新規 thread の成功を復帰対象にしない', async () => {
     vi.useFakeTimers();
+    const retryTimer = vi.spyOn(globalThis, 'setTimeout');
     runPlans = [
       {
         type: 'events',
@@ -2209,6 +2217,11 @@ describe('CodexClient retry', () => {
       },
       progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
+    try {
+      await vi.waitFor(() => expect(retryTimer.mock.calls.some(([, delay]) => delay === 1000)).toBe(true));
+    } finally {
+      retryTimer.mockRestore();
+    }
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
 
@@ -2232,6 +2245,7 @@ describe('CodexClient retry', () => {
 
   it('safety refusal 後の新規 thread も個別に compaction 復帰し transport と rollout の重複検出で再復帰しない', async () => {
     vi.useFakeTimers();
+    const retryTimer = vi.spyOn(globalThis, 'setTimeout');
     const now = new Date();
     const directory = path.join(
       projectDirectory,
@@ -2272,6 +2286,13 @@ describe('CodexClient retry', () => {
       {
         type: 'events',
         events: [
+          { type: 'item.completed', item: { id: 'assessment', type: 'agent_message', text: '{"decision":"needs_recovery"}' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
           { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'new thread recovered' } },
           { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
         ],
@@ -2294,6 +2315,11 @@ describe('CodexClient retry', () => {
       },
       progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
+    try {
+      await vi.waitFor(() => expect(retryTimer.mock.calls.some(([, delay]) => delay === 1000)).toBe(true));
+    } finally {
+      retryTimer.mockRestore();
+    }
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
 
@@ -2302,8 +2328,8 @@ describe('CodexClient retry', () => {
       content: 'new thread recovered',
       sessionId: 'thread-b',
     });
-    expect(runPlanIndex).toBe(3);
-    expect(startThreadCalls).toHaveLength(2);
+    expect(runPlanIndex).toBe(4);
+    expect(startThreadCalls).toHaveLength(3);
     expect(resumeThreadCalls).toEqual([{
       threadId: 'thread-b',
       options: startThreadCalls[1],
@@ -2326,6 +2352,7 @@ describe('CodexClient retry', () => {
 
   it('同一 thread の transient retry では compacted 通知を保持して復帰する', async () => {
     vi.useFakeTimers();
+    const retryTimer = vi.spyOn(globalThis, 'setTimeout');
     runPlans = [
       {
         type: 'events',
@@ -2338,6 +2365,13 @@ describe('CodexClient retry', () => {
         type: 'events',
         events: [
           { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: 'lost instruction' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'assessment', type: 'agent_message', text: '{"decision":"needs_recovery"}' } },
           { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
         ],
       },
@@ -2367,6 +2401,11 @@ describe('CodexClient retry', () => {
       },
       progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
+    try {
+      await vi.waitFor(() => expect(retryTimer.mock.calls.some(([, delay]) => delay === 1000)).toBe(true));
+    } finally {
+      retryTimer.mockRestore();
+    }
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
 
@@ -2375,8 +2414,8 @@ describe('CodexClient retry', () => {
       content: 'same thread recovered',
       sessionId: 'thread-a',
     });
-    expect(runPlanIndex).toBe(3);
-    expect(startThreadCalls).toHaveLength(0);
+    expect(runPlanIndex).toBe(4);
+    expect(startThreadCalls).toHaveLength(1);
     expect(resumeThreadCalls).toHaveLength(3);
     expect(resumeThreadCalls.every((call) => call.threadId === 'thread-a')).toBe(true);
     expect(onStream.mock.calls.filter(([event]) => (

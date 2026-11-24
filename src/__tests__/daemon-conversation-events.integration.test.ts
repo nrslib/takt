@@ -915,6 +915,25 @@ it.each([
   expect(restarted.runner.calls).toHaveLength(source === 'event' ? 2 : 1);
 });
 
+it('merges earlier interrupted images with a later unfinished image turn on restart', async () => {
+  const earlier = randomUUID();
+  const later = randomUUID();
+  const f = await fixture(async (directory, repository) => {
+    await mkdir(join(directory, 'conversations'), { recursive: true });
+    await writeFile(join(directory, 'conversations', `${conversationId({ kind: 'repository', repositoryDirectory: repository })}.json`),
+      JSON.stringify({ ...conversationRecord(repository), interruptedMessage: 'Earlier', interruptedImageAttachmentIds: [earlier] }));
+  });
+  const event = input('Later', f.id);
+  if (event.event.kind !== 'human_command' || event.event.command.kind !== 'message') throw new Error('Expected human message');
+  event.event.command.imageAttachmentIds = [later];
+  accepted(await f.dispatcher.accept(event));
+  await f.runner.started(1);
+  await f.close();
+  expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({
+    interruptedMessage: 'Earlier\n\nLater', interruptedImageAttachmentIds: [earlier, later],
+  });
+});
+
 it('roundtrips message-only changes and clearing through IPC and conversation storage', async () => {
   const f = await fixture();
   accepted(await f.post('state-update'));
@@ -1438,7 +1457,7 @@ it('recovers the reserved goal ID after its registration event leaves the inbox 
   expect((await f.conversations.store.read(f.id))?.state.approval?.state).toBe('reserved');
   await f.runner.finish(registration, { kind: 'interrupted' });
   accepted(await f.dispatcher.accept({ ...input('reapprove', f.id), event: { kind: 'human_command',
-    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'approve_summary', revision: 1 } } }));
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'approve_summary', revision: 1, conversationId: f.id } } }));
   const retry = await f.runner.started(2);
   const resolve = vi.fn();
   const service = createConversationTurnService(f.directory, { resolve, async close() {} });

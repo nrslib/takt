@@ -8,6 +8,37 @@
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-11-24
+
+### Added
+
+- Codex と OpenCode の runtime profile で、`context_window: auto`、正の整数による固定値、`{ initial: 500000, auto_expand: true }` を指定できるようにしました (#2091, #2092)。自動選択・拡張は確認済みのモデル上限を使い、上限が不明な場合の `auto` はプロバイダー既定値を維持します。固定値を指定すると自動拡張しません。
+- 単体の MCP クライアントから `takt_*_goal_proposal` ツールでゴール登録案を作成・一覧表示・詳細取得・承認・却下できるようにしました (#2060, #2083)。承認時には所有者とリビジョンを確認してからゴールを登録します。`takt_update_goal_branches` でブランチ変更後のゴールの保存済み参照を更新できます。ホスティング側の PR の base 変更は別途必要です (#2065)。
+- 実験的な manager の改善: 貼り付け画像を daemon 再起動後も保持し、タスク指示で参照した保存画像のパスを添付ファイルにコピーします (#2082)。`manager.runtime_assignments` の候補からタスクごとの runtime assignment を選択・保持でき (#2084)、`manager.refresh_interval_ms` または `TAKT_MANAGER_REFRESH_INTERVAL_MS` で TUI の更新間隔を設定できます (#2074)。
+- `provider_options.codex.readonly_permission_base` で、既存の Codex 権限プロファイルの拒否規則を保持したまま、書き込みとネットワークを無効にしたレポート出力・厳格な読み取り専用フェーズを実行できるようにしました (#2095, #2096)。`permission_control: codex` が必要です。
+
+### Changed
+
+- ゴールのタスク実行時に、保存済みの Gherkin・Quint・Alloy 仕様を実行コンテキスト内のファイルとして渡し、ワークフローのステップから元の仕様を読めるようにしました (#2076)。
+- 終了済みゴールを manager の実行中ゴールの文脈から外しました。`Ctrl+G` から検索して削除でき、削除前には Epic からの参照を確認します (#2072)。ゴール取得結果に関連 PR の状態も含めるようにしました (#2066)。
+- 組み込みのレビュー裁定を指摘の採否判断に絞り、修正方式の選択と影響調査を修正計画で行うようにしました (#2089)。
+
+### Fixed
+
+- OpenCode のツール入力に、pending 時点の空入力ではなく確定した引数を記録するようにしました。保存済みゴール仕様を含め、ツール結果と実際に要求したファイルやコマンドを対応付けられます。
+- Codex のターン中にコンテキスト圧縮が発生しても、完了済みの応答を保持し、不要な復帰ループを避けるようにしました (#2080)。裁定の指示と入力参照も圧縮後に引き継ぎます (#2094)。
+- レポート出力中にコンテキスト圧縮が起きた場合、新しいセッションでレポート生成を再試行するようにしました (#2087)。
+- ワークフロー再開時に、保存した引継ぎ記録とレポートをワークフロー名と呼び出し位置で照合し、ワークフロー本文の変更後も引き継げるようにしました (#2097)。
+- Git の表示言語が英語以外でも、worktree 用 clone の shallow reference エラーを検出できるようにしました (#2086)。同期時の merge に `--ff --no-edit` を明示し、ローカルの `merge.ff=only` 設定があっても分岐したブランチをマージできるようにしました (#2079)。
+- 内容が同じ policy と knowledge を、エージェントの指示へ重複して注入しないようにしました (#2077)。
+
+### Internal
+
+- daemon の会話ターンと director 通知に索引を設け、無関係な会話履歴の再読を減らしました (#2067, #2081)。
+- ローカルでの全件 Heavy IT 実行に明示的な許可を必要とするガードを追加しました。PR の CI では引き続き全件を実行します (#2075)。
+- catch 節のログに捕捉したエラーを含める lint 規則を追加し、daemon 調査用 probe と評価用依存を更新し、不要なテストと設計文書を整理しました (#2078, #2093, #2085, #2088, #2090)。
+- 依存 lockfile を更新し、このリリース用の Nix 依存ハッシュを同期しました。
+
 ## [0.76.1] - 2026-11-17
 
 ### Fixed
@@ -63,7 +94,7 @@
 - `takt manager` が、本格的な日々の開発に利用できるようになりました。仕様のあるゴールの登録から実装、PR の準備・マージまでを任せられます。中断をまたいだ会話の継続、会話とは独立した CI 待機、権限や利用ワークフローの設定にも対応します。
 - manager のゴールの登録案とゴールに仕様を持たせられるようにしました (#1997, #2005)。コードを変えるゴールには Gherkin の仕様を入れ、`assistant.formal_spec` の mode が `true` か `'Y/n'` のときは Quint と Alloy の仕様も入れます。manager の会話（TUI と Slack）で `/verify` と打つと、現在の合意から Quint と Alloy の仕様を新たに生成し、対話モードと同じ検査器で検証して、結果を同じ会話に返して manager に解釈させます。検証は mode が `true` か `'Y/n'` のときだけ利用でき、既定の `y/N` では利用できません。仕様は登録案の表示に出し、PR の最終レビューのタスクには保存した仕様を渡します。
 - CI までは `merge-review-fix-simple` と同じ準備を行い、マージせずに終わるビルトインのワークフロー `merge-prepare` を追加しました (#1989)。`takt merge` は、マージした PR と準備だけを終えた PR を分けて報告します。manager の `takt_merge_goal_pr` は、マージ用のタスクをゴールのタスクとして積んですぐに戻るようになり、ゴールの PR の仕上げはこのタスクだけで行います。タスクが PR のブランチに push したら、手元のゴールのブランチを fast-forward で追従させます。分かれているときやチェックアウト中のときは書き換えずに知らせます。
-- manager が、ゴールに紐付かない質問を `takt_ask_standalone_question` で人に尋ねられるようにしました (#1987)。たとえばイベントの対象のゴールが特定できないときに使います。質問は Slack に投稿し、ゴールの質問と同じ Webhook 通知でも知らせ、回答が届くと manager のターンを起こします。
+- manager が、ゴールに紐付かない質問を `takt_ask_standalone_question` で人に尋ねられるようにしました (#1987)。たとえばイベントの対象のゴールが特定できないときに使います。質問は Slack に投稿し、ゴールの質問と同じ Webhook 通知でも知らせ、回答が届くと manager のターンを開始します。
 - manager が、タスクに任せる前に `takt_get_workflow` でワークフローの段階・遷移・呼び先を読めるようにしました (#1991)。
 - manager の TUI で、ターンの処理中にいま何をしているか（考え中、応答中、使っている道具）を出すようにしました (#1990)。
 - マージ待ちの PR が衝突したら、衝突ごとに 1 回 manager に知らせるようにしました (#1995)。
@@ -72,7 +103,7 @@
 
 ### Changed
 
-- manager は、ターンの処理中に届いた人の発言を断らずに受け付け、今のターンが終わったら受け付けた順に処理するようにしました (#1953)。待てる発言は会話ごとに 32 件・合計 1 MiB までです。
+- manager は、ターンの処理中に届いた人の発言を断らずに受け付け、今のターンが終わったら受け付けた順に処理するようにしました (#1953)。待機中の発言は会話ごとに 32 件・合計 1 MiB までです。
 - manager のターンを中断しても（Esc や `takt daemon stop`）セッションを残し、次の発言で、前の発言が中断されたことを添えて同じ会話を続けるようにしました (#1984)。daemon の停止・再起動で処理の途中だったイベントは、次の起動で届け直します (#2000)。
 - manager の権限の判断役を外しました (#1973)。道具の分類、保存した許可・拒否、読み取り範囲の検査、Codex の判断用 hook、TUI と Slack の許可の画面がなくなります。人が manager に直接頼めば、director を通さなくてもゴールの PR をマージできます。取り込み先への反映、force push、リモートのブランチや未保存の成果の削除、ゴールの中止、頼まれた範囲の外への投稿は、引き続き人の明示の指示があるときだけ行います。`manager.main_merge: auto` は人の継続的な指示として扱い、ゴールごとの別の指示がなくてもマージできます。`runtime.yaml` の古い `manager-permission-judge` の設定と `manager.sensitive_paths` は読んで無視します。
 - daemon を、イベントを受け取ってターンを配る作りにしました (#1960)。manager の見回りは、リポジトリごとに `manager.patrol_interval`（既定を 1800 秒に変更）ごとに 1 回、動いているゴールがあるときだけ行い、マージ待ちのゴールは対象から外します (#1972, #1995)。見回りは会話とは別の新しいセッションで動かすので、長い会話を見回りのたびに読み直しません (#2001)。見回りは、実行中のタスクの報告・レビューの指摘・修正の方針が指示書と受け入れ条件から外れていないかで判断し、経過時間や繰り返しの回数では判断しません (#1985)。director は見回りをしなくなり、`director.patrol_interval` は無視します (#1963)。
@@ -92,7 +123,7 @@
 
 - Claude で `full` 権限を要求したとき（`takt manager` を含む）に、黙って default 権限に落ち、MCP の道具やパイプを含む Bash が承認待ちで失敗していた不具合を直しました (#1983)。組織のポリシーで bypass が禁止されている環境では、manager の自前の MCP の道具を事前に許可し、Claude SDK を `auto` モードに切り替えます (#1986)。
 - macOS でディレクトリのデバイス番号が変わったときや、同じパスに clone し直したときに、`takt manager`・`takt ui`・daemon が `Registered project fingerprint does not match` で止まったり、プロジェクトを黙って外したりしないようにしました (#1992)。プロジェクトはパスだけで見分けます。
-- squash でマージされた PR のゴールを、完成の申請のあとに作業へ戻したゴールも含めて完成にできるようにしました (#1954)。manager が前のターンの裏の処理を待ち続けて止まることと、最後の確認で使い捨てのマージコミットを作ろうとすることもなくしました。
+- squash でマージされた PR のゴールを、完成の申請のあとに作業へ戻したゴールも含めて完成にできるようにしました (#1954)。manager が前のターンのバックグラウンド処理を待ち続けて止まることと、最後の確認で使い捨てのマージコミットを作ろうとすることもなくしました。
 - タスクの成果をゴールのブランチに取り込んだら、そのタスクの clone を消すようにしました。終わったタスクの clone がディスクを使い切ることがなくなります (#1957)。`/requeue` と `/retry`（と manager の道具）は、最新の run が位置を保存する前に止まっていても失敗せず、位置を保存した最も新しい run から、なければ最初の段階から再開します。
 - daemon が clone で動くタスクのログを見つけられるようにし、manager に `watch_failed` の誤報が届かないようにしました (#1964)。
 - TUI で React の production ビルドを読み込むようにし、常駐する manager の TUI で計測の記録が溜まり続けて `MaxPerformanceEntryBufferExceededWarning` が出てメモリが増える不具合を直しました (#2003)。
@@ -100,7 +131,7 @@
 - manager の TUI で、端末より高いゴールの登録案が描き直しのたびにスクロールの履歴に積み重なる不具合 (#1952) と、「登録する」を選んだあとに確認枠が残る不具合 (#1980) を直しました。
 - Git の参照付き clone でタスクの作業場所を作るときは commit-graph を読まないようにし、参照元の commit-graph 再生成後に Git の不具合で checkout が失敗する問題を回避しました (#2010)。
 - Codex の読み取り専用の step で、ファイルへの書き込みを禁じたまま `network_access: true` による通信を許可できるようにしました (#2014)。TAKT が権限を管理するときは、制限を迂回できる利用者の許可ルールを無視します。`permission_control: codex` のときは Phase 1 の sandbox と通信の判断を Codex に委ねます。
-- Retry・Requeue・Instruct・段階の選択でワークフローを途中から再開するときに、前の段階の system context・effects の結果・構造化出力を読み戻すようにしました (#2015)。コンテキスト不足の失敗を防ぎ、前の段階を流し直さずに済みます。子ワークフローの結果は同じ呼び出しの続きのときだけ引き継ぎます。
+- Retry・Requeue・Instruct・段階の選択でワークフローを途中から再開するときに、前の段階の system context・effects の結果・構造化出力を読み戻すようにしました (#2015)。コンテキスト不足の失敗を防ぎ、前の段階を再実行せずに済みます。子ワークフローの結果は同じ呼び出しの続きのときだけ引き継ぎます。
 - ゴールの PR の仕上げタスクで、レビュー役にゴールの範囲外の指示を渡すようにし、base ブランチから取り込んだ変更をレビュー対象から外しました (#2019)。レビューでは PR の累積差分と、未コミット・未追跡の変更を対象にします。
 - manager の起動時に、readiness 確認で認証済みの daemon IPC 接続を最初の会話の open まで保持するようにしました。確認と open の間に daemon が idle 終了し、`Daemon IPC identity mismatch` になる競合を防ぎます (#2030)。
 - Slack へ通知したあとイベントの完了を保存する前に daemon が停止し、manager のイベントが再配信されても、同じゴール通知を再送しないようにしました。`takt_notify_goal` の通知にはイベントの操作と通知内容から決めた永続 ID を使い、同じターンの異なる通知までは重複して扱いません。
@@ -233,14 +264,14 @@
 ### Added
 
 - `takt merge [pr-number]` で、PR のレビュー・修正・マージを行う workflow を実行できるようにしました (#1704)。番号を省くと、`--author`、`--label`、`--base`、`--head`、`--managed-by-takt`、`--include-forks`、`--include-draft`、または設定の `merge.where` で開いている PR を選びます。下書きと fork は既定で除外し、fork の PR は脅威チェックを通します。既定の workflow は `merge-review-fix-simple`(読み取り専用のレビュアー 1 人のあと、裁定・修正・検証を別の step で行う)で、並列レビューは `--workflow merge-review-fix` で使えます。既定では 2 件ずつ並行して処理し(`merge.concurrency`、`--concurrency`)、マージ方法の既定は `squash` です(`merge.method`)。PR ごとに `takt list` のタスクとして記録して隔離した clone で実行し、失敗したタスクは Requeue / Retry で再開できます。`caccia.enabled` が true なら、push のたびに CodeRabbit と Caccia を挟みます。処理した PR が 1 件でも未マージのまま残ると、終了コードは 1 です。
-- `takt update [provider]` で、インストール済みの provider SDK を TAKT が固定した版に更新できるようにしました。provider を省くと、版がずれているインストール済みの provider だけを更新します。
+- `takt update [provider]` で、インストール済みの provider SDK を TAKT が指定する固定バージョンに更新できるようにしました。provider を省くと、そのバージョンと異なる SDK がインストールされている provider だけを更新します。
 - DeepSeek Harness provider で、`provider_options.deepseek_harness.plugins`(`id`、`source`、`ref`、`config`)から Git の plugin を読み込めるようにしました。plugin は HTTPS か SSH で一時的な runtime に clone します。定義できるのは global 設定、信頼された global の runtime profile、`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS` だけで、プロジェクトで定義した plugin は拒否します。lifecycle scripts は実行せず、`config` の値はログに出しません。
 - `/tell`、`/retry`、`/requeue`、指示書の修正で AI がタスクを選んだり指示を作ったりしている間、TUI の状態行に進捗を表示するようにしました。
 
 ### Changed
 
-- BREAKING: Claude Agent SDK、Codex SDK、OpenCode SDK、Pi SDK を TAKT と一緒にはインストールしないようにしました (#1738)。provider を使う前に一度 `takt install <provider>`(`claude-sdk`、`codex`、`opencode`、`pi`)を実行してください。既定の provider は `claude-sdk` なので、多くの場合は `takt install claude-sdk` が必要です。SDK は TAKT が固定した版で TAKT の設定ディレクトリの下に入ります。端末では、SDK が無いと実行前にインストールするかを確認します。CI、pipeline モード、`takt watch` など対話できない実行では ``Run `takt install <provider>` `` で止まるので、ジョブの中で先にインストールしてください。OpenCode は従来どおり CLI も必要です。`claude-headless`、`claude-terminal`、`cursor`、`copilot`、`kiro` は影響を受けません。
-- 固定している provider SDK の版は Claude Agent SDK 0.3.300、Codex SDK 0.162.1 です。
+- BREAKING: Claude Agent SDK、Codex SDK、OpenCode SDK、Pi SDK を TAKT と一緒にはインストールしないようにしました (#1738)。provider を使う前に一度 `takt install <provider>`(`claude-sdk`、`codex`、`opencode`、`pi`)を実行してください。既定の provider は `claude-sdk` なので、多くの場合は `takt install claude-sdk` が必要です。SDK は、TAKT が固定したバージョンで TAKT の設定ディレクトリ内にインストールされます。端末では、SDK が無いと実行前にインストールするかを確認します。CI、pipeline モード、`takt watch` など対話できない実行では ``Run `takt install <provider>` `` で止まるので、ジョブの中で先にインストールしてください。OpenCode は従来どおり CLI も必要です。`claude-headless`、`claude-terminal`、`cursor`、`copilot`、`kiro` は影響を受けません。
+- provider SDK の固定バージョンは Claude Agent SDK 0.3.300、Codex SDK 0.162.1 です。
 - DeepSeek Harness の SDK と runtime を 0.2.1-alpha.2 に更新しました (#1755)。ローカルの JSONL セッション保存に加えて、セッションログの API へのアップロードも無効にしています。既存のインストールは `takt update deepseek-harness` で更新してください。
 - Pi provider で、SDK の `codemode` ツールを既定で有効にしました (#1744)。`codemode` から呼ぶツールにも、ほかのツールと同じ権限モードと `allowed_tools` を適用します。`allowed_tools` を明示して `codemode` を含めていない場合は無効のままです。
 - `/go`、`/tell`、`/retry`、`/requeue` のあと、TUI は実際の結果(保存したタスク、作成した Issue の番号、実行の成否と失敗の理由)を表示し、会話にも記録するようにしました。次の AI の応答と `/go` は何が起きたかを踏まえます。これに伴い、セッション状態の保存と、次回の対話モード起動時に前回の結果を表示する機能を削除しました。
@@ -255,7 +286,7 @@
 ### Fixed
 
 - CodeRabbit がレビューを明示的に skip したとき、`takt caccia` が期限まで待ち続けないようにしました。レビュー完了とレート制限の通知は、レビュー対象のコミットと照合します。
-- ステータス判定の system prompt に、名前だけではなくビルトインの `conductor` persona が渡るようにしました。
+- ステータス判定の system prompt に、ビルトインの `conductor` persona の名前だけでなく、その内容が渡るようにしました。
 - 端末のサイズを変えると、TUI の入力欄と考え中の表示が重複して残る問題を直しました (#1721)。
 - 日本語 IME の未確定文字が、画面下部ではなく入力位置に表示されるようにしました (#1773)。
 - TUI を長く使うと `beforeExit` の `MaxListenersExceededWarning` が出る問題を直しました。
@@ -333,8 +364,8 @@
 
 - BREAKING: `deepseek-harness` provider が、uv で構築する Python ブリッジではなく、TAKT の npm 依存として固定した公式 DeepSeek Harness TypeScript SDK と runtime を使うようになりました。Python と uv は不要です。`takt deepseek-harness install` と provider の `python_path` オプションは削除しました。セッション履歴は runtime が生きている間だけ保持され、runtime の再起動や設定変更の後は古いセッションを拒否するため、新しいセッションが必要です。明示的なツール制限と、ツールなしの report / status フェーズには対応しておらず、実行前に失敗します。以前の Python/uv 環境のファイルは自動では削除しないので、手動での片付けは設定ガイドを参照してください。
 - BREAKING: Pi provider が TAKT の runtime prompt を Pi 自身の system prompt に置き換えるのではなく、後ろに追加するようになりました。Pi の組み込みの指示とスキル一覧が保たれます。従来の動作を続ける場合は `provider_options.pi.system_prompt_mode: replace`（または `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=replace`）を設定してください。
-- BREAKING: OpenCode の既定を v2 に変更しました（`@opencode/client` / `@opencode/plugin` 2.0.18、検証済み CLI 2.0.18）。v1 CLI だけを導入している環境では `TAKT_OPENCODE_VERSION=v1` を明示するか v2 を導入してください。major version が異なる CLI はサーバー起動前に拒否します。
-- OpenCode v2 の環境由来 Skill を既定で無効にしました (#1080)。`provider_options.opencode.skills.enabled: true` または OpenCode runtime profile の `options.skills.enabled` で Phase 1 の標準探索と permission を有効にできます。Phase 2 のレポート・Phase 3 のステータス判定・strict-readonly の内部呼び出しでは Skill tool を無効にします。CLI 2.0.18 の既知の制約として、true の Phase 1 を実行済みの同じセッションでは、これらの呼び出しや false への切替後も OpenCode が保存済みの一覧がモデル入力に残ることがあります。初回の system 一覧と、無効で開始した後に履歴へ追加された一覧の両方を含みます。TAKT は保存済みテキストを除去しません。tool は無効なので Skill は実行できません。Phase 2 の retry や strict-readonly の新規呼び出しを含む新規 off セッションでは tool と環境由来の一覧はどちらも出ません。v1 の動作は維持します。組み込み development/simple workflow の暗黙の `enable-skills` 付与を外し、プリセットと `takt exec` の既定は維持しました。
+- BREAKING: OpenCode の既定を v2 に変更しました（`@opencode/client` / `@opencode/plugin` 2.0.18、検証済み CLI 2.0.18）。v1 CLI だけを導入している環境では `TAKT_OPENCODE_VERSION=v1` を明示するか v2 を導入してください。メジャーバージョンが異なる CLI はサーバー起動前に拒否します。
+- OpenCode v2 の環境由来 Skill を既定で無効にしました (#1080)。`provider_options.opencode.skills.enabled: true` または OpenCode runtime profile の `options.skills.enabled` で Phase 1 の標準探索と permission を有効にできます。Phase 2 のレポート・Phase 3 のステータス判定・strict-readonly の内部呼び出しでは Skill tool を無効にします。CLI 2.0.18 の既知の制約として、Skill を有効にした Phase 1 を実行済みの同じセッションでは、これらの呼び出しや false への切替後も OpenCode に保存済みの一覧がモデル入力に残ることがあります。初回の system 一覧と、無効で開始した後に履歴へ追加された一覧の両方を含みます。TAKT は保存済みテキストを除去しません。tool は無効なので Skill は実行できません。Phase 2 の retry や strict-readonly の新規呼び出しを含め、Skill を無効にして始める新規セッションでは tool と環境由来の一覧はどちらも出ません。v1 の動作は維持します。組み込み development/simple workflow の暗黙の `enable-skills` 付与を外し、プリセットと `takt exec` の既定は維持しました。
 - step の model が、別の provider 向けの設定から引き継がれなくなりました (#1564)。model は最初に model を指定した層から決まり、その設定が採用 provider と異なる provider を指定している場合は、model を渡さず未指定にします（たとえば `--provider copilot` に、Claude 向けの `provider_routing.tags` の `model: opus` が渡らなくなります）。こうして model が未指定のまま OpenCode が選ばれた場合は、OpenCode runtime が選ぶモデルを使います。
 - `session: compact` の圧縮に失敗したとき、persona の文脈を失った新しいセッションで黙って続行するのではなく、Phase 1 の前で step を停止し、保存済みセッションを破棄するようにしました (#1268)。
 - 保存済みの再開位置が解決できなくなった場合、黙って最初の step からやり直すのではなく、理由を表示して有効な再開位置または再実行位置を選べるようにしました (#1225)。選択をキャンセルするとタスクを再実行せず、非対話の経路では有効な位置がなければ停止します。
@@ -353,12 +384,12 @@
 ### Fixed
 
 - 通常のインタラクティブモードで worktree 設定質問中に Esc を押すと保存を中断して行動選択メニューへ戻り、確定済みの指示書本文と添付を会話内に保持するようになりました (#1627)。これらのプロンプトで Ctrl+C を押すと終了します。
-- 土台のブランチがリモートにだけある場合に、worktree タスクが `Git clone failed` で失敗しなくなりました (#1676)。clone 後は取得した土台からサブモジュールを初期化し、サブモジュールのコミットや URL の変更も反映します。
+- ベースブランチがリモートにだけある場合に、worktree タスクが `Git clone failed` で失敗しなくなりました (#1676)。clone 後は取得したベースブランチからサブモジュールを初期化し、サブモジュールのコミットや URL の変更も反映します。
 - Claude 系 provider で、通常の応答やファイル内容にレート制限の文言が含まれているだけで `rate_limited` と判定しなくなりました (#1674)。単独のレート制限通知だけを検出するため、`switch_chain` を消費して workflow が中断することがなくなりました。
 - 子 workflow が反復上限、`ABORT`、`blocked`、実行エラーで中断し、親の `ABORT` ルールに一致しない場合、親が `rule_no_match` ではなく子の中断理由と失敗した step を報告するようになりました。
 - MCP の `takt_list_tasks` で、1 件のタスクの worktree や run 情報を読めないときに一覧全体が失敗しなくなりました。そのタスクだけが `error` を持ちます (#1677)。
 - `claude-headless` で、明示した空のツール一覧（`allowed_tools: []`）がツールなしで実行されるようになり、ツールなしの report フェーズで MCP ツールが公開されなくなりました (#1580)。
-- 再実行の開始位置ピッカーで、狭い端末でも Resume 行の失敗位置が切れなくなりました。ラベルを短くし、workflow の経路全体をその下に表示します (#1660)。
+- 再実行の開始位置を選ぶ画面で、狭い端末でも Resume 行の失敗位置が切れなくなりました。ラベルを短くし、workflow の経路全体をその下に表示します (#1660)。
 - `takt caccia` が、push 直後に GitHub が古い PR HEAD を返しても即座に失敗せず、push 済みの HEAD が反映されるのを待ってからスレッドを解決するようになりました。
 
 ### Internal
@@ -527,7 +558,7 @@
 ### Added
 
 - `takt make` が対話型 Workflow Maker を起動します (#1507)。TTY 専用で、会話の前に New workflow、または project / global / builtin / repertoire のワークフローを読み取り専用のベースとして選びます。選択したソースが編集されることはありません。会話中は `/workflow` でベースを差し替え、`/go` で完全な実装指示を準備します。承認画面には作成先の `.takt/make/<timestamp>/` パスが表示され、Execute・Continue editing・Cancel だけを提示します。承認された実行は静的に到達可能な依存クロージャを独立ディレクトリ（`workflows/`、`steps/`、`facet-pools/`、`facets/`）へコピーし、参照をコピー先へ書き換えたうえで、そのディレクトリを作業ディレクトリとして builtin の `workflow-maker` ワークフローを直接実行します。タスク・worktree・コミット・push・プルリクエストは作成しません。動的または未解決の依存は実行前に失敗し、完了・失敗した実行は表示されたパスにそのまま残ります。
-- グローバル設定とプロジェクト設定のパス衝突を起動時に検出します (#1505)。グローバル設定ディレクトリ（`TAKT_CONFIG_DIR` または `~/.takt`）とプロジェクトの `.takt` が同一の実体パスに解決される場合 — ホームディレクトリでの実行やシンボリックリンク経由 — 、CLI はプロジェクト初期化の前に、両方のパス・原因・対処を示すエラーで終了します。グローバル設定がプロジェクト設定として誤読されることはなくなりました。
+- グローバル設定とプロジェクト設定のパス衝突を起動時に検出します (#1505)。ホームディレクトリで実行した場合やシンボリックリンクを経由した場合など、グローバル設定ディレクトリ（`TAKT_CONFIG_DIR` または `~/.takt`）とプロジェクトの `.takt` が同一の実体パスに解決されると、CLI はプロジェクト初期化の前に、両方のパス・原因・対処を示すエラーで終了します。グローバル設定がプロジェクト設定として誤読されることはなくなりました。
 - DeepSeek Harness が route 付き model 参照をサポートします (#1485)。`model` フィールドは `openai/gpt-5.4` や `my-gateway/org/custom-model` のような `<route>/<model>` 形式を受け付けます。最初の `/` より前が provider route となり、残りは opaque な model ID としてそのまま公式 SDK へ渡されます（2つ目以降の `/` や `:` は保持されます）。route なしの model は後方互換の `deepseek-official` route を使います。`/gpt-5.4`、`openai/`、空値のような不正な参照はブリッジ起動前に拒否されます。TAKT は route の allowlist を持たず、未知の route や model ID の検証は SDK に委ねます。
 
 ### Changed
@@ -535,14 +566,14 @@
 - **BREAKING:** Pi の thinking level は model 参照のサフィックスではなく `provider_options.pi.thinking_level` で設定します (#1493)。受け付ける値は `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`（環境変数 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL` で上書き可能）で、不正な値は失敗し、未設定時は Pi SDK のデフォルト `medium` が使われます。設定された level は再利用セッションのターンを含む毎ターンの前に適用されます。Pi の model 参照は `/` でのみ分割されるようになり、model ID 中の `:` はリテラルです。`model: provider/model:high` は thinking level を選択せず、`model:high` を model ID として送信します。サフィックスを削除し、代わりに `provider_options.pi.thinking_level` を設定してください。
 - Companion の指摘修正はデフォルトで advisory な1ターンのみ実行します (#1503)。新設の `companion.fix_policy` は `single`（デフォルト）と `loop` を受け付けます。`single` ではレビューを1回実行し、accept された指摘を参考情報として同じ実装セッションへ渡して修正ターンを1回だけ実行し（対応の要否は実装側が判断）、再レビューせずに終了します。accept された指摘が0件なら修正ターンも実行しません。従来のレビュー→修正→再レビューのループは `fix_policy: loop` として残り、新たに accept される指摘がなくなったラウンドで終了します。設定はグローバル粒度のみで、`completion` / `live` 両方の review mode に適用され、project 値が global 値を上書きします。
 - Codex への権限委譲時に `network_access` を無視します (#1504)。`provider_options.codex.permission_control: codex` のとき、解決された `network_access` 値は警告なしに受理され、Codex の権限フィールドに対しては出所を問わず無視されます。従来はこの組み合わせで fail fast していました。`reasoning_effort`、`fast_mode`、`skills` のような権限以外のオプションは引き続き適用されます。
-- ビルトインの fix-plan プロンプトが、実装前に独立した修復パスを閉じます (#1519)。受け入れ基準が対象とする各結果について、単独で結果を変え得る入力・状態を列挙し、各パスを実際のエントリから観測可能な結果まで辿り、パスごとに成功例1つと違反を検出する反例1つを記録します。fix-plan レポートには Impact Paths テーブルが加わり、検証できないパスが残る間は計画を確定しません。
+- ビルトインの fix-plan プロンプトが、実装前に、修正に関わる独立した処理経路をすべて確認するようになりました (#1519)。受け入れ基準が対象とする各結果について、単独で結果を変え得る入力・状態を列挙し、各経路を実際の入口から観測可能な結果まで辿り、経路ごとに成功例1つと違反を検出する反例1つを記録します。fix-plan レポートには Impact Paths テーブルが加わり、検証できない経路が残る間は計画を確定しません。
 - ビルトインの ai-antipattern policy が、契約根拠のない文言固定テストを検出します (#1525)。宣言された機械可読な契約根拠なしに人間向け文言を完全一致で固定するテストを AI アンチパターンとして報告します（正本は testing policy）。宣言された契約トークンへのアサーションは検出対象になりません。
 - Ink TUI が起動時に過去 run の結果を通知しなくなりました (#1509)。別ターミナルで完了した `takt run` など、以前の実行が保存した結果は TUI 起動時に黙って破棄されます。プレーンリーダーは従来どおり1回表示し、TUI セッション自身が開始したワークフローの完了通知は引き続き行われます。
 - Web UI（experimental）の実行グラフを永続化された証跡から描画します (#1517)。observed participant / observed boundary のラベルはライフサイクルレコード由来で、`PREV` / `NEXT` はステップや境界のポートを示し、並列呼び出しは境界のポートを通る1つの fork と1つの join として描画されます。イベントの記録順で参加者同士が連結されることはありません。
 
 ### Fixed
 
-- Retry が `-prompts.jsonl` をセッションログとして誤選択しなくなりました (#1516)。セッションログの探索が per-run のサイドカーログ（prompts、provider events、usage events、OTLP shadow）を除外するようになり、per-run のプロンプト/レスポンスデバッグログが存在する状態でも、retry がデバッグファイルで失敗せずタスクを再実行します。
+- Retry が `-prompts.jsonl` をセッションログとして誤選択しなくなりました (#1516)。セッションログを探す際に、run ごとの補助ログ（prompts、provider events、usage events、OTLP shadow）を除外するようになりました。run ごとのプロンプト/レスポンスデバッグログが存在しても、retry はデバッグファイルで失敗せずタスクを再実行します。
 
 ### Internal
 
@@ -590,7 +621,7 @@
 
 - Ink 製の会話 TUI を追加しました (#1452)。stdin と stdout が TTY の場合、タスク会話は Ink で描画されます。パイプ入力は従来のプレーンな読み取りのままで、`--tui` フラグは TTY 要件を明示するだけです（TTY が無い場合はフォールバックせず失敗します）。Enter で送信、Shift+Enter または Option+Enter で改行、Esc で応答中の回答を中断できます。応答中に送信した行はキューに積まれ次のターンとして送られ、入力中のドラフトはキュー送信や再マウントを越えて保持されます。workflow・モード・実行後の選択は従来のセレクタのままです。
 - assistant 会話向けの形式仕様モードを追加しました (#1454, #1457, #1466)。`assistant.formal_spec` は `true`、`false`、`"Y/n"`、`"y/N"` を受け付け、project 値が global 値より優先されます。質問形式では TTY セッション開始時に1回だけ確認し、非 TTY と ACP は標準入力を消費せず設定の既定回答を採用します。有効なセッションでは各要件を Quint と Alloy の両記法で表現し、片方の記法を省く場合は要件ごとに表現不能な理由を示します。Gherkin のガイダンスは常時利用できます。
-- `runtime.yaml` にランタイム MCP 設定を追加しました (#1137, #1218)。トップレベルの `mcp` セクションが MCP サーバ定義（`${ENV}` 補間つき）とエージェントへの割り当てを所有します。`mcp` セクションは単独でも有効で、provider 解決を legacy な `config.yaml` に残したまま MCP サーバだけを注入できます。secret を含み得る補間後の command・args・URL は log-safe な情報源によりログへ出さず、読み取り専用と分離実行の経路には準備済みサーバを渡しません。`servers` 定義のみのセクションは legacy な workflow `mcp_servers` と共存できます。
+- `runtime.yaml` にランタイム MCP 設定を追加しました (#1137, #1218)。トップレベルの `mcp` セクションに MCP サーバ定義（`${ENV}` 補間つき）とエージェントへの割り当てを記述します。`mcp` セクションは単独でも有効で、provider 解決を legacy な `config.yaml` に残したまま MCP サーバだけを注入できます。secret を含み得る補間後の command・args・URL はログに安全に出せる情報源を使うことでログへの出力を防ぎ、読み取り専用と分離実行の経路には準備済みサーバを渡しません。`servers` 定義のみのセクションは legacy な workflow `mcp_servers` と共存できます。
 - `runtime.yaml` にディレクトリ別のプロバイダ割り当てを追加しました (#1455)。`provider.assignments` はトップレベルの `defaults` / `targets` と同形の名前付きセットを宣言し、`provider.directories` は起動プロジェクトディレクトリ（`~` 展開・realpath 正規化・完全一致）を assignment 名に対応付けます。同一リポジトリの複数チェックアウトでプロジェクト設定を変えずに異なるプロバイダ割り当てを使い分けられます。マッチした assignment は宣言したキーだけを置換し、省略キーはトップレベルへフォールバックします。未知の assignment 名や assignment 内の未知の profile/pool/ladder 参照はロード時に失敗します。
 - `takt workflow inspect` を追加しました (#1427, #1445)。workflow を検査し、実行時と同じ解決（`--auto-strategy` を含む）で設定と解決ソースを報告します。
 - Companion のレビューモードを追加しました (#1434, #1447)。`companion.review_mode` は既定の `completion`（実装者の応答成功ごとに累積差分をレビュー）と `live`（応答中の quiet・強制・コミット契機のレビューを維持）から選べます。project 値が global 値より優先され、不正な値はロード時に失敗します。
@@ -604,9 +635,9 @@
 
 - **BREAKING:** ビルトイン workflow のカタログを再編しました (#1424, #1433, #1448)。旧 `experimental` / `takt-experimental` が新しい `default` / `takt-default` になり、旧 `simple` は `pure` に改名され、`simple` はその dynamic facet 版になりました。`review-default` は `review` に改名され `development-review` 経由でレビュアーを自動選択します。`review-fix-default` は動的な `review-fix` に置き換わり、`default-high` / `default-mini` は削除されました。既存コードの流儀を尊重して開発する `maintenance` workflow を新設しました。削除された名前（`experimental`・`takt-experimental`・`review-default`・`review-fix-default`・`default-high`・`default-mini`）を明示参照している設定は更新してください。
 - `assistant.gherkin` を廃止しました (#1431)。この旧キーは警告後に無視し、変換・永続化・設定ファイル更新は行いません。対話プロンプトと最終タスク指示書プロンプトでは Gherkin のガイダンスを常時有効にしました。
-- Team Leader ステップで `companion` と `dynamic_facets` を使えるようにし (#1402, #1409)、team leader の selector と companion の呼び出しをプロバイダの無活動デッドラインに拘束しました。
+- Team Leader ステップで `companion` と `dynamic_facets` を使えるようにし (#1402, #1409)、team leader の selector と companion の呼び出しにも、プロバイダから通信がない場合の制限時間を適用しました。
 - Companion レビュアーが自分でリポジトリを調査するようになりました (#1439)。インライン差分だけで判断せず、定義された調査範囲内でローカル作業ツリーを読み取り専用で調査し、ラウンドごとの独立した発見を保ちます。
-- ビルトインのレビュー・検証プロンプトが記録済み証跡で判断するようになりました (#1443, #1453, #1469, #1473)。レビュー収束は証跡に基づく問題トラッキングで判断し、レビュアーと最終 synthesis は記録済み証跡だけから判定します。fix verifier は最終結果の前に各有限集合と状態軸を再列挙し、見つけた不足を要素ごとに分類つきで記録し、計画上の対象外の行を修正対象にせず無変更保存境界の確認は省略しません。また fix verifier は読み取り専用を保ち、作業ツリーを編集せず所見の記録だけを行います。
+- ビルトインのレビュー・検証プロンプトが記録済みの証拠で判断するようになりました (#1443, #1453, #1469, #1473)。レビューを終えられるかは証拠に基づいて問題の対応状況を追跡して判断し、レビュアーと最終 synthesis は記録済みの証拠だけから判定します。fix verifier は最終結果の前に各有限集合と状態軸を再列挙し、見つけた不足を要素ごとに分類つきで記録します。計画上の対象外の行を修正対象にはせず、変更せずに保つべき範囲の境界も必ず確認します。また fix verifier は読み取り専用を保ち、作業ツリーを編集せず所見の記録だけを行います。
 - Node.js の要件を >= 22.22.0 へ引き下げました (#1451)。下限は依存パッケージの engines が決めます。コンパイル済みの `dist/` は従来から Node 22 で動作していました。
 
 ### Fixed
@@ -614,7 +645,7 @@
 - ステータスラインとツールスピナーが端末出力を破壊しなくなりました (#1462)。複数行のツールプレビューは表示前に1行へ畳み、スピナー行は固定120桁の上書きではなくエスケープシーケンスで消去し、対話プロンプトが入力を読む間はステータスラインを一時停止します。
 - Claude Code のサブスクリプション上限がレート制限フォールバックを発動するようになりました (#1429)。Claude CLI の「hit your weekly/5-hour/session limit」メッセージを、パース済みストリーム出力内にある場合も含めてレート制限として検出し、汎用のプロバイダ失敗として表面化しないようにしました。
 - Pi の npm 拡張が一時インストールより先に project / user スコープから解決されるようになりました (#1422, #1423, #1458)。既存のインストールは再インストールせず再利用し、無効化されたリソースしか無いスコープと解決に失敗したスコープは一時インストールへフォールスルーします。ロードできない拡張は run を失敗させずフォールバックします。
-- 再開位置ピッカーが実行可能ステップの単一ツリーを表示するようになりました (#1437)。`workflow_call` のコンテナ項目は提示せず、再開の起点になれる実ステップだけを選択できます。
+- 再開位置を選ぶ画面が、実行可能なステップを1つのツリーにまとめて表示するようになりました (#1437)。`workflow_call` のコンテナ項目は提示せず、再開の起点になれる実ステップだけを選択できます。
 - プロンプト/レスポンスのデバッグログが workflow run 単位になりました (#1428, #1446)。`.takt/runs/<run>/logs/<sessionId>-prompts.jsonl` に書き出すため、並列 run がプロセス共通の1ファイルで混線しません。一般デバッグログは従来どおりプロセス単位です。
 - Retry と Instruct がタスクの指示書を確認つきで改訂するようになりました (#1442)。両経路とも改訂後の `order.md` を提案して承認を求め、承認時にタスクの指示書を置き換えます。再実行は古い指示書に会話メモを重ねる形ではなく改訂済みの指示書を実行します。ロケールと診断情報は保持され、否認した場合は会話へ戻ります。
 - タスク実行中の Ctrl-C が効き続けるようになりました (#1475)。共有 stdin を使うプロンプトの cleanup が stdin を pause しても run / watch の割り込みハンドラが再開して監視を続けるため、プロンプト後に Ctrl-C が効かなくなることがなくなりました。
@@ -633,30 +664,30 @@
 
 ### Added
 
-- 公式 DeepSeek Harness SDK プロバイダを追加しました (#1388)。新しい `deepseek-harness` プロバイダは、公式の DeepSeek Harness Python SDK を専用の JSON-RPC ブリッジ経由で駆動します。`provider_options.deepseek_harness` で `base_url`・`session_root`・`max_tokens`・`request_timeout_ms`・`shutdown_timeout_ms`・`runtime_mode` を設定できます（`python_path` と `cordis` は信頼済みグローバル設定と環境変数のみ）。認証情報は `DEEPSEEK_API_KEY` と任意の `DEEPSEEK_BASE_URL` から取得し、API キーはブリッジのプロセス環境にだけ渡され、コマンド引数や生成 workflow の設定には出力されません。実行には Python 3.10+ と、リリースの対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` が必要で、対応プラットフォームは Linux x64/arm64 と macOS arm64 のみです。Windows と macOS x64 は他プロバイダへ黙ってフォールバックせず即座に失敗します。本プロバイダは developer preview の互換面であり、上流の API・イベント語彙はリリース間で変わり得るため、新しい SDK/runtime の組み合わせを使う前に Configuration Guide のオプトイン live smoke 手順を実行してください。
+- 公式 DeepSeek Harness SDK プロバイダを追加しました (#1388)。新しい `deepseek-harness` プロバイダは、公式の DeepSeek Harness Python SDK を専用の JSON-RPC ブリッジ経由で駆動します。`provider_options.deepseek_harness` で `base_url`・`session_root`・`max_tokens`・`request_timeout_ms`・`shutdown_timeout_ms`・`runtime_mode` を設定できます（`python_path` と `cordis` は信頼済みグローバル設定と環境変数のみ）。認証情報は `DEEPSEEK_API_KEY` と任意の `DEEPSEEK_BASE_URL` から取得し、API キーはブリッジのプロセス環境にだけ渡され、コマンド引数や生成 workflow の設定には出力されません。実行には Python 3.10+ と、リリースの対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` が必要で、対応プラットフォームは Linux x64/arm64 と macOS arm64 のみです。Windows と macOS x64 は他プロバイダへ自動的に切り替えず、即座に失敗します。本プロバイダは developer preview として提供しており、上流の API・イベントの名称や種類はリリース間で変わり得るため、新しい SDK/runtime の組み合わせを使う前に Configuration Guide のオプトイン live smoke 手順を実行してください。
 - `takt-experimental-team` workflow を追加しました (#1401, #1404)。`takt-experimental` の計画・テスト・レビュー・final-gate の契約をそのまま保ち、実装・修正・再修正だけを静的な Team Leader の coder 実行に切り替えた実験的な TAKT 開発 workflow です。新設の callable workflow `development-implement-team` / `development-remediation-team` を呼び出し、リーダーと part のステップにはそれぞれのルーティングタグが付きます。現在のスキーマ制約により、この派生では実装側の dynamic facets と companion は使用しません。
-- `takt list` の failed タスクに instruct と PR 作成のアクションを追加しました (#1391, #1339)。failed の run に対して、completed に既にあった対話型の instruct と同じ流れを起動できます。failed の入口は run の未コミット作業ツリーを対象とし、最終裁定レポートの要約と作業ツリー差分の概要を初期コンテキストとして注入します。PR 作成アクションは completed / failed の両方から利用でき、既存の auto-commit と同じ命名でコミットし、shared clone に remote が無い場合はプロジェクトリポジトリ経由で push し、PR 本文を run の最終レポートから構成します。実行前にコミット対象のファイル一覧と本文プレビューを表示して確認を取ります。
+- `takt list` の failed タスクに instruct と PR 作成のアクションを追加しました (#1391, #1339)。failed の run に対して、completed に既にあった対話型の instruct と同じ流れを起動できます。failed から開く会話は run の未コミット作業ツリーを対象とし、最終裁定レポートの要約と作業ツリー差分の概要を初期コンテキストとして注入します。PR 作成アクションは completed / failed の両方から利用でき、既存の auto-commit と同じ命名でコミットし、shared clone に remote が無い場合はプロジェクトリポジトリ経由で push し、PR 本文を run の最終レポートから構成します。実行前にコミット対象のファイル一覧と本文プレビューを表示して確認を取ります。
 - Codex の権限制御オプション `provider_options.codex.permission_control` を追加しました (#1397)。既定の `takt` は従来どおり TAKT の permission mode を Codex SDK の `sandboxMode` / `networkAccessEnabled` に対応付けます。`permission_control: codex` を指定すると、厳密分離の structured 呼び出しを含むすべての Codex 呼び出しで両方を省略し、Codex 側の `config.toml`・`default_permissions`・permission profile が実効権限を決めます（非対話実行のための `approvalPolicy: never` は引き続き設定されます）。`network_access` との併用はできず、両方が残る設定は fail fast します。環境変数の上書きは `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL` です。
 - `instruction` が順序付き配列を受け付けるようになりました (#1395)。ステップと parallel サブステップで、複数の instruction facet やインラインテキストを合成できます。各要素はその位置で解決され、明示的な `---` の境界で連結されます。callable workflow では配列要素に `instruction` の `facet_ref` / `facet_ref[]` パラメータを置くこともでき、`facet_ref[]` の値は前後の順序を崩さずにその位置へ展開されます。スカラー指定の挙動は変わりません。
 - 簡体字中国語のドキュメントを追加しました (#1385, #1408)。導入経路（README・チュートリアル・設定・CLI リファレンス）、workflow 作成、プロバイダと外部連携、タスク管理を `.zh-CN.md` サフィックスで提供します。入口は `docs/README.zh-CN.md` です。残りのページは意図的に複製せず、英語または日本語のままです。
 
 ### Changed
 
-- **BREAKING:** workflow YAML からプロバイダ設定を削除しました (#1398)。`provider`・`model`・`provider_options`・`auto_routing`・`rate_limit_fallback`・`workflow_config.provider*`・`workflow_call.overrides` は workflow のフィールドではなくなり、これらを書いた workflow は移行先を示す診断つきでロード境界で失敗します。`promotion` のエントリは厳密に `{at: N}` の形だけになり（provider・model・provider options・`condition` は拒否）、マッチすると runtime ターゲットの `ladder` の次段へ進みます。provider・model・options・ルーティングは `runtime.yaml`（および従来どおり動作する legacy な `config.yaml` モード）が所有し、CLI と環境変数の上書きは引き続き利用できます。workflow YAML に残るプロバイダオプションの面は `capabilities` だけです。
-- Team Leader へのフィードバックを、セッションに蓄積せずレポート経由の有界要約で渡すようにしました (#1407)。part の結果はレポートとして書き出され、リーダーは上限付きの要約を受け取るため、分解が長く続いてもリーダーのコンテキストが肥大しません。リーダーにはレポート全文を開いて現物を確認することを求め、エンジンは分解フェーズと追加 part の判断フェーズに読み取り専用ツール（`read`・`glob`・`grep`）を既定で与えます（ツール allowlist をサポートするプロバイダの場合）。workflow 側で `inspect_tools` を書く必要はなくなりました。明示指定は既定を上書きし、明示的な空リストは空 allowlist として保持され、ツール制限を持たないプロバイダ（Codex など）では allowlist を設定しません。planning ステップの `{previous_response}` は従来どおり無損失で渡されます。
+- **BREAKING:** workflow YAML からプロバイダ設定を削除しました (#1398)。`provider`・`model`・`provider_options`・`auto_routing`・`rate_limit_fallback`・`workflow_config.provider*`・`workflow_call.overrides` は workflow のフィールドではなくなり、これらを書いた workflow は読み込み時に移行先を示す診断を出して失敗します。`promotion` のエントリは厳密に `{at: N}` の形だけになり（provider・model・provider options・`condition` は拒否）、マッチすると runtime ターゲットの `ladder` の次段へ進みます。provider・model・options・ルーティングは `runtime.yaml`（または従来どおり動作する legacy な `config.yaml` モード）で設定し、CLI と環境変数の上書きは引き続き利用できます。workflow YAML では、プロバイダオプションに関する指定は `capabilities` だけが残ります。
+- Team Leader へのフィードバックを、セッションに蓄積せずレポート経由で長さに上限のある要約として渡すようにしました (#1407)。part の結果はレポートとして書き出され、リーダーは上限付きの要約を受け取るため、分解が長く続いてもリーダーのコンテキストが肥大しません。リーダーにはレポート全文を開いて現物を確認することを求め、エンジンは分解フェーズと追加 part の判断フェーズに読み取り専用ツール（`read`・`glob`・`grep`）を既定で与えます（ツール allowlist をサポートするプロバイダの場合）。workflow 側で `inspect_tools` を書く必要はなくなりました。明示指定は既定を上書きし、明示的な空リストは空 allowlist として保持され、ツール制限を持たないプロバイダ（Codex など）では allowlist を設定しません。planning ステップの `{previous_response}` は従来どおり無損失で渡されます。
 - ビルトインのレビュー指示を集約しました (#1395, #1390)。レビュー範囲・finding の取り扱い・用語・family 探索・再発の指示を instruction ごとの facet partial から共有の `workflows/rules/` へ移し、`all_steps.rules` 経由で適用します。ドメインごとのレビュー基準は独立した policy facet（architecture・backend・frontend・react・cqrs-es・failure-boundary・implementation-semantics・resource-ownership・robustness・takt）に分割しました。実験的なレビュアーセットは再利用可能な step fragment になり、内部用の `experimental-review-adapter` / `takt-experimental-review-adapter` workflow は削除しました。`{review_scope}` は削除された `instructions/review-round-scope` partial ではなく共有ルール `findings-handling` からビルトインの汎用レビュアーへ届きます。親子の workflow ルールは `ref`・位置・解決後の内容が同一なら 1 回だけ適用されます。
-- ビルトインの判断系ステップから `review` タグを外しました (#1405)。裁定・修正計画・修正検証・final-gate・supervise / synthesis の完了ステップには役割どおりのタグ（`adjudication`・`plan`・`verification`・`final-gate`・`supervise`）だけを付け、レビュアー向けのルーティングがこれらを巻き込まないようにしました。これらのステップを `review` タグでルーティングしていた設定は、役割タグへ移してください。
-- ビルトインの final gate が充足判定の前に呼び出し先の実装を確認するようになりました (#1406)。呼び出し箇所の存在だけで要件充足とはみなさず、呼び出し先の実装まで追って判断します。本当に判定不能なケースは、無理に結論を出さず従来どおり判定不能として報告します。
+- ビルトインの判断系ステップから `review` タグを外しました (#1405)。裁定・修正計画・修正検証・final-gate・supervise / synthesis の完了ステップには役割どおりのタグ（`adjudication`・`plan`・`verification`・`final-gate`・`supervise`）だけを付け、レビュアー向けのルーティングがこれらを対象に含めないようにしました。これらのステップを `review` タグでルーティングしていた設定は、役割タグへ移してください。
+- ビルトインの final gate が充足判定の前に呼び出し先の実装を確認するようになりました (#1406)。呼び出し箇所の存在だけで要件充足とはみなさず、呼び出し先の実装まで追って判断します。判定不能なケースは、従来どおり判定不能として報告します。
 
 ### Fixed
 
-- 子プロセスの stdio エラーで TAKT プロセスが墜落しなくなりました (#1410, #1411, #1412)。子プロセスの stdin/stdout/stderr で未処理の `error` イベント（多くは相手が既に終了したストリームへの EPIPE）が起きると run 全体が落ちていました。共通ガードが Claude headless・Claude terminal（tmux）・Cursor・Kiro・clone-exec・companion の git diff の各経路でこのイベントを局所処理し、OpenCode の共有サーバは専用のサーバプロセスラッパー経由で起動して起動後の出力を有界テールで保持し異常終了の原因を提示します。Codex は SDK 内部の spawn をガードし、SDK 内で発生する stdin EPIPE でもプロセスが落ちないようにしました。
-- OpenCode の exact repeat 検知が、呼び出しを即座に失敗させずツールガードの回復経路を通るようになりました (#1419)。同一入力に対して同一結果が規定回数連続した場合、まずそのツールの呼び出しを止めて実際の進捗を報告するよう矯正を送り、次に新規セッションで再試行し、両方の回復手段を使い切ってから失敗します。
+- 子プロセスの stdio エラーで TAKT プロセスが異常終了しなくなりました (#1410, #1411, #1412)。子プロセスの stdin/stdout/stderr で未処理の `error` イベント（多くは相手が既に終了したストリームへの EPIPE）が起きると run 全体が停止していました。共通ガードが Claude headless・Claude terminal（tmux）・Cursor・Kiro・clone-exec・companion の git diff の各経路でこのイベントを局所処理し、OpenCode の共有サーバは専用のサーバプロセスラッパー経由で起動して起動後の出力の末尾を上限付きで保持して異常終了の原因を提示します。Codex は SDK 内部の spawn をガードし、SDK 内で発生する stdin EPIPE でもプロセスが停止しないようにしました。
+- OpenCode の exact repeat 検知が、呼び出しを即座に失敗させずツールガードの回復経路を通るようになりました (#1419)。同一入力に対して同一結果が規定回数連続した場合、まずそのツールの呼び出しを止めて実際の進捗を報告するよう修正を促す指示を送り、次に新規セッションで再試行し、両方の回復手段を使い切ってから失敗します。
 
 ### Internal
 
 - ビルド前にビルド出力を掃除し、古い成果物がパッケージへ混入しないことをテストで検証するようにしました (#1387)。あわせてドキュメントと facet に残っていた Finding Contract の記述を削除しました。
-- テストの整理として、壊れやすいテキスト断定とビルトイン内容の断定を削除し、プロンプト評価スイートを復元しました (#1396, #1399, #1400)。
+- テストの整理として、変更の影響を受けやすいテキストやビルトイン内容のアサーションを削除し、プロンプト評価スイートを復元しました (#1396, #1399, #1400)。
 - coding review メトリクスと final readiness 判定の eval を拡充し (#1395, #1406)、CI で DeepSeek ブリッジの Python 3.10 互換性を検証するようにしました (#1388)。
 
 ## [0.59.1] - 2026-08-16
@@ -669,27 +700,27 @@
 
 ### Added
 
-- ワークフロー全体ルール（`all_steps.rules`）を追加しました (#1366)。ワークフローが Markdown のルールファイルを宣言でき、全エージェントステップの Phase 1 プロンプトへ自動実行ルールの後、または `position: before_instruction` で instruction の直前に注入されます。ルールファイルは `workflows/rules/` 配下の `<ref>.md` で、プロジェクト → グローバル → ビルトインの順に解決されます。呼び出されたワークフローは親のルールを自分のルールより先に加算継承します。ルールは出力レポート・ステータスルーティング・companion レビュアーには適用されません。
-- レビュアーの completion retry（`completion_retry`）を追加しました (#1312, #1337, #1341, #1353)。ステップが `completion_retry: { retry_instruction: <facet>, min_retry?, max_retry? }` で有界の完了性チェックにオプトインできます。レビュアーの成功応答のたびに新規の completion judge がレポートを元の instruction・タスク・スコープ・証拠と突き合わせ、不完全な結果は同一レビュアーセッションで retry 上限（既定 4）まで再試行されます。judge は `runtime.yaml` の新設シート `internal_agents.review-completion-judge` で割り当てられます。
+- ワークフロー全体ルール（`all_steps.rules`）を追加しました (#1366)。ワークフローが Markdown のルールファイルを宣言でき、全エージェントステップの Phase 1 プロンプトへ自動実行ルールの後、または `position: before_instruction` で instruction の直前に注入されます。ルールファイルは `workflows/rules/` 配下の `<ref>.md` で、プロジェクト → グローバル → ビルトインの順に解決されます。呼び出されたワークフローは親のルールを継承し、自分のルールより前に追加します。ルールは出力レポート・ステータスルーティング・companion レビュアーには適用されません。
+- レビュアーの completion retry（`completion_retry`）を追加しました (#1312, #1337, #1341, #1353)。ステップが `completion_retry: { retry_instruction: <facet>, min_retry?, max_retry? }` で回数に上限のある完了性チェックを有効にできます。レビュアーの成功応答のたびに新規の completion judge がレポートを元の instruction・タスク・スコープ・証拠と突き合わせ、不完全な結果は同一レビュアーセッションで retry 上限（既定 4）まで再試行されます。judge は `runtime.yaml` の新設の割り当て先 `internal_agents.review-completion-judge` で割り当てられます。
 - セレクターガイダンスを追加しました (#1205, #1338)。動的 parallel と `dynamic_facets` のセレクターに、ワークフロー既存の persona / instruction facet を参照する `selector` ブロック（`persona` は任意、`instruction` は必須）を指定できます。ガイダンスは候補 ID の選び方だけを記述し、証拠参照・読み取り専用の structured 実行・候補検証・出力契約は TAKT 側が保持します。
-- 全プロバイダに無応答 deadline を導入しました (#1351, #1358)。`guards.call_timeout_ms` が `codex`、`opencode`、`claude` / `claude-sdk`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi` に適用されます。タイマーは観測可能なプロバイダイベントごとにリセットされ（既定 60 分、60,000〜86,400,000 ms）、累積実行時間には上限を設けません。OpenCode では呼び出し単位の wall-clock 上限と別建ての 10 分ストリーム idle タイムアウトを置き換えます — イベントが流れ続ける限り長時間の健全な呼び出しは走り続け、in-flight のツール呼び出しは deadline の 6 倍経過で stale になります。`claude_terminal.timeout_ms` は `guards.call_timeout_ms` 未設定時のみ使われます。
+- 全プロバイダに無応答 deadline を導入しました (#1351, #1358)。`guards.call_timeout_ms` が `codex`、`opencode`、`claude` / `claude-sdk`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi` に適用されます。タイマーは観測可能なプロバイダイベントごとにリセットされ（既定 60 分、60,000〜86,400,000 ms）、累積実行時間には上限を設けません。OpenCode では呼び出し単位の wall-clock 上限と別建ての 10 分ストリーム idle タイムアウトを置き換えます。イベントが流れ続ける限り、正常な呼び出しは長時間でも実行を継続し、in-flight のツール呼び出しは deadline の 6 倍経過で stale になります。`claude_terminal.timeout_ms` は `guards.call_timeout_ms` 未設定時のみ使われます。
 - 要求シナリオ（experimental）を追加しました (#1309, #1310, #1313, #1314, #1364)。`experimental` / `takt-experimental` ワークフローが、変種列挙・数値境界カバレッジを持つ要求シナリオから計画・テスト作成・fix-plan・final gate を実行できます。シナリオとテストの紐付けはコードへのシナリオ ID 記載ではなくレポートの対応表で行います。
 
 ### Changed
 
-- **BREAKING:** Finding Contract の設定・実行・永続化機構を削除しました (#1321)。旧構文を含む workflow は移行先を示す load error になり、既存の `finding-contract.sqlite` は削除・移行・読み込みを行わずそのまま保持します。レビュー構成は `review-adjudication`、要求シナリオ、`final-gate` を使用してください。Finding Contract 専用のランタイムシート（`intake-normalizer`、`findings-manager`、`terminal-adjudicator`、`escalation-reviewer`）と profile の `escalate` 宣言も併せて削除され、`internal_agents` は `selector`、`assistant`、`loop-judge`、`review-completion-judge` になりました。
+- **BREAKING:** Finding Contract の設定・実行・永続化機構を削除しました (#1321)。旧構文を含む workflow は移行先を示す load error になり、既存の `finding-contract.sqlite` は削除・移行・読み込みを行わずそのまま保持します。レビュー構成は `review-adjudication`、要求シナリオ、`final-gate` を使用してください。Finding Contract 専用のランタイム割り当て先（`intake-normalizer`、`findings-manager`、`terminal-adjudicator`、`escalation-reviewer`）と profile の `escalate` 宣言も併せて削除され、`internal_agents` は `selector`、`assistant`、`loop-judge`、`review-completion-judge` になりました。
 - **BREAKING:** `runtime.yaml` の auto routing は明示的な pool 割り当てを必須にしました (#1266, #1336)。`provider.defaults` は固定 `profile` または順序付き `ladder` のいずれかで、`pool` を指定できなくなりました。auto-routing されるのは `pool` を明示宣言した `personas` / `tags` / `steps` ターゲットだけです。pool のないターゲット、ワークフロー外の処理、その他の補助処理は `provider.defaults` を使い、暗黙のデフォルト pool はありません。`workflow_call` の子は親の auto-routing コンテキストを保持し、`takt workflow preview` は実行時と同じ割り当てを表示します。
-- Companion レビュアーをオプトイン化し、ラウンド単位の指摘配達へ再設計しました (#1307, #1311, #1323, #1344, #1354, #1362, #1367)。Companion はデフォルト無効になり、`runtime.yaml` のトップレベル `companion.enabled: true` で有効化します（グローバルとプロジェクトの値は論理 AND で合成）。厳密分離のプロバイダ制限は撤廃され、companion の structured 呼び出しはプロバイダ中立の新規セッション transport を使い（OpenCode も対象）、companion のレビュアー・モデレーター・セレクター呼び出しは常に読み取り専用で実行されます。finding のライフサイクル管理はラウンド単位の配達に置き換わりました。各レビューラウンドは新規の finding リストを作り、任意のモデレーターが個別に受理・棄却し、受理された finding は実装エージェントの次のフォローアッププロンプトへ直接埋め込まれ、JSONL メールボックスは監査ログ専用になります。companion の finding と失敗は助言的診断であり、ワークフローの遷移は通常の条件と Phase 3 判定だけで決まります。5 分固定の companion 呼び出しタイマーは削除され、プロバイダ deadline に一本化されました。
-- ビルトインの開発・レビュー系ワークフローは、独立した merge-readiness レビューに代えて supervisor の最終要件チェックで締めるようになりました (#1370, #1372)。`merge-readiness-reviewer` / `merge-readiness-supervisor` の persona とステップは削除され、final gate の責務は要件充足・finding 解消・再発台帳引き継ぎの判定に限定され、プロバイダルーティングは `final-gate` タグまたは `supervise` ステップを対象にします。
+- Companion レビュアーをオプトイン化し、ラウンド単位で指摘を渡すよう再設計しました (#1307, #1311, #1323, #1344, #1354, #1362, #1367)。Companion はデフォルト無効になり、`runtime.yaml` のトップレベル `companion.enabled: true` で有効化します（グローバルとプロジェクトの値は論理 AND で合成）。厳密分離のプロバイダ制限は撤廃され、companion の structured 呼び出しはプロバイダ中立の新規セッション transport を使い（OpenCode も対象）、companion のレビュアー・モデレーター・セレクター呼び出しは常に読み取り専用で実行されます。finding のライフサイクル管理はラウンド単位での受け渡しに置き換わりました。各レビューラウンドは新規の finding リストを作り、任意のモデレーターが個別に受理・棄却し、受理された finding は実装エージェントの次のフォローアッププロンプトへ直接埋め込まれ、JSONL メールボックスは監査ログ専用になります。companion の finding と失敗は参考情報であり、ワークフローの遷移は通常の条件と Phase 3 判定だけで決まります。5 分固定の companion 呼び出しタイマーは削除され、プロバイダ deadline に一本化されました。
+- ビルトインの開発・レビュー系ワークフローは、独立した merge-readiness レビューに代えて supervisor の最終要件チェックで完了するようになりました (#1370, #1372)。`merge-readiness-reviewer` / `merge-readiness-supervisor` の persona とステップは削除され、final gate の責務は要件の充足・finding の解消・再発台帳の引き継ぎの判定に限定され、プロバイダルーティングは `final-gate` タグまたは `supervise` ステップを対象にします。
 - ビルトインのセキュリティレビューは全系統で脅威モデルに基づいてレビュアーを選択するようになりました (#1380)。セキュリティレビュアーは peer-review 系・単体レビュー系の固定メンバーではなくなり、既定では選択しない基準を持つ外側 pool に置かれ、境界別のセキュリティナレッジが対象ごとに動的選択されます。
-- ビルトインのレビュー・修正プロンプトが堂々巡りせず収束するようになりました (#1308, #1329, #1330, #1332, #1343, #1346, #1350, #1368, #1369, #1379, #1382)。裁定結果が後続のレビュー・修正ラウンドへ届くようになり、不変条件台帳は裁定経由で remediation インスタンス間を継承され、同じ担当箇所・同じ不変条件の finding は新規 family を開かず既存 family へ合流します。fix plan は有界状態の主張に具体的証拠を必須とし、原因未確認のまま修正計画を確定できません。レビュースコープ契約の強制、デフォルトの明示的優先度、主要実行パスの優先、文書化済み・未実装の設定キーの検出に加え、review-fix のセレクターは未解消 finding の提出者を解消まで選び続けます。
+- ビルトインのレビュー・修正プロンプトが収束するようになりました (#1308, #1329, #1330, #1332, #1343, #1346, #1350, #1368, #1369, #1379, #1382)。裁定結果が後続のレビュー・修正ラウンドへ届くようになり、不変条件台帳は裁定を経由して remediation インスタンス間で引き継がれ、同じ担当箇所・同じ不変条件の finding は新規 family を開かず既存 family へ合流します。fix plan で状態に上限があると主張する場合は具体的な証拠を必須とし、原因未確認のまま修正計画を確定できません。レビュースコープ契約の強制、デフォルトの明示的優先度、主要実行パスの優先、文書化済み・未実装の設定キーの検出に加え、review-fix のセレクターは未解消 finding の提出者を解消まで選び続けます。
 - ビルトインのレビュアーがテスト追加を要求するのは観測可能な未検出 failure に限られるようになりました (#1318)。実装の言い換えにすぎないテストをレビュアーが要求しないよう testing ポリシーを見直しました。
 
 ### Fixed
 
-- report 参照を「在るなら見つかる・無いなら進む」へ修正しました (#1377)。requeue でコピーされた report は resume report snapshot に記録され、連鎖 requeue を含む新しい run から確実に参照できます。欠落した report・成果物は読み出し経路（instruction の `{report:...}`、judge report、動的セレクター、exec / interactive の読み出し、trace 生成）で throw せず欠落を示す一文へ置換されます。破損・整合性・安全境界の fail-fast は維持しています。
-- requeue を堅牢化しました (#1359, #1363, #1365, #1374)。pre-step 失敗後もタスクを requeue でき、ステップのレポート採番は継承成果物の続きから振られ、restart path の突合は `call_instance` に依存せず、一意に解決できない旧形式成果物は run 全体を起動不能にせず index から除外されます（無いものとして扱い、namespace は衝突防止のため予約）。
-- parallel ステップの terminal error を明示的に集約し、ビルトインのレビュー系ワークフローはレビュアーのプロバイダエラー時に有界の再試行を行うようになりました (#1360)。
+- 存在する report を参照し、欠落時にも run を継続するよう修正しました (#1377)。requeue でコピーされた report は resume report snapshot に記録され、連鎖 requeue を含む新しい run から確実に参照できます。欠落した report・成果物は読み出し経路（instruction の `{report:...}`、judge report、動的セレクター、exec / interactive の読み出し、trace 生成）で throw せず欠落を示す一文へ置換されます。破損・整合性・安全境界の fail-fast は維持しています。
+- requeue を堅牢化しました (#1359, #1363, #1365, #1374)。pre-step 失敗後もタスクを requeue でき、ステップのレポート番号は継承成果物の続きから付けられ、restart path の突合は `call_instance` に依存せず、一意に解決できない旧形式成果物は run 全体を起動不能にせず index から除外されます（無いものとして扱い、namespace は衝突防止のため予約）。
+- parallel ステップの terminal error を明示的に集約し、ビルトインのレビュー系ワークフローはレビュアーのプロバイダエラー時に回数に上限を設けて再試行するようになりました (#1360)。
 - Codex: 深い推論中に無応答 watchdog が誤発火しないよう `model_reasoning_summary: auto` を常時有効化し、推論中もストリームイベントが流れるようにしました (#1344)。パース失敗は parallel 集約・ワークフロー中断を通じて failure カテゴリを保持したまま表面化し、空出力に見えなくなりました (#1272, #1316)。ツールシェルは呼び出し元の `PATH` を保持します (#1386)。
 - Kiro: compaction のみの応答を空の成功出力として扱わず、エラーとして拒否するようになりました (#1297, #1298)。
 - 動的セレクターへ渡す過大な diff は、セレクター入力を溢れさせず切り詰めるようになりました (#1328)。
@@ -700,32 +731,32 @@
 - Mock E2E シャードにもユニットシャードと同じ birpc ノイズの一回限り再計測を適用しました (#1333)。
 - `@openai/codex-sdk` を 0.147.0 へ更新しました (#1371)。
 - レビュアー評価の合成・動的 facet 選択・CLI 実行境界の eval を拡充し、非挙動・冗長なテストを削減しました (#1315, #1317, #1372, #1375, #1378, #1381, #1383)。
-- Pi プロバイダのグローバル設定境界とリソース読み込み例を文書化し (#1340, #1348, #1349)、Finding Contract 削除で機械的に壊れた文書を修復しました (#1322)。
+- Pi プロバイダのグローバル設定境界とリソース読み込み例を文書化し (#1340, #1348, #1349)、Finding Contract の削除で参照や記述が不整合になった文書を修復しました (#1322)。
 
 ## [0.58.0] - 2026-08-11
 
 ### Added
 
-- Pi SDK プロバイダを追加しました (#1283, #1302)。新プロバイダ `pi` は SDK 専用のインメモリセッションで Pi を実行し、ストリーミング・中断・ネイティブ画像添付をサポートします。パーミッションモードは Pi の active-tool 許可リスト（`readonly` / `edit` / `full`）へ対応付けられ、`provider_options.pi` でリソース読み込み（`extensions`、`no_extensions`、`no_skills`、`no_prompt_templates`、`no_themes`、`no_context_files`）を制御でき、対応する `TAKT_PROVIDER_OPTIONS_PI_*` 環境変数でも上書きできます。認証情報は Pi SDK の credential store またはプロバイダ固有の環境変数を使います。Pi のパーミッションモードは SDK の active-tool 許可リストであり OS サンドボックスではありません — 明示的に指定した extension は TAKT プロセス内で実行され、プロジェクトローカルの暗黙 extension は読み込まれず、厳密な読み取り専用分離を要する動的内部エージェントには Pi は使えません。
+- Pi SDK プロバイダを追加しました (#1283, #1302)。新プロバイダ `pi` は SDK 専用のインメモリセッションで Pi を実行し、ストリーミング・中断・ネイティブ画像添付をサポートします。パーミッションモードは Pi の active-tool 許可リスト（`readonly` / `edit` / `full`）へ対応付けられ、`provider_options.pi` でリソース読み込み（`extensions`、`no_extensions`、`no_skills`、`no_prompt_templates`、`no_themes`、`no_context_files`）を制御でき、対応する `TAKT_PROVIDER_OPTIONS_PI_*` 環境変数でも上書きできます。認証情報は Pi SDK の credential store またはプロバイダ固有の環境変数を使います。Pi のパーミッションモードは SDK の active-tool 許可リストであり OS サンドボックスではありません。明示的に指定した extension は TAKT プロセス内で実行され、プロジェクトローカルの暗黙 extension は読み込まれず、厳密な読み取り専用分離を要する動的内部エージェントには Pi は使えません。
 - Companion レビュアーを追加しました (#1269, #1300)。通常のエージェントステップに `companion` を宣言すると、実装エージェントと並走する読み取り専用のステートレスなレビュアーを最大3体実行できます。TAKT は変更系ツールイベントを観測し、静穏期間または強制インターバル後に累積 diff をレビューし、実装完了時に未レビュー変更を確認し、findings を `.takt/runs/{run}/companion/` 配下の companion 別 JSONL メールボックスへ追記します。open な `must_fix` findings はステップの事後条件評価前に同一セッションの修正ループを駆動し、companion の findings はレビュー裁定フローに合流し、companion の失敗は fail-soft で実装をブロックせずリトライされます。定義は `.takt/companions/`、`~/.takt/companions/`、同梱の `companions/`（AI アンチパターンレビュー companion とモデレーターを同梱）の順に解決される YAML ファイルです。companion の利用には有効な `runtime.yaml` の provider セクションが必要で、参照する各 companion は `provider.targets.companions`（固定 profile のみ）で解決され、未指定なら `provider.defaults` にフォールバックします。解決されたプロバイダは厳密な分離実行と structured output をサポートしている必要があります。
-- `takt-experimental` ワークフローを追加しました (#1263, #1276, #1296, #1299)。共有の裁定・検証付き修正・フォローアップレビュー・merge-readiness フローの上に、TAKT 固有のレビュアーと実装 companion を加えた実験的な TAKT 開発ワークフローです。新設の `experimental-review` / `takt-experimental-review` スイートとその adapter ワークフロー (#1299) を通じて、汎用の `experimental` ワークフローとレビュアースイートを共有します。
+- `takt-experimental` ワークフローを追加しました (#1263, #1276, #1296, #1299)。共有の裁定・検証付き修正・フォローアップレビュー・merge-readiness フローに、TAKT 固有のレビュアーと実装 companion を加えた実験的な TAKT 開発ワークフローです。新設の `experimental-review` / `takt-experimental-review` スイートとその adapter ワークフロー (#1299) を通じて、汎用の `experimental` ワークフローとレビュアースイートを共有します。
 - parallel レビュアーでの dynamic facets を追加しました (#1299)。`dynamic_facets` が静的 `parallel` の子ステップと動的 parallel の `fixed` / `pool` エントリでも宣言可能になりました。参加者選択が先に走り、選択された動的な子ごとに facet セレクターが実行されてから parallel の子が開始します。共有契約を広げずにこの合成を可能にする callable ワークフローのパラメータ型を2つ追加しました (#1263, #1296)。`facet_pool_ref` は子ローカルの facet pool を束縛し（`dynamic_facets.pool: { $param: ... }`）、`companion_ref[]` は固定 companion を供給します（`companion: { $param: ... }`。空配列は `companion` フィールド自体を省略します）。
 
 ### Changed
 
 - **BREAKING:** ビルトインの TAKT 開発系・Finding Contract 系ワークフロー変種を統廃合しました (#1296)。`takt-default-fc`、`takt-default-high`、`takt-default-team-high`、`takt-default-localllm`、`review-fix-takt-default-high`、および Finding Contract のビルトインサブワークフロー（`finding-contract-boundary-review`、`finding-contract-local-review`、`finding-contract-remediation`、`merge-readiness-finding-contract-final-gate`、`peer-review-finding-contract`、`peer-review-finding-contract-localllm`、`peer-review-suite-finding-contract-base`）を削除しました。TAKT 開発は `takt-default` と新設の `takt-experimental` に集約され、共有の `development-core` は差し替え可能な `development-implement` / `development-remediation` サブワークフロー（および `-dynamic` 変種）を裁定・検証付き修正・フォローアップレビュー・merge-readiness とともに合成し、実装 facet pool と companion をパラメータ化します。
-- `experimental` ワークフローを共有 development core の上に再構成しました (#1263, #1296, #1299)。`development-core` への薄い wrapper となり、動的な実装・修復サブワークフローを使い、レビュアースイートは `experimental-review-adapter` 経由で束縛され、同梱の AI アンチパターンレビュー companion とモデレーターがデフォルトで有効です — `experimental` の実行には実装中の companion レビューが含まれるようになりました。
+- `experimental` ワークフローを共有 development core を使って再構成しました (#1263, #1296, #1299)。`development-core` を呼び出す wrapper となり、動的な実装・修復サブワークフローを使い、レビュアースイートは `experimental-review-adapter` 経由で割り当てられ、同梱の AI アンチパターンレビュー companion とモデレーターがデフォルトで有効です。`experimental` の実行には実装中の companion レビューが含まれるようになりました。
 - `assistant.gherkin` がグローバル設定になりました (#1260)。従来はプロジェクト専用でしたが `~/.takt/config.yaml` にも書けるようになり、プロジェクトの明示値がグローバル値を上書きします。
 - ビルトインのレビュー・裁定・計画プロンプトがタスクスコープを守るようになりました (#1262, #1284, #1291)。レビュー裁定は実行可能な品質指摘を保ちながら findings をタスクスコープ内に収め（新設の `review-adjudication` policy facet が裏付け）、共有レビューポリシーは収束時の修正の適用範囲を制御し、計画・レビューの instruction は開発ワークフローでのスコープ拡大を抑制します。
-- ビルトインのセキュリティレビュー facet をシステムサーフェス別に再編しました (#1270, #1274)。セキュリティポリシーをレビュー用に特化し、既存のセキュリティナレッジを対象のシステムサーフェスでルーティングして peer review と audit review で共有します — 新規レビュー内容の追加はない facet 再編です。
+- ビルトインのセキュリティレビュー facet をシステムの対象領域別に再編しました (#1270, #1274)。セキュリティポリシーをレビュー用に特化し、既存のセキュリティナレッジをシステム内の対象領域に応じてルーティングし、peer review と audit review で共有します。今回の変更は facet の再編で、レビュー内容の追加はありません。
 - プロセス resume 時に動的選択を再実行するようになりました (#1292)。プロセス resume は保存済みの参加者・facet 選択を復元せず、現在の pool に対してセレクターを再実行します。削除された動的選択フィールドを含む resume ポイントはサポートされません。
 
 ### Fixed
 
-- プロバイダの `effort` 値がそのままプロバイダへ渡るようになりました (#1261)。`effort` / `reasoning_effort` はプロバイダ別の固定 enum で検証されていたため、プロバイダが受け付けるのに TAKT が列挙していないレベルはロード時に拒否されていました。空でない値はそのまま透過します。
-- Finding Contract: manager 裁定の入力超過で観測がドロップしなくなりました (#1278, #1281, #1287)。call-site identity が冗長な約 1.2KB のスタック表現を全 raw finding ID に埋め込み、プロンプト描画が固定 24,000 バイト入力上限に対して非有界だったため、raw タスクが超過し観測（解消申告を含む）が黙って落ちていました。raw ID は圧縮形の run-path segment を使い、描画される各フィールドには可視の切り詰めマーカー付き固定バイト上限を設け（逐語引用は発行時点で有界化し byte-exact 照合では切り詰めない）、1 raw タスクが必ず上限に収まることを静的な予算検算テストで保証し、提出された観測が台帳への着地か理由付き明示失敗のどちらにも数えられない場合はエンジンバグとして即失敗する勘定検査を追加しました。
-- Finding Contract: conflict 裁定が空回りしなくなりました (#1264, #1265, #1267, #1271)。再裁定は実際のコード変化に束縛され、同一主張の再観測は裁定予算をリセットせず、裁定リクエストは raw findings を縮約形で参照し裁定専用の 96KiB 入力上限に収め、conflict landing の永続 registry は追記順を保ちます — 入力予算を枯渇させ run を終了させていた reviewer と裁定の往復が止まります。
-- Finding Contract: 未決着の conflict landing を保有する finding の解消は run を落とさず保留されるようになりました (#1285, #1288, #1290)。通常の解消経路が landing を settle しないままこうした provisional finding を解消でき、直後の裁定スナップショットが不変条件違反で run 全体を落としていました。conflict が active な間は解消を保留し、申告は裁定根拠を変更しない監査専用の添付として記録して（検証レポートの専用フィールドで報告）、裁定決着後の次ラウンドで通常どおり解消します。
+- プロバイダの `effort` 値がそのままプロバイダへ渡るようになりました (#1261)。`effort` / `reasoning_effort` はプロバイダ別の固定 enum で検証されていたため、プロバイダが受け付けるのに TAKT が列挙していないレベルはロード時に拒否されていました。空でない値はそのまま渡します。
+- Finding Contract: manager 裁定の入力超過で観測結果が欠落しなくなりました (#1278, #1281, #1287)。call-site identity が冗長な約 1.2KB のスタック表現を全 raw finding ID に埋め込み、プロンプト描画が固定 24,000 バイトの入力上限を考慮していなかったため、raw タスクが上限を超え、観測結果（解消申告を含む）が通知なく欠落していました。raw ID は圧縮形の run-path segment を使い、描画される各フィールドには可視の切り詰めマーカー付き固定バイト上限を設け（逐語引用は発行時点で長さを制限し byte-exact 照合では切り詰めない）、1 raw タスクが必ず上限に収まることを静的な予算検算テストで保証し、提出された観測が台帳への記録と理由付きの明示的な失敗のどちらにも該当しない場合は、エンジンバグとして即座に失敗する整合性検査を追加しました。
+- Finding Contract: conflict 裁定が進展なく繰り返される問題を修正しました (#1264, #1265, #1267, #1271)。実際にコードが変化した場合だけ再裁定を行い、同一主張の再観測は裁定予算をリセットせず、裁定リクエストは raw findings を縮約形で参照し裁定専用の 96KiB 入力上限に収め、conflict landing の永続 registry は追記順を保ちます。これにより、入力上限を使い切って run を終了させていた reviewer と裁定の往復を防ぎます。
+- Finding Contract: 未決着の conflict landing を保有する finding の解消を保留し、run を継続するようになりました (#1285, #1288, #1290)。通常の解消経路が landing を settle しないままこうした provisional finding を解消でき、直後の裁定スナップショットが不変条件違反で run 全体を停止させていました。conflict が active な間は解消を保留し、申告は裁定根拠を変更しない監査専用の添付として記録して（検証レポートの専用フィールドで報告）、裁定決着後の次ラウンドで通常どおり解消します。
 - リトライした run がレポート継承と操作系譜を分離して記録するようになりました (#1293)。以前の run のレポートを継承する fallback 実行が、その継承を検証済みの操作系譜として run メタデータに記録していました。2つの出所を分けて追跡します。
 
 ### Internal
@@ -737,7 +768,7 @@
 
 ### Added
 
-- `capabilities` 参照を追加しました (#1231, #1237)。ワークフロー・ステップ・parallel の子ステップに `capabilities: <name>`（またはリスト。左から右へマージし、同じ leaf は後の名前が勝つ）を宣言すると、inline の `provider_options` の代わりに意味ベースのプリセットを参照できます。同梱プリセットは `readonly`（読み取り・検索・シェル・Web 参照とネットワークアクセス）、`edit`（`readonly` + ファイル作成・編集）、`enable-skills`（Codex の repo/user スキル）です。受理されるのは能力系 leaf（`allowed_tools` / `network_access` / `sandbox` / `skills`）のみで、品質系・マシン系 leaf を含むプリセットや未解決の名前はロード時に fail fast します。ステップ自身の宣言はワークフロー既定を置換し、parallel 親の解決済み capabilities は子ステップの既定になります。
+- `capabilities` 参照を追加しました (#1231, #1237)。ワークフロー・ステップ・parallel の子ステップに `capabilities: <name>`（またはリスト。左から右へマージし、同じ leaf は後に指定したプリセットを優先）を宣言すると、inline の `provider_options` の代わりに意味ベースのプリセットを参照できます。同梱プリセットは `readonly`（読み取り・検索・シェル・Web 参照とネットワークアクセス）、`edit`（`readonly` + ファイル作成・編集）、`enable-skills`（Codex の repo/user スキル）です。受理されるのは能力系 leaf（`allowed_tools` / `network_access` / `sandbox` / `skills`）のみで、品質系・マシン系 leaf を含むプリセットや未解決の名前はロード時に fail fast します。ステップ自身の宣言はワークフロー既定を置換し、parallel 親の解決済み capabilities は子ステップの既定になります。
 - `runtime.yaml` の profile ladder を追加しました (#1231)。`defaults` と各 `provider.targets` エントリは、固定の `profile`・自動ルーティングの `pool`・順序付き `ladder` のいずれか1つを指定します。ladder は先頭 profile が初期割り当てで、ステップの `promotion` が次の段へ進めます。自己参照・循環 ladder はロード時に拒否されます。あわせて、ステップからワークフロー最上位の `mcp_servers` 定義を `mcp: [name, ...]` で名前参照でき、未解決の名前は fail fast します。
 - インタラクティブモード Grill Me を追加しました (#1251)。新モード `grill-me` は、判断が分かれる論点を1問ずつ推奨付きの質問で解消しながらタスクを詰め、要件が揃ったところで `/go` を提案します。モード選択プロンプトに加わり、`interactive_mode: grill-me` で既定にもできます。
 - Markdown + Gherkin のタスク指示を追加しました (#1252)。プロジェクト専用設定 `assistant.gherkin: true` を有効にすると、アシスタント対話（quiet モード含む）から生成される最終タスク指示が、背景・スコープ・設計意図・制約・検証を Markdown に保ちつつ、重要な観測可能挙動・状態遷移・境界・失敗・不変条件だけを最小限の Gherkin シナリオで表現するようになります。未設定なら従来の Markdown 指示のままです。
@@ -748,9 +779,9 @@
 - **BREAKING:** Finding Contract の合成ロールはワークフローから provider / model を指定しなくなりました (#1234)。`finding_contract.manager` / `finding_contract.adjudicator` は persona / instruction 等のカスタマイズのみを受け付け、残存する `provider` / `model` キーはロード時に拒否されます。ロールの割り当ては新設の `runtime.yaml` `provider.targets.internal_agents` seat（`findings-manager`・`terminal-adjudicator`・`loop-judge`・`escalation-reviewer`・`intake-normalizer`）で行います。seat はすべてオプショナルで、未指定 seat はそのロールの従来の既定解決を維持します。`escalation-reviewer` seat は、レビュアー profile の `escalate` 宣言が既に有効化した格上げの宛先だけを差し替え、発火の有無は変えません。
 - **BREAKING:** ビルトインワークフローを inline `provider_options` から `capabilities` 参照へ移行し、provider-options プリセットもあわせて再編しました (#1238, #1239)。`review-readonly` は `readonly` へ改名、`review-files` は削除、`enable-skills` を新設し、`edit` は従来どおりです。`extends: review-readonly` / `review-files` を使っているユーザーワークフローやフラグメントは `readonly` / `edit` へ切り替えてください。
 - レビューワークフロー `compound-eye` がプロバイダ中立になりました (#1239, #1241)。プロバイダ固定だった子ステップ `claude-eye`（claude-sdk）/ `codex-eye`（codex）は中立名の `eye1` / `eye2` になり、ワークフロー YAML からプロバイダ名が消えました。`runtime.yaml`（`provider.targets.steps`）で各 eye に異なるプロバイダを割り当てて初めて複眼レビューになり、割り当てるまでは両 eye とも既定プロバイダで動きます。旧子ステップ名を対象にしたルーティング設定は `eye1` / `eye2` へ切り替えてください。
-- Finding Contract レビュー（実験的機能）を Markdown 一本道の intake へ作り直しました (#1219, #1221, #1222, #1226, #1227, #1229, #1230, #1232, #1235, #1246)。すべての FC レビュアー（格上げ枠含む）は通常の Markdown レポートを書き、隔離された正規化係の1回の呼び出しがそれを指摘へ変換して、引用とアンカーをファイルとバイト一致で機械検証します。構造化・レガシーの publication 記述子は廃止しました。レビュアーは観察専任になり、何が・どこで・なぜ壊れているかと引用可能な証拠の場所だけを報告し、severity・title・family の分類は正規化係が付与します。正しい観察が分類事務の書き忘れで死ぬことはなくなりました。エンジンがレビュースコープを算出して `review_scope` 変数としてレビュアー指示へ注入し、REJECT 整合ゲートにより claim ゼロの REJECT 判定が黙って握り潰されることも防ぎます。言い直しは次ラウンド相乗りからラウンド内のレビュアー別 slot へ移り、フォローアップがレビュー予算を消費しなくなりました。レビュアーの profile に `escalate: <profile>` を宣言すると、最終提示をより強いモデルの完全な再レビューへ委ねられます。
+- Finding Contract レビュー（実験的機能）を Markdown に統一した intake へ作り直しました (#1219, #1221, #1222, #1226, #1227, #1229, #1230, #1232, #1235, #1246)。すべての FC レビュアー（格上げ枠含む）は通常の Markdown レポートを書き、隔離された正規化係の1回の呼び出しがそれを指摘へ変換して、引用とアンカーをファイルとバイト一致で機械検証します。構造化・レガシーの publication 記述子は廃止しました。レビュアーは観察専任になり、何が・どこで・なぜ壊れているかと引用可能な証拠の場所だけを報告し、severity・title・family の分類は正規化係が付与します。これにより、分類項目の記入漏れで正しい観察が失われることを防ぎます。エンジンがレビュースコープを算出して `review_scope` 変数としてレビュアー指示へ注入し、REJECT 整合ゲートにより 有効な claim がゼロの REJECT 判定が通知なく無視されることも防ぎます。言い直しは次ラウンドでの実行から同じラウンド内のレビュアー別 slot へ移り、フォローアップがレビュー予算を消費しなくなりました。レビュアーの profile に `escalate: <profile>` を宣言すると、最終提示をより強いモデルの完全な再レビューへ委ねられます。
 - ビルトインのレビューファセットに調査規律3原則を追加し、指摘の検出力を引き上げました (#1220)。
-- Finding Contract レビュー（実験的機能）が、言い直しの枯渇や未確定の conflict で即座に ABORT しなくなりました (#1257)。提示上限に達した claim-bearing な anomaly には、終端処理の前にエンジン側の証拠探しを1回だけ行います。エンジンが対象ファイルを読み、主張された行の周辺の限定ウィンドウを隔離された正規化係へ渡し、バイト一致で検証された引用だけが昇格します（台帳には `promotionOrigin: evidence-search` として記録されます）。裁定が `verification_undetermined` に終わった conflict には、レビュースコープスナップショット由来の digest 束縛ウィンドウで接地再裁定を1回行います。ビルトインの FC ワークフローは `findings.rounds.budgetExhausted == false` の間 conflict を fix/review ループに保ち、`ABORT` は予算枯渇時の出口だけになりました。
+- Finding Contract レビュー（実験的機能）が、言い直しの上限到達や未確定の conflict で即座に ABORT しなくなりました (#1257)。提示上限に達した claim-bearing な anomaly には、終端処理の前にエンジン側の証拠探しを1回だけ行います。エンジンが対象ファイルを読み、主張された行の周辺の限定ウィンドウを隔離された正規化係へ渡し、バイト一致で検証された引用だけが昇格します（台帳には `promotionOrigin: evidence-search` として記録されます）。裁定が `verification_undetermined` に終わった conflict には、レビュースコープスナップショット由来の digest で内容を特定した周辺テキストを根拠に再裁定を1回行います。ビルトインの FC ワークフローは `findings.rounds.budgetExhausted == false` の間 conflict を fix/review ループに保ち、`ABORT` は予算枯渇時の出口だけになりました。
 
 ### Fixed
 
@@ -768,14 +799,14 @@
 ### Added
 
 - 実験的機能の Finding Contract を刷新しました (#1128, #1193, #1187, #1188, #1201, #1180)。指摘は run 単位の SQLite 台帳で機械検証されたレコードとして管理され、intake の契約化により弱いレビュアーモデルでもラウンドが止まらなくなりました。ワークフロー版 `takt-default-fc` を追加し、manager / adjudicator はワークフローから構成できます。一本化より前の台帳は読めません。`finding_contract:` を持たないワークフローは影響を受けません。
-- 動的ファセットプールを追加しました (#1138)。通常のエージェントステップに `dynamic_facets: { pool, max_selected }` を宣言すると、内部のセレクターエージェントが指定プールからそのラウンドに注入する policy / knowledge を選びます。プールは `.takt/facet-pools/`、`~/.takt/facet-pools/`、レパートリーパッケージに置けます。未知の選択はステップ開始前に失敗し、プール全体へ黙って退避することはありません。再開時は保存済みの選択を復元し、セレクターを再実行しません。`parallel` の子ステップは `dynamic_facets` をスキーマレベルで拒否します。`takt eject` は参照されたプールもあわせてコピーします。
-- プロバイダ設定専用のレイヤー `runtime.yaml` を追加しました (#1136)。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml`（プロジェクト優先）が、プロバイダ・モデル・プロバイダオプション・自動ルーティング・内部エージェント割り当てを1か所で持ちます。これまで `config.yaml` に散在していたプロバイダ設定の置き換えです。`runtime.yaml` が置き換えるのは `config.yaml` の旧プロバイダキーが担っていた設定レイヤーの既定値で、`promotion`・step 直接指定・`workflow_call`・`provider_routing`・auto routing といった上位の解決はこれまでどおり適用されます。この時点では step の provider と model はフィールド単位で独立に解決されていました。#1564 以後は、provider を伴う最初の model 指定を採用 provider と照合し、不一致なら model を未指定にします。旧プロバイダキーとの混在は、どちらかを黙って採用するのではなく、問題のファイルと移行先キーを示す診断つきで拒否されます。CLI と環境変数の上書き（`TAKT_PROVIDER` / `TAKT_MODEL`）は引き続き最優先で、非ワークフロー seam とセレクター seam でも同じです。`runtime.yaml` がなければ `config.yaml` は従来どおり動作します。
+- 動的ファセットプールを追加しました (#1138)。通常のエージェントステップに `dynamic_facets: { pool, max_selected }` を宣言すると、内部のセレクターエージェントが指定プールからそのラウンドに注入する policy / knowledge を選びます。プールは `.takt/facet-pools/`、`~/.takt/facet-pools/`、レパートリーパッケージに置けます。未知の選択はステップ開始前に失敗し、プール全体を自動的に選び直すことはありません。再開時は保存済みの選択を復元し、セレクターを再実行しません。`parallel` の子ステップは `dynamic_facets` をスキーマレベルで拒否します。`takt eject` は参照されたプールもあわせてコピーします。
+- プロバイダ設定専用のレイヤー `runtime.yaml` を追加しました (#1136)。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml`（プロジェクト優先）が、プロバイダ・モデル・プロバイダオプション・自動ルーティング・内部エージェント割り当てを1か所で持ちます。これまで `config.yaml` に散在していたプロバイダ設定の置き換えです。`runtime.yaml` が置き換えるのは `config.yaml` の旧プロバイダキーが担っていた設定レイヤーの既定値で、`promotion`・step 直接指定・`workflow_call`・`provider_routing`・auto routing といった上位の解決はこれまでどおり適用されます。この時点では step の provider と model はフィールド単位で独立に解決されていました。#1564 以後は、provider を伴う最初の model 指定を採用 provider と照合し、不一致なら model を未指定にします。旧プロバイダキーとの混在は、問題のファイルと移行先キーを示す診断つきで拒否され、どちらの設定も自動採用しません。CLI と環境変数の上書き（`TAKT_PROVIDER` / `TAKT_MODEL`）は引き続き最優先で、ワークフロー外の処理とセレクターの呼び出しでも同じです。`runtime.yaml` がなければ `config.yaml` は従来どおり動作します。
 - `development-core` に `replan` ステップを追加しました (#1206)。`need_replan` はこれまでワークフロー全体を先頭から再走させていましたが、専用の replan ステップへ遷移して計画をその場で改訂し継続するようになりました。実行途中の再計画で完了済みの作業を捨てなくなります。
 - ビルトインの implement / fix instruction に編集後のセルフスキャンを追加しました (#1179)。編集後にエージェントが変更箇所を読み直し、宣言された契約と突き合わせてから引き渡します。
 
 ### Changed
 
-- OpenCode が隔離構造化実行に対応しました (#1198)。構造化された結果を必要とするステップが、他のプロバイダーと同じように OpenCode でも動きます。
+- OpenCode が分離した環境での構造化実行に対応しました (#1198)。構造化された結果を必要とするステップが、他のプロバイダーと同じように OpenCode でも動きます。
 - `peer-review` の reviewers サイクル loop monitor しきい値を 5 から 3 へ下げました (#1211)。review/fix のサイクルをより早く検出します。
 
 ### Fixed
@@ -793,7 +824,7 @@
 
 ### Changed
 
-- 従来からある「勝手な後方互換追加の禁止」を厳密化し、契約として検証される形にしました (#1172)。明示的な互換要求が効力を持つのは記載された対象とスコープのみで、互換対象（スキーマ移行・データバックフィル・イベントアップキャスト・Read Model 再構築・API 互換）ごとに個別の根拠が必要です。既存コンシューマーを新契約へ移行する作業はレガシーサポートではなく通常の置き換え作業として区別されます。既存コードの動作・既存テスト・保存済みデータ・リリース済みであることは影響分析の証拠であって、旧経路を残す根拠にはなりません。計画はサポート対象とスコープを計画の出力契約に記録し、レビュアーは心得の文章ではなく契約として互換対応を検証します。契約置換の判定は共有ポリシー1つを正本とし、persona・工程別instruction・出力契約には各レイヤー固有の責務だけを残します。
+- 従来からある「勝手な後方互換追加の禁止」を厳密化し、契約として検証される形にしました (#1172)。明示的な互換要求が効力を持つのは記載された対象とスコープのみで、互換対象（スキーマ移行・データバックフィル・イベントアップキャスト・Read Model 再構築・API 互換）ごとに個別の根拠が必要です。既存コンシューマーを新契約へ移行する作業はレガシーサポートではなく通常の置き換え作業として区別されます。既存コードの動作・既存テスト・保存済みデータ・リリース済みであることは影響分析の証拠であって、旧経路を残す根拠にはなりません。計画の出力契約にはサポート対象とスコープを記録し、レビュアーはその契約に基づいて互換対応を検証します。契約置換の判定基準を1つの共有ポリシーに集約し、persona・工程別instruction・出力契約には各レイヤー固有の責務だけを残します。
 
 ### Fixed
 
@@ -803,19 +834,19 @@
 
 ### Added
 
-- 再利用可能なワークフローステップフラグメント (#852, #1131)。任意のワークフローのステップに `uses: <name>` を書くと、`.takt/steps/`、`~/.takt/steps/`、ビルトインの `steps/`、またはレパートリーパッケージの `steps/`（`@owner/repo/name` 形式）から単一ステップのフラグメント YAML をロード時に展開します。フラグメントは必須の型付き `params`（`facet_ref`、`facet_kind` に `policy` / `knowledge` / `instruction` / `persona` / `report_format` を指定する `facet_ref[]`、`workflow_ref`）を宣言でき、呼び出し側が `with:` で束縛し、フラグメント本体は `$param` で参照します（`policy` / `knowledge` へのファセットリストの展開も可能）。ルーティングは呼び出し側の責務で、フラグメントは `rules` を宣言できず、parallel フラグメントの呼び出し側はサブステップ用のルールツリーを渡します。展開はバリデーション前に行われるため、`takt workflow doctor`・プレビュー・プロンプトには通常のステップとして見えます。レパートリーパッケージは `steps/` ディレクトリを同梱でき、`takt eject` は参照中のフラグメントをワークフローと一緒にコピーします。
+- 再利用可能なワークフローステップフラグメント (#852, #1131)。任意のワークフローのステップに `uses: <name>` を書くと、`.takt/steps/`、`~/.takt/steps/`、ビルトインの `steps/`、またはレパートリーパッケージの `steps/`（`@owner/repo/name` 形式）から単一ステップのフラグメント YAML をロード時に展開します。フラグメントは必須の型付き `params`（`facet_ref`、`facet_kind` に `policy` / `knowledge` / `instruction` / `persona` / `report_format` を指定する `facet_ref[]`、`workflow_ref`）を宣言でき、呼び出し側が `with:` で値を渡し、フラグメント本体は `$param` で参照します（`policy` / `knowledge` へのファセットリストの展開も可能）。ルーティングは呼び出し側の責務で、フラグメントは `rules` を宣言できず、parallel フラグメントの呼び出し側はサブステップ用のルールツリーを渡します。展開はバリデーション前に行われるため、`takt workflow doctor`・プレビュー・プロンプトには通常のステップとして見えます。レパートリーパッケージは `steps/` ディレクトリを同梱でき、`takt eject` は参照中のフラグメントをワークフローと一緒にコピーします。
 - 動的 parallel ステップ (#1139)。`parallel` ステップをオブジェクト形式にして、常に実行される `fixed` サブステップと、それぞれ `description` を持つ候補の `pool` を宣言できます。ステップ開始時に内部の読み取り専用セレクターエージェントが、タスク・スコープ内のレポート・現在の差分からそのラウンドの pool 参加者を選び、厳格な `{ selected_ids, rationale }` 構造化出力を返します。不正な選択や未知の ID は全 pool へのフォールバックではなく、参加者の起動前に失敗します。`selection.mode: replace`（デフォルト）はラウンドごとに再選択し、`cumulative` は過去の選択を保持します。ラウンドの再開時は保存済みの選択を復元してセレクターを再実行せず、`all()` / `any()` はそのラウンドの実参加者だけを集計します。`takt_providers.selector` でセレクター専用の provider / model / provider_options を指定でき、要求される読み取り専用の隔離と構造化出力の契約を満たすのは Claude・Codex・Mock です。
-- 修正前のレビュー裁定 (#1154)。peer-review フローでは、レビュアーと修正ループの間に裁定ステップが入りました。review-adjudicator ペルソナが並列レビューレポートを単一の `review-resolution.md` の裁定へ統合し、修正ステップは各レポートではなくこの裁定に対して修正します。独立した最終ゲートは merge-readiness の監督へ統合されました。
+- 修正前のレビュー裁定 (#1154)。peer-review フローでは、レビュアーと修正ループの間に裁定ステップが入りました。review-adjudicator ペルソナが並列レビューレポートを単一の `review-resolution.md` の裁定へ統合し、修正ステップは各レポートを個別に扱う代わりに、この裁定に基づいて修正します。独立した最終ゲートは merge-readiness の監督へ統合されました。
 - Retry / Requeue でネストしたサブワークフロー内のステップから開始できるようになりました (#1129)。`takt list` の開始位置プロンプトはページング付きのブラウズ可能なツリーになり、`Resume failed position` は保存済みチェックポイント（コールスタック・iteration カウンター・経過時間）を維持し、`Restart from` はそれらを引き継がずに選択位置から新しい論理実行を開始し、`Browse child workflow from` は `workflow_call` の子ワークフローへ降りてそのステップを選択できます。パスは完全修飾で表示され、深さの異なる同名ステップを区別できます。選択は実行直前に再検証され、ステップやワークフローの同一性が変わっていれば拒否されます。即時実行とタスク保存の両方が選択を引き継ぎます。
 - `workflow_call` ステップの `vars` (#1157)。スカラーの実行コンテキスト（文字列・有限数値・真偽値）がネストした workflow call を通じて継承され、call ごとに上書きでき、インストラクションファセットから `{var:name}` で参照できます。未定義の値は `unspecified` として展開されます。
 - `loop_monitors.ignore_steps` (#1158)。サイクル監視から任意の検証・リトライステップを除外できるため、間にオプションのステップが挟まっても論理的な `review ↔ fix` サイクルを検出できます。
 
 ### Changed
 
-- **BREAKING:** `workflow_call` をカウントしない制御ノードへ変更し、ルート workflow の `max_steps` をすべての子孫の実 step が共有するようにしました (#1133)。callable workflow は `max_steps` を定義できず、明示するとロード時にエラーになり、callable workflow のルート直接実行も拒否されます。call wrapper 自身は provider / model を解決・記録しません。session log と trace では、call invocation と完全な call stack をキーにした provider 非依存の lifecycle record を確認できます。iteration 上限の判定はカウント対象ステップの直前だけで行われるため、上限到達時でも `workflow_call` への進入は許可され、子の最初の実 step の直前で停止します。対話的な上限延長と `--ignore-exceed` は単一の共有予算を延長します。`.takt/runs/*/reports/` 配下のサブワークフローのレポートディレクトリは `iteration-N--step-X--workflow-Y` 形式から `call-…` 形式へ変わり、旧形式の run の読み取り・resume サポートは完全に削除されました (#1170)。run の状態は run ごとに閉じているため、移行処理は提供しません。iteration 番号・wrapper の provider 情報・レポートパスを解析する利用者は更新が必要です。
+- **BREAKING:** `workflow_call` をカウントしない制御ノードへ変更し、ルート workflow の `max_steps` をすべての子孫の実 step が共有するようにしました (#1133)。callable workflow は `max_steps` を定義できず、明示するとロード時にエラーになり、callable workflow のルート直接実行も拒否されます。call wrapper 自身は provider / model を解決・記録しません。session log と trace では、call invocation と完全な call stack をキーにした provider 非依存の lifecycle record を確認できます。iteration 上限の判定はカウント対象ステップの直前だけで行われるため、上限到達時でも `workflow_call` への進入は許可され、子の最初の実 step の直前で停止します。対話的な上限延長と `--ignore-exceed` は共通の上限を引き上げます。`.takt/runs/*/reports/` 配下のサブワークフローのレポートディレクトリは `iteration-N--step-X--workflow-Y` 形式から `call-…` 形式へ変わり、旧形式の run の読み取り・resume サポートは完全に削除されました (#1170)。run の状態は各 run 内で完結するため、移行処理は提供しません。iteration 番号・wrapper の provider 情報・レポートパスを解析する利用者は更新が必要です。
 - **BREAKING:** Claude 系 provider はデフォルトでファイルシステムの Skill を継承しなくなりました (#1078)。新しい `provider_options.claude.skills.enabled` フラグ（環境変数 `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` でも上書き可能）が `claude-sdk`・`claude`・`claude-terminal` の Skill 検出を制御し、デフォルトは `false` です。`claude-sdk` には `skills: []` が渡され、CLI ベースの `claude` と `claude-terminal` は `--disable-slash-commands` 付きで起動されるため、それらのセッションではカスタムスラッシュコマンドも無効になります。従来どおりの検出に戻すには `enabled: true` を設定してください。CLI ベースのセッションは起動前にフラグ対応を検証します。検証済みの最低バージョンは Claude Code 2.1.220 です。これはコンテキストフィルタでありサンドボックスではないため、Skill ファイル自体は Read や Bash から到達可能です。
 - ビルトインの開発系ワークフローを共有ステップフラグメントで再構成しました (#1132, #1140, #1141, #1163)。`takt-default`、`default`、`default-high`、ドメイン別ワークフロー、`*-mini` ファミリー、`simple` ファミリーが `development-core` / `mini-core` の計画・テスト・実装・レビュー・修正フラグメントを共有し、レビュアーと修正の間に専用の `fix-plan` ステップが入りました。`default-high` と `dual` は Team Leader への委譲をやめて直接実装するようになりました。リーダー方式は `takt-default-team-high` を使用してください。
-- ビルトインの計画・テスト作成・実装プロンプトが契約のトレーサビリティと要求のオーソリティを強制するようになりました (#1162, #1164, #1165, #1166)。現行モデルが確実に扱える水準に合わせたプロンプトチューニングです。計画は独立検証可能な完了義務ごとに安定した ID を割り当て、その ID は追記専用でテストレポートを経て新しい `implementation-report.md` 成果物へ流れ、契約ごとの検証ステータスが記録されます。実装は ID を追加できますが、上流の ID の付け替えや転用はできません。すべての要求と完了契約は出所の明示が必須になり、現行コード・WIP 差分・テスト・レビューレポート・ナレッジ/ポリシーファセットは証拠にとどまり、要求を生み出せません。プランナーは提示された目的・制約・受け入れ基準を固定したまま扱い、タスクの読み替えやレビュアーの提案の要求への昇格を行いません。また、すべてのステップの Phase 2 レポート生成が元のワークフロータスクを要求の正典として受け取るようになり、Phase 1 の応答内容へレポートが引きずられなくなりました。
+- ビルトインの計画・テスト作成・実装プロンプトが契約を追跡できるようにし、要求の根拠を必須とするようになりました (#1162, #1164, #1165, #1166)。現行モデルが確実に扱える水準に合わせたプロンプトチューニングです。計画は独立検証可能な完了義務ごとに安定した ID を割り当て、その ID を追記専用のままテストレポートから新しい `implementation-report.md` 成果物へ引き継ぎ、契約ごとの検証ステータスが記録されます。実装は ID を追加できますが、上流の ID の付け替えや転用はできません。すべての要求と完了契約は出所の明示が必須になり、現行コード・WIP 差分・テスト・レビューレポート・ナレッジ/ポリシーファセットは証拠にとどまり、要求を生み出せません。プランナーは提示された目的・制約・受け入れ基準を固定したまま扱い、タスクの読み替えやレビュアーの提案の要求への昇格を行いません。また、すべてのステップの Phase 2 レポート生成が元のワークフロータスクを要求の根拠として受け取るようになり、レポートが Phase 1 の応答内容だけに左右されることを防ぎます。
 - レビューと修正が問題ファミリー単位で収束するようになりました (#1153, #1157, #1158, #1160)。レビュアーは各指摘の背後にある欠陥ファミリー全体を走査して報告し、初回レビューラウンドと上限付きのフォローアップラウンドが分離され、検証が不完全な修正は再計画ではなく専用の `fix-retry` ステップへルーティングされます。
 
 ### Removed
@@ -828,7 +859,7 @@
 - タスクの requeue をまたいでワークフローの進捗が保持されるようになりました (#1156, #1159)。自動 requeue やリトライされたタスクは、ネストした再開チェックポイント・リトライ iteration メタデータ・ステップカウンターを失わずに引き継ぎ、復元された iteration のステップ上限は倍々ではなくワークフローの `max_steps` ずつ線形に拡張されます。
 - パスがファイルシステムルートのシンボリックリンク（macOS の `/tmp` → `/private/tmp` など）を経由するプロジェクトで、private artifact の検証が trusted root のシンボリックリンクエラーで失敗しなくなりました (#1141)。信頼境界より下のシンボリックリンクは引き続き拒否されます。
 - ワークフローファイルの参照がシンボリックリンクを通じて正規化されるようになり (#1158)、同じワークフローへ異なるパスから到達しても信頼と同一性が一貫します。
-- エージェントに提示される finding ledger のサマリーが、コミット前の投影ではなくコミット済みの ledger 状態を反映するようになりました (#1157)。
+- エージェントに提示される finding ledger のサマリーが、コミット前に予測した状態ではなく、コミット済みの ledger 状態を反映するようになりました (#1157)。
 
 ### Internal
 
@@ -839,7 +870,7 @@
 
 ### Fixed
 
-- strict structured outputスキーマの不整合により、Codexのauto-routingが全ルーティング対象ステップでfallbackしていた問題を修正 (#1123)。ルーター出力スキーマをestimator生成時に検証し、決定的なスキーマ非互換はFail Fastとする一方、実行時の推定失敗では設定されたpool fallbackを引き続き使用します。CodexとClaudeの共通スキーマ経路をClaude Agent SDKのquery境界まで統合テストで検証します。
+- strict structured output スキーマの不整合により、Codex の auto-routing が全ルーティング対象ステップで fallback していた問題を修正しました (#1123)。ルーター出力スキーマを estimator 生成時に検証し、スキーマの非互換が確定する場合は即座に失敗します。実行時の推定失敗では、設定された pool fallback を引き続き使用します。Codex と Claude の共通スキーマ経路は、Claude Agent SDK の query 境界まで統合テストで検証します。
 
 ## [0.54.0] - 2026-07-28
 
@@ -849,7 +880,7 @@
 
 ### Internal
 
-- スキルドキュメントのテストから文面に結合したアサーションを削除し、ビルトインファセット配備テストが新しい `use-relevant-skills` インストラクションパーシャルをカバーするようにしました (#1117)。
+- スキルドキュメントのテストから特定の文面に依存したアサーションを削除し、ビルトインファセット配備テストが新しい `use-relevant-skills` インストラクションパーシャルをカバーするようにしました (#1117)。
 
 ## [0.53.0] - 2026-07-27
 
@@ -862,8 +893,8 @@
 
 - `takt-default-team-high` ワークフロー (#1055)。`takt-default-high` の Team Leader 版です。計画、テスト、Team Leader 主導の実装、6 つのコンパクトな専門レビュー、Team Leader 主導の修正、fail-closed な最終ゲートで構成されます。
 - Team Leader の Finding Contract 修正モード (#1089, #1090, #1091, #1100)。`team_leader.mode: finding_contract_fix` を設定すると team_leader ステップが Finding Contract の修正専用ステップになります。各 part は明示的な actionable finding に割り当てられ、`complete` には検証成功とステップ開始時点の全 actionable finding の `fixCoverage` が必要で、判定は `when(structured.fix.decision == "complete")` のような機械的条件でルーティングします。ワイルドカードの contract path は拒否され (#1090)、part の `writePaths` はサンドボックスではなく並行作業間の協調契約として扱われます (#1100)。
-- findings-manager が判定者に拡張されました (#1053)。dismiss 裁定と重複統合が ledger に実際に反映されるようになり、manager の状態が review-fix の judge に注入され、manager / interpreter の LLM 呼び出しが usage イベントに記録されてトークン集計の死角ではなくなりました。
-- ファセットのマルチセレクト選択 (#1065)。exec のファセットエディタがマルチセレクトプロンプトに対応し、ファセット参照を 1 つずつのダイアログではなく一括で選択できるようになりました。
+- findings-manager が判定者に拡張されました (#1053)。dismiss 裁定と重複統合が ledger に実際に反映されるようになり、manager の状態が review-fix の judge に注入され、manager / interpreter の LLM 呼び出しが usage イベントに記録され、トークン使用量を集計できるようになりました。
+- ファセットのマルチセレクト選択 (#1065)。exec のファセットエディタがマルチセレクトプロンプトに対応し、ファセット参照をまとめて選択できるようになりました。
 - Codex Skill 継承の制御 (#1081)。新しい `provider_options.codex.skills.repo` / `.user` フラグ（および `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数オーバーライド）で、Codex がリポジトリ（`.agents/skills`）とユーザー（`~/.agents/skills`、`$CODEX_HOME/skills`）の Skill を発見するかを制御できます。ワークフローはデフォルトでどちらのスコープも継承しなくなりました。`takt exec` はデフォルトで継承し、解決済みの値を生成ワークフローにスナップショットします。
 - 再開した run がレビューレポートを引き継ぐようになりました (#1059)。run の再開時に過去のレビューレポートをベストエフォートで引き継ぐため、再開後の修正ステップがゼロから始まりません。同一 run 内の requeue では resume スナップショットをスキップします。
 - 共有 fix ステップが構造化された `fix-report` を保存するようになりました (#1116)。共有 fix instruction を使うビルトインワークフローが、対応済み・未対応の finding、検証結果、family coverage を非判定の output contract として書き出すため、次の反復や再開した run が修正の続きから始められます。rules・遷移・完了判定は変更ありません。
@@ -874,23 +905,23 @@
 - **BREAKING:** Auto Routing の candidates をプールとティア中心に再設計しました (#1103)。`cost_tier` は `routing_tier`（`high` | `medium` | `low`）にリネームされ、`default_pool` と `candidate_pools`（各プールにプールローカルな `fallback`）が必須になりました。任意の `pool_rules` で tags / steps / personas をプールに固定できます。router は正規化されたタスク・ステップ指示・現在の残作業から必要ティアの推定のみを行い、候補は TAKT が決定的に選択します。`cost` と `balanced` は選択プール内で必要ティアを満たす最小の `routing_tier` を、`performance` は最大を選びます。既存の設定は `cost_tier` のリネームと `default_pool` / `candidate_pools` の追加が必要です。
 - high 系ワークフローのステップ上限を 50 にしました (#1061)。`takt-default-high`、`review-fix-takt-default-high`、`takt-default-team-high` の `max_steps` を 200 から 50 に引き下げました。
 - high 系ワークフローで merge-readiness を最終監督より前に実行するようにしました (#1060)。Finding Contract 用の最終ゲートは `merge-readiness-finding-contract-final-gate` として切り出されました。
-- stop budget の時間上限をオプトインにしました (#1052)。`stop_budget.max_minutes` の既定値（90 分）を廃止しました。守るべき病理（churn）はラウンド数に現れるのであって時間には現れず、時間の既定上限が健全な大型 run を誤停止させた実測があるためです。ラウンド上限（既定 40）は決定的な停止保証として残ります。また、品質ゲートの実行証跡を要求する指摘を finding として起票することを全レビュアーで禁止しました。検証結果の評価は最終ゲートの職掌です。
+- stop budget の時間上限をオプトインにしました (#1052)。`stop_budget.max_minutes` の既定値（90 分）を廃止しました。停止対象の無駄な反復（churn）はラウンド数で検出できる一方、経過時間での判定は正常な大型 run も誤停止させていたためです。ラウンド上限（既定 40）は決定的な停止保証として残ります。また、品質ゲートの実行証跡を要求する指摘を finding として起票することを全レビュアーで禁止しました。検証結果の評価は最終ゲートが担当します。
 - Team Leader の総 part 数上限を撤廃しました (#1084)。leader は作業完了と判断するまでバッチを追加でき、`initial_max_parts` は最初の分解バッチのみを制限します。
 
 ### Fixed
 
-- Team Leader の堅牢化。旧 part を取り消し、完了判定で実行中 part を待つようになりました (#1105)。不正な分解は失敗ではなく検証診断付きで再生成されます (#1113)。中断時にフィードバックフォールバックが停止します (#1085)。reviewer anomaly の不変条件が loop monitor に渡されます (#1114)。実装判定にエージェントの完了報告が引き継がれます (#1101)。
+- Team Leader の堅牢化。旧 part を取り消し、完了判定で実行中 part を待つようになりました (#1105)。不正な分解は検証診断付きで再生成され、直ちに失敗とはなりません (#1113)。中断時にフィードバックフォールバックが停止します (#1085)。reviewer anomaly の不変条件が loop monitor に渡されます (#1114)。実装判定にエージェントの完了報告が引き継がれます (#1101)。
 - Finding Contract の収束と復旧の強化 (#1056, #1058, #1063, #1067, #1069, #1072, #1074, #1086, #1087, #1092, #1093)。findings-manager は dedup と証拠衝突で出力全体を破棄せず、空の結果ではなく機械分類へ縮退します (#1056)。収束状態がリトライを跨いで維持され (#1058)、finding コンテキストが再開を跨いで維持されます (#1074)。滞留した Finding Contract ワークフローは再計画し、最終ゲートの `needs_fix` 判定が尊重されます (#1069)。レビュー対象スナップショットは構造化出力契約に束縛され (#1086)、reviewer anomaly は再照合後も保持されます (#1087)。不正な manager 判定はリトライされ (#1092)、その復旧が強化されました (#1093)。説明的な裁定証拠の引用が受理されます (#1063)。修正後の loop monitor 状態が区別されます (#1067)。外部要因のみを理由とする再計画はループせず中断します (#1072)。
-- 環境要因で検証不能な場合、修正ループが明示的な判定付きで中断するようになりました (#1102)。修正不能な finding で空転しません。
+- 環境要因で検証不能な場合、修正ループが明示的な判定付きで中断するようになりました (#1102)。修正不能な finding に対するループを防ぎます。
 - PR 由来タスクと Instruct の差分基準を統一しました (#1106)。PR の diff ref を実体化し、レビューコンテキストが実際にマージされる内容と一致します。
 - 並行実行時の clone / worktree パス衝突を修正しました (#1110)。clone ディレクトリに一意なランダムサフィックスが付き、同一秒のタスク開始や PR 同期 worktree でも衝突しません。
 - 隔離一時パスを短縮しました (#1071)。プラットフォームのパス長制限に収まるようにし、Windows の一時ディレクトリ環境変数の優先順位もカバーしています。
 - `auto-improvement-loop` が codex で Issue → 実装 → PR → セルフレビュー → マージの一巡を完走できるようになりました (#1045)。従来は `plan_from_issue` で即座に中断していました。
-- ローカルモデルでの OpenCode 実行を安定化しました (#1017)。ツール呼び出し失敗時に問題の引数が debug ログに記録されるようになり、弱いモデルでの Finding Contract の凍結が解消されました。
+- ローカルモデルでの OpenCode 実行を安定化しました (#1017)。ツール呼び出し失敗時に問題の引数が debug ログに記録されるようになり、弱いモデルで Finding Contract が進まなくなる問題を解消しました。
 
 ### Internal
 
-- Finding Contract専用SQLite authority (#1111)。Finding状態をrun lifecycle artifactから分離し、`.takt/runs/<run>/finding-contract.sqlite` で管理するよう再構成しました。
+- Finding Contract の状態管理を SQLite に一本化しました (#1111)。finding の状態を run のライフサイクルを記録する成果物から分離し、`.takt/runs/<run>/finding-contract.sqlite` で管理するよう再構成しました。
 - ビルトインの TAKT ワークフローをルールの first-match セマンティクスに統一しました (#1083)。
 - MCP stdio 統合テストが隔離済み `TAKT_CONFIG_DIR` を起動したサーバーに渡すようになり、実行者の実際の `~/.takt/config.yaml` を読まなくなりました。
 - ドキュメント: 再利用可能な TAKT 概要アセット (#1108, #1109) と YouTube チュートリアルリンク (#1112) を追加しました。
@@ -910,18 +941,18 @@
 
 ### Changed
 
-- CLI 起動の遅延ロード化 (#1035, #1047)。サブコマンド実装と設定・Git・ログ初期化を実行時に動的ロードするようにし、`--help` / `--version` の起動時間を約 84% 短縮しました（196ms → 32ms）。更新確認は親プロセスでの安価な同期キャッシュ読み取りと、キャッシュを更新するバックグラウンドワーカーの2段構成に分離しました。
+- CLI 起動の遅延ロード化 (#1035, #1047)。サブコマンド実装と設定・Git・ログ初期化を実行時に動的ロードするようにし、`--help` / `--version` の起動時間を約 84% 短縮しました（196ms → 32ms）。更新確認は親プロセスでの処理負荷の小さい同期キャッシュ読み取りと、キャッシュを更新するバックグラウンドワーカーの2段構成に分離しました。
 - レビュアーの検証責務の分担 (#1048)。レビューポリシーが、レビュアーに全体テストスイートの再実行ではなく自分の指摘の再現とリスクベースの対象検証へ時間を使うよう指示するようになりました。スイート全体の検証は、それを品質ゲートとして課されたステップ（merge-readiness の最終ゲートなど）の責務です。
 - review↔fix の収束強化 (#1038, #1039, #1046)。fix は同一 finding family の全分岐を一括で修正し、family カバレッジ表の報告が必須になりました。兄弟分岐を残す部分修正は非生産的なループ反復として数えられます。ピアレビューの収束ゲートは検証済みの解決で進捗を判断し、レビュー範囲をブロッキング依存に揃え、生産的なループは維持します。
 
 ### Fixed
 
-- codex 安全フィルタの拒否応答がルール評価失敗としてワークフローを ABORT させる事故を修正 (#1050)。拒否応答（拒否パターンに一致する短い本文）を検出すると新セッションで最大2回リトライし、尽きた場合はルール評価へ流さず明示的なプロバイダエラーとして報告します。純粋な structured output 応答は拒否として扱われません。またレビューポリシーの冒頭に防御的監査であるという前提を明記し、拒否の発生率自体を下げています。
-- `takt_providers.assistant` が対話プランニングだけでなく instruct / retry ペルソナにも適用されるようになりました (#1011, #1018)。0.51.0 のリリースノートに記載していましたが、実際の変更は 0.51.0 タグの後にマージされており、本リリースで出荷されます。
+- codex 安全フィルタの拒否応答がルール評価失敗としてワークフローを ABORT させる問題を修正 (#1050)。拒否応答（拒否パターンに一致する短い本文）を検出すると新セッションで最大2回リトライし、尽きた場合はルール評価へ流さず明示的なプロバイダエラーとして報告します。純粋な structured output 応答は拒否として扱われません。またレビューポリシーの冒頭に防御的監査であるという前提を明記し、拒否の発生率自体を下げています。
+- `takt_providers.assistant` が対話プランニングだけでなく instruct / retry ペルソナにも適用されるようになりました (#1011, #1018)。0.51.0 のリリースノートに記載していましたが、実際の変更は 0.51.0 タグの後にマージされており、本リリースに含まれます。
 - OpenCode のプロンプトがグローバルに直列化される問題を修正 (#1026)。プロンプトのキューイングがセッション単位になり、別セッションで走る並列ステップが同時実行されます。暗黙のリトライは従来どおり新セッションを使います。
 - Kiro のセッション継続性を修正 (#781, #1036)。Kiro CLI 出力の ANSI エスケープを除去し、初回ターン後に `kiro-cli chat --list-sessions` でセッション ID を解決、以降のターンは `--resume-id` で再開するため、複数ターンのワークフローで会話文脈が失われなくなりました。セッション解決にはタイムアウトと abort シグナル伝播も追加しています。
 - 自動ルーティングの structured output に strict スキーマを適用 (#1030)。未知のキーを含むルーター応答は暗黙に受理されず拒否されます。
-- command 品質ゲートの `timeout_ms` が `workflow_call` の解決を通過するよう修正 (#1021)。callable ワークフローの command ゲートは設定正規化の過程でタイムアウトが落ちていました。
+- command 品質ゲートの `timeout_ms` が `workflow_call` の解決時にも保持されるよう修正 (#1021)。callable ワークフローの command ゲートは設定正規化の過程でタイムアウトが失われていました。
 
 ### Internal
 
@@ -940,7 +971,7 @@
 
 ### Changed
 
-- Finding Manager の機械分類 (#1007)。決定可能な raw finding — 解決確認と、open finding への location+familyTag 完全一致 — をコードで分類し、マネージャ LLM には残余の判断だけを（スリム化した台帳とともに）渡すようになりました。残余ゼロかつ異議申告がなければ LLM 呼び出し自体をスキップします。実測ベンチではマネージャが毎ラウンド約 200 KB の台帳を運ぶ最大のトークン消費源でした。
+- Finding Manager の機械分類 (#1007)。決定可能な raw finding — 解決確認と、open finding への location+familyTag 完全一致 — をコードで分類し、マネージャ LLM には残余の判断だけを（スリム化した台帳とともに）渡すようになりました。残余ゼロかつ異議申告がなければ LLM 呼び出し自体をスキップします。実測ベンチではマネージャが毎ラウンド約 200 KB の台帳を処理し、最も多くのトークンを消費していました。
 - `for-local-llm` ファミリーで `implement` の行き詰まりを ABORT ではなく `plan`（再計画）へ流すようにしました (#1009)。`write_tests` と `fix` の既存挙動に揃えたものです。ABORT はループモニターの裁定・要件不明確・レビュー対立に限定されます。
 - 同梱 SDK を更新: `@openai/codex-sdk` 0.144.1 / `@anthropic-ai/claude-agent-sdk` 0.3.206 (#1015)。同梱の Codex CLI が GPT-5.6 モデルファミリー（`gpt-5.6-sol`・`gpt-5.6-terra`・`gpt-5.6-luna`）を認識するようになり、codex プロバイダの `model` に指定できます。
 
@@ -951,10 +982,10 @@
 ### Fixed
 
 - `takt_providers.assistant` が `instruct` / `retry` 対話にも適用されるよう修正（従来はインタラクティブ計画会話のみ）(#1011)。
-- OpenCode の無音タイムアウト時にセッションを検死し、プロバイダの 429 を `rate_limited` として分類 (#985, #1010)。OpenCode サーバはプロバイダの 429 を内部リトライで握り `session.error` を流さないため、レート制限されたセッションが進捗ゼロのストールに見え、無音ウォッチドッグがエンジンのレート制限バックオフへ接続せずに落としていました。無音タイムアウトで abort した場合に限り、セッションの最後の assistant メッセージを（5 秒の上限付きで）照会し、429 系エラーを `rate_limited` として返します。
-- Finding Contract の異議申告が `language: ja` でも機能するようになり、index 状態由来の finding を防止 (#1012, #1014)。FC の指示文が英語固定で ja では異議申告の入口が細かったため、機械照合されるトークン（`## Disputed Findings`・フィールド名）は英語のまま散文をローカライズしました。正当な異議を封じていた coder ペルソナの「レビュワーの指摘は絶対。反論しない」という姿勢を証拠の規律へ書き換えました。git ルールに「index/staging の状態を証拠として扱わない」を追加し、TAKT 管理の実行で充足不能な「このファイルをコミットせよ」finding を防ぎます。
-- 異議申告ルートで陳腐化した finding をエンドツーエンドでカバー (#993)。異議申告ガイダンスが現行コードと矛盾する finding（再修正の前に実態と照合し、新しい file:line 証拠で異議を申告する）をカバーするようになり、review-fix のループ判定は「修正は着地したのに finding が残り続ける」状態を、中断ではなく再計画+異議申告で解ける findings 側のデッドロックとして扱います。
-- 実走ベンチ運用からの夜間堅牢化 (#999)。ユーザー設定の部分的な `provider_profiles` がデフォルトマップ全体を置き換えるのではなくプロバイダ単位のオーバーレイになりました。`edit: true` が `edit` 権限フロアを供給し、編集を宣言したステップが読み取り専用ツールマップで走ることがなくなりました。ツール名をローテーションする退化ループを止める呼び出し単位のツールエラーバジェット（25、リセットなし）と、純テキスト断片のスピンループを止める assistant メッセージサイクル上限を追加しました。
+- OpenCode の無音タイムアウト時にセッションを調べ、プロバイダの 429 を `rate_limited` として分類 (#985, #1010)。OpenCode サーバはプロバイダの 429 を内部でリトライし、`session.error` を通知しないため、レート制限されたセッションが進捗のない停止状態とみなされ、無音ウォッチドッグがエンジンのレート制限バックオフを使わずに中断していました。無音タイムアウトで abort した場合に限り、セッションの最後の assistant メッセージを（5 秒の上限付きで）照会し、429 系エラーを `rate_limited` として返します。
+- Finding Contract の異議申告が `language: ja` でも機能するようになり、index 状態由来の finding を防止 (#1012, #1014)。FC の指示文が英語固定で ja では異議申告が機能しにくかったため、機械照合されるトークン（`## Disputed Findings`・フィールド名）は英語のまま散文をローカライズしました。正当な異議を封じていた coder ペルソナの「レビュワーの指摘は絶対。反論しない」という姿勢を証拠の規律へ書き換えました。git ルールに「index/staging の状態を証拠として扱わない」を追加し、TAKT 管理の実行で充足不能な「このファイルをコミットせよ」finding を防ぎます。
+- 異議申告ルートで陳腐化した finding をエンドツーエンドでカバー (#993)。異議申告ガイダンスが現行コードと矛盾する finding（再修正の前に実態と照合し、新しい file:line 証拠で異議を申告する）をカバーするようになり、review-fix のループ判定は「修正済みでも finding が残り続ける」状態を、中断ではなく再計画+異議申告で解ける findings 側のデッドロックとして扱います。
+- 実走ベンチ運用からの夜間堅牢化 (#999)。ユーザー設定の部分的な `provider_profiles` がデフォルトマップ全体を置き換えるのではなくプロバイダ単位のオーバーレイになりました。`edit: true` が 権限の下限として `edit` を適用し、編集を宣言したステップが読み取り専用ツールマップで走ることがなくなりました。ツール名を変えながら同じ失敗を繰り返すループを止める呼び出し単位のツールエラーバジェット（25、リセットなし）と、テキスト断片だけを繰り返し出力するループを止める assistant メッセージサイクル上限を追加しました。
 
 ### Internal
 
@@ -965,42 +996,42 @@
 ### Added
 
 - MCP サーバーエントリポイント `takt-mcp` (#938, #943)。TAKT を stdio Model Context Protocol サーバーとして起動できるようになりました。MCP クライアント（Codex、Claude Code など）から `takt add` / `takt run` を経由せずに TAKT を操作できます。公開ツールは 3 つです。`takt_enqueue_task`（`.takt/tasks.yaml` に pending タスクを保存）、`takt_create_issue_and_enqueue_task`（設定済み issue プロバイダで issue を作成し、その番号でタスクを積む）、`takt_run_next_task`（次の pending タスクを取得して実行）。各ツールの `cwd` は `realpath` で解決され、サーバーの許可プロジェクトルート内に収まる必要があります。Codex には `codex mcp add takt -- takt-mcp` または `[mcp_servers.takt]` ブロックで登録します。ツールスキーマの詳細は CLI Reference を参照してください。
-- ACP エージェントエントリポイント `takt-acp` (#913, #916)。TAKT を stdio JSON-RPC 上の Agent Client Protocol エージェントとして起動できるようになりました。ACP 互換クライアントから起動します。`session/prompt` は既定で enqueue-first です。「タスクを積んで」のようなプロンプトは `.takt/tasks.yaml` に pending タスク（`worktree: true`）を追加し、後で `takt run` で実行できます。「今すぐ実行」のような明示的なプロンプトのみ直接実行します。`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` をサポートし、`session/new` で渡された stdio MCP サーバーはワークフロー実行へ引き継がれます。
-- `for-local-llm` ワークフローファミリー (#958, #974, #982)。ローカルまたは非力なモデル向けに調整した 5 つのワークフロー（`takt-default-for-local-llm`、`frontend-for-local-llm`、`backend-for-local-llm`、`backend-cqrs-for-local-llm`、`dual-for-local-llm`）を追加。それぞれ 4 つ（dual は 5 つ）の並列ディープレビュアーが Finding Contract（レジャー、解決確認、ディスピュート裁定）を背景に走り、フラットなマージレディネス最終ゲートを備えます。コンパイルを通過する挙動上の欠陥を捉える新しい `implementation-semantics` レビュアー（ペルソナ、ナレッジ、インストラクション、finding-contract 出力契約）を追加。レビュー専用の `peer-review-for-local-llm` ワークフローも同梱します。
+- ACP エージェントエントリポイント `takt-acp` (#913, #916)。TAKT を stdio JSON-RPC 上の Agent Client Protocol エージェントとして起動できるようになりました。ACP 互換クライアントから起動します。`session/prompt` は既定でタスクを保存し、実行は後で行います。「タスクを積んで」のようなプロンプトは `.takt/tasks.yaml` に pending タスク（`worktree: true`）を追加し、後で `takt run` で実行できます。「今すぐ実行」のような明示的なプロンプトのみ直接実行します。`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` をサポートし、`session/new` で渡された stdio MCP サーバーはワークフロー実行へ引き継がれます。
+- `for-local-llm` ワークフローファミリー (#958, #974, #982)。ローカルまたは非力なモデル向けに調整した 5 つのワークフロー（`takt-default-for-local-llm`、`frontend-for-local-llm`、`backend-for-local-llm`、`backend-cqrs-for-local-llm`、`dual-for-local-llm`）を追加。それぞれ 4 つ（dual は 5 つ）の並列の詳細レビュアーを Finding Contract（台帳、解決確認、異議申告の裁定）で支え、階層化しないマージレディネス最終ゲートを備えます。コンパイルを通過する挙動上の欠陥を捉える新しい `implementation-semantics` レビュアー（ペルソナ、ナレッジ、インストラクション、finding-contract 出力契約）を追加。レビュー専用の `peer-review-for-local-llm` ワークフローも同梱します。
 - `cli` ワークフロー (#947)。CLI 開発向けワークフローです（plan → write_tests → draft（実装 + AI セルフレビュー）→ peer-review（並列レビュアー + fix）→ supervise → COMPLETE）。
-- Finding Contract のディスピュート/waiver ライフサイクル (#969)。妥当だが修正できない finding に対し、コーダーが固定見出し `## Disputed Findings` の下でディスピュート（finding id / 理由 / file:line）を宣言できるようになりました。findings マネージャは finding を waive（理由と根拠を記録してブロッキング集合から除外）するか、ディスピュートを却下（open のままブロッキング継続）します。ゲートは従来通り `findings.open.count == 0` 条件を保つため、妥当だが修正不能な finding でデッドロックしていた実行が解けます。
-- エンジン評価条件のための `when()` 構文 (#977)。ルール条件内の決定的な状態式を、既存の `ai()` / `all()` / `any()` ファミリーと同様に `when(...)` で明示的に宣言するようになりました（例: `condition: when(findings.conflicts.count > 0)` や `approved && when(findings.open.count == 0)`）。ルールレベルの `when:` キーは式を自動的にラップするシュガーです。カスタムワークフローについては後述の BREAKING を参照してください。
+- Finding Contract の異議申告/waiver ライフサイクル (#969)。妥当だが修正できない finding に対し、コーダーが固定見出し `## Disputed Findings` の下で異議（finding id / 理由 / file:line）を申告できるようになりました。findings マネージャは finding を waive（理由と根拠を記録してブロッキング集合から除外）するか、異議を却下（open のままブロッキング継続）します。ゲートは従来通り `findings.open.count == 0` 条件を保つため、妥当だが修正不能な finding でデッドロックしていた実行を再開できます。
+- エンジン評価条件のための `when()` 構文 (#977)。ルール条件内の決定的な状態式を、既存の `ai()` / `all()` / `any()` ファミリーと同様に `when(...)` で明示的に宣言するようになりました（例: `condition: when(findings.conflicts.count > 0)` や `approved && when(findings.open.count == 0)`）。ルールレベルの `when:` キーを使うと、式を自動的にラップできます。カスタムワークフローについては後述の BREAKING を参照してください。
 - 最終ゲート用のプロバイダルーティングタグ (#954)。ビルトインの最終ゲートステップに `final-gate` タグが付与され、`provider_routing.tags.final-gate` でマージレディネスゲートだけを他のレビューステップと独立して強いプロバイダ/モデルへルーティングできます。
 - マージレディネスレビューゲート (#949)。ビルトインの開発・メンテナンスワークフローに、マージ可能かどうかだけを判定する並列の最終マージレディネスゲート（`merge-readiness-final-gate` / `merge-readiness-dual-final-gate`）を追加しました。
-- OpenCode ネイティブ `json_schema` 構造化出力 (#965) と、レビュアーが不正な構造化出力を出した際の 1 回限りの是正リトライ (#963)。OpenCode レビュアーステップは、手書き JSON に頼らずキー構造をソースで強制する OpenCode ネイティブの `format: json_schema` で構造化出力を要求するようになりました。それでも不正な JSON が出た場合、失敗させる前に同一セッションへ一度だけ修正済みペイロードの再出力を求めます。
+- OpenCode ネイティブ `json_schema` 構造化出力 (#965) と、レビュアーが不正な構造化出力を出した際の 1 回限りの是正リトライ (#963)。OpenCode レビュアーステップは、キー構造を OpenCode 側で強制するネイティブの `format: json_schema` で構造化出力を要求するようになりました。それでも不正な JSON が出た場合、失敗させる前に同一セッションへ一度だけ修正済みペイロードの再出力を求めます。
 
 ### Changed
 
-- **BREAKING:** 決定的なルール条件に `when()` ラッパーが必須になりました (#977)。ルール `condition` 内の裸の比較式（例: `findings.open.count == 0`）はエンジン評価される事実ではなく、単なる散文タグ条件として扱われます。裸の式を含む集約ガードは移行ヒント付きで設定エラーになります。これは、`coverage >= 80%` のような散文を暗黙にマッチ不能なデッドルール化していた脆い比較演算子ヒューリスティックを置き換えるものです。旧ヒューリスティックに依存していたカスタムワークフローは、決定的な句を `when(...)`（またはルールの `when:` キー）でラップする必要があります。ビルトインは移行済みです。
+- **BREAKING:** 決定的なルール条件に `when()` ラッパーが必須になりました (#977)。ルール `condition` 内のラッパーのない比較式（例: `findings.open.count == 0`）はエンジン評価される事実ではなく、通常の文章によるタグ条件として扱われます。ラッパーのない式を含む集約ガードは移行ヒント付きで設定エラーになります。これは、`coverage >= 80%` のような文章をマッチ不能なルールとして扱っていた、比較演算子による推測処理を置き換えるものです。この推測処理に依存していたカスタムワークフローは、決定的な句を `when(...)`（またはルールの `when:` キー）でラップする必要があります。ビルトインは移行済みです。
 - **BREAKING:** `-with-fc` ワークフロー系統を削除 (#974)。`takt-default-with-fc` と `peer-review-with-fc`（0.47.0 で追加）は、新しい `for-local-llm` ファミリーに置き換えられました。これが Finding Contract のラインナップになります。旧ワークフロー名への参照は更新してください。
-- fixer が「続行不能」で実行を中断しなくなりました (#986)。fixer がブロッカーを諦めた場合、実行全体を捨てる代わりに planner へ戻して再分解します（planner の席は強いモデルにルーティング可能）。新しい再計画サイクルのループモニターは、連続する再計画が同じ行き詰まりを繰り返したときだけ、人間向けの引き継ぎサマリーとともに中断します。5 つの開発ワークフローに適用されます。
+- fixer が「続行不能」で実行を中断しなくなりました (#986)。fixer がブロッカーを諦めた場合、実行全体を捨てる代わりに planner へ戻して再分解します（planner には強いモデルを割り当て可能）。新しい再計画サイクルのループモニターは、連続する再計画が同じ行き詰まりを繰り返したときだけ、人間向けの引き継ぎサマリーとともに中断します。5 つの開発ワークフローに適用されます。
 - Codex の `approval_policy` を `never` に固定。TAKT は Codex を非対話で実行するためエスカレーションを承認する人間がいません。そのためサンドボックスモードが唯一の書き込み境界となり、`readonly` は書き込みを完全にブロック、`edit`/`full` は従来通りに動作します（Codex の既定承認ポリシーが読み取り専用サンドボックスを越えてエスカレーションを自動承認する挙動を防止）。
 - Codex のモデル能力チェックをプロバイダへ委譲 (#983)。
 
 ### Fixed
 
 - OpenCode のアイドルウォッチドッグがストールしたセッションで発火するようになりました (#984)。10 分のアイドルウォッチドッグは、サーバー全体のイベント（LSP、ファイルウォッチャー、兄弟セッション）でタイマーがリセットされるためストールを見逃すことがありました。リセットをそのセッション自身のイベントに限定しました。
-- OpenCode セッションがステップフェーズ間でプロンプト単位のツール制限により保持されるようになり (#948)、ワークスペース外拒否は有効かつ非致命的に保たれます (#957)。
+- OpenCode セッションがステップフェーズ間でプロンプト単位のツール制限により保持されるようになり (#948)、ワークスペース外へのアクセスは拒否しつつ、実行は継続します (#957)。
 - OpenCode 構造化出力のリカバリ: ネイティブ構造化出力が生成されないときはフォーマットなしのリトライにフォールバックし (#967)、ゲートウェイが `json_schema` を拒否したときも復帰、空または誤字の raw-finding の location/suggestion フィールドは未設定として扱います (#962)。
-- finding-contract の解決が到達可能になり、ガード付きタグルールをサポート (#961)。ディスピュートガイダンスは open な finding が存在するときだけ注入されます (#973)。
+- finding-contract の解決が到達可能になり、ガード付きタグルールをサポート (#961)。異議申告のガイダンスは open な finding が存在するときだけ注入されます (#973)。
 - Cursor CLI の設定ディレクトリが実行間で保持されるようになりました (#960)。
 - シンボリックリンクされた stdio エントリポイントを実パスへ解決 (#955)。`takt-mcp` / `takt-acp` をシンボリックリンク経由で起動しても動作します。
-- レポートフェーズの失敗と空の Phase 1 出力がソフトエラーになりました (#907, #911, #927)。レポート生成の失敗は中断せず Phase 3（ステータス判定）へ継続し、空の Phase 1 出力はエラーとして検出され後続フェーズが無内容で走らないようにし、レポートのフォールバック経路を追加しました。
+- レポートフェーズの失敗と空の Phase 1 出力がソフトエラーになりました (#907, #911, #927)。レポート生成の失敗は中断せず Phase 3（ステータス判定）へ継続し、空の Phase 1 出力はエラーとして検出され内容のないまま後続フェーズが実行されることを防ぎ、レポートのフォールバック経路を追加しました。
 - 分離クローンの fetch が、親リポジトリの HEAD が対象ブランチにある場合に失敗しなくなりました (#924)。fetch 前に HEAD をデタッチします。
 - OpenCode の readonly・ツールなしフェーズでの `bash` ツール処理を修正 (#918, #919)。
-- `takt list` の追加指示 + リキューフローを修正 (#942)。
-- フルエリア監査に基づき判定・findings・OpenCode 処理を堅牢化 (#981)。
+- `takt list` の追加指示 + 再キューのフローを修正 (#942)。
+- 全領域の監査に基づき判定・findings・OpenCode 処理を堅牢化 (#981)。
 
 ### Internal
 
 - CQRS+ES のナレッジとガイダンスを強化 (#925, #940, #941, #979, #988)。
 - プロンプト品質ツール: promptfoo ベースのファセット品質 eval (#946) と、implementation-semantics レビュアー向けの rescan-semantics eval スイート (#951, #952, #959)。
-- レビュアーはレビューレポートに再スキャンの証跡を記載する必要があり (#951)、published-state の不変性とファミリーレベルの finding 集約を学習し (#953)、ガード付き Record を指摘しなくなりました (#968)。
+- レビュアーはレビューレポートに再スキャンの証跡を記載する必要があり (#951)、published-state の不変性とファミリーレベルの finding 集約を指示に追加し (#953)、ガード付き Record を指摘しなくなりました (#968)。
 - review / write-tests / test-policy のファセット契約を厳格化 (#915, #917, #932, #944, #966, #987)。
 - Codex: テストゲートの並列化 (#920)、MCP タスクワークフローと auto-PR の判断 (#972)。
 - `when()` ヘルパーをコーディング規約に沿って整理 (#978)。
@@ -1009,7 +1040,7 @@
 
 ### Added
 
-- `takt exec` — ワークフロー YAML を書かずにマルチエージェントを即座に実行するインスタントモード (#880, #893, #908)。対話セッションを開始し、Assistant エージェントがリクエストを明確化、`/go` で会話をワークフローに変換、Worker エージェントがタスクを実装、Review エージェントがレビュー、Replanning エージェントが必要に応じてユーザーに方針確認を行い、ループ検出が非生産的な繰り返しを防止します。ビルトインプリセット (`backend`, `frontend`, `dual`, `research`) を同梱。`/setup` でエージェント、ループ閾値、プリセット、参照ファセットを編集でき、変更は `~/.takt/exec.yaml` に保存されます。プリセットはプロジェクトまたはグローバルスコープで保存・削除でき、`/setup` メニューからスタンドアロンのワークフロー YAML としてエクスポートも可能です。
+- `takt exec` — ワークフロー YAML を書かずにマルチエージェントを即座に実行するインスタントモード (#880, #893, #908)。対話セッションでは Assistant エージェントがリクエストを明確にし、`/go` で会話をワークフローに変換します。Worker エージェントがタスクを実装し、Review エージェントがレビューします。Replanning エージェントは必要に応じてユーザーに方針を確認し、ループ検出は進展のない繰り返しを防ぎます。ビルトインプリセット (`backend`, `frontend`, `dual`, `research`) を同梱。`/setup` でエージェント、ループ閾値、プリセット、参照ファセットを編集でき、変更は `~/.takt/exec.yaml` に保存されます。プリセットはプロジェクトまたはグローバルスコープで保存・削除でき、`/setup` メニューからスタンドアロンのワークフロー YAML としてエクスポートも可能です。
 - `session_key` ワークフローフィールド。通常のエージェントステップ、並列サブステップ、`loop_monitors.judge` で `session_key` を指定して、ステップ間でペルソナセッションを共有または分離できるようになりました。ランタイムキーは `session_key` に解決済みプロバイダサフィックスを付加して構築されます（例: `shared-coder:claude`）。省略時は従来通りペルソナキーまたはステップ名が使用されます。
 - 外部コントラクト検証ポリシー (#891)。コンパイル成功やモック成功を外部サービスコントラクトの証明として扱うことを防止する新ポリシールールを追加。`existing-system-respect`、`review`、`testing` ポリシーに追加されました。
 
@@ -1017,8 +1048,8 @@
 
 - チームリーダーの分解ターン制限 (#904, #906)。チームリーダーの `decomposeTask` および `requestMoreParts` 呼び出しが、大規模プロジェクトで「最大ターン数 (15) に到達」エラーで失敗する問題を修正。読み取り専用の分解呼び出しからハードコードされたターン制限を削除しました。
 - OpenCode 利用不可ツールのループ検出 (#886)。`UnavailableToolLoopDetector` がエラー以外のすべてのツール状態（`running` を含む）でリセットされていた問題を修正。`completed` 状態のみでカウンターをリセットするように変更しました。
-- OpenCode のツールなしフェーズでのツール拒否 (#887)。ツールなしフェーズでワイルドカード拒否を使用するように変更し、ツールフリー実行フェーズでのツール漏れを防止しました。
-- OpenCode ランタイムツールリストの極性 (#890)。OpenCode ランタイム命令がネガティブリストからポジティブリストに変更され、利用可能なツールの混乱を低減しました。
+- OpenCode のツールなしフェーズでのツール拒否 (#887)。ツールなしフェーズでワイルドカード拒否を使用するように変更し、ツールを使わないフェーズで呼び出しが許可されることを防ぎます。
+- OpenCode の実行時指示におけるツールの列挙方法を変更しました (#890)。禁止するツールから利用可能なツールの列挙に切り替え、どのツールを使えるかを明確にしました。
 - OpenCode の存在しないツール呼び出し (#892)。OpenCode のデフォルトの few-shot 例に含まれる存在しない `list` および `task` ツールの呼び出しを防止するため、カスタム TAKT エージェントを定義しました。
 
 ### Internal
@@ -1031,7 +1062,7 @@
 
 ### Added
 
-- プロバイダ `base_url` サポート (#867)。`provider_options.claude.base_url` および `provider_options.codex.base_url` でカスタム API エンドポイントを設定可能に。グローバル・プロジェクト・ワークフローの各レベルで設定できる。セキュリティ上、プロジェクト/ワークフロー設定ではループバック以外の URL はブロックされる。
+- プロバイダ `base_url` サポート (#867)。`provider_options.claude.base_url` および `provider_options.codex.base_url` でカスタム API エンドポイントを設定可能に。グローバル設定・プロジェクト設定・ワークフローで指定できる。セキュリティ上、プロジェクト/ワークフロー設定ではループバック以外の URL はブロックされる。
 - チームリーダー `inspect_tools` (#857, #858)。`team_leader` ブロックで `inspect_tools` を指定し、タスク分解時にリーダーが使えるツールを制限可能に。`read`、`glob`、`grep` をサポート。OpenCode と Claude プロバイダで利用可能。
 - チームリーダーパートタグ (#855)。チームリーダーが分解したワーカーパートに `tags` を付与可能に。`provider_routing.tags` によるパートレベルのプロバイダ/モデル切り替えが可能。
 - Nix flake パッケージング (#837)。TAKT を Nix flake として提供開始。`x86_64-linux`、`aarch64-linux`、`x86_64-darwin`、`aarch64-darwin` で再現可能なビルドを提供。Node.js 22 と Bun を含む dev shell 付き。
@@ -1055,18 +1086,18 @@
 ### Added
 
 - Finding Contract — レビューワークフロー向けの構造化された指摘ライフサイクル管理 (#816, #826, #839, #840, #842, #845)。レビュー指摘が正式な台帳（`findings-ledger.json`）でライフサイクル状態（`new`・`persists`・`resolved`・`reopened`）、重要度、重複排除とともに追跡されるようになった。専用の `findings-manager` ペルソナが複数レビュアーの生の指摘を台帳と照合し、安定した ID（`F-0001`、`F-0002`、…）を割り当てて競合を検出する。`src/core/workflow/findings/` に reconciler・store・manager-runner・validation を新設し、全レビュータイプ（coding・architecture・security・QA・frontend・testing・terraform・CQRS/ES・pure・AI antipattern）に finding-contract 出力契約を追加した。Finding Contract 対応の新ワークフロー `takt-default-with-fc` と `peer-review-with-fc` を同梱。ワークフロー YAML に `finding_contract` セクションを追加することで有効化できる
-- ペルソナ・タグ・ステップ名による `provider_routing` 設定を追加 (#844, #846)。新しい `provider_routing` 設定セクションで、3 つの次元でプロバイダー/モデル/provider_options を選択できる。`personas`（生のペルソナキー別）、`tags`（ステップタグ別）、`steps`（ステップ名別）。解決優先順位はステップ直接指定 > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > 非推奨の `persona_providers` > ワークフロー > CLI。プロジェクト（`.takt/config.yaml`）またはグローバル（`~/.takt/config.yaml`）で設定可能
+- ペルソナ・タグ・ステップ名による `provider_routing` 設定を追加 (#844, #846)。新しい `provider_routing` 設定セクションで、次の 3 種類の指定でプロバイダー/モデル/provider_options を選択できる。`personas`（生のペルソナキー別）、`tags`（ステップタグ別）、`steps`（ステップ名別）。解決優先順位はステップ直接指定 > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > 非推奨の `persona_providers` > ワークフロー > CLI。プロジェクト（`.takt/config.yaml`）またはグローバル（`~/.takt/config.yaml`）で設定可能
 - ビルトインワークフローの全ステップにタグを追加 (#851)。すべてのビルトインワークフローステップに `tags` 配列（例: `plan`・`coding`・`review`・`implementation`・`edit`）を付与した。タグは `provider_routing.tags` の主キーで、個別のステップ名ではなくカテゴリ単位でプロバイダー/モデルをオーバーライドできる。並列サブステップのタグもサポート
-- OTel スパン向けのトレース発見性を追加 (#843, #847)。新しい `traceDiscovery` モジュールが、構造化された `WorkflowTraceDiscovery` オブジェクト（サービス名・runId・ワークフロー名・タスクメタデータ・Git ブランチ/ベース情報）と検索可能なクエリ文字列を構築し、Grafana Tempo などの外部オブザーバビリティツールとのワークフロー実行の相関を可能にする
-- トレースタスクメタデータのエンリッチメントを追加 (#827, #829)。タスクメタデータ（ソース・Issue/PR 番号・ブランチ・スラッグ・要約）が構造化された `WorkflowTraceTaskMetadata` として抽出され、OTel スパンとトレース発見出力に伝播されるようになった
-- provider options とファセット向けの名前付きリソースリゾルバーを追加 (#820, #824)。セキュアな 3 層リゾルバー（`namedResourceResolver.ts`）が `.takt/provider-options/` → `~/.takt/provider-options/` → ビルトイン `provider-options/` ディレクトリをベア名で拡張子フォールバック（`.yaml`/`.yml`）付きで検索し、パストラバーサルを検証しシンボリックリンクが許可ディレクトリ内に留まることを確認する。新しい `extends` キーワードで使用される
+- OTel スパンから実行トレースを検索する機能を追加 (#843, #847)。新しい `traceDiscovery` モジュールが、構造化された `WorkflowTraceDiscovery` オブジェクト（サービス名・runId・ワークフロー名・タスクメタデータ・Git ブランチ/ベース情報）と検索可能なクエリ文字列を構築し、Grafana Tempo などの外部オブザーバビリティツールでワークフロー実行を関連付けられるようにする
+- トレースにタスクメタデータを追加 (#827, #829)。タスクメタデータ（ソース・Issue/PR 番号・ブランチ・スラッグ・要約）が構造化された `WorkflowTraceTaskMetadata` として抽出され、OTel スパンとトレース検索用の出力に引き継がれるようになった
+- provider options とファセット向けの名前付きリソースリゾルバーを追加 (#820, #824)。セキュアな 3 層リゾルバー（`namedResourceResolver.ts`）が `.takt/provider-options/` → `~/.takt/provider-options/` → ビルトイン `provider-options/` ディレクトリをパスを含まない名前で、拡張子（`.yaml`/`.yml`）を補いながら検索し、パストラバーサルを検証しシンボリックリンクが許可ディレクトリ内に留まることを確認する。新しい `extends` キーワードで使用される
 
 ### Changed
 
-- **BREAKING:** `provider_options.$ref` を `provider_options.extends` にリネーム (#820, #824)。ステップ/ワークフローの `provider_options` で共有 YAML ファイルを参照していた `$ref` キーが `extends` にリネームされた。値は相対ファイルパス（例: `$ref: provider-options/edit.yaml`）ではなく、3 層の名前付きリソースリゾルバーで解決されるベア名（例: `extends: edit`）になった。`$ref` を使用しているカスタムワークフローは更新が必要。ビルトインの provider options ファイルは `builtins/{lang}/workflows/provider-options/` から `builtins/{lang}/provider-options/` に移動した。ユーザーオーバーライドは `.takt/provider-options/` または `~/.takt/provider-options/` に配置する
-- **BREAKING:** `persona_providers` を非推奨化し `provider_routing` を推奨 (#844, #846)。`persona_providers` 設定キーは引き続き動作するが非推奨となった。表示名でマッチするため脆弱であり、`provider_routing.personas` は代わりに生のペルソナキーでマッチする。移行方法: `persona_providers` のエントリを `provider_routing.personas` に移動する
-- レポートフェーズのツール呼び出し検出を強化。レポートフェーズがプロバイダーのツール呼び出し（このフェーズでは禁止）を積極的に検出・拒否し、壊れた出力を黙って生成する代わりにリトライ可能なエラーを返すようになった。レポートファイル書き込みロジックを共有 `report-writer.ts` モジュールに抽出
-- レビューとコーディングのポリシーを強化。レビューポリシーにコントラクトカバレッジ・コントラクト整合性・仕様完全性・要件アンカリング・解決判断に関する新しい REJECT 条件を追加。これまで欠落していたレビューワークフローにコーディングポリシーを接続した (#848)
+- **BREAKING:** `provider_options.$ref` を `provider_options.extends` にリネーム (#820, #824)。ステップ/ワークフローの `provider_options` で共有 YAML ファイルを参照していた `$ref` キーが `extends` にリネームされた。値は相対ファイルパス（例: `$ref: provider-options/edit.yaml`）ではなく、3 層の名前付きリソースリゾルバーで解決されるパスを含まない名前（例: `extends: edit`）になった。`$ref` を使用しているカスタムワークフローは更新が必要。ビルトインの provider options ファイルは `builtins/{lang}/workflows/provider-options/` から `builtins/{lang}/provider-options/` に移動した。ユーザーオーバーライドは `.takt/provider-options/` または `~/.takt/provider-options/` に配置する
+- **BREAKING:** `persona_providers` を非推奨化し `provider_routing` を推奨 (#844, #846)。`persona_providers` 設定キーは引き続き動作するが非推奨となった。表示名の変更に影響されやすく、`provider_routing.personas` は代わりに生のペルソナキーでマッチする。移行方法: `persona_providers` のエントリを `provider_routing.personas` に移動する
+- レポートフェーズのツール呼び出し検出を強化。レポートフェーズがプロバイダーのツール呼び出し（このフェーズでは禁止）を積極的に検出・拒否し、不正な出力を生成することを防ぎ、リトライ可能なエラーを返すようになった。レポートファイル書き込みロジックを共有 `report-writer.ts` モジュールに抽出
+- レビューとコーディングのポリシーを強化。レビューポリシーにコントラクトカバレッジ・コントラクト整合性・仕様完全性・要件との対応・解決判断に関する新しい REJECT 条件を追加。これまで欠落していたレビューワークフローにコーディングポリシーを適用した (#848)
 - スーパーバイザーインストラクションを通常モード・メンテナンスモードの両方で全面改訂し、スコーピングと検証基準を明確化
 - 知識ファセットを拡充: アーキテクチャパターン、バックエンドの例外変換スコープ、CQRS/ES ドメインパターン
 
@@ -1074,7 +1105,7 @@
 
 - Cursor CLI の並列実行時に cli-config.json リネームの ENOENT が発生する問題を修正 (#802, #819)。Cursor CLI が並列レビュアーステップ実行時に内部の `cli-config.json.tmp` → `cli-config.json` リネームが競合し ENOENT で断続的に失敗することがあった。致命的なプロバイダーエラーとして扱う代わりに、指数バックオフ付きリトライ（最大 8 回、1〜30 秒遅延）を行うようにした
 - OpenCode の利用不可ツールループを修正 (#822)。OpenCode プロバイダーがエージェントの利用不可ツール繰り返し呼び出しで無限ループに陥ることがあった。新しい `UnavailableToolLoopDetector` が連続 2 回の利用不可ツールエラーでセッションを中断し、明確な失敗メッセージを表示する
-- レビュー指摘を元の要件にアンカリングするよう修正 (#830)。レビュアーが指摘を評価する際に元のタスク要件から逸脱することがあった。インストラクションと出力契約で、レビュー判断をプランおよび元のタスク記述にアンカリングすることを強制するようにした
+- レビュー指摘を元の要件に照らして判断するよう修正 (#830)。レビュアーが指摘を評価する際に元のタスク要件から逸脱することがあった。インストラクションと出力契約で、プランおよび元のタスク記述に照らしてレビュー判断を行うことを必須にした
 
 ### Internal
 
@@ -1083,7 +1114,7 @@
 - README にステータスバッジを追加 (#835)
 - finding contract・provider routing・trace discovery・trace task metadata・report phase retry・named resource resolver・workflow spans 等をカバーする 20 以上の新テストファイル
 - 設定とワークフローのドキュメントを `provider_routing` と `extends` に対応して更新
-- `WorkflowEngineSetup` を抽出してエンジン初期化をクリーン化
+- `WorkflowEngineSetup` を抽出してエンジンの初期化処理を整理
 - `WorkflowRunLoop` に失敗メタデータとコマンドゲートの改善を追加
 - レパートリー pack-summary を名前付きリソース解決と `extends` 参照に対応して書き直し
 
@@ -1091,7 +1122,7 @@
 
 ### Added
 
-- OTLP エクスポートにプロバイダーサブプロセスの span ネストと実行中トレースの発見性を追加 (#808, #812, #814)。`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃った場合のみ、既存のローカル exporter と並走して span と metric を OTLP HTTP で送信する。`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` による個別 endpoint 上書きも標準環境変数として利用できるが、TAKT 独自の OTLP config キーは追加していない。0.42.0 の「標準 `OTEL_*` 環境変数で自前の collector に接続する」という記述は、#753 以降 `spanProcessors` / `metricReaders` を明示指定したことで成立していなかったため、本変更で実際に送信できるようにした。さらに、起動するプロバイダーのサブプロセスへ W3C トレースコンテキストを伝播するようにし、各プロバイダー CLI の span が独立したトレースにならず親ワークフローのトレース配下にネストするようにした (#812)。あわせて、長時間続くルート span が閉じる前でも実行中のワークフローを Grafana Tempo で発見できるよう、短命な `workflow_start.<name>` span を出力する (#814)
+- OTLP エクスポートにプロバイダーサブプロセスの span ネストと実行中トレースを検索する機能を追加 (#808, #812, #814)。`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃った場合のみ、既存のローカル exporter と並走して span と metric を OTLP HTTP で送信する。`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` による個別 endpoint 上書きも標準環境変数として利用できるが、TAKT 独自の OTLP config キーは追加していない。0.42.0 の「標準 `OTEL_*` 環境変数で自前の collector に接続する」という記述は、#753 以降 `spanProcessors` / `metricReaders` を明示指定したことで成立していなかったため、本変更で実際に送信できるようにした。さらに、起動するプロバイダーのサブプロセスへ W3C トレースコンテキストを伝播するようにし、各プロバイダー CLI の span が独立したトレースにならず親ワークフローのトレース配下にネストするようにした (#812)。あわせて、長時間続くルート span が閉じる前でも実行中のワークフローを Grafana Tempo で発見できるよう、短命な `workflow_start.<name>` span を出力する (#814)
 - OpenCode のツール許可リストと共有 `provider_options` ファイルを追加 (#804)。`provider_options.opencode.allowed_tools` で、ステップやワークフローが利用できる OpenCode ツールを小文字のツール名（例: `read`・`glob`・`grep`・`bash`・`websearch`・`webfetch`）で絞り込める。`provider_options` ブロックはワークフローファイルからの相対パスで共有 YAML ファイルを `$ref` 参照できるようになり、インライン値が一致するリーフを上書きする。再利用できるビルトイン `provider-options/{edit,review-files,review-readonly,review-web}.yaml` プリセットも同梱した
 - Kiro のステップ単位カスタムエージェントを追加 (#796)。`provider_options.kiro.agent` で、ステップ・ワークフロー・ペルソナ・プロジェクト・グローバルの各設定に Kiro CLI のカスタムエージェント名（`kiro-cli chat --agent`）を渡せるようになった。`TAKT_PROVIDER_OPTIONS_KIRO_AGENT` 環境変数による上書きも可能。指定がないステップは Kiro CLI の既定エージェントを使う
 
@@ -1099,18 +1130,18 @@
 
 - `team_leader` の同時実行数と初回分解を分離 (#799)。`max_concurrency`（最大 3）は同時に走るワーカーパート数を制限し、任意の `initial_max_parts` は最初の分解 batch だけを制限する。以降はリーダーが作業完了と判断するまで batch を追加できる。従来の `max_parts` キーは `max_concurrency` の互換エイリアスとして引き続き受け付ける
 - ビルトインのレビュー系・開発系ワークフローに純粋レビューパスを追加。汎用の `pure-reviewer` ペルソナ（`review-pure` インストラクションと `pure-review` 出力契約を伴う）が「この変更は今マージできるか」だけを判定し、未対応の要求・既存挙動の破壊・テスト不足・スコープ外の変更を検出する。peer-review・review・review-fix・backend(-cqrs)・frontend・dual(-cqrs)・terraform・maintenance の各ワークフローに組み込んだ。これにより従来の要件レビュアー（`requirements-reviewer` ペルソナと `requirements-review` 出力契約）は削除した
-- ビルトインのレビュー・テスト系ファセットを強化。レビュアーとテスト作成ガイダンスが、置き換えられた仕様が消えたことだけを確認する「不在のみ」テストに対するガードレールを持つようになり、coding・review・testing ポリシー全体で挙動検証・レビュー検証・命名ポリシーのガイダンスを強化した
+- ビルトインのレビュー・テスト系ファセットを強化。レビュアーとテスト作成ガイダンスが、置き換えられた仕様が消えたことだけを確認する「不在のみ」テストを防ぐ基準を設け、coding・review・testing ポリシー全体で挙動検証・レビュー検証・命名ポリシーのガイダンスを強化した
 
 ### Fixed
 
-- レート制限の誤検出を低減 (#809)。レート制限検出のパターンが過度に広く、単独の `429`、通りすがりの `rate limit` という記述、通常のエージェント出力に含まれる `resets H:MM` のような時刻表記までレート制限と誤読してフォールバックを誘発していた。検出により具体的な表現（例: "too many requests" を伴う `429`、"rate limited" / "rate limit exceeded" / "rate limit error"、"exceeded/hit/reached rate limit"）を要求し、緩い単独時刻のストリームマーカーを廃止した
+- レート制限の誤検出を低減 (#809)。レート制限検出のパターンが過度に広く、単独の `429`、通常の文章に含まれる `rate limit` という記述、通常のエージェント出力に含まれる `resets H:MM` のような時刻表記までレート制限と誤読してフォールバックを誘発していた。検出により具体的な表現（例: "too many requests" を伴う `429`、"rate limited" / "rate limit exceeded" / "rate limit error"、"exceeded/hit/reached rate limit"）を要求し、緩い単独時刻のストリームマーカーを廃止した
 - OpenCode のパーミッション処理を修正 (#801, #803, #807)。OpenCode の `doom_loop` パーミッション要求が、有効なパーミッションモードによって拒否される代わりに自動応答されるようになり、非対話実行が停止しなくなった (#803)。パーミッション要求と解決済みパーミッションの要約をログ出力するようにした (#801, #807)。さらに OpenCode 連携を再構成し、編集系ツールが OpenCode の編集パーミッションに対応付くようにし、共有 OpenCode サーバープールを設定ごとにキー分けして適切な取得・解放・中断処理を行うようにした (#807)
 
 ## [0.45.0] - 2026-06-10
 
 ### Added
 
-- フェーズ単位の usage イベントと usage 分析スクリプトを追加 (#785)。`observability.enabled: true` と `observability.usage_events_phase: true` を設定すると、実行ごとにフェーズ単位のトークン usage イベントを `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力する（既存の `logging.usage_events` 出力とは別ストリーム）。イベントはワークフローフェーズ（`phase1_execute`・`phase2_report`・ステータス判定の `phase3_structured` / `phase3_tag` / `phase3_fallback`）ごとに記録され、usage が取得できなかった呼び出しは 0 トークン扱いではなく `usage_missing: true` として記録される。新しい `npm run analyze:usage` スクリプトは、イベントファイルや実行ディレクトリを step × phase × provider × model 単位の Markdown / CSV テーブルに集計し、トークン合計と呼び出しごとの統計を出力する。新設の [Observability ガイド](./observability.ja.md) に記載
+- フェーズ単位の使用量イベントと使用量分析スクリプトを追加 (#785)。`observability.enabled: true` と `observability.usage_events_phase: true` を設定すると、実行ごとにフェーズ単位のトークン使用量イベントを `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力する（既存の `logging.usage_events` 出力とは別ストリーム）。イベントはワークフローフェーズ（`phase1_execute`・`phase2_report`・ステータス判定の `phase3_structured` / `phase3_tag` / `phase3_fallback`）ごとに記録される。使用量を取得できなかった呼び出しは `usage_missing: true` として記録し、0 トークンとしては扱わない。新しい `npm run analyze:usage` スクリプトは、イベントファイルや実行ディレクトリを step × phase × provider × model 単位の Markdown / CSV テーブルに集計し、トークン合計と呼び出しごとの統計を出力する。詳細は新設の [Observability ガイド](./observability.ja.md) に記載
 - インタラクティブモードでクリップボード画像ペーストに対応 (#791)。インタラクティブ入力中に Ctrl+V（または新しい `/paste-image` コマンド）で OS のクリップボードから画像を直接添付できるようになった。これまではターミナルがインライン画像（OSC 1337）エスケープシーケンスを送出する場合にのみペーストが機能していた。添付画像はプロバイダー抽象も通るようになり、`claude-sdk` と `codex` はネイティブの画像入力として受け取り、その他のプロバイダーにはプロンプト内に添付ファイルパスの参照が展開されるため、エージェントが自身のツールで画像を開ける
 
 ### Changed
@@ -1132,7 +1163,7 @@
 ### Added
 
 - `kiro` プロバイダーを追加 (#773)。Claude・Codex・OpenCode・Cursor・Copilot に加えて、Kiro CLI を AI エージェントプロバイダーとして利用できるようになった。`--provider kiro` または設定で選択する。認証は設定の `kiro_api_key`（または環境変数 `TAKT_KIRO_API_KEY`）を使い、CLI バイナリは `kiro_cli_path` / `TAKT_KIRO_CLI_PATH` で上書きできる
-- OpenTelemetry オブザーバビリティに動作するエクスポーターとスパンの拡充を追加 (#753)。0.42.0 で導入したスパン基盤の上に、実行ごとのワークフローメトリクスをローカルの `monitor.json` に出力する機能（`observability.monitor: true` で有効化）と、OTel スパンから派生するシャドウセッションログ（`observability.sessionLogExporter: true`）を追加し、スパンの対象をフェーズ実行とステータス判定（judge）フェーズにも拡張した。エクスポーターは実行 ID ごとにルーティングされ、シャドウセッションログは正規の NDJSON セッションログとレダクションの整合性を保つため、機微なエージェント出力はサニタイズされたままになる。引き続き `observability.enabled: true` の背後でデフォルト無効
+- OpenTelemetry の可観測性機能にエクスポーターを実装し、スパンの対象を拡充 (#753)。0.42.0 で導入したスパンの仕組みに、実行ごとのワークフローメトリクスをローカルの `monitor.json` に出力する機能（`observability.monitor: true` で有効化）と、OTel スパンから生成するシャドウセッションログ（`observability.sessionLogExporter: true`）を追加し、スパンの対象をフェーズ実行とステータス判定（judge）フェーズにも広げた。エクスポーターは実行 ID ごとに振り分けられる。シャドウセッションログでも正規の NDJSON セッションログと同じように機密情報を除去するため、機微なエージェント出力はサニタイズされたままになる。引き続きデフォルトでは無効で、`observability.enabled: true` を設定すると有効になる
 
 ### Changed
 
@@ -1152,9 +1183,9 @@
 ### Added
 
 - 画像添付に対応（実験的, #751）。画像を TAKT 全体で受け渡しできるようになった。対話モードではプロンプトに画像を直接ペーストでき（ターミナルのインライン画像 OSC 1337 シーケンスを保留中の添付としてデコードする）、`takt add` や再実行ではタスク仕様とともに画像添付が引き継がれ、エージェントはテキスト指示と一緒に画像を受け取る。assistant / passthrough / quiet / retry の各入力モードで動作し、1 画像あたり 10 MB の上限がある。動作確認中の実験的機能であり、挙動は変わる可能性がある
-- ダイレクト run 向けの `takt resume` コマンドを追加 (#759)。失敗・中断したダイレクト（ワンショット・キュー外）run を `takt resume` で再開できるようになった。直近の失敗 / 中断したダイレクト run を探して、最初からやり直すのではなく続きから再開する。再開時は既存の run ディレクトリを再利用し、専用のスコアリングプロンプトがワークフローへの再入方法を判断する
+- ダイレクト run 向けの `takt resume` コマンドを追加 (#759)。失敗・中断したダイレクト（ワンショット・キュー外）run を `takt resume` で再開できるようになった。直近の失敗・中断したダイレクト run を探し、その続きから再開する。再開時は既存の run ディレクトリを再利用し、専用のスコアリングプロンプトがワークフローの再開方法を判断する
 - コマンド品質ゲートを追加 (#761)。ステップの `quality_gates` が、AI 指示の文字列に加えて、機械実行される `type: command` エントリを受け付けるようになった。コマンドゲートはエージェントステップ完了後に実行され、コマンドが終了コード `0` で終わった場合のみ通過する。失敗時は、コマンドのメタデータ・cwd・終了コード（またはタイムアウト / 出力上限の詳細）・出力ログのパス・上限付きでサニタイズした stdout/stderr を同じエージェントステップに差し戻して再試行させる。ワークフロー YAML のコマンドゲートを使うには設定で `workflow_command_gates.custom_scripts: true` が必要。`system` / `workflow_call` ステップは `quality_gates` を受け付けない
-- ビルトインワークフロー `frontend-maintenance` を追加（実験的）。新規構築ではなく既存フロントエンドプロダクトの改修に向けたワークフローで、保守スコープの plan / implement / write-tests / fix / supervise インストラクション、`existing-system` ナレッジファセット、既存の規約を尊重させる `existing-system-respect` ポリシー、`maintenance-scope` 出力契約を同梱する。現状はやや過剰に動くことがあるため、既存プロダクト改修の出発点として使い、コードベースに合わせて調整することを推奨する実験的ワークフロー
+- ビルトインワークフロー `frontend-maintenance` を追加（実験的）。既存フロントエンドプロダクトの改修向けに、保守の範囲を扱う plan / implement / write-tests / fix / supervise インストラクション、`existing-system` ナレッジファセット、既存の規約を尊重させる `existing-system-respect` ポリシー、`maintenance-scope` 出力契約を同梱する。現状はやや過剰に動くことがあるため、既存プロダクトの改修に使う場合はコードベースに合わせて調整することを推奨する
 - デフォルトのピアレビューに coding review を追加。ビルトインの `default-peer-review` ワークフローに、新しい `coding-reviewer` ペルソナ・`review-coding` インストラクション・`coding-review` 出力契約に基づく coding-review サブステップが加わり、既存の専門レビューワと並んで一般的なコード品質もレビューされるようになった
 
 ### Changed
@@ -1177,7 +1208,7 @@
 
 ### Added
 
-- `claude-terminal` プロバイダを追加 (#727)。Anthropic SDK（`claude-sdk`）や headless CLI（`claude`）を呼ぶのではなく、tmux ペイン内で対話型 Claude Code CLI セッションを起動し、セッションのトランスクリプトから結果を読み取る新しい実行方式。`--provider claude-terminal` または設定ファイルで選択する。structured output / MCP サーバ / allowed-tools に対応し、権限確認や ask-user-question のプロンプトはターミナル経由で受け渡しする。プロバイダオプションは `provider_options.claude_terminal` 配下（`backend: tmux`, `timeout_ms`, `keep_session`, `transcript_poll_interval_ms`）。利用には `tmux` のインストールが必要で、`maxTurns` は非対応、トランスクリプトに含まれないため API 使用量は取得できない
+- `claude-terminal` プロバイダを追加 (#727)。Anthropic SDK（`claude-sdk`）や headless CLI（`claude`）を呼ぶ従来の方式とは異なり、tmux ペイン内で対話型 Claude Code CLI セッションを起動し、セッションのトランスクリプトから結果を読み取る新しい実行方式。`--provider claude-terminal` または設定ファイルで選択する。structured output / MCP サーバ / allowed-tools に対応し、権限確認や ask-user-question のプロンプトはターミナル経由で受け渡しする。プロバイダオプションは `provider_options.claude_terminal` 配下（`backend: tmux`, `timeout_ms`, `keep_session`, `transcript_poll_interval_ms`）。利用には `tmux` のインストールが必要で、`maxTurns` は非対応。API 使用量はトランスクリプトに含まれないため取得できない
 - オプトインの OpenTelemetry オブザーバビリティを追加 (#706, #745)。`~/.takt/config.yaml`（グローバル）または `.takt/config.yaml`（プロジェクト）で `observability.enabled: true` を設定する（環境変数 `TAKT_observability__enabled` でも上書き可）と、ワークフロー実行の OTel スパンを出力する。各 run は `workflow.<name>` スパンを生成し、その子として `step.<name>` スパンが付き、ワークフロー / ステップ名・ステップ種別・iteration 回数・解決された provider / model（とその設定ソース）・最終ステータス（abort 種別を含む）といった属性を持つ。スパンは通常実行と並走する非ブロッキングの「シャドウ」として出力され、run の挙動は一切変えない。基盤は OTel Node SDK（サービス名 `takt`）を初期化するが exporter は同梱しないため、標準の `OTEL_*` 環境変数で自前のコレクタに接続する。デフォルトは無効
 - `/accept` 対話コマンドを追加 (#733)。対話アシスタントモードで、`/accept` は直近のアシスタント発言をそのままタスクとして実行する（`/go` による要約を経由しない）。アシスタント発言がまだ無い場合は、先にタスク内容を入力するよう促す
 - アシスタント init ファイルを追加 (#734)。`.takt/config.yaml` の `assistant.init_files` にプロジェクトのコンテキストファイルを列挙すると、対話アシスタントの会話ごとに「Assistant Init Context」セクションとして自動的に読み込まれる。これによりアーキテクチャメモ・規約・独自指示などのプロジェクト固有コンテキストを毎回手作業で渡さずに済む。パスはプロジェクト内の相対パスに限られ、機微なファイル（`.env*`, `.pem`, `.key`, `.npmrc`, `.netrc`, `.git/` など）は拒否される。上限は 16 ファイル / 1 ファイル 256 KB / 合計 1 MB
@@ -1191,7 +1222,7 @@
 ### Fixed
 
 - OpenCode の応答で、SDK が差分（delta）と全文スナップショットの両方を出すときにコンテンツが二重化する問題を修正 (#749)。従来は両ストリームを連結していたため、アシスタントのテキストが応答に二重に現れていた
-- プロバイダの rate-limit メッセージを、汎用的なプロセスエラーに潰さずに保持するようにした (#730)。プロバイダが rate limit を報告した際、元のメッセージが応答を通じて残るため原因が見えるようになる
+- プロバイダの rate-limit メッセージを、汎用的なプロセスエラーへ置き換えずに保持するようにした (#730)。プロバイダが rate limit を報告した際、元のメッセージが応答に残るため原因を確認できる
 
 ### Internal
 
@@ -1230,7 +1261,7 @@
 
 ### Added
 
-- `takt list` の failed タスクに `Requeue` アクションを追加 (#435)。これまで failed タスクの選択肢は会話モード必須の `Retry` と `Delete` のみで、別タスクに集中している間にサクッと再実行キューへ戻す手段がなかった。`Requeue` は会話を経由せず直接 pending に戻すため、原因分析が不要なケースを最短で再投入できる。`retry_note` は失敗 step 名 / エラー要約 / 「ユーザーが対処済みと判断したため再投入」というコンテキストから自動生成し、再実行時のエージェントが `## 再投入メモ` で読み取れる。既存の `retry_note` は上書きせず累積追記する
+- `takt list` の failed タスクに `Requeue` アクションを追加 (#435)。これまで failed タスクの選択肢は会話モード必須の `Retry` と `Delete` のみで、別タスクの作業中にすぐ再実行キューへ戻す手段がなかった。`Requeue` は会話を経由せず直接 pending に戻すため、原因分析が不要なケースを最短で再投入できる。`retry_note` は失敗 step 名 / エラー要約 / 「ユーザーが対処済みと判断したため再投入」というコンテキストから自動生成し、再実行時のエージェントが `## 再投入メモ` で読み取れる。既存の `retry_note` は上書きせず累積追記する
 - AI アンチパターンレビューを reviewers サイクル毎に実行するように追加。`default` / `default-mini` / `default-high` / `backend` / `backend-cqrs` / `dual` / `dual-cqrs` / `frontend` / `terraform` / `takt-default` の reviewers parallel ステップに `ai-antipattern-review-2nd` を追加し、`fix` 後に混入した過剰防御や幽霊コメントを毎サイクルで検出するようになった。split 構成（`backend` / `dual` / `frontend` 系）では `reviewers_1` のみに配置している（`fix` は常に `reviewers_1` に戻るため）
 
 ### Changed
@@ -1257,14 +1288,14 @@
 - step レベルの `allow_git_commit` フィールドを追加 (#587)。Phase 1 / Phase 2 のインストラクションに注入される「git add / commit / push を実行しない」制約を、step 単位でオプトイン解除できる（デフォルト `false`）。1 つのタスクで多数の issue を消化するワークフローなど、作業単位ごとに git commit したいユースケースに使う
 - ビルトイン workflow `default-mini` を追加。`default` から `write_tests` を抜いたミニ版（`plan -> implement -> AI antipattern review -> parallel review -> complete`）。Quick Start カテゴリと Mini カテゴリ、builtin カタログに登録
 - run チェックポイント再開を追加 (#568)。run 実行中の `currentStep` / `phase` / `iterations` / `resumePoint` を `.takt/runs/<slug>/meta.json` に継続的に保存するようになり、`tasks.yaml` が `start_step`（`start_movement` は後方互換のエイリアスとして保持）を受け付けることで中断 run の再開時に最後に動いていた step から続行できる
-- エージェント失敗のカテゴリ分類を追加 (#678)。team leader part の失敗を `external_abort` / `part_timeout` / `provider_error` / `stream_idle_timeout` に分類し、trace report / session log / 集約エラーメッセージに分類を残すようになった。これまで「execution aborted」に潰れていた原因が判別可能になる。Codex クライアントは abort cause（`timeout` / `external`）を保持し、failure detail に伝搬する
+- エージェント失敗のカテゴリ分類を追加 (#678)。team leader part の失敗を `external_abort` / `part_timeout` / `provider_error` / `stream_idle_timeout` に分類し、trace report / session log / 集約エラーメッセージに分類を残すようになった。これまで「execution aborted」としか表示されなかった失敗の原因を判別できる。Codex クライアントは abort cause（`timeout` / `external`）を保持し、failure detail に渡す
 
 ### Changed
 
 - `mode: system` ワークフローを project workflows root の外でも実行できるように緩和 (#691)。`mode: system` / workflow-level `runtime.prepare` / step `allow_git_commit: true` は従来 `.takt/workflows/` 配下でないと拒否されていたが、ビルトイン workflow（`auto-improvement-loop` 等）と `~/.takt/workflows/` 配下の global workflow を許可するようになった。再利用可能な orchestration workflow を global に置いて名前指定で実行できる。path-based に workflow を再分類していた旧 trust boundary は撤去され、loader 確定済みの `WorkflowTrustInfo` を後段でも使うようにした
 - `auto-improvement-loop` の PR 分岐 action セットを整理 (#676)。`comment_on_pr` と `noop` を削除し、`reject_pr` を追加。PR 分岐の選択肢は `enqueue_from_pr` / `prepare_merge` / `reject_pr` の 3 種に固定。`reject_pr` は `close_pr` effect で PR を close するのみで、コメント追加・ブランチ削除・タスク再エンキューは行わない。`pr-followup-task` schema の enum も同期して更新
 - `auto-improvement-loop` の Issue 分岐 / fresh planning を強化 (#685)。`plan_from_issue` / `plan_fresh_improvement` から `noop` を削除し、planning instruction で低価値・cosmetic-only・曖昧・既存 PR / Issue と重複するタスクを明示的に拒否、具体的な成果物・完了条件を必須化。`followup-task` schema の action enum は `enqueue_new_task` / `wait_before_next_scan` の 2 種に縮小
-- レートリミット原因を workflow abort 経由でも保持 (#569)。Claude のレートリミットが provider events で観測された場合、後段の phase / parallel / workflow エラー表示が generic な `Claude Code process exited with code 1` ではなく `Rate limit exceeded. Please try again later.` として残るようになった。`AgentResponse.errorKind` を provider 境界で正規化することで、session resume / report phase retry 経路でも原因が潰れない
+- レートリミット原因を workflow abort 経由でも保持 (#569)。Claude のレートリミットが provider events で観測された場合、後段の phase / parallel / workflow エラー表示が、汎用的な `Claude Code process exited with code 1` から `Rate limit exceeded. Please try again later.` に変わった。`AgentResponse.errorKind` をプロバイダとの接続部分で正規化することで、session resume / report phase retry の処理でも原因を保持する
 
 ### Fixed
 
@@ -1299,7 +1330,7 @@
 
 - `team_leader + output_contracts.report` の step で、root session 不在を理由に report phase が abort する問題を修正 (#655)。`runReportPhase()` が team leader の集約 `lastResponse` を fallback として受け付けるようになり、root session も `lastResponse` も無い場合のみ失敗する
 - takt 自身のリポジトリで discovery 経由のロード時、ビルトイン workflow の `source` / `trust` 情報が path-based に project workflow へ再分類されてしまう問題を修正 (#659)。`auto-improvement-loop` を含む privileged ビルトイン workflow が discovery 経路でも builtin として正しく扱われる（恒久対応は #660）
-- `provider_options.copilot.effort` の設定保存ラウンドトリップが落ちていた問題を修正 (#626)。`denormalizeProviderOptions()` が `copilot.effort` を raw 形式へ書き戻すようになり、設定保存経路で値が消えなくなる
+- 設定の保存・再読み込みで `provider_options.copilot.effort` の値が失われる問題を修正 (#626)。`denormalizeProviderOptions()` が `copilot.effort` を raw 形式へ書き戻すようになり、設定の保存時に値が消えなくなる
 - managed PR の判定で `takt-managed` GitHub label への依存を撤去。hidden marker `<!-- takt:managed -->` を managed PR の唯一の識別子に統一
 
 ### Internal
@@ -1355,7 +1386,7 @@
 ### Changed
 
 - **BREAKING:** 旧用語 `piece` / `movement` を完全に廃止し、`workflow` / `step` に統一 (#602, #609)。ワークフロー YAML の `piece_config:` → `workflow_config:`、`movements:` → `steps:`、`initial_movement:` → `initial_step:`、`max_movements:` → `max_steps:` への移行が必須。ディレクトリも `~/.takt/pieces/` → `~/.takt/workflows/`、`.takt/pieces/` → `.takt/workflows/` に変更。レガシー環境変数（`TAKT_PIECE_*`）は引き続きマッピングされる
-- 非対応プロバイダ向けの provider-specific オプション（`claude.allowed_tools`、`mcp_servers`、`team_leader.part_allowed_tools`）をサイレントドロップするよう変更。ワークフローをプロバイダ非依存に保てるように改善
+- 非対応プロバイダ向けのプロバイダ固有オプション（`claude.allowed_tools`、`mcp_servers`、`team_leader.part_allowed_tools`）を、通知せずに無視するよう変更。ワークフローをプロバイダに依存せず使えるように改善
 - 全レビュー系インストラクションのエビデンスガイダンスを統一: `reopened` ステータスの追加、検証ターゲット・確認内容・観測結果の記録を必須化、オープン指摘事項の脱落防止ルールを追加
 
 ### Fixed
@@ -1415,7 +1446,7 @@
 
 ### Added
 
-- `takt list` でスタックした実行中タスクを強制失敗にできる「Mark as failed」アクションを追加 (#604)
+- `takt list` で進まなくなった実行中タスクを強制的に失敗扱いにできる「Mark as failed」アクションを追加 (#604)
 - タスクレコードに `run_slug` を追加し、実行中タスクの現在のステップ情報を `meta.json` から取得可能に
 
 ### Changed
@@ -1467,7 +1498,7 @@
 ### Fixed
 
 - `pr_body_template` が `--task` オプション実行時に無視される問題を修正 (#538)
-- 既存 PR ブランチ更新時にリモートを正として worktree を作成するよう修正 (#557)
+- 既存 PR ブランチの更新時に、リモートの状態に合わせて worktree を作成するよう修正 (#557)
 - SIGINT（Ctrl+C）が AI レスポンス待機中に正しくアボートされない問題を修正 (#595)
 - mise 等のバージョン管理ツール環境下で Claude SDK サブプロセスの PATH が安定しない問題を修正 (#591)
 - ジャッジムーブメントのプロバイダフォールバック解決が正しく機能しない問題を修正 (#577)
@@ -1946,7 +1977,7 @@
 
 ### Changed
 
-- **BREAKING:** `review-only` ピースを `review` にリネーム、`review-fix-minimal` ピースを削除 — これらのピース名を参照しているユーザーは `review` に更新が必要
+- **BREAKING:** `review-only` ピースを `review` にリネームし、`review-fix-minimal` ピースを削除。これらのピース名を参照している場合は `review` に更新が必要
 - `write-tests-first` インストラクションに具体的なインテグレーションテスト判断基準を追加（「適宜 E2E テストを作成」から置き換え）
 
 ### Fixed
@@ -1977,21 +2008,21 @@
 
 ### Changed
 
-- Provider/Model 解決を `resolveProviderModelCandidates()` に一元化 — `AgentRunner` と `resolveMovementProviderModel` で同一の解決関数を使用
+- Provider/Model 解決を `resolveProviderModelCandidates()` に一元化。`AgentRunner` と `resolveMovementProviderModel` で同じ解決関数を使用
 - パイプライン実行を薄いオーケストレーター (`execute.ts`) + ステップ実装 (`steps.ts`) にリファクタリング
 - クローンディレクトリのデフォルト名を `takt-worktree`（単数）から `takt-worktrees`（複数）に変更（レガシーディレクトリの自動マイグレーション付き）
 - PR タイトルに Issue 番号プレフィックスを追加（例: `[#6] Fix the bug`）
-- タスクステータスが PR 作成失敗を反映するよう改善 — 以前はピース実行の成功のみを追跡
+- タスクステータスに PR 作成の失敗を反映するよう改善。以前はピース実行の成功のみを記録していた
 - `auto-tag.yml` がマージコミットではなく PR head SHA にタグを付与（ホットフィックスの正しいコード publish のため）
 - セッションリーダーが `sessions-index.json` が欠損・不正な場合に JSONL ファイルスキャンにフォールバック
-- `ProjectLocalConfig` 型をキャメルケースに正規化（`auto_pr`→`autoPr`、`draft_pr`→`draftPr`）— YAML のスネークケースは維持
+- `ProjectLocalConfig` 型をキャメルケースに正規化（`auto_pr`→`autoPr`、`draft_pr`→`draftPr`）。YAML のスネークケースは維持
 - `getLocalLayerValue` を switch-case から動的プロパティルックアップに簡素化
 
 ### Fixed
 
 - `repertoire add` のパイプ stdin: readline がバッファ済み行を破棄するため複数の `confirm()` 呼び出しが失敗する問題を修正 (#334)
 - `AgentRunner` での movement provider 上書き優先順位: step provider がグローバル設定に誤って上書きされていた問題を修正
-- プロジェクトレベルの `model` 設定が無視されていた問題 — `getLocalLayerValue` に `model` ケースが欠落していた
+- プロジェクトの `model` 設定が無視されていた問題を修正。`getLocalLayerValue` に `model` ケースが欠けていた
 - PR 作成失敗がタスク失敗として適切に伝搬されるよう修正（エラーメッセージ付き）(#345)
 - Claude セッション resume 候補が `sessions-index.json` 利用不可時に JSONL ファイルスキャンにフォールバック
 
@@ -2006,16 +2037,16 @@
 
 ### Added
 
-- **Repertoire パッケージシステム** (`takt repertoire add/remove/list`): GitHub から外部 TAKT パッケージをインポート・管理 — `takt repertoire add github:{owner}/{repo}@{ref}` でパッケージを `~/.takt/repertoire/` にダウンロード。アトミックなインストール、バージョン互換チェック、ロックファイル生成、確認前のパッケージ内容サマリ表示に対応
-- **@scope 参照**: piece YAML のファセット参照で `@{owner}/{repo}/{facet-name}` 構文をサポート — インストール済み repertoire パッケージのファセットを直接参照可能（例: `persona: @nrslib/takt-fullstack/expert-coder`）
-- **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張 — repertoire パッケージのピースは自パッケージ内のファセットを最優先で解決
+- **Repertoire パッケージシステム** (`takt repertoire add/remove/list`): GitHub から外部 TAKT パッケージをインポート・管理できる。`takt repertoire add github:{owner}/{repo}@{ref}` でパッケージを `~/.takt/repertoire/` にダウンロード。アトミックなインストール、バージョン互換チェック、ロックファイル生成、確認前のパッケージ内容サマリ表示に対応
+- **@scope 参照**: piece YAML のファセット参照で `@{owner}/{repo}/{facet-name}` 構文をサポート。インストール済み repertoire パッケージのファセットを直接参照可能（例: `persona: @nrslib/takt-fullstack/expert-coder`）
+- **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張。repertoire パッケージのピースは自パッケージ内のファセットを最優先で解決
 - **ピース選択に repertoire カテゴリ追加**: インストール済みの repertoire パッケージがピース選択 UI の「repertoire」カテゴリにサブカテゴリとして自動表示
 - **implement/fix インストラクションにビルドゲート追加**: `implement` と `fix` のビルトインインストラクションでテスト実行前にビルド（型チェック）の実行を必須化
 - **Repertoire パッケージドキュメント追加**: repertoire パッケージシステムの包括的なドキュメントを追加（[en](./repertoire.md), [ja](./repertoire.ja.md)）
 
 ### Changed
 
-- **BREAKING: ファセットディレクトリ構造の変更**: 全レイヤーでファセットディレクトリが `facets/` サブディレクトリ配下に移動 — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`、`~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`、`.takt/{facetType}/` → `.takt/facets/{facetType}/`。マイグレーション: カスタムファセットファイルを新しい `facets/` サブディレクトリに移動してください
+- **BREAKING: ファセットディレクトリ構造の変更**: 全レイヤーでファセットディレクトリが `facets/` サブディレクトリ配下に移動。移動先は `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`、`~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`、`.takt/{facetType}/` → `.takt/facets/{facetType}/`。カスタムファセットファイルを新しい `facets/` サブディレクトリに移動してください
 - 契約文字列のハードコード散在防止ルールをコーディングポリシーとアーキテクチャレビューインストラクションに追加
 
 ### Fixed
@@ -2048,7 +2079,7 @@
 
 ### Changed
 
-- **設定システムの刷新**: `loadConfig()` による一括マージを廃止し、`resolveConfigValue()` によるキー単位解決に移行 — global < piece < project < env の優先順位でソーストラッキングと `OptionsBuilder` のマージ方向を制御 (#324)
+- **設定システムの刷新**: `loadConfig()` による一括マージを廃止し、`resolveConfigValue()` によるキー単位の解決に移行。global < piece < project < env の優先順位で、設定元の追跡と `OptionsBuilder` のマージ方向を制御 (#324)
 
 ### Fixed
 
@@ -2061,14 +2092,14 @@
 
 ### Fixed
 
-- `@opencode-ai/sdk` を `<1.2.7` にピン留め — v1.2.7 以降のビルド成果物で v2 exports が壊れており、`npm install -g takt` 時に `Cannot find module` エラーが発生する問題を修正 (#329)
+- `@opencode-ai/sdk` を `<1.2.7` に固定。v1.2.7 以降のビルド成果物で v2 exports に不具合があり、`npm install -g takt` 時に `Cannot find module` エラーが発生する問題を修正 (#329)
 
 ## [0.20.0] - 2026-02-19
 
 ### Added
 
-- **Faceted Prompting モジュール** (`src/faceted-prompting/`): ファセット合成・解決・テンプレートレンダリング・トランケーションのスタンドアロンライブラリ — TAKT 内部への依存ゼロ。プラガブルなファセットストレージのための `DataEngine` インターフェースと `FileDataEngine`、`CompositeDataEngine` 実装を含む
-- **Analytics モジュール** (`src/features/analytics/`): ローカル専用のレビュー品質メトリクス収集 — イベント型（レビュー指摘、修正アクション、ムーブメント結果）、日付ローテーション付き JSONL ライター、レポートパーサー、メトリクス計算
+- **Faceted Prompting モジュール** (`src/faceted-prompting/`): ファセット合成・解決・テンプレートレンダリング・トランケーションの独立したライブラリ。TAKT 内部には依存しない。ファセットの保存先を差し替えるための `DataEngine` インターフェースと `FileDataEngine`、`CompositeDataEngine` 実装を含む
+- **Analytics モジュール** (`src/features/analytics/`): ローカル専用のレビュー品質メトリクス収集。イベント型（レビュー指摘、修正アクション、ムーブメント結果）、日付ローテーション付き JSONL ライター、レポートパーサー、メトリクス計算を含む
 - **`takt metrics review` コマンド**: レビュー品質メトリクスを表示（再報告カウント、ラウンドトリップ率、解決イテレーション数、ルール別 REJECT カウント、反論解決率）。`--since` で時間枠を設定可能
 - **`takt purge` コマンド**: 古いアナリティクスイベントファイルを削除。`--retention-days` で保持期間を設定可能
 - **`takt reset config` コマンド**: グローバル設定をビルトインテンプレートにリセット（既存設定の自動バックアップ付き）
@@ -2078,7 +2109,7 @@
 
 ### Changed
 
-- **README を大幅改訂**: 約950行から約270行に圧縮 — 詳細情報を専用ドキュメント（`docs/configuration.md`、`docs/cli-reference.md`、`docs/task-management.md`、`docs/ci-cd.md`、`docs/builtin-catalog.md`）に分離し、日本語版も作成。プロダクトコンセプトを4軸（すぐ始められる、実用的、再現可能、マルチエージェント）で再定義
+- **README を大幅改訂**: 約950行から約270行に短縮。詳細情報を専用ドキュメント（`docs/configuration.md`、`docs/cli-reference.md`、`docs/task-management.md`、`docs/ci-cd.md`、`docs/builtin-catalog.md`）に分離し、日本語版も作成。プロダクトコンセプトを4軸（すぐ始められる、実用的、再現可能、マルチエージェント）で再定義
 - **設定システムのリファクタリング**: 設定解決を `resolveConfigValue()` と `loadConfig()` に統一し、コードベース全体に散在していた設定アクセスパターンを解消
 - **`takt config` コマンド削除**: デフォルトへのリセットを行う `takt reset config` に置き換え
 - ビルトイン設定テンプレートのコメントと構造を刷新
@@ -2101,14 +2132,14 @@
 
 ### Added
 
-- 失敗タスク専用のリトライモードを追加 — 失敗コンテキスト（エラー詳細、失敗ムーブメント、最終メッセージ）、実行セッションデータ、ピース構成をシステムプロンプトに注入する対話ループ
-- 完了/失敗タスクの再指示用に専用 instruct システムプロンプトを追加 — タスク名・内容・ブランチ変更・リトライノートを汎用の対話プロンプトではなく直接プロンプトに注入
-- `takt list` からの直接再実行 — "execute" アクションで既存ワークツリー内で即座にタスクを実行（pending への再キューだけでなく）
-- `startReExecution` によるアトミックなタスクステータス遷移 — completed/failed から直接 running に遷移し、requeue → claim のレースコンディションを回避
-- タスク実行時のワークツリー再利用 — 既存のクローンディレクトリがディスク上に残っていればそのまま再利用（ブランチ名生成やクローン作成をスキップ）
-- 対話モードおよびサマリーシステムプロンプトにタスク履歴を注入 — completed/failed/interrupted タスクのサマリーをコンテキストとして提供
-- 対話モードおよび instruct システムプロンプトに前回実行の参照機能 — ログとレポートを参照可能に
-- `findRunForTask` / `getRunPaths` ヘルパー — タスク内容による実行セッションの自動検索
+- 失敗タスク専用のリトライモードを追加。失敗コンテキスト（エラー詳細、失敗ムーブメント、最終メッセージ）、実行セッションデータ、ピース構成をシステムプロンプトに含める対話ループ
+- 完了/失敗タスクの再指示用に専用 instruct システムプロンプトを追加。タスク名・内容・ブランチ変更・リトライノートを、この専用プロンプトに直接含める
+- `takt list` からの直接再実行に対応。"execute" アクションで既存ワークツリー内で即座にタスクを実行でき、pending への再キューも引き続き使える
+- `startReExecution` によるアトミックなタスクステータス遷移。completed/failed から直接 running に遷移し、requeue → claim のレースコンディションを回避
+- タスク実行時にワークツリーを再利用。既存のクローンディレクトリがディスク上に残っていれば、ブランチ名生成やクローン作成をスキップしてそのまま再利用
+- 対話モードおよびサマリーシステムプロンプトにタスク履歴を追加。completed/failed/interrupted タスクのサマリーをコンテキストとして提供
+- 対話モードおよび instruct システムプロンプトに前回実行の参照機能を追加。ログとレポートを参照可能に
+- `findRunForTask` / `getRunPaths` ヘルパーを追加。タスク内容に基づいて実行セッションを自動検索
 - `isStaleRunningTask` プロセスヘルパーを TaskLifecycleService から抽出し再利用可能に
 
 ### Changed
@@ -2120,7 +2151,7 @@
 
 ### Internal
 
-- `DebugConfig` をモデル・スキーマ・グローバル設定から削除 — verbose モードのみに簡素化
+- `DebugConfig` をモデル・スキーマ・グローバル設定から削除し、verbose モードのみに簡素化
 - stdin シミュレーションテストヘルパー（`stdinSimulator.ts`）を追加し、E2E 対話ループテストを実現
 - リトライモード、対話ルーティング、実行セッション注入の包括的な E2E テストを追加
 - `check:release` npm スクリプトを追加（リリース前検証用）
@@ -2129,7 +2160,7 @@
 
 ### Added
 
-- グローバル設定に `codex_cli_path` オプションと `TAKT_CODEX_CLI_PATH` 環境変数を追加 — Codex SDK が使用する CLI バイナリのパスを上書き可能に (#292)
+- グローバル設定に `codex_cli_path` オプションと `TAKT_CODEX_CLI_PATH` 環境変数を追加。Codex SDK が使用する CLI バイナリのパスを上書き可能に (#292)
   - 厳密なバリデーション付き: 絶対パス、ファイル存在確認、実行権限、制御文字の禁止
   - 優先順位: `TAKT_CODEX_CLI_PATH` 環境変数 > config.yaml の `codex_cli_path` > SDK 同梱バイナリ
 
@@ -2138,19 +2169,19 @@
 ### Added
 
 - セキュリティナレッジにマルチテナントデータ分離セクションと認可・リゾルバー整合性のコード例を追加
-- コーディングポリシーに「プロジェクトスクリプト優先」ルールを追加 — npm スクリプトが存在するのに直接ツール呼び出し（例: `npx vitest`）を検出
+- コーディングポリシーに「プロジェクトスクリプト優先」ルールを追加。npm スクリプトがあるのにツールを直接呼び出すケース（例: `npx vitest`）を検出
 
 ## [0.18.0] - 2026-02-17
 
 ### Added
 
-- `deep-research` ピースを追加 — 計画→深掘り→分析→統括の4ステップで多角的なリサーチを行うワークフロー
+- `deep-research` ピースを追加。計画→深掘り→分析→統括の4ステップで、複数の観点からリサーチするワークフロー
 - プロジェクトレベルの `.takt/` ファセット（pieces, personas, policies, knowledge, instructions, output-contracts）をバージョン管理可能に (#286)
 - リサーチ系ファセットを新規追加（research ポリシー、ナレッジ、比較分析ナレッジ、専用ペルソナ・インストラクション）
 
 ### Changed
 
-- `research` ピースをリファクタリング — ペルソナに埋め込まれていたルール・知識をポリシー・ナレッジ・インストラクションに分離し、ファセット設計に準拠
+- `research` ピースをリファクタリング。ペルソナに埋め込まれていたルール・知識をポリシー・ナレッジ・インストラクションに分離し、ファセット設計に準拠
 - 既存ピース（expert, expert-cqrs, backend, backend-cqrs, frontend）に knowledge/policy 参照を追加
 
 ### Fixed
@@ -2166,11 +2197,11 @@
 
 ### Added
 
-- ビルトインの AI アンチパターンポリシーとフロントエンドナレッジに API クライアント生成の一貫性ルールを追加 — 生成ツール（Orval 等）が存在するプロジェクトでの手書きクライアント混在を検出
+- ビルトインの AI アンチパターンポリシーとフロントエンドナレッジに API クライアント生成の一貫性ルールを追加。生成ツール（Orval 等）があるプロジェクトに、手書きのクライアントが混在しているケースを検出
 
 ### Fixed
 
-- タスクストアのロック解放時に EPERM クラッシュが発生する問題を修正 — ファイルベースロックからインメモリガードに置き換え
+- タスクストアのロック解放時に EPERM クラッシュが発生する問題を修正。ファイルベースロックからインメモリガードに置き換え
 
 ### Internal
 
@@ -2180,39 +2211,39 @@
 
 ### Added
 
-- `expert-mini`、`expert-cqrs-mini` ピースを追加 — Expert ピースの軽量版として、plan → implement → 並列レビュー（AI アンチパターン＋スーパーバイザー）→ 修正のワークフローを提供
+- `expert-mini`、`expert-cqrs-mini` ピースを追加。Expert ピースの軽量版として、plan → implement → 並列レビュー（AI アンチパターン＋スーパーバイザー）→ 修正のワークフローを提供
 - ピースカテゴリの「⚡ Mini」「🔧 エキスパート」に新ピースを追加
 
 ### Fixed
 
-- パーミッションモード未解決時にエラーをスローしていた問題を修正 — `readonly` にフォールバックするように変更
+- パーミッションモードを解決できないときにエラーをスローしていた問題を修正。`readonly` にフォールバックするよう変更
 
 ## [0.17.1] - 2026-02-15
 
 ### Changed
 
-- `.takt/.gitignore` テンプレートをホワイトリスト方式に変更 — デフォルトで全ファイルを無視し、`config.yaml` のみを追跡対象に。新しいファイルが追加されても ignore 漏れが発生しない
+- `.takt/.gitignore` テンプレートをホワイトリスト方式に変更。デフォルトで全ファイルを無視し、`config.yaml` のみを追跡対象に。新しいファイルが追加されても ignore 漏れが発生しない
 
 ## [0.17.0] - 2026-02-15
 
 ### Added
 
-- **mini ピースシリーズ**: `default-mini`、`frontend-mini`、`backend-mini`、`backend-cqrs-mini` を追加 — `coding`/`minimal` の後継として、並列レビュー（AI アンチパターン＋スーパーバイザー）付きの軽量開発ピースを提供
+- **mini ピースシリーズ**: `default-mini`、`frontend-mini`、`backend-mini`、`backend-cqrs-mini` を追加。`coding`/`minimal` の後継として、並列レビュー（AI アンチパターン＋スーパーバイザー）付きの軽量開発ピースを提供
 - ピースカテゴリに「⚡ Mini」カテゴリを追加
-- `supervisor-validation` 出力契約を追加 — 要件充足チェックテーブル（Requirements Fulfillment Check）で要件ごとにコード根拠を提示する形式
+- `supervisor-validation` 出力契約を追加。要件充足チェックテーブル（Requirements Fulfillment Check）で要件ごとにコード上の根拠を提示する形式
 - `getJudgmentReportFiles()`: `use_judge` フラグにより Phase 3 ステータス判定の対象レポートをフィルタリング可能に
 - Output contract に finding_id トラッキングを追加（new/persists/resolved セクションによる指摘の追跡）
 
 ### Changed
 
-- **BREAKING: `coding` ピースと `minimal` ピースを削除** — mini ピースシリーズに置き換え。`coding` → `default-mini`、`minimal` → `default-mini` への移行を推奨
-- **BREAKING: Output contract を item 形式に統一** — `use_judge`（boolean）と `format`（string）フィールドを必須化し、`OutputContractLabelPath`（label:path 形式）を廃止
+- **BREAKING: `coding` ピースと `minimal` ピースを削除**。mini ピースシリーズに置き換え。`coding` → `default-mini`、`minimal` → `default-mini` への移行を推奨
+- **BREAKING: Output contract を item 形式に統一**。`use_judge`（boolean）と `format`（string）フィールドを必須化し、`OutputContractLabelPath`（label:path 形式）を廃止
 - ランタイム環境ディレクトリを `.runtime` から `.takt/.runtime` に移動
-- スーパーバイザーの要件充足検証を強化: 要件を個別に抽出し、コード（file:line）に対して1件ずつ検証する方式に変更 — 「おおむね完了」は APPROVE の根拠にならない
+- スーパーバイザーの要件充足検証を強化: 要件を個別に抽出し、コード（file:line）に対して1件ずつ検証する方式に変更。「おおむね完了」は APPROVE の根拠にならない
 
 ### Fixed
 
-- クローン/worktree ディレクトリの削除にリトライ機構を追加（`maxRetries: 3`, `retryDelay: 200`）— ファイルロックによる一時的な削除失敗を軽減
+- クローン/worktree ディレクトリの削除にリトライ機構を追加（`maxRetries: 3`, `retryDelay: 200`）。ファイルロックによる一時的な削除失敗を軽減
 
 ### Internal
 
@@ -2223,11 +2254,11 @@
 
 ### Added
 
-- **プロバイダー別パーミッションプロファイル（`provider_profiles`）**: グローバル設定（`~/.takt/config.yaml`）およびプロジェクト設定（`.takt/config.yaml`）でプロバイダーごとのデフォルトパーミッションモードとムーブメント単位のオーバーライドを定義可能に — 5段階の優先順位解決（project override → global override → project default → global default → `required_permission_mode` 下限補正）
+- **プロバイダー別パーミッションプロファイル（`provider_profiles`）**: グローバル設定（`~/.takt/config.yaml`）およびプロジェクト設定（`.takt/config.yaml`）で、プロバイダーごとのデフォルトパーミッションモードとムーブメント単位のオーバーライドを定義可能に。5段階の優先順位で解決する（project override → global override → project default → global default → `required_permission_mode` 下限補正）
 
 ### Changed
 
-- **BREAKING: `permission_mode` → `required_permission_mode`**: ムーブメントの `permission_mode` フィールドを `required_permission_mode` にリネーム — 下限（フロア）として機能し、実際のパーミッションモードは `provider_profiles` で解決される設計に変更。旧 `permission_mode` は `z.never()` で拒否されるため後方互換性なし
+- **BREAKING: `permission_mode` → `required_permission_mode`**: ムーブメントの `permission_mode` フィールドを `required_permission_mode` にリネーム。下限（フロア）として機能し、実際のパーミッションモードは `provider_profiles` で解決される設計に変更。旧 `permission_mode` は `z.never()` で拒否されるため後方互換性なし
 - ビルトイン `config.yaml` テンプレートを全面リライト: コメント整理、`provider_profiles` の説明と使用例を追加、OpenCode 関連設定の追加
 
 ### Internal
@@ -2239,8 +2270,8 @@
 
 ### Added
 
-- **ランタイム環境プリセット**: `piece_config.runtime.prepare` およびグローバル設定の `runtime.prepare` で、ピース実行前に環境準備スクリプトを自動実行可能に — ビルトインプリセット（`gradle`, `node`）で依存解決・キャッシュ設定を `.runtime/` ディレクトリに隔離
-- **ループモニターの judge インストラクション**: `loop_monitors` の judge 設定で `instruction_template` フィールドをサポート — ループ判定の指示をインストラクションファセットとして外部化し、ビルトインピース（expert, expert-cqrs）に適用
+- **ランタイム環境プリセット**: `piece_config.runtime.prepare` およびグローバル設定の `runtime.prepare` で、ピース実行前に環境準備スクリプトを自動実行可能に。ビルトインプリセット（`gradle`, `node`）で依存解決・キャッシュ設定を `.runtime/` ディレクトリに隔離
+- **ループモニターの judge インストラクション**: `loop_monitors` の judge 設定で `instruction_template` フィールドをサポート。ループ判定の指示をインストラクションファセットとして外部化し、ビルトインピース（expert, expert-cqrs）に適用
 
 ### Internal
 
@@ -2251,21 +2282,21 @@
 
 ### Added
 
-- **`takt list` インストラクトモード (#267)**: 既存ブランチに対して追加指示を行えるインストラクトモードを追加 — 会話ループで要件を詳細化してからピース実行が可能に
+- **`takt list` インストラクトモード (#267)**: 既存ブランチに追加指示を出せるインストラクトモードを追加。会話ループで要件を詳しくしてからピースを実行可能に
 - **`takt list` 完了タスクアクション (#271)**: 完了タスクに対する diff 表示・ブランチ操作（マージ、削除）を追加
 - **Claude サンドボックス設定**: `provider_options.claude.sandbox` でサンドボックスの除外コマンド（`excluded_commands`）やサンドボックス無効化（`allow_unsandboxed_commands`）を設定可能に
-- **`provider_options` のグローバル/プロジェクト設定**: `provider_options` を `~/.takt/config.yaml`（グローバル）および `.takt/config.yaml`（プロジェクト）で設定可能に — ピースレベル設定の最低優先フォールバックとして機能
+- **`provider_options` のグローバル/プロジェクト設定**: `provider_options` を `~/.takt/config.yaml`（グローバル）および `.takt/config.yaml`（プロジェクト）で設定可能に。ピースレベルの設定に対して、優先順位が最も低いフォールバックとして機能
 
 ### Changed
 
 - **provider/model の解決ロジックを AgentRunner に集約**: provider 解決でプロジェクト設定をカスタムエージェント設定より優先するよう修正。ステップレベルの `stepModel` / `stepProvider` による上書きを追加
 - **ポストエクスキューションの共通化**: インタラクティブモードとインストラクトモードで post-execution フロー（auto-commit, push, PR 作成）を `postExecution.ts` に共通化
-- **スコープ縮小防止策をインストラクションに追加**: plan, ai-review, supervise のインストラクションに要件の取りこぼし検出を追加 — plan では要件ごとの「変更要/不要」判定と根拠提示を必須化、supervise では計画レポートの鵜呑み禁止
+- **スコープ縮小防止策をインストラクションに追加**: plan, ai-review, supervise のインストラクションに要件の漏れを検出する手順を追加。plan では要件ごとの「変更要/不要」判定と根拠の提示を必須とし、supervise では計画レポートをそのまま信用することを禁止
 
 ### Fixed
 
 - インタラクティブモードの選択肢が非同期実行時に表示されてしまうバグを修正 (#266)
-- OpenCode のパラレル実行時にセッション ID を引き継げない問題を修正 — サーバーをシングルトン化し並列実行時の競合を解消
+- OpenCode のパラレル実行時にセッション ID を引き継げない問題を修正。サーバーをシングルトン化し、並列実行時の競合を解消
 - OpenCode SDK サーバー起動タイムアウトを 30 秒から 60 秒に延長
 
 ### Internal
@@ -2282,27 +2313,27 @@
 
 ### Added
 
-- **Team Leader ムーブメント**: ムーブメント内でチームリーダーエージェントがタスクを動的にサブタスク（Part）へ分解し、複数のパートエージェントを並列実行する新しいムーブメントタイプ — `team_leader` 設定（persona, maxParts, timeoutMs, partPersona, partEdit, partPermissionMode）をサポート (#244)
-- **構造化出力（Structured Output）**: エージェント呼び出しに JSON Schema ベースの構造化出力を導入 — タスク分解（decomposition）、ルール評価（evaluation）、ステータス判定（judgment）の3つのスキーマを `builtins/schemas/` に追加。Claude / Codex 両プロバイダーで対応 (#257)
-- **`provider_options` ピースレベル設定**: ピース全体（`piece_config.provider_options`）および個別ムーブメントにプロバイダー固有オプション（`codex.network_access`、`opencode.network_access`）を設定可能に — 全ビルトインピースに Codex/OpenCode のネットワークアクセスを有効化
-- **`backend` ビルトインピース**: バックエンド開発特化のピースを新規追加 — バックエンド、セキュリティ、QA の並列専門家レビュー対応
-- **`backend-cqrs` ビルトインピース**: CQRS+ES 特化のバックエンド開発ピースを新規追加 — CQRS+ES、セキュリティ、QA の並列専門家レビュー対応
+- **Team Leader ムーブメント**: ムーブメント内でチームリーダーエージェントがタスクを動的にサブタスク（Part）へ分解し、複数のパートエージェントを並列実行する新しいムーブメントタイプ。`team_leader` 設定（persona, maxParts, timeoutMs, partPersona, partEdit, partPermissionMode）をサポート (#244)
+- **構造化出力（Structured Output）**: エージェント呼び出しに JSON Schema ベースの構造化出力を導入。タスク分解（decomposition）、ルール評価（evaluation）、ステータス判定（judgment）の3つのスキーマを `builtins/schemas/` に追加。Claude / Codex 両プロバイダーで対応 (#257)
+- **`provider_options` ピースレベル設定**: ピース全体（`piece_config.provider_options`）および個別ムーブメントにプロバイダー固有オプション（`codex.network_access`、`opencode.network_access`）を設定可能に。全ビルトインピースで Codex/OpenCode のネットワークアクセスを有効化
+- **`backend` ビルトインピース**: バックエンド開発に特化したピースを新規追加。バックエンド、セキュリティ、QA の専門家による並列レビューに対応
+- **`backend-cqrs` ビルトインピース**: CQRS+ES に特化したバックエンド開発ピースを新規追加。CQRS+ES、セキュリティ、QA の専門家による並列レビューに対応
 - **AbortSignal によるパートタイムアウト**: Team Leader のパート実行にタイムアウト制御と親シグナル連動の AbortSignal を追加
 - **エージェントユースケース層**: `agent-usecases.ts` にエージェント呼び出しのユースケース（`decomposeTask`, `executeAgent`, `evaluateRules`）を集約し、構造化出力の注入を一元管理
 
 ### Changed
 
-- **BREAKING: パブリック API の整理**: `src/index.ts` の公開 API を大幅に絞り込み — 内部実装の詳細（セッション管理、Claude/Codex クライアント詳細、ユーティリティ関数等）を非公開化し、安定した最小限の API サーフェスに (#257)
+- **BREAKING: パブリック API の整理**: `src/index.ts` の公開 API を大幅に絞り込み。内部実装の詳細（セッション管理、Claude/Codex クライアント詳細、ユーティリティ関数等）を非公開化し、安定した最小限の API のみを公開 (#257)
 - **Phase 3 判定ロジックの刷新**: `JudgmentDetector` / `FallbackStrategy` を廃止し、構造化出力ベースの `status-judgment-phase.ts` に統合。判定の安定性と保守性を向上 (#257)
 - **Report フェーズのリトライ改善**: Report Phase（Phase 2）が失敗した場合、新規セッションで自動リトライするよう改善 (#245)
-- **Ctrl+C シャットダウンの統一**: `sigintHandler.ts` を廃止し、`ShutdownManager` に統合 — グレースフルシャットダウン → タイムアウト → 強制終了の3段階制御を全プロバイダーで共通化 (#237)
+- **Ctrl+C シャットダウンの統一**: `sigintHandler.ts` を廃止し、`ShutdownManager` に統合。グレースフルシャットダウン → タイムアウト → 強制終了の3段階制御を全プロバイダーで共通化 (#237)
 - **スコープ外削除の防止ガードレール**: coder ペルソナにタスク指示書の範囲外の削除・構造変更を禁止するルールを追加。planner ペルソナにスコープ規律と参照資料の優先順位を追加
 - フロントエンドナレッジにデザイントークンとテーマスコープのガイダンスを追加
 - アーキテクチャナレッジの改善（en/ja 両対応）
 
 ### Fixed
 
-- clone 時に既存ブランチの checkout が失敗する問題を修正 — `git clone --shared` で `--branch` を渡してからリモートを削除するよう変更
+- clone 時に既存ブランチの checkout が失敗する問題を修正。`git clone --shared` で `--branch` を渡してからリモートを削除するよう変更
 - Issue 参照付きブランチ名から `#` を除去（`takt/#N/slug` → `takt/N/slug`）
 - OpenCode の report フェーズで deprecated ツール依存を解消し、permission 中心の制御へ移行 (#246)
 - 不要な export を排除し、パブリック API の整合性を確保
@@ -2325,7 +2356,7 @@
 
 ### Fixed
 
-- セッションが見つからない場合に無言で新規セッションに進む問題を修正 — セッション未検出時に info メッセージを表示するように改善
+- セッションが見つからない場合に通知なしで新規セッションに進む問題を修正。セッション未検出時に info メッセージを表示するよう改善
 
 ### Internal
 
@@ -2337,12 +2368,12 @@
 
 ### Added
 
-- **OpenCode プロバイダー**: 第3のプロバイダーとして OpenCode をネイティブサポート — `@opencode-ai/sdk/v2` による SDK 統合、権限マッピング（readonly/edit/full → reject/once/always）、SSE ストリーム処理、リトライ機構（最大3回）、10分タイムアウトによるハング検出 (#236, #238)
-- **Arpeggio ムーブメント**: データ駆動バッチ処理の新ムーブメントタイプ — CSV データソースからバッチ分割、テンプレート展開（`{line:N}`, `{col:N:name}`, `{batch_index}`）、並行 LLM 呼び出し（Semaphore 制御）、concat/custom マージ戦略をサポート (#200)
-- **`frontend` ビルトインピース**: フロントエンド開発特化のピースを新規追加 — React/Next.js 向けの knowledge 注入、coding/testing ポリシー適用、並列アーキテクチャレビュー対応
-- **Slack Webhook 通知**: ピース実行完了時に Slack へ自動通知 — `TAKT_NOTIFY_WEBHOOK` 環境変数で設定、10秒タイムアウト、失敗時も他処理をブロックしない (#234)
-- **セッション選択 UI**: インタラクティブモード開始時に Claude Code の過去セッションから再開可能なセッションを選択可能に — 最新10セッションの一覧表示、初期入力・最終応答プレビュー付き (#180)
-- **プロバイダーイベントログ**: Claude/Codex/OpenCode の実行中イベントを NDJSON 形式でファイル出力 — `.takt/logs/{sessionId}-provider-events.jsonl` に記録、長大テキストの自動圧縮 (#236)
+- **OpenCode プロバイダー**: 第3のプロバイダーとして OpenCode をネイティブサポート。`@opencode-ai/sdk/v2` による SDK 統合、権限マッピング（readonly/edit/full → reject/once/always）、SSE ストリーム処理、リトライ機構（最大3回）、10分タイムアウトによるハング検出に対応 (#236, #238)
+- **Arpeggio ムーブメント**: データ駆動バッチ処理の新ムーブメントタイプ。CSV データソースのバッチ分割、テンプレート展開（`{line:N}`, `{col:N:name}`, `{batch_index}`）、並行 LLM 呼び出し（Semaphore 制御）、concat/custom マージ戦略をサポート (#200)
+- **`frontend` ビルトインピース**: フロントエンド開発に特化したピースを新規追加。React/Next.js 向けの knowledge、coding/testing ポリシー、並列アーキテクチャレビューに対応
+- **Slack Webhook 通知**: ピース実行完了時に Slack へ自動通知。`TAKT_NOTIFY_WEBHOOK` 環境変数で設定し、10秒でタイムアウトする。失敗しても他の処理は止めない (#234)
+- **セッション選択 UI**: インタラクティブモード開始時に Claude Code の過去セッションから再開可能なセッションを選択可能に。最新10セッションを一覧表示し、初期入力・最終応答のプレビューを含む (#180)
+- **プロバイダーイベントログ**: Claude/Codex/OpenCode の実行中イベントを NDJSON 形式で `.takt/logs/{sessionId}-provider-events.jsonl` に記録。長大なテキストは自動圧縮 (#236)
 - **プロバイダー・モデル名の出力表示**: 各ムーブメント実行時に使用中のプロバイダーとモデル名をコンソールに表示
 
 ### Changed
@@ -2376,8 +2407,8 @@
 
 ### Fixed
 
-- AI Judge がプロバイダーシステムを経由するよう修正 — `callAiJudge` を Claude 固定実装からプロバイダー経由（`runAgent`）に変更し、Codex プロバイダーでも AI 判定が正しく動作するように
-- 実行指示が長大化する問題を緩和 — implement/fix 系ムーブメントで `pass_previous_response: false` を設定し、Report Directory 内のレポートを一次情報として優先する指示に変更（en/ja 両対応）
+- AI Judge がプロバイダーシステムを経由するよう修正。`callAiJudge` を Claude 固定実装からプロバイダー経由（`runAgent`）に変更し、Codex プロバイダーでも AI 判定が正しく動作するように
+- 実行指示が長大化する問題を緩和。implement/fix 系ムーブメントで `pass_previous_response: false` を設定し、Report Directory 内のレポートを一次情報として優先する指示に変更（en/ja 両対応）
 
 ### Internal
 
@@ -2387,7 +2418,7 @@
 
 ### Added
 
-- **`e2e-test` ビルトインピース**: E2Eテスト特化のピースを新規追加 — E2E分析 → E2E実装 → レビュー → 修正のフロー（VitestベースのE2Eテスト向け）
+- **`e2e-test` ビルトインピース**: E2Eテストに特化したピースを新規追加。E2E分析 → E2E実装 → レビュー → 修正のフロー（VitestベースのE2Eテスト向け）
 - **`error` ステータス**: プロバイダーエラーを `blocked` から分離し、エラー状態を明確に区別可能に。Codex にリトライ機構を追加
 - **タスク YAML 一元管理**: タスクファイルの管理を `tasks.yaml` に統合。`TaskRecordSchema` による構造化されたタスクライフサイクル管理（pending/running/completed/failed）
 - **タスク指示書ドキュメント**: タスク指示書の構造と目的を明文化 (#174)
@@ -2405,7 +2436,7 @@
 ### Fixed
 
 - オリジナル指示の差分処理が正しく動作しない問題を修正 (#181)
-- タスク指示書のゴールが不適切にスコープ拡張される問題を修正 — ゴールを常に実装・実行に固定
+- タスク指示書のゴールが不適切にスコープ拡張される問題を修正。ゴールを常に実装・実行に固定
 
 ### Internal
 
@@ -2418,10 +2449,10 @@
 
 ### Added
 
-- **`structural-reform` ビルトインピース**: プロジェクト全体のレビューと構造改革 — `loop_monitors` を活用した反復的なコードベース再構成（段階的なファイル分割）ワークフロー
-- **`unit-test` ビルトインピース**: ユニットテスト特化のピース — テスト分析 → テスト実装 → レビュー → 修正のフロー。`loop_monitors` によるサイクル制御付き
+- **`structural-reform` ビルトインピース**: プロジェクト全体をレビューし、`loop_monitors` を使ってコードベースを繰り返し再構成するワークフロー。ファイルを段階的に分割する
+- **`unit-test` ビルトインピース**: ユニットテストに特化したピース。テスト分析 → テスト実装 → レビュー → 修正のフローで、`loop_monitors` によるサイクル制御付き
 - **`test-planner` ペルソナ**: コードベースを解析し、包括的なテスト戦略を立案する専用ペルソナ
-- **インタラクティブモードのバリアント**: ピース選択後に4種のモードから選択可能 — `assistant`（デフォルト: AI 支援による要件整理）、`persona`（最初のムーブメントのペルソナとの会話）、`quiet`（質問なしで指示書を生成）、`passthrough`（ユーザー入力をそのまま使用）
+- **インタラクティブモードのバリアント**: ピース選択後に4種のモードから選択可能。`assistant`（デフォルト: AI 支援による要件整理）、`persona`（最初のムーブメントのペルソナとの会話）、`quiet`（質問なしで指示書を生成）、`passthrough`（ユーザー入力をそのまま使用）
 - **`persona_providers` 設定**: ペルソナごとのプロバイダーオーバーライド（例: `{ coder: 'codex' }`）— ハイブリッドピースを作成せずに特定ペルソナを別プロバイダーへルーティング可能
 - **`task_poll_interval_ms` 設定**: `takt run` が実行中に新規タスクを検出するポーリング間隔を設定可能（デフォルト: 500ms、範囲: 100〜5000ms）
 - **`interactive_mode` ピースフィールド**: ピースレベルのデフォルトインタラクティブモードを上書き可能（例: AI 計画が不要なピースに `passthrough` を設定）
@@ -2430,11 +2461,11 @@
 
 ### Changed
 
-- **BREAKING:** ハイブリッド Codex ピース（`*-hybrid-codex`）を全廃 — `persona_providers` 設定で同等の機能を実現できるため、ピースファイルの重複が不要に
+- **BREAKING:** ハイブリッド Codex ピース（`*-hybrid-codex`）を全廃。`persona_providers` 設定で同等の機能を実現できるため、ピースファイルの重複が不要に
 - `tools/generate-hybrid-codex.mjs` を削除（`persona_providers` により不要）
 - 並列実行時の出力改善: ムーブメントレベルプレフィックスに並行実行時のタスクコンテキストとイテレーション情報を追加
 - Codex クライアントがストリームのハングを検出するように（10分間アイドルタイムアウト）。タイムアウト vs 外部中断をエラーメッセージで区別
-- 並列タスク実行（`takt run`）がタスク完了間のみではなく実行中にも新規追加タスクをポーリングするよう変更
+- 並列タスク実行（`takt run`）で、タスク完了の合間と実行中の両方で、新規追加タスクをポーリングするよう変更
 - 並列タスク実行でタスクごとの時間制限を廃止（従来はタイムアウトあり）
 - Issue 参照がインタラクティブモードをスキップせず、最初の入力としてインタラクティブモードを経由するよう変更
 - ビルトイン `config.yaml` を更新し、GlobalConfig の全フィールドをドキュメント化
@@ -2443,7 +2474,7 @@
 
 ### Fixed
 
-- ストリームがアイドル状態になった際に Codex プロセスが無期限にハングする問題を修正 — 10分間アクティビティがない場合に中断し、ワーカープールのスロットを解放
+- ストリームがアイドル状態になった際に Codex プロセスが無期限にハングする問題を修正。10分間アクティビティがない場合に中断し、ワーカープールのスロットを解放
 
 ### Internal
 
@@ -2459,12 +2490,12 @@
 ### Added
 
 - **`takt catalog` コマンド**: 各レイヤー（builtin/user/project）にわたって利用可能なファセット（personas, policies, knowledge, instructions, output-contracts）を一覧表示
-- **`compound-eye` ビルトインピース**: マルチモデルレビュー — 同一の指示を Claude と Codex に同時送信し、両者の回答を統合
+- **`compound-eye` ビルトインピース**: 同じ指示を Claude と Codex に同時送信し、両者の回答を統合するマルチモデルレビュー
 - **並列タスク実行**: `takt run` がワーカープールによる並行タスク実行をサポート（`concurrency` 設定で制御、デフォルト: 1）
 - **インタラクティブモードのリッチなラインエディタ**: Shift+Enter で複数行入力、カーソル移動（矢印キー、Home/End）、Option+Arrow で単語単位移動、Ctrl+A/E/K/U/W 編集、ブラケットペーストモード対応
 - **インタラクティブモードでのムーブメントプレビュー**: ピースのムーブメント構造（ペルソナ＋インストラクション）を AI プランナーに注入してタスク分析を改善（`interactive_preview_movements` 設定、デフォルト: 3）
 - **MCP サーバー設定**: ムーブメントごとの MCP（Model Context Protocol）サーバー設定。stdio/SSE/HTTP トランスポートをサポート
-- **ファセット単位の eject**: `takt eject persona coder` — ファセットをタイプと名前で個別にエジェクトしてカスタマイズ可能に
+- **ファセット単位の eject**: `takt eject persona coder` のようにタイプと名前でファセットを指定し、個別にエジェクトしてカスタマイズ可能に
 - **3層ファセット解決**: ペルソナ、ポリシー、その他のファセットを project → user → builtin の順で解決（名前ベースの参照をサポート）
 - **`pr-commenter` ペルソナ**: レビュー所見を GitHub PR コメントとして投稿する専用ペルソナ
 - **`notification_sound` 設定**: 通知音の有効/無効を設定可能（デフォルト: true）
@@ -2498,11 +2529,11 @@ alpha.1 の内容を正式リリース。機能変更なし。
 ### Added
 
 - **Faceted Prompting アーキテクチャ**: プロンプト構成要素を独立ファイルとして管理し、ピース間で自由に組み合わせ可能に
-  - `personas/` — エージェントの役割・専門性を定義するペルソナプロンプト
-  - `policies/` — コーディング規約・品質基準・禁止事項を定義するポリシー
-  - `knowledge/` — ドメイン知識・アーキテクチャ情報を定義するナレッジ
-  - `instructions/` — ムーブメント固有の手順を定義するインストラクション
-  - `output-contracts/` — レポート出力フォーマットを定義するアウトプットコントラクト
+  - `personas/`: エージェントの役割・専門性を定義するペルソナプロンプト
+  - `policies/`: コーディング規約・品質基準・禁止事項を定義するポリシー
+  - `knowledge/`: ドメイン知識・アーキテクチャ情報を定義するナレッジ
+  - `instructions/`: ムーブメント固有の手順を定義するインストラクション
+  - `output-contracts/`: レポート出力フォーマットを定義するアウトプットコントラクト
   - ピースYAMLのセクションマップ（`personas:`, `policies:`, `knowledge:`）でキーとファイルパスを対応付け、ムーブメントからキーで参照
 - **Output Contracts と Quality Gates**: レポート出力の構造化定義と品質基準の AI ディレクティブ
   - `output_contracts` フィールドでレポート定義（`report` フィールドを置き換え）
