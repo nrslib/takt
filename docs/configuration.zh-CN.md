@@ -287,6 +287,8 @@ daemon:
 
 省略 `remote_worker` 时不启动网络监听。即使明确指定内置上限，也不会超过项目的 `concurrency`。PR 合并任务和没有 origin 的任务仅由内置 worker 执行；内置上限为0时无法推进。在 daemon 机器上用 `takt worker list` 查看注册名称和上限，通过 [worker CLI](./cli-reference.zh-CN.md#worker) 管理注册。没有直接在 YAML 中编辑注册列表的设置。
 
+使用 `port: 0` 时，可在 `~/.takt/daemon-logs/*.json` 的启动 info 记录的 `message` 中查看实际监听端口。设置 `TAKT_CONFIG_DIR` 后，保存位置为 `$TAKT_CONFIG_DIR/daemon-logs/*.json`。请将 `Daemon started (12345), worker port: 49152` 中的 PID 与当前 daemon 的 PID 核对。手动启动（`takt daemon --resident`）和自动启动都会写入此记录。使用监听主机和记录的端口组成 worker URL，例如主机 `127.0.0.1` 和端口 `49152` 对应 `http://127.0.0.1:49152`。连接 localhost 以外的地址必须使用 HTTPS。使用反向代理时，worker 应连接代理的公开 HTTPS URL，由代理转发到 daemon 内部的监听主机和端口；公开端口可能与日志记录的内部端口不同。
+
 认证值仅接受 `${ENV_NAME}` 引用，不接受明文秘密值。引用在 daemon 环境中解析，变量为空、未设置或超过8192字节时，分发失败。不会自动分发未配置的环境变量。
 
 | `providers` 键 | 任务子进程变量 |

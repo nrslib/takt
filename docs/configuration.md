@@ -294,6 +294,8 @@ daemon:
 
 Omitting `remote_worker` disables the network listener. An explicit builtin limit never overrides the project's `concurrency` limit. PR merge tasks and tasks without origin run only on builtin and cannot progress with a builtin limit of 0. Inspect registered worker names and limits with `takt worker list` on the daemon machine; manage registrations through the [worker CLI](./cli-reference.md#worker). There is no YAML setting for editing the registration list directly.
 
+When `port: 0` is used, find the actual listening port in the startup info record's `message` in `~/.takt/daemon-logs/*.json`. If `TAKT_CONFIG_DIR` is set, look in `$TAKT_CONFIG_DIR/daemon-logs/*.json` instead. Match the PID in `Daemon started (12345), worker port: 49152` to the current daemon's PID. Manual startup (`takt daemon --resident`) and automatic startup both write this record. Combine the listening host and the recorded port to form the worker URL; for example, host `127.0.0.1` and port `49152` give `http://127.0.0.1:49152`. Worker URLs outside localhost require HTTPS. With a reverse proxy, use its public HTTPS URL for workers and forward it to the daemon's internal listening host and port; the public port can differ from the recorded port.
+
 Credential values accept only `${ENV_NAME}` references, not plaintext secrets. References resolve in the daemon's environment. Empty, unset, or larger-than-8192-byte values cause delivery to fail. Unconfigured environment variables are not automatically distributed.
 
 | `providers` key | Task subprocess variable |

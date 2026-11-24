@@ -20,6 +20,7 @@ import type { RemoteControl } from '../../core/worker-pool/remoteExecutionProtoc
 import type { RemoteArtifacts } from '../../core/worker-pool/remoteExecutionProtocol.js';
 import { REMOTE_CHUNK_BYTES } from '../../core/worker-pool/remoteExecutionProtocol.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
+import { TaskStoppedError } from './taskStop.js';
 
 function remoteRecord(task: TaskRecord): RemoteTaskRecord | undefined {
   if (task.remote_assignment === undefined || task.status === 'exceeded') return undefined;
@@ -126,9 +127,10 @@ export class RemoteTaskLifecycle {
           updated = remoteRecord(next)!;
           return next;
         }
-        const prFailed = request.kind === 'finish' && request.success && request.prFailed === true && receiptFailure === undefined;
-        const success = request.kind === 'finish' && request.success && !prFailed && receiptFailure === undefined;
-        const detail = request.kind === 'fail' ? request.reason
+        const stopped = request.kind === 'finish' && task.stop_request?.execution_id === assignment.executionId;
+        const prFailed = !stopped && request.kind === 'finish' && request.success && request.prFailed === true && receiptFailure === undefined;
+        const success = !stopped && request.kind === 'finish' && request.success && !prFailed && receiptFailure === undefined;
+        const detail = stopped ? new TaskStoppedError(task.name, assignment.executionId).message : request.kind === 'fail' ? request.reason
           : receiptFailure ?? (prFailed ? request.prError ?? 'Failed to create pull request.' : request.reason) ?? 'Remote workflow execution failed';
         const reason = request.kind === 'finish'
           ? sanitizeRemoteFailureReason(assignment.workerName, detail, []) : sanitizeSensitiveText(detail);
@@ -138,12 +140,12 @@ export class RemoteTaskLifecycle {
             retryReservation: !success && goal?.executionStatus !== 'aborted' },
           status: success ? 'completed' : prFailed ? 'pr_failed' : 'failed', completed_at: new Date().toISOString(), owner_pid: null,
           failure: success ? undefined : prFailed ? { error: `PR creation failed: ${reason}` }
-            : { error: reason, retryable: request.kind === 'finish' && request.retryable === true },
+            : { error: reason, retryable: !stopped && request.kind === 'finish' && request.retryable === true },
           ...(request.kind === 'finish' && received !== undefined && request.prUrl !== undefined ? { pr_url: request.prUrl } : {}),
           run_slug: received?.runSlug ?? task.run_slug ?? `remote-${assignment.executionId}`,
           ...(received === undefined ? {} : { branch: received.branch, remote_artifacts: received }),
-          completion: { success, interrupted: request.kind === 'fail' || request.interrupted === true,
-            workflowResult: request.kind === 'finish' && receiptFailure === undefined ? request.workflowResult ?? (success ? 'completed' : 'error') : 'error',
+          completion: { success, interrupted: stopped || request.kind === 'fail' || request.interrupted === true,
+            workflowResult: stopped ? 'aborted' : request.kind === 'finish' && receiptFailure === undefined ? request.workflowResult ?? (success ? 'completed' : 'error') : 'error',
             ...(success ? {} : { failureReason: reason }),
             ...(received === undefined ? { shaUnavailableReason: reason } : { branch: received.branch, sha: received.sha }) },
         });

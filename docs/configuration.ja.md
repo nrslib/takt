@@ -294,6 +294,8 @@ daemon:
 
 `remote_worker` を省略するとネットワーク待受は開始しません。組み込み上限を明示しても、プロジェクト側の `concurrency` を超えて実行しません。PRマージ用タスクと origin のないタスクは組み込み限定で、組み込み上限が0だと進みません。登録済み worker の名前と上限は daemon 側の `takt worker list` で確認し、登録・削除は [worker CLI](./cli-reference.ja.md#worker)で行います。登録一覧を YAML に直接書く設定はありません。
 
+`port: 0` の実ポートは `~/.takt/daemon-logs/*.json` にある起動infoの `message` で確認できます。`TAKT_CONFIG_DIR` を指定した場合の保存先は `$TAKT_CONFIG_DIR/daemon-logs/*.json` です。`Daemon started (12345), worker port: 49152` のPIDを現在の daemon のPIDと照合してください。手動起動（`takt daemon --resident`）と自動起動の両方で記録されます。待受ホストと記録されたポートから worker の接続URLを作ります。たとえばホストが `127.0.0.1` で実ポートが `49152` なら `http://127.0.0.1:49152` です。localhost以外への接続にはHTTPSが必要です。リバースプロキシを使う場合は公開HTTPS URLを worker に指定し、daemon内部の待受ホストと実ポートへ転送します。公開ポートとログに記録された内部ポートは異なる場合があります。
+
 認証設定の値は `${ENV_NAME}` 形式の参照だけを受け付け、平文の秘密値は受け付けません。参照先は daemon の環境で解決されます。空・未設定、または8192バイトを超える値では認証配送が失敗します。設定していない環境変数を自動で全配送することはありません。
 
 | `providers` のキー | タスク子環境の変数 |

@@ -314,7 +314,7 @@ export async function runDaemon(resident = false): Promise<void> {
   const failures: unknown[] = [];
   try {
     daemon = await startDaemon({ configDirectory: directory, owner, tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
-    await logger.write('info', `Daemon started (${process.pid})`);
+    await logger.write('info', `Daemon started (${process.pid})${daemon.workerPort === undefined ? '' : `, worker port: ${daemon.workerPort}`}`);
     await Promise.race([stopped, daemon.stopped]);
   } catch (error) {
     if (daemon === undefined) cleanupSucceeded = !(error instanceof DaemonCleanupError);

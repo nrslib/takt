@@ -8,6 +8,8 @@ import { TasksFileSchema, type TasksFileData } from '../infra/task/schema.js';
 import { executionIdentity } from '../core/worker-pool/remoteProtocol.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { sanitizeRemoteFailureReason } from '../core/worker-pool/remoteFailure.js';
+import { TaskStoppedError } from '../infra/task/taskStop.js';
+import { deferred } from './helpers/controlledDaemon.js';
 
 const doubles = vi.hoisted(() => ({ git: vi.fn(), text: vi.fn(), sequence: vi.fn(), sha: vi.fn(), goal: vi.fn(), event: vi.fn(), updateGoal: vi.fn() }));
 vi.mock('../infra/goals/git-command.js', () => ({ runGoalGit: doubles.git, resolveGoalBranchSha: doubles.sha, goalGitText: doubles.text }));
@@ -275,6 +277,96 @@ it('saves a remote stop request without a local PID and keeps the same execution
   expect(f.state().tasks[0]!.stop_request).toEqual(requested);
   expect(doubles.event).not.toHaveBeenCalled();
 });
+
+it.each(['before finish', 'during fetch', 'after finish'] as const)(
+  'honors a stop accepted %s while preserving completion without a stop', async (timing) => {
+    for (const stop of [false, true]) {
+      doubles.event.mockClear();
+      doubles.git.mockResolvedValue({ output: Buffer.from('https://example.test/repo.git\n'), code: 0, truncated: false });
+      const f = fixture();
+      const claimed = await f.lifecycle.request({ ...f.claim, leaseExpiresAt: Date.now() + 60_000 }, 1);
+      if (claimed.kind !== 'claim' || claimed.assignment === null) throw new Error('Expected claim');
+      const assignment = executionIdentity(claimed.assignment);
+      const service = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', f.store);
+      const artifacts = { branch: claimed.assignment.branch, sha: 'b'.repeat(40),
+        runSlug: `remote-${assignment.executionId}`, finalLogSequence: 2 };
+      const fetchStarted = deferred<void>();
+      const releaseFetch = deferred<void>();
+      doubles.git.mockResolvedValue({ code: 1, output: Buffer.alloc(0), truncated: false });
+      doubles.text.mockImplementation(async (_cwd: string, args: string[]) => {
+        if (args[0] === 'fetch') { fetchStarted.resolve(); await releaseFetch.promise; }
+        return args[0] === 'rev-parse' ? artifacts.sha : '';
+      });
+      const requestStop = () => {
+        service.requestTaskStop(goalRecord().id, 'T', assignment.executionId);
+        expect(f.state().tasks[0]!.status).toBe('running');
+        expect(doubles.event).not.toHaveBeenCalled();
+      };
+      if (stop && timing === 'before finish') requestStop();
+      const request = { kind: 'finish' as const, assignment, now: Date.now(), success: true, artifacts };
+      const finish = f.lifecycle.request(request, 1);
+      try {
+        await fetchStarted.promise;
+        if (stop && timing === 'during fetch') requestStop();
+      } finally { releaseFetch.resolve(); }
+      await finish;
+      if (stop && timing === 'after finish') {
+        expect(() => service.requestTaskStop(goalRecord().id, 'T', assignment.executionId)).toThrow();
+      }
+      const stopped = stop && timing !== 'after finish';
+      const task = f.state().tasks[0]!;
+      expect(task).toMatchObject({ status: stopped ? 'failed' : 'completed', remote_artifacts: artifacts,
+        completion: { success: !stopped, interrupted: stopped, workflowResult: stopped ? 'aborted' : 'completed',
+          branch: artifacts.branch, sha: artifacts.sha } });
+      if (stopped) {
+        const reason = new TaskStoppedError('T', assignment.executionId).message;
+        expect(task.failure?.error).toContain(reason);
+        expect(task.completion?.failureReason).toBe(task.failure?.error);
+        expect(task.failure?.retryable).not.toBe(true);
+      }
+      expect(doubles.event).toHaveBeenCalledExactlyOnceWith('/project', expect.objectContaining({ result: task.completion }));
+      const saved = structuredClone(f.state());
+      await f.lifecycle.request(request, 1);
+      expect(f.state()).toEqual(saved);
+      expect(doubles.event).toHaveBeenCalledOnce();
+    }
+  });
+
+it.each(['PR', 'workflow', 'forced failure'] as const)(
+  'resolves stop requests against %s and preserves failure without a stop', async (failure) => {
+    for (const stop of [false, true]) {
+      doubles.event.mockClear();
+      doubles.git.mockResolvedValue({ output: Buffer.from('https://example.test/repo.git\n'), code: 0, truncated: false });
+      const f = fixture();
+      const claimed = await f.lifecycle.request({ ...f.claim, leaseExpiresAt: Date.now() + 60_000 }, 1);
+      if (claimed.kind !== 'claim' || claimed.assignment === null) throw new Error('Expected claim');
+      const assignment = executionIdentity(claimed.assignment);
+      if (stop) new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', f.store)
+        .requestTaskStop(goalRecord().id, 'T', assignment.executionId);
+      const reason = `${failure} failed`;
+      const artifacts = { branch: claimed.assignment.branch, sha: 'b'.repeat(40),
+        runSlug: `remote-${assignment.executionId}`, finalLogSequence: 2 };
+      doubles.git.mockResolvedValue({ code: 1, output: Buffer.alloc(0), truncated: false });
+      doubles.text.mockImplementation(async (_cwd: string, args: string[]) => args[0] === 'rev-parse' ? artifacts.sha : '');
+      await f.lifecycle.request(failure === 'forced failure'
+        ? { kind: 'fail', assignment, reason }
+        : { kind: 'finish', assignment, now: Date.now(), success: failure === 'PR',
+          workflowResult: failure === 'PR' ? 'completed' : 'error', reason, retryable: true,
+          ...(failure === 'PR' ? { prFailed: true, prError: reason, artifacts } : {}) }, 1);
+      const stopped = stop && failure !== 'forced failure';
+      const task = f.state().tasks[0]!;
+      expect(task.status).toBe(!stopped && failure === 'PR' ? 'pr_failed' : 'failed');
+      expect(task.completion).toMatchObject({ success: false,
+        interrupted: stopped || failure === 'forced failure',
+        workflowResult: stopped ? 'aborted' : failure === 'PR' ? 'completed' : 'error' });
+      expect(task.failure?.error).toContain(stopped ? new TaskStoppedError('T', assignment.executionId).message : reason);
+      if (stopped) {
+        expect(task.completion?.failureReason).toBe(task.failure?.error);
+        expect(task.failure?.retryable).not.toBe(true);
+      }
+      expect(doubles.event).toHaveBeenCalledExactlyOnceWith('/project', expect.objectContaining({ result: task.completion }));
+    }
+  });
 
 it.each(['fail', 'finish'] as const)('reserves the original worker after a remote %s and restores the reservation', async (kind) => {
   const f = fixture();
