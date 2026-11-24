@@ -94,6 +94,7 @@
     "eval:prompts:initial-review-external-identity-wiring": "node eval/scripts/prepare.mjs initial-review-external-identity-wiring && node eval/scripts/run-evals.mjs initial-review-external-identity-wiring",
     "eval:prompts:final-readiness-precision": "node eval/scripts/prepare.mjs final-readiness-precision && node eval/scripts/run-evals.mjs final-readiness-precision",
     "eval:tell": "vitest run --config vitest.config.tell-eval.ts",
+    "eval:director:fire": "node --import tsx src/__tests__/helpers/director-fire-evaluation.ts",
     "test": "npm run test:type-contracts && npm run test:deepseek-harness:types && npm run test:types && node scripts/run-npm-test.mjs",
     "pretest": "npm run patch:dependencies",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",

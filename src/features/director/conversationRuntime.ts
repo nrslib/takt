@@ -17,9 +17,14 @@ export async function prepareDirectorTurn(
   const plan = createDirectorConversationPlan(configDirectory, overrides);
   const turnScope = new TurnToolScope();
   turnScope.begin(signal);
-  const connection = await startLocalMcpConnection(() => createDirectorMcpServer(configDirectory, actions, signal, turnScope));
+  const connection = await startLocalMcpConnection((_request, _connection, responses) => createDirectorMcpServer(configDirectory, actions, signal, responses, turnScope));
   let disposed: Promise<void> | undefined;
-  const dispose = (): Promise<void> => disposed ??= turnScope.end().then(() => connection.dispose());
+  const dispose = (): Promise<void> => disposed ??= (async () => {
+    const results = await Promise.allSettled([connection.dispose(), turnScope.end()]);
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length === 1) throw failures[0]!.reason;
+    if (failures.length > 0) throw new AggregateError(failures.map((result) => result.reason), 'Director turn cleanup failed');
+  })();
   try {
     await plan.ctx.provider.preflight?.({ cwd: plan.cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
       permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,
@@ -31,7 +36,7 @@ export async function prepareDirectorTurn(
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions, prompt: plan.systemPrompt,
       })).digest('hex'), executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
         try { return await executor.execute(turn); }
-        finally { await turnScope.end(); }
+        finally { await dispose(); }
       } }, dispose,
     };
   } catch (error) { await dispose(); throw error; }

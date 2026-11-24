@@ -10,9 +10,11 @@ const doubles = vi.hoisted(() => ({
   workspaces: vi.fn<typeof readWorkspaceRegistry>(),
   resolve: vi.fn<typeof resolveCurrentManagerAssignment>(),
   realpath: vi.fn<(directory: string) => Promise<string>>(),
+  isFired: vi.fn(),
   stat: vi.fn(), access: vi.fn(), warn: vi.fn(),
 }));
 vi.mock('../infra/config/global/projectRegistry.js', () => ({ readProjectRegistry: doubles.projects }));
+vi.mock('../infra/director/managerState.js', () => ({ DirectorManagerStateStore: class { isFired = doubles.isFired; } }));
 vi.mock('../infra/config/global/workspaceRegistry.js', () => ({ readWorkspaceRegistry: doubles.workspaces }));
 vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssignment: doubles.resolve }));
 vi.mock('node:fs/promises', () => ({ realpath: doubles.realpath, stat: doubles.stat, access: doubles.access }));
@@ -32,6 +34,7 @@ function repository(directory: string) {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.isFired.mockResolvedValue(false);
   doubles.projects.mockResolvedValue({ projects: [], warnings: [] });
   doubles.workspaces.mockResolvedValue([]);
   doubles.realpath.mockImplementation(async (directory) => directory);
@@ -86,4 +89,25 @@ it('rejects an unavailable original registration even when its replacement has a
   expect(result).toMatchObject({ managers: [repository('/a-good')],
     errors: [{ repositoryDirectory: '/b-replaced', reason: expect.stringMatching(/\S/) }] });
   expect(doubles.resolve).toHaveBeenCalledExactlyOnceWith({ kind: 'repository', repositoryDirectory: '/a-good' }, '/config');
+});
+
+it('keeps every marked manager visible regardless of how long ago it was used', async () => {
+  doubles.projects.mockResolvedValue({ projects: [project('/old', { createdAt: '2000-01-01T00:00:00Z', lastSeenAt: '2000-01-01T00:00:00Z' }),
+    project('/recent')], warnings: [] });
+
+  expect(await listDirectorManagers('/config')).toEqual({ managers: [repository('/old'), repository('/recent')], errors: [] });
+});
+
+it('applies current fire state to both workspace and repository managers after deduplication', async () => {
+  const workspace = { id: '550e8400-e29b-41d4-a716-446655440000', name: 'workspace', repositoryDirectories: ['/member'] };
+  const assigned = { kind: 'workspace' as const, workspaceId: workspace.id, name: workspace.name, repositoryDirectories: ['/member'] };
+  doubles.projects.mockResolvedValue({ projects: [project('/member'), project('/repository')], warnings: [] });
+  doubles.workspaces.mockResolvedValue([workspace]);
+  doubles.resolve.mockImplementation(async (identity) => identity.kind === 'repository' && identity.repositoryDirectory === '/member'
+    ? assigned : repository('/repository'));
+  expect((await listDirectorManagers('/config')).managers).toEqual([assigned, repository('/repository')]);
+  doubles.isFired.mockResolvedValue(true);
+  expect((await listDirectorManagers('/config')).managers).toEqual([]);
+  doubles.isFired.mockResolvedValue(false);
+  expect((await listDirectorManagers('/config')).managers).toEqual([assigned, repository('/repository')]);
 });

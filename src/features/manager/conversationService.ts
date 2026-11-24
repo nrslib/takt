@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { isDeepStrictEqual } from 'node:util';
 import { buildManagerTurnPrompt } from './conversationPrompt.js';
@@ -13,6 +14,7 @@ import type { ConversationRuntime } from './conversationRuntime.js';
 import type { ManagerTurnInput } from './turnExecutor.js';
 import type { IdentifiedToolActivityEvent } from '../../shared/tool-activity/types.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import { withManagerLifecycleLock } from '../../infra/conversations/managerLifecycleLock.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssignedGoalRepository } from './assignment.js';
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
@@ -191,7 +193,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
                 reservationSaved = true;
               }
               io.signal.throwIfAborted();
-              const goal = await registerReservedGoal({ ...priorPending.summary, creationOrigin: 'manager', cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
+              const repositoryDirectory = await realpath(reservation.repositoryDirectory);
+              const managerId = conversationId({ kind: 'repository', repositoryDirectory });
+              const goal = await withManagerLifecycleLock(configDirectory, managerId, io.signal,
+                () => registerReservedGoal({ ...priorPending.summary, creationOrigin: 'manager', cwd: repositoryDirectory, id: reservation.goalId }, io.signal));
               return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
                 approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
               }) };

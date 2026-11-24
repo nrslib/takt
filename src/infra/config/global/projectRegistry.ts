@@ -164,7 +164,8 @@ async function isAvailableDirectory(stored: StoredProjectRegistration): Promise<
   }
 }
 
-async function atomicWriteRegistration(path: string, value: StoredProjectRegistration): Promise<void> {
+async function atomicWriteRegistration(path: string, value: StoredProjectRegistration, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   const directory = join(path, '..');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = join(directory, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
@@ -179,7 +180,9 @@ async function atomicWriteRegistration(path: string, value: StoredProjectRegistr
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
+      signal,
     });
+    signal?.throwIfAborted();
     await rename(temporary, path);
   } finally {
     await unlink(temporary).catch(() => undefined);
@@ -191,7 +194,9 @@ export async function registerProject(options: {
   readonly projectDirectory: string;
   readonly command: string;
   readonly managerUsed?: true;
+  readonly signal?: AbortSignal;
 }): Promise<RegisteredProject> {
+  options.signal?.throwIfAborted();
   const canonicalDirectory = await realpath(options.projectDirectory);
   await verifyProjectDirectory(canonicalDirectory);
   const locationId = projectIdForCanonicalDirectory(canonicalDirectory);
@@ -247,7 +252,7 @@ export async function registerProject(options: {
         lastCommand: options.command,
       };
   const registration = options.managerUsed === true ? { ...stored, managerUsed: true } : stored;
-  await atomicWriteRegistration(target, registration);
+  await atomicWriteRegistration(target, registration, options.signal);
   return toPublicProject(registration, true);
 }
 

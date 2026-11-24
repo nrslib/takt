@@ -45,12 +45,13 @@ export class DaemonConversations implements ConversationOwner {
     private readonly onError: (error: unknown) => void,
     private readonly turns: ConversationTurns) {}
 
-  async ensure(assignment: ConversationAssignment): Promise<void> {
+  async ensure(assignment: ConversationAssignment, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const id = conversationId(assignment);
     if (await this.store.read(id) !== undefined) return;
     await this.store.create({ schemaVersion: 1, id, agent: assignment.kind === 'daemon' ? 'director' : 'manager', assignment,
       counterpart: { namespace: 'local', id: 'operator' }, lastSpeaker: null, provider: 'claude-sdk', model: null, sessionId: null,
-      bindings: [], revision: 0, pending: null, approval: null, running: null });
+      bindings: [], revision: 0, pending: null, approval: null, running: null }, signal);
   }
 
   private version(id: string, revision: number, operationId: string | null): OutputVersion {

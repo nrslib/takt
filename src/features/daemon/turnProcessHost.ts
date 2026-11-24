@@ -28,7 +28,7 @@ interface ChildEntry {
   exited: boolean;
   active?: ActiveTurn;
   timer?: ReturnType<typeof setTimeout>;
-  requests: Map<string, AbortController>;
+  requests: Map<string, { turn: TurnIdentity; controller: AbortController }>;
   sender: SerialSender<DaemonProcessMessage>;
   termination?: Promise<void>;
   exit: Promise<void>;
@@ -48,7 +48,7 @@ export function createTurnProcessHost(input: {
 
   const report = (promise: Promise<unknown>): void => { void promise.catch(input.onError); };
   const cancelRequests = (entry: ChildEntry): void => {
-    for (const controller of entry.requests.values()) controller.abort();
+    for (const { controller } of entry.requests.values()) controller.abort();
     entry.requests.clear();
   };
   const send = (entry: ChildEntry, message: DaemonProcessMessage): Promise<void> => entry.sender.send(message);
@@ -133,6 +133,11 @@ export function createTurnProcessHost(input: {
     const active = entry.active;
     if (active === undefined || active.finished || !sameTurn(active.input.turn, message.turn)) return;
     switch (message.kind) {
+      case 'cancel_daemon_request': {
+        const pending = entry.requests.get(message.requestId);
+        if (pending !== undefined && sameTurn(pending.turn, message.turn)) pending.controller.abort();
+        break;
+      }
       case 'turn_progress':
         if (!active.interrupted) await input.bus.post({ kind: message.kind, turn: message.turn, message: message.message });
         break;
@@ -142,20 +147,18 @@ export function createTurnProcessHost(input: {
       case 'daemon_request': {
         if (entry.requests.has(message.requestId)) throw new Error('Duplicate turn process request');
         const controller = new AbortController();
-        entry.requests.set(message.requestId, controller);
-        try {
-          let reply: DaemonStateReply;
-          try { reply = await input.bus.request(message.turn, message.request, controller.signal); }
-          catch (error) {
-            if (!controller.signal.aborted && !active.interrupted) input.onError(error);
-            reply = { kind: 'error', code: controller.signal.aborted || active.interrupted ? 'stale_turn' : 'storage',
-              message: 'Daemon state request did not complete' };
-          }
-          if (!entry.stopping && !entry.exited && entry.active === active) {
-            await send(entry, { ...envelope(entry), kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
-          }
+        entry.requests.set(message.requestId, { turn: message.turn, controller });
+        let reply: DaemonStateReply;
+        try { reply = await input.bus.request(message.turn, message.request, controller.signal); }
+        catch (error) {
+          if (!controller.signal.aborted && !active.interrupted) input.onError(error);
+          reply = { kind: 'error', code: controller.signal.aborted || active.interrupted ? 'stale_turn' : 'storage',
+            message: 'Daemon state request did not complete' };
         } finally {
           entry.requests.delete(message.requestId);
+        }
+        if (!entry.exited && entry.process.child.connected && entry.active === active) {
+          await send(entry, { ...envelope(entry), kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
         }
         break;
       }

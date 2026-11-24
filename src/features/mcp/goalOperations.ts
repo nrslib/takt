@@ -2,6 +2,9 @@ import { resolveTaskOrderContent } from '../tasks/orderRevision.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { createGoal } from '../../infra/goals/service.js';
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { conversationId } from '../../infra/conversations/identity.js';
+import { withManagerLifecycleLock } from '../../infra/conversations/managerLifecycleLock.js';
 import type { GoalCreateInput } from '../../infra/goals/schema.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { enqueueTask } from '../../infra/task/enqueueService.js';
@@ -12,7 +15,7 @@ import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDe
 import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { join } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { goalWrite } from './goalWrite.js';
 import { goalWriteSummary } from './goalResponse.js';
 import { pagedResult } from './response.js';
@@ -76,7 +79,11 @@ export async function createTaktGoal(input: GoalCreateInput, deps: McpOperationD
     if (await realpath(input.cwd) !== root) {
       throw new Error(`cwd must be the Git repository root: ${root}`);
     }
-    const goal = await createGoal({ ...input, cwd: root }, signal);
+    const configDirectory = getGlobalConfigDir();
+    await mkdir(configDirectory, { recursive: true, mode: 0o700 });
+    const managerId = conversationId({ kind: 'repository', repositoryDirectory: root });
+    const goal = await withManagerLifecycleLock(configDirectory, managerId, signal,
+      () => createGoal({ ...input, cwd: root }, signal));
     return jsonResult({ goal: goalWriteSummary(goal) });
   } catch (error) { return errorResult('Goal creation failed', error); }
 }
