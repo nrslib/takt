@@ -580,13 +580,15 @@ function handleToolPartUpdated(
   onStream: StreamCallback | undefined,
   state: StreamTrackingState,
 ): boolean {
+  state.sensitiveSources.collect(toolPart.state.input);
+  // pending は入力生成中。v2 の input.started には実引数がなく、後続の running で確定する。
+  if (toolPart.state.status === 'pending') return true;
+
   const toolId = toolPart.callID || toolPart.id;
   const isNewTool = !state.startedTools.has(toolId);
   if (isNewTool) {
     state.startedTools.add(toolId);
   }
-  state.sensitiveSources.collect(toolPart.state.input);
-
   if (!onStream) return true;
 
   if (isNewTool || toolPart.state.status === 'completed' || toolPart.state.status === 'error') {
