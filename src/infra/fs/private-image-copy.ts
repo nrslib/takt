@@ -24,4 +24,3 @@ export function writePrivateImageCopy(root: string, destination: string, data: U
   catch (error) { fs.unlinkSync(destination); throw error; }
   finally { fs.closeSync(file); }
 }
-
