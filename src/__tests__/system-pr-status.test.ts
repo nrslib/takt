@@ -318,6 +318,50 @@ describe('CI failure system input and rerun effect', () => {
     expect(index.checks[0]!.jobs[0]!.logPath).toBeNull();
   });
 
+  describe('外部の失敗チェックを含む証拠', () => {
+    const external = [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }];
+
+    it('外部の失敗チェックを不足証拠にせず、索引・調査prompt・停止コメント用の情報へ区別して渡す', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue({ ...failure(), external });
+
+      const result = await h.service.resolveSystemInput(input, h.state) as PrCiFailure & {
+        promptEvidence: string; details: string;
+      };
+      expect(result).toMatchObject({ complete: true, unavailable: [], external });
+      const [summary, ...notes] = result.promptEvidence.split('\n').slice(0, -1);
+      for (const count of ['complete=true', 'unique job logs=1', 'external checks=1', 'unavailable=0']) {
+        expect(summary).toContain(count);
+      }
+      // The index marks these with `external`; the prompt must say what the field means.
+      expect(notes.some((note) => note.includes('external'))).toBe(true);
+      const index = JSON.parse(readFileSync(/^Evidence index: (.+)$/m.exec(result.promptEvidence)![1]!, 'utf8')) as {
+        complete: boolean; external: typeof external; unavailable: unknown[];
+      };
+      expect(index).toMatchObject({ complete: true, external, unavailable: [] });
+      expect(JSON.parse(result.details)).toMatchObject({ external, unavailable: [] });
+    });
+
+    it('外部の失敗チェックがない証拠のpromptには区別の注記を足さない', async () => {
+      const h = fixture();
+      const result = await h.service.resolveSystemInput(input, h.state) as { promptEvidence: string };
+      expect(result.promptEvidence).toContain('external checks=0');
+      expect(result.promptEvidence.split('\n')).toHaveLength(2);
+    });
+
+    it('外部要因と判断された証拠は、外部の失敗チェックが混ざっていても再実行できる', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue({ ...failure(), external });
+      const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
+      h.state.systemContexts.set('collect_ci_failure', { failure: collected });
+      h.state.currentStep = 'rerun_ci';
+
+      expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: collected }, h.state))
+        .toMatchObject({ success: true });
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+    });
+  });
+
   it('jobのない複数checkを原本とclone側で同じ不足証拠として保持し再保存しても増やさない', async () => {
     const h = fixture();
     const run = failure().checks[0]!.run;

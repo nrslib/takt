@@ -1335,7 +1335,7 @@ caccia:
 
 `comment_pr`には任意の`body_format: plain_text`を指定できます。補間済みの本文全体をコードブロックで囲み、区切りのバッククォートは本文中の最長の連続列より長くします。CI回復の停止・push失敗コメントでこの形式を使い、チェック名・job名・調査要点・エラーを文字として表示します。未指定の場合は従来どおりMarkdown本文を渡します。
 
-回復用の`pr_ci_failure`は`source: current_pr`とHEADの完全なstate参照`head_sha`を受け取ります。`number`、`headSha`、`complete`、run・attempt・jobとログ本文を含む失敗`checks`、取得不能理由`unavailable`、`fixRounds`、`rerunCount`、コメント用の文字列`details`を返します。`rerun_ci` effectは`pr`と失敗証拠の完全参照`failure`を受け取り、証拠が揃っていて調査が外部要因と判断した場合だけ失敗runを重複なく1回再実行します。結果の`rerun`にはPR・HEAD・再実行前のattemptを保持します。その完全参照を`pr_status.rerun_from`へ渡すと新attemptを待機します。再実行stepの実行前はこの任意参照が通常のpollingを保持します。回数は同じworkflow実行が所有します。
+回復用の`pr_ci_failure`は`source: current_pr`とHEADの完全なstate参照`head_sha`を受け取ります。`number`、`headSha`、`complete`、run・attempt・jobとログ本文を含む失敗`checks`、取得不能理由`unavailable`、`fixRounds`、`rerunCount`、コメント用の文字列`details`を返します。commit statusや外部サービスのcheckなど、Actionsのログがない失敗は`external`に並べます。これらは失敗のまま扱いますが、ほかのcheckの証拠を不完全にはしません。`complete`が`false`になるのは、あるはずの証拠が`unavailable`に入った場合と、判断できるActionsのcheckが1つもない場合です。`rerun_ci` effectは`pr`と失敗証拠の完全参照`failure`を受け取り、証拠が揃っていて調査が外部要因と判断した場合だけ失敗runを重複なく1回再実行します。結果の`rerun`にはPR・HEAD・再実行前のattemptを保持します。その完全参照を`pr_status.rerun_from`へ渡すと新attemptを待機します。再実行stepの実行前はこの任意参照が通常のpollingを保持します。回数は同じworkflow実行が所有します。
 
 ### Caccia システム効果
 
