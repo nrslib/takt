@@ -235,6 +235,66 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.source).toBe('env');
   });
 
+  it('Codex readonly permission base を global/project/env の優先順位と trace 付きで解決する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    permission_control: codex',
+        '    readonly_permission_base: global-base',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    readonly_permission_base: project-base'].join('\n'),
+      'utf-8',
+    );
+
+    const localResult = resolveProviderOptionsWithTrace(projectDir);
+    expect(localResult.value?.codex).toMatchObject({
+      permissionControl: 'codex',
+      readonlyPermissionBase: 'project-base',
+    });
+    expect(localResult.originResolver('codex.readonlyPermissionBase')).toBe('local');
+    expect(resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'codex')).toMatchObject({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'project-base' },
+    });
+
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_READONLY_PERMISSION_BASE = 'env-base';
+    invalidateGlobalConfigCache();
+
+    const envResult = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(envResult.value?.codex).toMatchObject({ readonlyPermissionBase: 'env-base' });
+    expect(envResult.originResolver('codex.readonlyPermissionBase')).toBe('env');
+  });
+
+  it('Codex readonly permission base と permission_control: takt の併用を設定エラーとして拒否する', () => {
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    permission_control: takt',
+        '    readonly_permission_base: takt-review-p2',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateAllResolvedConfigCache();
+
+    expect(() => resolveNonWorkflowProviderOptions(projectDir, undefined, undefined, 'codex'))
+      .toThrow(/readonly_permission_base.*permission_control/);
+  });
+
   it('provider_options の effort 系キーも trace 付きで解決する', () => {
     writeFileSync(
       globalConfigPath,

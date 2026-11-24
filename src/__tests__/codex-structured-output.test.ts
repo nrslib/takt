@@ -12,7 +12,7 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
-import type { CodexCallOptions } from '../infra/codex/types.js';
+import { CODEX_SPAWN_OPTIONS, type CodexCallOptions, type CodexSpawnEnvironment } from '../infra/codex/types.js';
 import { CodexProvider } from '../infra/providers/codex.js';
 import { hasCodexMcpServer, runCodexMcpList } from '../infra/codex/mcp-list.js';
 import { buildInactivityAbortSignal } from '../core/workflow/engine/abort-signal.js';
@@ -92,6 +92,19 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 // CodexClient は @openai/codex-sdk をインポートするため、mock 後にインポート
 const { CodexClient } = await import('../infra/codex/client.js');
+
+function derivedReadonlyProfileName(options: CodexOptions | undefined): string | undefined {
+  const configValue = options?.config?.default_permissions;
+  if (typeof configValue === 'string') return configValue;
+  const override = options?.configOverrides?.find((value) => value.startsWith('default_permissions='));
+  return override === undefined
+    ? undefined
+    : JSON.parse(override.slice('default_permissions='.length)) as string;
+}
+
+function codexConfigOverridesText(options: CodexOptions | undefined): string {
+  return (options?.configOverrides ?? []).join('\n').replace(/[ \t]+/g, ' ');
+}
 
 describe('CodexClient — structuredOutput 抽出', () => {
   it.each([undefined, 'existing-thread'])('sends the current TAKT instructions under the session developer contract on %s', async (sessionId) => {
@@ -376,7 +389,255 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
     expect(result.status).toBe('done');
     expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+    expect((lastCodexConstructorOptions?.configOverrides ?? [])
+      .some((value) => value.startsWith('default_permissions=') || value.startsWith('permissions.'))).toBe(false);
   });
+
+  it.each([undefined, 'existing-thread'])(
+    'uses a TAKT-owned derived permission profile in Phase 2 when readonly_permission_base is set (session=%s)',
+    async (sessionId) => {
+      mockEvents = [{ type: 'turn.completed' }];
+      const result = await new CodexProvider().setup({ name: 'reporter' }).call('Report current work', {
+        cwd: '/tmp', executionPhase: 2, permissionMode: 'full', sessionId,
+        providerOptions: {
+          codex: {
+            permissionControl: 'codex',
+            configProfile: 'automation-review',
+            readonlyPermissionBase: 'takt-review-p2',
+          },
+        },
+      });
+      expect(result.status).toBe('done');
+
+      // The derived profile replaces every legacy sandbox setting.
+      expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+      expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(lastThreadOptions?.approvalPolicy).toBe('never');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('sandbox_mode');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('sandbox_workspace_write');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+
+      const profileName = derivedReadonlyProfileName(lastCodexConstructorOptions);
+      expect(typeof profileName).toBe('string');
+      expect(profileName).not.toBe('takt-review-p2');
+
+      const overridesText = codexConfigOverridesText(lastCodexConstructorOptions);
+      expect(overridesText).not.toMatch(/sandbox_mode\s*=/);
+      expect(overridesText).not.toMatch(/sandbox_workspace_write\./);
+      expect(overridesText).toContain('extends="takt-review-p2"');
+      expect(overridesText).toMatch(/":workspace_roots" = \{"\." = "read"\}/);
+      expect(overridesText).toMatch(/":slash_tmp" = "read"/);
+      expect(overridesText).toMatch(/":tmpdir" = "read"/);
+      expect(overridesText).toMatch(/network(?:\.enabled)?\s*=\s*(?:false|\{\s*enabled\s*=\s*false\s*\})/);
+
+      // The cooperation policy keeps --ignore-rules and the selected profile.
+      const spawnOptions = (lastCodexConstructorOptions?.env as CodexSpawnEnvironment | undefined)?.[CODEX_SPAWN_OPTIONS];
+      expect(spawnOptions?.execArgs).toEqual(['--ignore-rules']);
+      expect(spawnOptions?.configProfile).toBe('automation-review');
+
+      if (sessionId === undefined) {
+        expect(mockStartThread).toHaveBeenCalledOnce();
+        expect(mockResumeThread).not.toHaveBeenCalled();
+      } else {
+        expect(mockResumeThread).toHaveBeenCalledWith(sessionId, lastThreadOptions);
+        expect(mockStartThread).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it('uses a TAKT-owned derived permission profile for strict-readonly calls when readonly_permission_base is set', async () => {
+    mockEvents = [
+      { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+      { type: 'turn.completed' },
+    ];
+    const result = await new CodexProvider().setupIsolatedStructured({ name: 'selector' }).call('Choose', {
+      cwd: '/tmp', edit: false, permissionMode: 'full', outputSchema: { type: 'object' },
+      providerOptions: {
+        codex: {
+          permissionControl: 'codex',
+          configProfile: 'automation-review',
+          readonlyPermissionBase: 'takt-review-p2',
+        },
+      },
+    });
+    expect(result.status).toBe('done');
+
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+    expect(lastThreadOptions?.approvalPolicy).toBe('never');
+
+    const profileName = derivedReadonlyProfileName(lastCodexConstructorOptions);
+    expect(typeof profileName).toBe('string');
+    expect(profileName).not.toBe('takt-review-p2');
+
+    const overridesText = codexConfigOverridesText(lastCodexConstructorOptions);
+    expect(overridesText).not.toMatch(/sandbox_mode\s*=/);
+    expect(overridesText).not.toMatch(/sandbox_workspace_write\./);
+    expect(overridesText).toContain('extends="takt-review-p2"');
+    expect(overridesText).toMatch(/":workspace_roots" = \{"\." = "read"\}/);
+    expect(overridesText).toMatch(/":slash_tmp" = "read"/);
+    expect(overridesText).toMatch(/":tmpdir" = "read"/);
+    expect(overridesText).toMatch(/network(?:\.enabled)?\s*=\s*(?:false|\{\s*enabled\s*=\s*false\s*\})/);
+    expect(overridesText).toContain('approval_policy="never"');
+
+    const spawnOptions = (lastCodexConstructorOptions?.env as CodexSpawnEnvironment | undefined)?.[CODEX_SPAWN_OPTIONS];
+    expect(spawnOptions?.execArgs).toEqual(['--ignore-rules']);
+  });
+
+  it.each([undefined, 'existing-thread'])(
+    'keeps the derived permission profile out of the strict-readonly MCP probe (session=%s)',
+    async (sessionId) => {
+      mockEvents = [
+        { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+        { type: 'turn.completed' },
+      ];
+      const result = await new CodexClient().call('selector', 'Choose', {
+        cwd: '/tmp', sessionId, edit: false, permissionMode: 'full', outputSchema: { type: 'object' },
+        internalAgentIsolation: 'strict-readonly',
+        permissionControl: 'codex',
+        configProfile: 'automation-review',
+        readonlyPermissionBase: 'takt-review-p2',
+      });
+      expect(result.status).toBe('done');
+
+      const probeOverrides = vi.mocked(runCodexMcpList).mock.calls[0]?.[0].configOverrides ?? [];
+      const probeText = probeOverrides.join('\n');
+      expect(probeText).not.toMatch(/default_permissions\s*=/);
+      expect(probeText).not.toMatch(/permissions[.=]/);
+
+      expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+      expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(lastCodexConstructorOptions?.config ?? {}).not.toHaveProperty('default_permissions');
+      expect(lastCodexConstructorOptions?.config ?? {}).not.toHaveProperty('permissions');
+      const profileName = derivedReadonlyProfileName(lastCodexConstructorOptions);
+      expect(typeof profileName).toBe('string');
+      const finalText = codexConfigOverridesText(lastCodexConstructorOptions);
+      expect(finalText).toContain(`default_permissions="${profileName}"`);
+      expect(finalText).toContain('extends="takt-review-p2"');
+      expect(finalText).toContain('":slash_tmp" = "read"');
+
+      const spawnOptions = (lastCodexConstructorOptions?.env as CodexSpawnEnvironment | undefined)?.[CODEX_SPAWN_OPTIONS];
+      expect(spawnOptions?.execArgs).toEqual(['--ignore-rules']);
+      expect(spawnOptions?.configProfile).toBe('automation-review');
+
+      if (sessionId === undefined) {
+        expect(mockStartThread).toHaveBeenCalledOnce();
+        expect(mockResumeThread).not.toHaveBeenCalled();
+      } else {
+        expect(mockResumeThread).toHaveBeenCalledWith(sessionId, lastThreadOptions);
+        expect(mockStartThread).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([undefined, 'existing-thread'])(
+    'keeps the derived permission profile out of the Phase 2 MCP get probe (session=%s)',
+    async (sessionId) => {
+      vi.mocked(hasCodexMcpServer).mockResolvedValue(true);
+      mockEvents = [{ type: 'turn.completed' }];
+      const preparedMcp = { dispose: async () => {}, excludedServerNames: ['datadog'] };
+      const result = await new CodexProvider().setup({ name: 'reporter' }).call('Report current work', {
+        cwd: '/repo', executionPhase: 2, sessionId, preparedMcp,
+        providerOptions: {
+          codex: {
+            permissionControl: 'codex',
+            configProfile: 'automation-review',
+            readonlyPermissionBase: 'takt-review-p2',
+          },
+        },
+      });
+      expect(result.status).toBe('done');
+
+      const probeInput = vi.mocked(hasCodexMcpServer).mock.calls[0]?.[0];
+      expect(probeInput).toMatchObject({ serverName: 'datadog', configProfile: 'automation-review' });
+      const probeText = (probeInput?.configOverrides ?? []).join('\n');
+      expect(probeText).not.toMatch(/default_permissions\s*=/);
+      expect(probeText).not.toMatch(/permissions[.=]/);
+
+      expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+      expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+      const profileName = derivedReadonlyProfileName(lastCodexConstructorOptions);
+      expect(typeof profileName).toBe('string');
+      const finalText = codexConfigOverridesText(lastCodexConstructorOptions);
+      expect(finalText).toContain(`default_permissions="${profileName}"`);
+      expect(finalText).toContain('extends="takt-review-p2"');
+      expect(finalText).toContain('mcp_servers.datadog.enabled=false');
+
+      const spawnOptions = (lastCodexConstructorOptions?.env as CodexSpawnEnvironment | undefined)?.[CODEX_SPAWN_OPTIONS];
+      expect(spawnOptions?.execArgs).toEqual(['--ignore-rules']);
+      expect(spawnOptions?.configProfile).toBe('automation-review');
+
+      if (sessionId === undefined) {
+        expect(mockStartThread).toHaveBeenCalledOnce();
+        expect(mockResumeThread).not.toHaveBeenCalled();
+      } else {
+        expect(mockResumeThread).toHaveBeenCalledWith(sessionId, lastThreadOptions);
+        expect(mockStartThread).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it('does not overwrite the existing takt-readonly-network profile when it is the readonly permission base', async () => {
+    mockEvents = [{ type: 'turn.completed' }];
+    await new CodexProvider().setup({ name: 'reporter' }).call('Report current work', {
+      cwd: '/tmp', executionPhase: 2,
+      providerOptions: {
+        codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-readonly-network' },
+      },
+    });
+
+    const profileName = derivedReadonlyProfileName(lastCodexConstructorOptions);
+    expect(typeof profileName).toBe('string');
+    expect(profileName).not.toBe('takt-readonly-network');
+    expect(lastCodexConstructorOptions?.config?.permissions ?? {})
+      .not.toHaveProperty('takt-readonly-network');
+    const overrides = lastCodexConstructorOptions?.configOverrides ?? [];
+    expect(overrides.some((value) => (
+      value.startsWith('permissions.takt-readonly-network.')
+      || /^permissions=\{.*"takt-readonly-network"\s*=/.test(value)
+    ))).toBe(false);
+    expect(codexConfigOverridesText(lastCodexConstructorOptions)).toContain('extends="takt-readonly-network"');
+  });
+
+  it.each([1, 3] as const)(
+    'keeps Phase %s Codex arguments identical with and without readonly_permission_base',
+    async (executionPhase) => {
+      mockEvents = [{ type: 'turn.completed' }];
+      const provider = new CodexProvider();
+      const callOptions = {
+        cwd: '/tmp', executionPhase, edit: true, permissionMode: 'full' as const,
+      };
+      const readObservedArguments = () => ({
+        threadOptions: { ...lastThreadOptions },
+        config: { ...lastCodexConstructorOptions?.config },
+        configOverrides: [...(lastCodexConstructorOptions?.configOverrides ?? [])],
+        spawnOptions: (lastCodexConstructorOptions?.env as CodexSpawnEnvironment)[CODEX_SPAWN_OPTIONS],
+      });
+
+      await provider.setup({ name: 'coder' }).call('Work', {
+        ...callOptions,
+        providerOptions: { codex: { permissionControl: 'codex', configProfile: 'automation-review' } },
+      });
+      const withoutBase = readObservedArguments();
+
+      await provider.setup({ name: 'coder' }).call('Work', {
+        ...callOptions,
+        providerOptions: {
+          codex: {
+            permissionControl: 'codex',
+            configProfile: 'automation-review',
+            readonlyPermissionBase: 'takt-review-p2',
+          },
+        },
+      });
+
+      expect(readObservedArguments()).toEqual(withoutBase);
+    },
+  );
 
   it('通常のタスク実行には manager のフック設定を追加しない', async () => {
     mockEvents = [{ type: 'turn.completed' }];

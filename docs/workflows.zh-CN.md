@@ -856,9 +856,9 @@ Reviewer 每次成功响应后，新的 completion judge 使用其解析后的 r
 
 `review_completion` 仍可作为已弃用别名使用，不能与 `completion_retry` 同时指定。Provider 和 model 不是 workflow 字段，必须由 `runtime.yaml` 的 profile/routing 提供；CLI 和环境变量覆盖仍可使用。在 workflow 中写入已移除字段会在加载时失败，并显示迁移提示。
 
-由 TAKT 管理 Codex 权限时，显式 `edit: false` 会禁止 Phase 1 写入，不受解析出的 permission mode 影响。设置 `network_access: true` 时，TAKT 传递允许网络访问的只读权限 profile；否则使用 `read-only` sandbox。使用 `permission_control: codex` 时，即使设置 `edit: false`，写入与网络权限也由 Codex 自身配置决定。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终使用 `read-only` sandbox 并禁用网络访问，即使委托权限也不例外。通用权限解析与其他 provider 的行为保持不变。详见 [Codex 权限控制](./configuration.zh-CN.md#codex-权限控制permission_control)。
+由 TAKT 管理 Codex 权限时，显式 `edit: false` 会禁止 Phase 1 写入，不受解析出的 permission mode 影响。设置 `network_access: true` 时，TAKT 传递允许网络访问的只读权限 profile；否则使用 `read-only` sandbox。使用 `permission_control: codex` 时，即使设置 `edit: false`，写入与网络权限也由 Codex 自身配置决定。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）即使委托权限也由 TAKT 管理。未设置 `readonly_permission_base` 时使用 `read-only` sandbox 并禁用网络访问；设置后使用继承基础 profile 的只读、禁用网络的权限 profile。通用权限解析与其他 provider 的行为保持不变。详见 [Codex 权限控制](./configuration.zh-CN.md#codex-权限控制permission_control)。
 
-TAKT 管理权限的 Codex 调用也会为可写 step、新 session 和恢复的 session 传递 `--ignore-rules`，防止用户或项目 execpolicy `.rules` 绕过 sandbox。委托给 Codex 的调用保留这些规则，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终禁用规则并禁止写入和网络访问。Phase 2 和这些内部调用选择的 `config_profile` 可与 `--ignore-rules` 同时生效。
+TAKT 管理权限的 Codex 调用也会为可写 step、新 session 和恢复的 session 传递 `--ignore-rules`，防止用户或项目 execpolicy `.rules` 绕过 sandbox。委托给 Codex 的调用保留这些规则，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终禁用规则并禁止写入和网络访问。Phase 2 和这些内部调用选择的 `config_profile` 可与 `--ignore-rules` 同时生效。设置 `readonly_permission_base` 时，TAKT 还会省略 `--sandbox`。
 
 ## Workflow 级配置
 

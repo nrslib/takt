@@ -328,6 +328,52 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('readonlyPermissionBase is resolved with normal provider-option precedence', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'codex.readonlyPermissionBase' ? 'env' : 'local'),
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'config-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'step-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'persona-base' } }),
+      'codex',
+    )).toEqual({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'config-base' },
+    });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'config-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'step-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'persona-base' } }),
+      'codex',
+    )).toEqual({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'step-base' },
+    });
+    expect(mergeProviderOptions(
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'global-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'project-base' } }),
+    )).toEqual({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'project-base' } });
+  });
+
+  it('rejects readonlyPermissionBase without permission_control codex', () => {
+    expect(() => resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ codex: { permissionControl: 'takt', readonlyPermissionBase: 'takt-review-p2' } }),
+      undefined,
+      undefined,
+      'codex',
+    )).toThrow(/readonly_permission_base.*permission_control/);
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' } }),
+      undefined,
+      undefined,
+      'codex',
+    )).toEqual({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' } });
+  });
+
   it.each([true, false])(
     'keeps permissionControl=codex with networkAccess=%s across merge and effective resolution',
     (networkAccess) => {
@@ -1172,6 +1218,22 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.codex.config_profile');
   });
 
+  it('tracks Codex readonly permission base through env, trace, internal, and present-path contracts', () => {
+    expect(PROVIDER_OPTIONS_ENV_SPECS).toContainEqual({
+      path: 'provider_options.codex.readonly_permission_base',
+      type: 'string',
+    });
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.readonly_permission_base');
+    expect(toProviderOptionsTracePath('codex.readonlyPermissionBase'))
+      .toBe('provider_options.codex.readonly_permission_base');
+    expect(getPresentProviderOptionPaths(asProviderOptions({
+      codex: { readonlyPermissionBase: 'takt-review-p2' },
+    }))).toContain('codex.readonlyPermissionBase');
+    expect(getPresentProviderOptionPaths(asProviderOptions({
+      codex: { readonlyPermissionBase: undefined },
+    }))).not.toContain('codex.readonlyPermissionBase');
+  });
+
   it('resolves Codex config profile with the same layer precedence as other leaves', () => {
     const resolved = resolveEffectiveProviderOptions(
       'project',
@@ -1207,6 +1269,25 @@ describe('providerOptionsContract', () => {
       .toMatchObject({ 'codex.configProfile': 'env' });
   });
 
+  it('reports Codex readonly permission base origin and source', () => {
+    const options = asProviderOptions({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' },
+    });
+    const resolver = (path: string) => (path === 'codex.readonlyPermissionBase' ? 'env' : 'local');
+
+    expect(resolveProviderOptionOrigin(resolver, 'codex.readonlyPermissionBase', 'project')).toBe('env');
+    expect(resolveProviderOptionSource(
+      'codex.readonlyPermissionBase',
+      undefined,
+      [],
+      options,
+      resolver,
+      'project',
+    )).toBe('env');
+    expect(resolveProviderOptionsSources(undefined, [], options, resolver, 'project'))
+      .toMatchObject({ 'codex.readonlyPermissionBase': 'env' });
+  });
+
   it('provider_options contract paths stay aligned across env and trace definitions', () => {
     const envPaths = new Set(PROVIDER_OPTIONS_ENV_SPECS.map((spec) => spec.path));
 
@@ -1217,6 +1298,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.network_access',
       'provider_options.codex.permission_control',
       'provider_options.codex.config_profile',
+      'provider_options.codex.readonly_permission_base',
       'provider_options.codex.reasoning_effort',
       'provider_options.codex.guards.call_timeout_ms',
       'provider_options.codex.skills.repo',
@@ -1274,6 +1356,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.permission_control');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.readonly_permission_base');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
