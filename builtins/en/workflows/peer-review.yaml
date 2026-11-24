@@ -226,22 +226,23 @@ steps:
         next: review-adjudication
   - name: review-adjudication
     input_reports:
+      - from_step: reviewers
+        fallback_from_step: initial-reviewers
+        reports: all
+      - from_step: review-adjudication
+        reports: [review-resolution.md]
+        previous_only: true
       - from_step: remediation
         reports: [fix-plan.md, fix-report.md, fix-verification.md]
         optional_if_unrun: true
         history: {previous: 2}
     uses: peer-review-adjudication
-    with:
-      review_policy_additions:
-        $param: review_policy_additions
-      review_knowledge_additions:
-        $param: review_knowledge_additions
     rules:
-      - condition: Problems require repair
+      - condition: The entire task does not need replanning, and there are problems to repair or factual investigations needed to decide acceptance that can proceed within the current scope
         next: remediation
-      - condition: No problems require repair
+      - condition: The entire task does not need replanning, and there are no problems to repair or factual investigations to decide acceptance that can proceed within the current scope (including when only items awaiting external confirmation or unverifiable in this environment remain)
         next: final-gate
-      - condition: The entire task must be replanned
+      - condition: The entire task must be replanned, including decisions about protection obligations or repair scope
         return: need_replan
   - name: final-gate
     uses: peer-review-final-gate

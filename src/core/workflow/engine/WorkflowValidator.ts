@@ -321,21 +321,25 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       const validateReportInput = (consumer: WorkflowStep, consumerPath: readonly PropertyKey[]) => {
         if (consumer.inputReports === undefined) return;
         for (const input of reportInputEntries(consumer.inputReports)) {
-          const sourceIndex = config.steps.findIndex((candidate) => candidate.name === input.fromStep);
-          const source = config.steps[sourceIndex];
-          if (source === undefined || sourceIndex === stepIndex || source.kind === 'system') {
-            throw withWorkflowStepErrorPath(
-              new Error(`input_reports.from_step must name another report-producing step in this workflow: "${input.fromStep}"`),
-              [...consumerPath, 'input_reports', 'from_step'],
-            );
-          }
-          if (source.kind !== 'workflow_call'
-            && source.parallel === undefined
-            && getReportFiles(source.outputContracts).length === 0) {
-            throw withWorkflowStepErrorPath(
-              new Error(`input_reports.from_step "${input.fromStep}" has no report output contract`),
-              [...consumerPath, 'input_reports', 'from_step'],
-            );
+          for (const [field, name] of [['from_step', input.fromStep], ['fallback_from_step', input.fallbackFromStep]] as const) {
+            if (name === undefined) continue;
+            const sourceIndex = config.steps.findIndex((candidate) => candidate.name === name);
+            const source = config.steps[sourceIndex];
+            if (source === undefined || source.kind === 'system'
+              || sourceIndex === stepIndex && !(field === 'from_step' && input.previousOnly === true)) {
+              throw withWorkflowStepErrorPath(
+                new Error(`input_reports.${field} must name a report-producing step in this workflow: "${name}"`),
+                [...consumerPath, 'input_reports', field],
+              );
+            }
+            if (source.kind !== 'workflow_call'
+              && source.parallel === undefined
+              && getReportFiles(source.outputContracts).length === 0) {
+              throw withWorkflowStepErrorPath(
+                new Error(`input_reports.${field} "${name}" has no report output contract`),
+                [...consumerPath, 'input_reports', field],
+              );
+            }
           }
           if (input.reports !== 'all') {
             for (const [reportIndex, report] of input.reports.entries()) {

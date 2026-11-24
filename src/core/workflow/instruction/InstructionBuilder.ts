@@ -183,7 +183,7 @@ export class InstructionBuilder {
     const declaredReports = (this.context.declaredReportInputs ?? []).flatMap(({ reports }) => reports);
     const unreferencedDeclaredReports = declaredReports
       .flatMap((report) => [
-        { ...report, content: renderCurrentReport(report) },
+        { ...report, content: renderCurrentReport(report, language) },
         ...(report.history === undefined ? [] : [{ reference: report.reference, scope: report.scope, producer: report.producer,
           kind: 'history' as const, content: report.history }]),
       ])
@@ -198,12 +198,25 @@ export class InstructionBuilder {
             `### ${report.producer === undefined ? report.reference : `${report.producer}: ${report.reference}`}${report.kind === 'history' ? ' (history)' : ''}\n${report.content}`,
           ).join('\n\n'),
         ].join('\n');
-    const currentExecutions = declaredReports.some((report) => report.history !== undefined)
-      ? declaredReports.flatMap((report) => report.execution === undefined ? [] : [
-          `- ${report.producer}: ${report.reference}; execution=${report.execution.id}; order=${report.execution.order}; completion_order=${report.execution.completionOrder ?? 'unavailable'}; producer execution=${report.origin?.id ?? 'unavailable'}; producer start=${report.origin?.order ?? 'unavailable'}; producer completion=${report.origin?.completionOrder ?? 'unavailable'}`,
-        ]) : [];
-    const instructions = currentExecutions.length === 0 ? reportInstructions
-      : [reportInstructions, '', language === 'ja' ? '## 現在レポートの実行記録' : '## Current report executions', ...currentExecutions].join('\n');
+    const unavailable = (this.context.declaredReportInputs ?? []).flatMap((input) => input.unavailable ?? []);
+    const reportInstructionsWithUnavailable = unavailable.length === 0 ? reportInstructions : [
+      reportInstructions, '', language === 'ja' ? '## 未供給の成果物入力' : '## Unavailable declared report inputs',
+      ...unavailable.map((entry) => `- ${entry.producer}: ${entry.names.join(', ')}; ${language === 'ja' ? 'producer未実行、固定版と実行IDは未供給' : 'producer has not run; fixed version and execution ID not supplied'}`),
+    ].join('\n');
+    const currentExecutions = declaredReports.flatMap((report) => report.execution === undefined ? [] : [
+      `- ${report.producer}: ${report.reference}; execution=${report.execution.id}; order=${report.execution.order}; completion_order=${report.execution.completionOrder ?? 'unavailable'}; producer execution=${report.origin?.id ?? 'unavailable'}; producer start=${report.origin?.order ?? 'unavailable'}; producer completion=${report.origin?.completionOrder ?? 'unavailable'}; ${report.path === undefined ? 'path=unavailable' : `path=\`${report.path}\``}`,
+    ]);
+    const legacyVersions = declaredReports.flatMap((report) => report.legacyPublicBody !== true ? [] : [
+      `- ${report.producer}: ${report.reference}; ${language === 'ja'
+        ? '元の完了実行の固定版と実行IDは未供給' : 'Original completed execution version and ID not supplied'}; ${report.path === undefined
+        ? (language === 'ja' ? '今回のsnapshotなし' : 'no snapshot for this call')
+        : `${language === 'ja' ? '今回作成したsnapshot' : 'snapshot created for this call'}=\`${report.path}\``}`,
+    ]);
+    const instructions = [
+      reportInstructionsWithUnavailable,
+      ...(currentExecutions.length === 0 ? [] : ['', language === 'ja' ? '## 現在レポートの実行記録' : '## Current report executions', ...currentExecutions]),
+      ...(legacyVersions.length === 0 ? [] : ['', language === 'ja' ? '## 旧runの成果物の版情報' : '## Legacy report version status', ...legacyVersions]),
+    ].join('\n');
     const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
       if (!isOutputContractItem(entry)) return [];
       const content = [entry.order, entry.format].filter(Boolean).join('\n\n');
@@ -295,6 +308,10 @@ export class InstructionBuilder {
     );
     return {
       text,
+      requiredReferenceContents: [
+        ...(this.context.policySourcePath !== undefined && policyJoined.length > CONTEXT_MAX_CHARS ? [policyJoined] : []),
+        ...(this.context.knowledgeSourcePath !== undefined && knowledgeJoined.length > CONTEXT_MAX_CHARS ? [knowledgeJoined] : []),
+      ],
       injectedReports: [...referencedReports.values(), ...unreferencedDeclaredReports],
       reportInputs: {
         userInputs: [...this.context.userInputs],

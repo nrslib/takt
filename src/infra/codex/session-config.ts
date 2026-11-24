@@ -24,6 +24,7 @@ export function hasCodexShellEnvironmentFilter(
 export function buildCodexSessionConfig(options: CodexCallOptions): {
   config: NonNullable<CodexOptions['config']>;
   env: Record<string, string>;
+  configOverrides: string[];
   permissionThreadOptions: ReturnType<typeof resolveCodexPermissions>['threadOptions'];
 } {
   const permissions = resolveCodexPermissions(options);
@@ -83,6 +84,7 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     ...(options.reasoningEffort === undefined
       ? {}
       : { model_reasoning_effort: options.reasoningEffort }),
+    ...(options.contextWindow === undefined ? {} : { model_context_window: options.contextWindow }),
     ...((options.fastMode !== undefined || options.internalAgentIsolation === 'strict-readonly') ? {
       features: {
         ...(codexSkillConfig?.features as Record<string, boolean> | undefined),
@@ -97,5 +99,10 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
           shell_environment_policy: shellPolicy,
         }),
   };
-  return { config: codexConfig, env: codexEnvironment, permissionThreadOptions: permissions.threadOptions };
+  return {
+    config: codexConfig,
+    env: codexEnvironment,
+    configOverrides: permissions.configOverrides,
+    permissionThreadOptions: permissions.threadOptions,
+  };
 }

@@ -71,6 +71,386 @@ describe('AgentRunner compaction recovery', () => {
     getProviderMock.mockReset();
   });
 
+  it('passes a fixed context window through and does not look up or promote it', async () => {
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      expect(options.contextWindow).toBe(400_000);
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-fixed' } });
+      return makeResponse('completed', 'window-fixed');
+    });
+    const getContextWindowLimits = vi.fn();
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-fixed',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-fixed',
+        providerOptions: { codex: { contextWindow: 400_000 } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first task', options);
+    await new AgentRunner().run(undefined, 'second task', options);
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(getContextWindowLimits).not.toHaveBeenCalled();
+  });
+
+  it('passes an explicit initial window to the provider and promotes it for recovery and the next call', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-object' } });
+      }
+      return makeResponse('completed', 'window-object');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(
+      async (_task, options) => {
+        windows.push(options.contextWindow);
+        return makeResponse('recovered', 'window-object');
+      },
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse: async () => ({ decision: 'needs_recovery' }) }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-object',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-object',
+        providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', { ...options, executionPhase: 2 });
+
+    expect(windows).toEqual([500_000, 872_000, 872_000]);
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+  });
+
+  it('does not reuse a promotion when the explicit setting changes or the maximum becomes unknown', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-object-change' } });
+      }
+      return makeResponse('completed', 'window-object-change');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 500_000 });
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-object-change',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-object-change',
+        providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', options);
+    const changed = {
+      ...options,
+      resolvedExecution: {
+        ...options.resolvedExecution!,
+        providerOptions: { codex: { contextWindow: { initial: 400_000, auto_expand: true } } },
+      },
+    };
+    await new AgentRunner().run(undefined, 'changed setting', changed);
+    await new AgentRunner().run(undefined, 'unknown maximum', changed);
+    await new AgentRunner().run(undefined, 'disabled', {
+      ...options,
+      resolvedExecution: {
+        ...options.resolvedExecution!,
+        providerOptions: { codex: { contextWindow: { initial: 400_000, auto_expand: false } } },
+      },
+    });
+    await new AgentRunner().run(undefined, 'original setting restored', options);
+    await new AgentRunner().run(undefined, 'maximum lowered', options);
+
+    expect(windows).toEqual([500_000, 400_000, 400_000, 400_000, 500_000, 500_000]);
+    expect(getContextWindowLimits).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps auto promotion within its own provider session', async () => {
+    const windows: Array<[string | undefined, number | undefined]> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push([options.sessionId, options.contextWindow]);
+      if (options.sessionId === 'window-session-a' && windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: options.sessionId } });
+      }
+      return makeResponse('completed', options.sessionId!);
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-session-a',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-session',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first task', options);
+    await new AgentRunner().run(undefined, 'other session', { ...options, sessionId: 'window-session-b' });
+    await new AgentRunner().run(undefined, 'same session', options);
+
+    expect(windows).toEqual([
+      ['window-session-a', undefined],
+      ['window-session-b', undefined],
+      ['window-session-a', 500_000],
+    ]);
+  });
+
+  it('bounds a promoted session to the current native maximum', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length <= 2) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-shrinking' } });
+      }
+      return makeResponse('completed', 'window-shrinking');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce({ default: 272_000, maximum: 500_000 });
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-shrinking',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-shrinking',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', options);
+    expect(windows).toEqual([undefined, 500_000, 500_000]);
+  });
+
+  it('does not promote a new response session from a foreign compaction event', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'refused-session' } });
+      }
+      return makeResponse('completed', 'new-session');
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'refused-session',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-foreign',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', { ...options, sessionId: 'new-session' });
+    expect(windows).toEqual([undefined, undefined]);
+  });
+
+  it('does not carry a prior session promotion into a new response session', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-old' } });
+        return makeResponse('completed', 'window-old');
+      }
+      if (windows.length === 2) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-old' } });
+        return makeResponse('completed', 'window-new');
+      }
+      return makeResponse('completed', 'window-new');
+    });
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-old',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-new',
+        providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', options);
+    await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', { ...options, sessionId: 'window-new' });
+
+    expect(windows).toEqual([500_000, 872_000, 500_000]);
+  });
+
+  it('resets the native window before recovering a new session from an ID-less compaction event', async () => {
+    const windows: Array<[string | undefined, number | undefined]> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push([options.sessionId, options.contextWindow]);
+      if (call.mock.calls.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-old-recovery' } });
+        return makeResponse('completed', 'window-old-recovery');
+      }
+      if (call.mock.calls.length === 2) {
+        options.onStream?.({ type: 'context_compacted', data: {} });
+        return makeResponse('needs recovery', 'window-new-recovery');
+      }
+      return makeResponse('completed', 'window-new-recovery');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(
+      async (_task, options) => {
+        windows.push([options.sessionId, options.contextWindow]);
+        return makeResponse('recovered', 'window-new-recovery');
+      },
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse: async () => ({ decision: 'needs_recovery' }) }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-old-recovery',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-new-recovery',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first', { ...options, executionPhase: 2 });
+    const recovered = await new AgentRunner().run(undefined, 'second', options);
+    await new AgentRunner().run(undefined, 'third', { ...options, executionPhase: 2, sessionId: 'window-new-recovery' });
+
+    expect(recovered.content).toBe('recovered');
+    expect(windows).toEqual([
+      ['window-old-recovery', undefined],
+      ['window-old-recovery', 500_000],
+      ['window-new-recovery', undefined],
+      ['window-new-recovery', undefined],
+    ]);
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+  });
+
+  it('does not reuse a promoted override when the current native default is unknown', async () => {
+    const windows: Array<number | undefined> = [];
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      windows.push(options.contextWindow);
+      if (windows.length === 1) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-unknown' } });
+      }
+      return makeResponse('completed', 'window-unknown');
+    });
+    const getContextWindowLimits = vi.fn()
+      .mockResolvedValueOnce({ default: 272_000, maximum: 872_000 })
+      .mockResolvedValueOnce(undefined);
+    getProviderMock.mockReturnValue({ ...makeProvider({ call }), getContextWindowLimits });
+    const options = makeRunOptions({
+      executionPhase: 2,
+      sessionId: 'window-unknown',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-unknown',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    await new AgentRunner().run(undefined, 'first task', options);
+    await new AgentRunner().run(undefined, 'after config change', options);
+
+    expect(windows).toEqual([undefined, undefined]);
+  });
+
+  it('promotes the same provider session before recovery without changing its session ID', async () => {
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      expect(options.contextWindow).toBeUndefined();
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-recovery' } });
+      return makeResponse('needs recovery', 'window-recovery');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(
+      async (_task, options) => {
+        expect(options.contextWindow).toBe(500_000);
+        expect(options.sessionId).toBe('window-recovery');
+        return makeResponse('completed', 'window-recovery');
+      },
+    );
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'needs_recovery' }),
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000, effectivePercent: 95 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-recovery',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-recovery',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    const result = await new AgentRunner().run(undefined, 'short task', options);
+
+    expect(result.content).toBe('completed');
+    expect(call).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a completed response and its promoted capacity for the next call', async () => {
+    const call = vi.fn<ProviderAgent['call']>(async (_task, options) => {
+      if (call.mock.calls.length === 1) {
+        expect(options.contextWindow).toBeUndefined();
+        options.onStream?.({ type: 'context_compacted', data: { sessionId: 'window-complete' } });
+      } else {
+        expect(options.contextWindow).toBe(500_000);
+      }
+      return makeResponse('completed', 'window-complete');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'complete' }),
+    );
+    getProviderMock.mockReturnValue({
+      ...makeProvider({ call, recoverFromCompaction, assessCompactedResponse }),
+      getContextWindowLimits: async () => ({ default: 272_000, maximum: 872_000, effectivePercent: 95 }),
+    });
+    const options = makeRunOptions({
+      sessionId: 'window-complete',
+      resolvedExecution: {
+        provider: 'codex', model: 'synthetic-window-complete',
+        providerOptions: { codex: { contextWindow: 'auto' } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect((await new AgentRunner().run(undefined, 'short task', options)).content).toBe('completed');
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    await new AgentRunner().run(undefined, 'next phase', { ...options, executionPhase: 2 });
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   it('recovers once after repeated compaction events and returns only the recovery result', async () => {
     const order: string[] = [];
     const onStream = vi.fn();

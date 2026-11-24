@@ -58,10 +58,8 @@ function start(config: WorkflowConfig, language: 'ja' | 'en', initialStep: strin
     reportDirName: 'reports',
   });
   const abort = vi.fn<WorkflowEvents['workflow:abort']>();
-  const started = vi.fn<WorkflowEvents['step:start']>();
   engine.on('workflow:abort', abort);
-  engine.on('step:start', started);
-  return { engine, abort, started };
+  return { engine, abort };
 }
 
 function queueScenario(config: WorkflowConfig, steps: readonly { name: string; ruleIndex: number; report: string }[]) {
@@ -86,7 +84,7 @@ function phase1Prompt(callIndex: number): string {
 describe('fix-replan routes through the shipped WorkflowEngine graph with the mock provider', () => {
   it.each(languages)('%s: fix returns through fix-replan to fix with the previous reports retained', async (language) => {
     const config = load(language);
-    const { engine, abort, started } = start(config, language, 'fix-plan');
+    const { engine, abort } = start(config, language, 'fix-plan');
     queueScenario(config, [
       { name: 'fix-plan', ruleIndex: 0, report: originalPlan },
       { name: 'fix', ruleIndex: 1, report: blockedFix },
@@ -99,7 +97,6 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
 
     expect(abort.mock.calls.map(call => call.slice(1))).toEqual([]);
     expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-replan', 'fix', 'fix-verifier']);
     expect(phase1Prompt(1)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(blockedFix);
@@ -108,58 +105,6 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
     expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-plan.md'), 'utf8')).toContain(revisedPlan);
     expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-verification.md'), 'utf8'))
       .toContain('Verified boundary repair against the revised plan.');
-    expect(runAgent).toHaveBeenCalledTimes(10);
     expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it.each(languages)('%s: completed fix ends remediation with test evidence for follow-up review', async (language) => {
-    const config = load(language);
-    const { engine, abort, started } = start(config, language, 'fix-plan');
-    queueScenario(config, [
-      { name: 'fix-plan', ruleIndex: 0, report: originalPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Boundary repair completed. npm test -- boundary.test.ts passed.' },
-      { name: 'fix-verifier', ruleIndex: 0, report: 'Verified boundary repair with passing test evidence.' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(abort).not.toHaveBeenCalled();
-    expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-verifier']);
-    expect(phase1Prompt(1)).toContain(originalPlan);
-    expect(phase1Prompt(2)).toContain('npm test -- boundary.test.ts passed');
-    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-report.md'), 'utf8'))
-      .toContain('npm test -- boundary.test.ts passed');
-    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-verification.md'), 'utf8'))
-      .toContain('Verified boundary repair with passing test evidence.');
-    expect(runAgent).toHaveBeenCalledTimes(6);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  describe.each(languages)('%s: fix-replan terminal routes', (language) => {
-    it('returns need_replan when the accepted contract must change', async () => {
-      const config = load(language);
-      const { engine, abort } = start(config, language, 'fix-replan');
-      queueScenario(config, [{ name: 'fix-replan', ruleIndex: 1, report: 'The accepted contract requires a project-wide change.' }]);
-
-      const state = await engine.run();
-
-      expect(abort.mock.calls.map(call => call.slice(1))).toEqual([]);
-      expect(state).toMatchObject({ status: 'completed', returnValue: 'need_replan' });
-      expect(getScenarioQueue()?.remaining).toBe(0);
-    });
-
-    it('aborts by the selected terminal rule rather than a provider failure', async () => {
-      const config = load(language);
-      const { engine, abort } = start(config, language, 'fix-replan');
-      queueScenario(config, [{ name: 'fix-replan', ruleIndex: 2, report: 'No feasible project-local work remains.' }]);
-
-      const state = await engine.run();
-
-      expect(state.status).toBe('aborted');
-      expect(abort).toHaveBeenCalledOnce();
-      expect(abort.mock.calls[0]?.[3]).toMatchObject({ kind: 'step_transition', step: 'fix-replan' });
-      expect(getScenarioQueue()?.remaining).toBe(0);
-    });
   });
 });

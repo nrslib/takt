@@ -17,7 +17,9 @@ const CLONE_FAILED_MESSAGE = 'Git clone failed';
 // Dissociation closes the graph before checkout can lazy-load commit trees on affected Git versions.
 const REFERENCE_CLONE_ARGS = ['-c', 'core.commitGraph=false', 'clone'] as const;
 export const REMOTE_BRANCH_FETCH_FAILED_MESSAGE = 'Git remote branch fetch failed';
+// LC_ALL=C keeps Git's stderr in English, because isShallowReferenceError() matches on the message text.
 const ISOLATED_GIT_ENV = {
+  LC_ALL: 'C',
   GIT_CONFIG_COUNT: '1',
   GIT_CONFIG_KEY_0: 'core.logAllRefUpdates',
   GIT_CONFIG_VALUE_0: 'false',
@@ -139,8 +141,8 @@ function destinationHasContent(clonePath: string): boolean {
 function cleanupPartialClone(clonePath: string): void {
   try {
     fs.rmSync(clonePath, { recursive: true, force: true });
-  } catch {
-    log.debug('Failed to cleanup partial clone before retry');
+  } catch (err) {
+    log.debug('Failed to cleanup partial clone before retry', { error: getErrorMessage(err) });
   }
 }
 
@@ -323,6 +325,7 @@ export function cloneAndIsolate(
   } catch (err) {
     const stderr = getExecErrorStderr(err);
     if (!destinationHadContent && isShallowReferenceError(stderr)) {
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
@@ -539,6 +542,7 @@ export async function cloneAndIsolateAbortable(
 
     const stderr = getErrorMessage(err);
     if (!destinationHadContent && isShallowReferenceError(stderr)) {
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {

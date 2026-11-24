@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { stringify } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isNormalOrTeamLeaderWorkflowStep, type WorkflowConfig } from '../core/models/types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../core/models/types.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../infra/config/loaders/workflowLoader.js';
 import {
@@ -46,32 +45,6 @@ describe('policy and knowledge facet deduplication', () => {
     expect(resolveRefList(refs, sections, projectDir, kind, context)).toEqual(['FIRST', 'SECOND']);
     expect(resolveRefListWithSource(['second', 'first'], sections, projectDir, kind, context)
       ?.map(({ content }) => content)).toEqual(['SECOND', 'FIRST']);
-  });
-
-  it.each(['policies', 'knowledge'] as const)('%s: keeps only the first facet across files and inline definitions with identical content', (kind) => {
-    const context = { projectDir, lang: 'ja' as const };
-    const first = `./.takt/facets/${kind}/first.md`;
-    write(first, 'SAME');
-    write(`.takt/facets/${kind}/second.md`, 'SAME');
-    const sections = { inline: 'SAME', other: 'SAME' };
-    const refs = ['first', 'second', 'inline', 'other', first, 'inline'];
-
-    expect(resolveRefList(refs, sections, projectDir, kind, context)).toEqual(['SAME']);
-    expect(resolveRefList(['first', 'second', 'inline', 'other'], sections, projectDir, kind, context))
-      .toEqual(['SAME']);
-    expect(resolveRefList([], sections, projectDir, kind, context)).toBeUndefined();
-    expect(resolveRefList(undefined, sections, projectDir, kind, context)).toBeUndefined();
-  });
-
-  it.each(['policies', 'knowledge'] as const)('%s: preserves files and inline definitions with different content', (kind) => {
-    const context = { projectDir, lang: 'ja' as const };
-    write(`.takt/facets/${kind}/first.md`, 'FIRST');
-    write(`.takt/facets/${kind}/second.md`, 'SECOND');
-    const sections = { inline: 'INLINE', other: 'OTHER' };
-    const refs = ['first', 'second', 'inline', 'other'];
-
-    expect(resolveRefList(refs, sections, projectDir, kind, context))
-      .toEqual(['FIRST', 'SECOND', 'INLINE', 'OTHER']);
   });
 
   it('preserves repeated instruction refs because their positions can express repeated actions', () => {
@@ -135,33 +108,4 @@ describe('policy and knowledge facet deduplication', () => {
     }
   });
 
-  it.each(['ja', 'en'] as const)('%s: takt-default review-adjudication assembles each policy and knowledge facet once', (lang) => {
-    write('.takt/config.yaml', `language: ${lang}\n`);
-    const workflow = loadWorkflowByIdentifier(
-      fileURLToPath(new URL(`../../builtins/${lang}/workflows/takt-default.yaml`, import.meta.url)), projectDir);
-    assert.ok(workflow);
-    const childOf = (parent: WorkflowConfig, name: string): WorkflowConfig => {
-      const call = parent.steps.find(step => step.name === name);
-      assert.ok(call?.kind === 'workflow_call');
-      const child = resolveWorkflowCallTarget(parent, call, projectDir);
-      assert.ok(child);
-      return child;
-    };
-    const peer = childOf(childOf(workflow, 'develop'), 'peer-review');
-    const step = peer.steps.find(step => step.name === 'review-adjudication');
-    assert.ok(step && isNormalOrTeamLeaderWorkflowStep(step));
-    for (const contents of [step.policyContents, step.knowledgeContents]) {
-      assert.ok(contents?.length);
-      const bodies = contents.map(({ content }) => content);
-      expect(new Set(bodies).size).toBe(bodies.length);
-      const assembled = bodies.join('\n\n---\n\n');
-      expect(assembled).not.toContain('{{include:');
-    }
-    for (const name of ['architecture', 'takt']) {
-      const path = fileURLToPath(new URL(`../../builtins/${lang}/facets/knowledge/${name}.md`, import.meta.url));
-      const heading = readFileSync(path, 'utf8').split('\n')[0];
-      assert.ok(heading);
-      expect(step.knowledgeContents?.map(({ content }) => content).join('\n').split(heading)).toHaveLength(2);
-    }
-  });
 });

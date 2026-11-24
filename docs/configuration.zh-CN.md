@@ -135,7 +135,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` 是可选项。provider/model 的优先级为显式 CLI 或环境变量覆盖、项目 selector、全局 selector、项目顶层、全局顶层。model 只有在其 candidate 属于解析出的 provider 时才有效。只有 selector 条目提供 `provider_options`，并按 option leaf 从全局到项目合并；顶层、persona 和 pool sub-step 的 options 不会传给 selector。provider option 的环境变量覆盖只应用于已解析的 selector provider。Codex selector 使用 `config_profile` 时，selector 自身的有效 options（selector 条目或匹配的环境变量覆盖）必须包含 `permission_control: codex`；顶层 `provider_options` 不会继承。空 selector 条目或空 `provider_options` 条目会在加载配置时被拒绝。dynamic parallel 和 `dynamic_facets` selector 使用 provider-neutral 的新 session，并传入固定的只读工具 allowlist `Read`、`Glob`、`Grep` 以及 `permission_mode: readonly`。Companion selector 不接收固定的 `allowedTools` 列表，因此可以使用 selector profile 中的 `allowed_tools`。工具 allowlist 只对遵守它的 provider 生效。没有 dynamic parallel、dynamic facets 或启用的 companion pool 时，selector 设置不会使用，也不会影响 workflow。
+`takt_providers.selector` 是可选项。provider/model 的优先级为显式 CLI 或环境变量覆盖、项目 selector、全局 selector、项目顶层、全局顶层。model 只有在其 candidate 属于解析出的 provider 时才有效。只有 selector 条目提供 `provider_options`，并按 option leaf 从全局到项目合并；顶层、persona 和 pool sub-step 的 options 不会传给 selector。provider option 的环境变量覆盖只应用于已解析的 selector provider。Codex selector 使用 `config_profile` 或 `readonly_permission_base` 时，selector 自身的有效 options（selector 条目或匹配的环境变量覆盖）必须包含 `permission_control: codex`；顶层 `provider_options` 不会继承。空 selector 条目或空 `provider_options` 条目会在加载配置时被拒绝。dynamic parallel 和 `dynamic_facets` selector 使用 provider-neutral 的新 session，并传入固定的只读工具 allowlist `Read`、`Glob`、`Grep` 以及 `permission_mode: readonly`。Companion selector 不接收固定的 `allowedTools` 列表，因此可以使用 selector profile 中的 `allowed_tools`。工具 allowlist 只对遵守它的 provider 生效。没有 dynamic parallel、dynamic facets 或启用的 companion pool 时，selector 设置不会使用，也不会影响 workflow。
 
 ```yaml
 # ~/.takt/config.yaml（续）
@@ -534,6 +534,61 @@ manager:
 
 manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.prepare_workflow` / `merge.workflow`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
 
+## manager 的任务 runtime assignment
+
+在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中设置 `manager.runtime_assignments`，指定 manager 为各任务选择 runtime assignment 时可用的候选项。项目值替换整个全局列表。每项可以是名称字符串，或只含一个 `{ 名称: 用途说明 }` 的对象；不支持 `all`。
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: 不紧急、允许较长完成时间的目标任务
+    - fast
+```
+
+项目和全局都未设置 `manager.runtime_assignments` 时，候选项为空，manager 无法指定 runtime assignment。名称必须已定义在 `runtime.yaml` 的 `provider.assignments` 中。创建 manager 会话计划时，会警告并忽略未定义的名称。
+
+manager 通过 `takt_list_runtime_assignments` 读取候选项及用途说明，再将合适的名称作为 `runtimeAssignment` 传给 `takt_enqueue_goal_task`。指定候选项之外的名称会报错。名称以 `runtime_assignment` 保存到任务中；requeue 和 retry 未指定替换值时使用保存值。通过 `--runtime-assignment` 启动时，命令行指定优先于任务的保存值。
+
+将已有任务重新提交给 `takt_enqueue_goal_task` 时，即使指定另一个有效候选名称，也不会改变保存值。工具验证名称后返回已有任务，不会创建新任务。
+
+### 保存的 assignment 名称被删除时
+
+从 `runtime.yaml` 的 `provider.assignments` 删除名称后，保存该名称的任务无法继续按保存值执行。
+
+属于目标的任务会被执行前的 provider 检查跳过，在被领取（claim）执行时变为 `failed`，其他任务不受影响。不属于目标的任务只要仍为 `pending`，`takt run` 的 provider 预检查就会在任何任务开始前停止，因此项目中的其他 pending 任务也不会执行。
+
+可以采用以下恢复方法：
+
+1. 在 `runtime.yaml` 中恢复该名称。
+2. 启动时通过 `--runtime-assignment` 指定 `runtime.yaml` 中已定义的有效名称。此指定只对本次启动有效，不会修复任务中保存的 `runtime_assignment`。
+3. 仅对于目标任务，先通过 `takt_remove_goal_task` 移除任务，再由 manager 在 `takt_enqueue_goal_task` 的 `runtimeAssignment` 中指定有效名称，重新加入队列。
+
+已经变为 `failed` 的目标任务，不会因为名称恢复或指定了 CLI 覆盖而自动重跑。请先通过 `takt_retry_goal_task` 将其恢复为 `pending`，再启动 run。
+
+### 使用 CLI 覆盖恢复时的自动执行
+
+`manager.auto_run` 启用时（默认启用），retry 也会自动启动 run。该 run 不带 `--runtime-assignment` 领取任务，因此计划通过 CLI 覆盖恢复时，请先禁用 `manager.auto_run`，再 retry。
+
+禁用 `manager.auto_run` 不会停止已经运行的 run，它仍会在没有 CLI 覆盖的情况下继续领取 pending 任务。请先停止正在运行的 run，或等其结束后再 retry。
+
+### 移除任务并重新加入队列时
+
+采用上述第3种方法时，如果目标已暂停（`executionStatus` 为 `paused`），请先恢复目标，再重新加入队列。`takt_enqueue_goal_task`、retry 和 requeue 都会拒绝已暂停的目标。可以使用 `takt_resume_goal`，或在 TUI 中按 Ctrl+G，选择目标并恢复。
+
+除 merge 任务和未整合的已完成成果的处理路径外，`takt_remove_goal_task` 会直接删除 worktree，不检查未提交的修改。移除前请检查 worktree，并保存需要的修改。重新加入队列不会恢复已删除的修改。
+
+只有目标状态为 `created` 时，才能移除 pending 任务。PR 的 merge 任务在目标为 `awaiting_merge` 时也可以移除。不能移除 running 任务。
+
+### 修改保存值
+
+目标任务恢复为 `pending` 时，可以向 `takt_retry_goal_task` 或 `takt_requeue_goal_task` 传入 `runtimeAssignment`，保存另一个名称。移除任务后重新加入队列也可以修改保存值。
+
+省略 `runtimeAssignment` 时，requeue 和 retry 不改变保存值。Failed 目标任务使用同一个缺失名称恢复为 pending 后，在领取时仍会再次失败。追加指示 `takt_tell_run` 只用于 running 任务，不修改保存值。当前可用候选项可通过 `takt_list_runtime_assignments` 确认。
+
+### 同时检查 defaults 和 directories 的引用
+
+如果 `runtime.yaml` 的 `provider.defaults.assignment` 或 `provider.directories` 引用了 `provider.assignments` 中不存在的名称，解析该引用时会失败。CLI 覆盖、移除后重新加入队列都无法绕过。尝试恢复前，请先将这些引用也改为有效名称。
+
 ## manager 工具权限
 
 在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中配置：
@@ -628,9 +683,9 @@ export TAKT_SLACK_BOT_TOKEN='xoxb-...'
 takt manager
 ```
 
-`TAKT_SLACK_APP_TOKEN` 使用带有 `connections:write` 权限的 App-Level Token，`TAKT_SLACK_BOT_TOKEN` 使用机器人令牌。daemon 读取后会从自身环境中删除这两个变量，避免 provider 和工具子进程继承令牌。没有自动启动机制，需要使用上述命令之一启动 daemon。
+`TAKT_SLACK_APP_TOKEN` 使用带有 `connections:write` 权限的 App-Level Token，`TAKT_SLACK_BOT_TOKEN` 使用机器人令牌。daemon 读取后会从自身环境中删除这两个变量，避免 provider 和工具子进程继承令牌。`takt manager` 和 `takt director` 会按需启动 daemon。
 
-只要有仓库配置了 Slack，且两个令牌均已设置，即使没有任务，daemon 也会继续监听。未配置 Slack 或缺少任一令牌时，daemon 仍按原有规则在空闲时退出。如果两个仓库配置了同一频道，两者的 Slack 都会被禁用，原因会写入 `~/.takt/logs/daemon.log`。
+没有 Slack 或 TUI 连接、待处理事件、等待中的命令或需要监视的工作时，daemon 会自动退出。即使没有 Slack 配置或令牌，也可以通过 TUI 提交输入并使用必要的监视功能。要明确停止 daemon，请运行 `takt daemon stop` 或发送信号。如果两个仓库配置了同一频道，两者的 Slack 都会被禁用。启动、停止和诊断信息会异步保存到 `~/.takt/daemon-logs/*.json`。
 
 ### 对话和回答询问
 
@@ -663,6 +718,36 @@ director 将一轮中新产生的通知汇总为该频道中的一条消息，�
 ## manager 敏感文件设置
 
 `manager.sensitive_paths` 和 `provider.targets.internal_agents.manager-permission-judge` 已弃用并被忽略。保留旧配置不会导致启动失败，但这些设置不再保护文件或决定工具执行权限。manager 按照 facets 处理人的指令和秘密值，不再读取权限 Markdown。
+
+## manager 通知设置
+
+在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中使用 `manager.notifications`，可以分别启用或禁用各类目标通知。
+
+| 配置键 | 事件 | 默认值 |
+|--------|------|--------|
+| `question` | 保存问题 | `true` |
+| `awaiting_merge` | 目标等待人工合并 | `true` |
+| `completed` | 目标完成 | `true` |
+| `progress` | 整合一个工作单元 | `true` |
+| `blocked` | manager 通过通知工具报告阻碍，或事件处理、TUI 对话失败 | `true` |
+| `custom` | manager 通过通知工具报告其他事件 | `true` |
+
+```yaml
+manager:
+  notifications:
+    question: true
+    awaiting_merge: true
+    completed: true
+    progress: false
+    blocked: true
+    custom: true
+```
+
+各类通知独立按项目设置 → 全局设置 → `true` 的顺序解析。显式的 `false` 也按此优先级处理。例如，项目中的 `question: true` 会覆盖全局的 `question: false`；项目省略该键时使用全局值。其他通知类型不受影响。
+
+将某类通知设为 `false` 后，不再保存、在 TUI 显示或向 Slack 发送该类通知。回答问题、整合结果和更新目标的处理会继续，待回答的问题仍然可见。
+
+设置 `TAKT_NOTIFY_WEBHOOK` 可向 Slack 发送通知。TUI 打开期间会刷新已启用并保存的通知。manager 事件处理或 TUI 对话失败时发送 `blocked`，包括重复失败；不会创建失败状态文件。Slack 发送失败会写入日志，manager 继续工作。这些设置不影响普通 run 或 pipeline 通知。
 
 ## API Key 配置
 
@@ -789,6 +874,56 @@ OpenCode provider 会启动外部 `opencode serve` CLI，并通过 SDK 连接到
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 ```
 
+在 v2 中，随包提供的 plugin 负责应用工具权限。plugin 不可用时，TAKT 会在执行前报错。执行时使用配置的工具列表和获准的 MCP 设置，响应返回后按 schema 校验结构化输出。
+
+#### OpenCode Skills
+
+v2 默认禁用环境中的 Skill。在旧版全局/项目配置、routing 条目或 workflow/step capability 文件中，将布尔值 `provider_options.opencode.skills.enabled` 设为 `true`，可在 Phase 1 启用原生 Skill 发现和权限。仅有 `Read` 权限不会启用 Skill。TAKT 不会把原生的 `allow`、`deny`、`ask` 强制改为 `allow`，也不会修改 OpenCode 配置或 Skill 文件。
+
+```yaml
+# Legacy ~/.takt/config.yaml or .takt/config.yaml
+provider_options:
+  opencode:
+    skills:
+      enabled: true
+```
+
+旧版 `provider_routing` 也支持按 persona、tag 或 step 设置。以下是不同的选择方式，只保留需要的条目。
+
+```yaml
+provider_routing:
+  personas:
+    coder: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  tags:
+    coding: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+  steps:
+    implement: { provider: opencode, provider_options: { opencode: { skills: { enabled: true } } } }
+```
+
+在 runtime 模式下，将 `skills.enabled` 放入 OpenCode profile 的 `options`，再为所需 persona、tag 或 step 选择该 profile。以下 target 同样是不同的选择方式，只保留需要的条目。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    default: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: false } } }
+    coder: { provider: opencode, model: opencode/big-pickle, options: { skills: { enabled: true } } }
+  defaults: { profile: default }
+  targets:
+    personas:
+      coder: { profile: coder }
+    tags:
+      coding: { profile: coder }
+    steps:
+      development-implement/implement: { profile: coder }
+```
+
+也可以设置 `TAKT_PROVIDER_OPTIONS_OPENCODE_SKILLS_ENABLED=true`，或使用 `TAKT_PROVIDER_OPTIONS` JSON。Skill 工具只在已启用的 Phase 1 调用中可用；报告、状态判定和只读调用会禁用它。retry 和 resume 保留配置值。此选项不适用于 v1。
+
+OpenCode CLI 2.0.18 中，曾在 Phase 1 启用 Skill 的会话可能在禁用 Skill 工具后，仍将保存的 `<available_skills>` 列表保留在后续模型输入中。请只为需要 Skill 的 step 启用它。
+
+对于 v2 MCP server，TAKT 最多等待 30 秒，让获准工具完成注册。未限制工具列表的 server 必须至少注册一个工具。
+
 ## Runtime Provider 配置（`runtime.yaml`）
 
 `runtime.yaml` 将 provider/model/options 从 workflow 中移出，使同一 workflow 可以在不同执行环境中运行而无需修改。固定读取两个路径，项目文件优先：
@@ -815,6 +950,23 @@ companion:
 `companion.review_mode` 默认是 `completion`。project 值优先于 global 值；project 未指定时继承 global 值。`completion` 在 implementer 成功响应后审查累计 diff，`live` 保留响应期间的 quiet、forced 和 commit 触发。只接受 `completion` 和 `live`；无效值会在加载 `runtime.yaml` 时失败。即使 `companion.enabled` 为 `false`，仍会验证 mode 的结构，但不会解析或执行 Companion provider。
 
 `companion.fix_policy` 默认是 `single`。project 值优先于 global 值；project 未指定时继承 global 值。`single` 在初次审查后最多进行一次修复跟进，不复审该次修复；`loop` 则继续审查与修复循环。只接受 `single` 和 `loop`；即使 Companion 未启用，也会验证此配置。
+
+### 执行后的循环分析
+
+循环分析需要显式启用。在顶层添加 `loop_analysis`，即可在 run 的最终产物保存完成后分析该次执行：
+
+```yaml
+version: 1
+loop_analysis:
+  enabled: true
+  output: file # file | pr-comment; defaults to file
+```
+
+启用后，成功、失败或中断的 run 结束时都会启动分析。原 run 不等待分析，分析失败也不改变原结果。Run 结束后立即强制终止进程时，分析可能尚未启动。
+
+分析会读取日志、trace、报告和 workflow 定义，识别重复问题并提出改进建议。结果位于分析 run 的 `reports/loop-analysis.md`。完整副本保存在 `TAKT_CONFIG_DIR`（默认为 `~/.takt`）下的 `loop-analysis/`。发布的报告会移除已识别的秘密信息、本地路径等内容。
+
+使用 `output: pr-comment` 时，若原 run 启用了自动 PR，TAKT 会向已有 PR 发表评论。没有 PR 时，报告保留在文件中。分析使用的 provider 按通常方式通过 `runtime.yaml` target 分配。全局和项目都设置 `loop_analysis` 时，项目部分优先。
 
 ### 配置示例
 
@@ -884,16 +1036,23 @@ provider:
 
 ### 命名 assignment
 
-`provider.assignments` 用于定义通过项目目录或 `--runtime-assignment <name>` 选择的命名 provider 配置集合。每个 entry 必须至少包含
-`defaults` 或 `targets`，不能使用空 assignment。`defaults` 与顶层 `provider.defaults` 形状完全相同，必须
-在 `profile` 和 `ladder` 中选择一个。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
+`provider.assignments` 用于定义通过项目目录、`--runtime-assignment <name>` 或默认设置选择的命名 provider 配置集合。每个 entry 必须至少包含
+`defaults` 或 `targets`，不能使用空 assignment。assignment 内的 `defaults` 必须
+在 `profile` 和 `ladder` 中选择一个，不能引用另一个 assignment。`targets` 与顶层 `provider.targets` 形状相同：`personas`、`tags`、
 `steps` 可以使用 `profile`、`pool` 或 `ladder`，`internal_agents` 只能使用 `profile` 或 `ladder`，
 而 `companions` 只能使用固定的 `profile`。
+
+通过 `provider.defaults: { assignment: project-sol }` 可以选择默认 assignment。
+顶层 `defaults` 必须在 `profile`、`ladder` 和 `assignment` 中选择一个。
+选择优先级依次为 CLI、任务中保存的 `runtime_assignment`（执行任务时）、匹配的目录、默认 assignment。project 的 `defaults` 会整体替换 global 的值。
+未知的 assignment 或 profile、空的 defaults，以及同时指定多个选项的 defaults，都会在 agent 启动前报错。
+如果顶层 defaults 指定 assignment，而选中的 assignment 没有具体的 defaults，也会报错。
+如果顶层 defaults 指定 profile 或 ladder，assignment 可以省略 defaults 并继承该值。
 
 `provider.directories` 将目录路径映射到 assignment 名称。匹配对象是启动时的 project 目录。路径键会先展开
 `~`、转换为绝对路径，并对存在的路径进行 realpath 等价的规范化，然后进行完全匹配；不支持前缀匹配和 glob。
 如果目录值引用了未定义的 assignment，加载时会快速失败。目录匹配成功后使用 assignment 的 `defaults`；如果
-省略，则回退到顶层 `provider.defaults`。如果 assignment 提供了 `targets`，它会整体替换顶层
+省略，则使用顶层的 profile 或 ladder。如果 assignment 提供了 `targets`，它会整体替换顶层
 `provider.targets`，不会按 `personas` 等子 map 合并。省略 `targets` 的 assignment 会继续使用顶层
 `provider.targets`。`profiles` 和 `auto_routing` 继续共享。
 
@@ -924,7 +1083,7 @@ assignment 选择之前。assignment 内的 profile、pool、ladder 引用与其
 
 `--runtime-assignment <name>` 从 global 和 project runtime.yaml 合并后的 `provider.assignments`
 中选择名称，优先于匹配的 `provider.directories`。assignment 只应用一次，以合并后的顶层配置为基准：
-省略 `defaults` 或 `targets` 时继承顶层值；提供 `targets` 时整体替换 map。
+省略 `defaults` 时继承顶层的 profile 或 ladder，省略 `targets` 时继承顶层的 targets；提供 `targets` 时整体替换 map。
 `profiles`、`auto_routing`、`mcp`、`companion` 和 `loop_analysis` 保持共享。
 现有 `--provider`、`--model` 和 `--auto-strategy` override 仍优先于选择后的配置。
 
@@ -962,8 +1121,9 @@ takt --pipeline --runtime-assignment cost "#123"
 
 此选项适用于交互式启动、直接执行、pipeline、`run`、`watch` 和其他子命令。
 同一次 `run` 的所有任务、同一 `watch` 启动后新增的任务、内部 agent 和 loop-analysis 使用相同选择。
-选择操作不会改写配置文件，也不会保存到任务记录。requeue、retry 和 instruct 不会恢复过去启动的选择。
-正常任务执行仍会更新任务状态。未指定选项时，原有目录匹配和顶层解析行为保持不变。
+`--runtime-assignment` 的选择不会改写配置文件，也不会保存到任务记录。manager 通过 `takt_enqueue_goal_task` 创建新任务，或通过 `takt_retry_goal_task`、`takt_requeue_goal_task` 将任务恢复为 `pending` 时，传入的 `runtimeAssignment` 名称会以 `runtime_assignment` 保存到任务中。
+启动时指定 `--runtime-assignment`，该值优先于任务保存的 `runtime_assignment`。
+正常任务执行仍会更新任务状态。未指定 `--runtime-assignment` 时，如果任务保存了 `runtime_assignment`，就使用该值；也没有保存值时，沿用原有的目录匹配和顶层配置解析。
 
 名称未定义、assignments 不存在或没有有效 runtime provider section 时，在任何 agent 启动前停止。
 错误包含指定名称和可用 assignment 名称列表，或说明没有定义；不会回退到目录或 legacy 配置。
@@ -987,7 +1147,7 @@ takt run --runtime-assignment personal
 
 两层中不同名称的 profile 和 assignment 在合并后保留；同名 entry 由 project 整体替换。
 
-`provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
+`provider.profiles` 保存命名的 provider/model/options 定义。每个有效 provider section 都必须指定 `provider.defaults`，并在固定的 `profile`、有序的 `ladder` 和命名的 `assignment` 中选择一个；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
 继承解析后仍必须提供 `provider`。codex、claude、claude-sdk、claude-headless、claude-terminal、copilot、cursor、kiro、pi、deepseek-harness 和 mock 可以省略 `model`。子 profile 通过 `extends` 继承父 profile 的 model；继承后仍没有 model 时，TAKT 使用 provider 自身的默认模型，不从未选中的 defaults 或其他低优先级 profile 补全 model。显式 CLI `--model` 或环境变量 `TAKT_MODEL` 优先。opencode 是例外，必须提供 `provider/model` 格式的 `model`。
 
@@ -1020,7 +1180,7 @@ defaults
   < steps
 ```
 
-内部 `selector`、`assistant`、`loop-judge` 和 `review-completion-judge` 使用单独的解析顺序。`selector` 选择动态工作，`assistant` 支持交互会话，`loop-judge` 判断 loop monitor，`review-completion-judge` 判断已启用的 reviewer 是否需要再次审查。各 seat 都可省略，未指定时使用普通默认解析。已废弃的 `manager-permission-judge` 会被忽略。
+内部 `selector`、`assistant`、`loop-judge` 和 `review-completion-judge` 使用单独的解析顺序。`selector` 选择动态工作，`assistant` 支持交互会话，`loop-judge` 判断 loop monitor，`review-completion-judge` 判断已启用的 reviewer 是否需要再次审查。各 agent 的配置都可省略，未指定时使用普通默认解析。已废弃的 `manager-permission-judge` 会被忽略。
 
 ```text
 defaults
@@ -1060,6 +1220,169 @@ runtime 与旧版 provider 设置不能混用：
 
 首次启动时，TAKT 会原子写入 `~/.takt/runtime.yaml`，不会覆盖已有文件，也不会自动生成项目 `.takt/runtime.yaml`。新环境会把选定的 provider/model 写入 `provider.profiles.default`，并设置 `provider.defaults.profile: default`。已有旧版 provider 设置的环境只会收到一个 inactive 的 `version: 1` 文件，因此迁移前行为不会改变。
 
+## `runtime.yaml` 中的 Runtime MCP 配置
+
+`runtime.yaml` 的顶层 `mcp` 部分定义 MCP server，并将其分配给 agent。它与 `provider` 并列，也可以在没有 `provider` 部分时单独启用。此时 provider/model 仍通过旧版 `config.yaml` 解析，同时向 agent 提供 MCP server。
+
+### 配置示例
+
+```yaml
+version: 1
+
+mcp:
+  servers:
+    common-tools:
+      type: stdio
+      command: common-mcp-server
+      args: []
+      env:
+        API_TOKEN: "${COMMON_MCP_API_TOKEN}"
+    github:
+      type: http
+      url: https://api.githubcopilot.com/mcp/
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+
+  defaults:
+    servers:
+      - common-tools
+
+  targets:
+    personas:
+      release-manager:
+        servers:
+          - github
+    tags:
+      github:
+        servers:
+          - github
+    steps:
+      release/create-pr:
+        servers:
+          - github
+    internal_agents:
+      selector:
+        exclude:
+          - common-tools
+```
+
+### 配置结构
+
+普通 assistant 和 grill-me 对话均使用 `mcp.targets.personas.assistant`。provider 支持 MCP 时，assistant 还会获得内置的只读 `takt` server。用户以 `takt` 为名定义的 server 不会传给 assistant；TAKT 会使用内置 server，且不显示提示。provider 不支持 MCP 时，对话继续，但不使用 MCP，并显示提示。
+
+例如，可按以下方式分配 Backlog MCP server：
+
+```yaml
+version: 1
+mcp:
+  servers:
+    backlog:
+      type: stdio
+      command: backlog-mcp-server
+  targets:
+    personas:
+      assistant:
+        servers: [backlog]
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `mcp.servers` | `{ <name>: ServerEntry }` | 命名的 MCP server 定义（`stdio` / `sse` / `http`）。仅定义不会启用，必须通过 `defaults` 或 `targets` 分配。 |
+| `mcp.defaults.servers` | `string[]` | 应用于每次 agent 执行，包括普通 step、并行 agent、fan-in、内部 agent 和子 workflow 的叶子 step。 |
+| `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | 按 persona 添加或排除。 |
+| `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | 按 tag 添加或排除。 |
+| `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | 按 step 添加或排除。`workflow_call` 等控制节点不参与解析。 |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | 对内部 agent（`selector`、`assistant`、`manager`）应用排除设置。只接受 `selector.exclude`。manager 还匹配 `mcp.targets.personas.manager`，并始终添加自身的 TAKT MCP server。 |
+
+Server 定义：
+
+| Transport | 必需字段 | 可选字段 |
+|-----------|----------|----------|
+| `stdio` | `command` | `args`、`env` |
+| `sse` | `url` | `headers` |
+| `http` | `url` | `headers` |
+
+### 实际使用的 server
+
+```text
+effective servers
+  = defaults.servers
+  + matched targets.servers
+  - matched targets.exclude
+```
+
+- Server 名称会去重。
+- `exclude` 优先于添加设置。
+- `targets` 引用未知 server 名称时，会在任何 agent 执行前报错。
+- `mcp.servers` 中的定义必须通过 `defaults` 或 `targets` 分配才会启用。
+
+### 合并全局与项目配置
+
+全局和项目的 `runtime.yaml` 都包含 `mcp` 时，项目部分会整体替换全局部分。同名 server 不逐字段合并；`defaults`、`targets` 存在时采用项目值。这与 `provider` 部分的合并规则一致。
+
+### 环境变量插值
+
+`command`、`args`、`env`、`url` 和 `headers` 中的 `${NAME}` 在 agent 启动前从 `process.env` 解析。必需的环境变量未定义时会报错，不会静默替换为空字符串。解析后的秘密值（env、headers）不会写入日志或错误消息。
+
+仅在 runtime HTTP/SSE 的 **headers** 中，可以使用 `${env:NAME}` 让 provider 从自身环境读取值。TAKT 检查变量是否已定义，只传递变量名，不将值复制到参数、临时文件、环境变量中的配置 JSON 或日志。变量仍保留在 provider 进程环境中。`${NAME}` 仍立即插值，可能在这些启动材料中暴露值；固定 header 不变。不需要增加配置键或 `provider_options` 设置。
+
+```yaml
+mcp:
+  servers:
+    datadog:
+      type: http
+      url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+      headers:
+        Authorization: "Bearer ${env:DD_ACCESS_TOKEN}"
+        X-Tenant: "${TENANT}"
+  defaults:
+    servers: [datadog]
+```
+
+| Provider / 执行方式 | Runtime header 变量引用 |
+|---------------------|-------------------------|
+| Codex，包括仅使用 MCP 的执行（已验证 CLI 0.162.1） | 支持：`Authorization: "Bearer ${env:X}"` 使用 `bearer_token_env_var`；整个 header 值为 `${env:X}` 时使用 `env_http_headers`。 |
+| OpenCode v1 / v2（已验证 CLI 1.18.2 / 2.0.18） | 支持：在 `OPENCODE_CONFIG_CONTENT` 中转换为 `{env:X}`，可包含周围文本。 |
+| Claude SDK / Headless / Terminal | TAKT 的 inline/file/terminal 执行方式尚未验证，受影响的 server 会被排除。 |
+| Cursor / Copilot / 其他 provider | 尚未验证，受影响的 server 会被排除。 |
+
+Codex 无法表达 `Token ${env:X}` 等其他周围文本，也无法在一个 header 中使用多个引用。TAKT 会显示包含 provider、server 和原因的警告，并在本次执行中排除整个 server。未验证的 provider 也遵循此规则。其他 server 和后续 workflow step 继续执行。TAKT 不会回退到明文；需要立即插值时请显式使用 `${NAME}`。变量未定义时，会在排除警告或 provider 启动前失败，不支持该引用的 provider 也一样。已定义但为空的变量可以使用。`${env:NAME}` 在 URL 或 stdio 字段中没有新增含义；`${NAME}` 插值生成的文本也不会被再次解释为 provider 变量引用。
+
+Codex 通过 `shell_environment_policy.filters` 自动从 AI 工具的 shell 中排除被引用的变量，同时保留通常的 PATH 设置。若引用的是 PATH，不会将其重新复制到 shell 配置中。普通执行和仅使用 MCP 的执行都适用。TAKT 不会为其他 provider 提供相同的 shell 排除控制；OpenCode 的 shell 工具仍可能继承这些变量。
+
+使用 `${NAME}` 时，当前会复制到的启动材料包括：Codex 和 Claude SDK 的 argv，Claude Headless/Terminal、Cursor、Copilot 的临时文件，以及 OpenCode 的 `OPENCODE_CONFIG_CONTENT` JSON。`${env:NAME}` 在上述受支持方式中可避免这些复制，但不会从 provider 自身进程环境中移除值。
+
+### Provider 支持的 transport
+
+每个 provider 都声明其支持的 transport。解析后的 server 使用不支持的 transport 时，TAKT 会在 agent 启动前报错，并显示 provider、server、transport、支持列表和 runtime.yaml 的来源路径。
+
+| Provider | 支持的 transport |
+|----------|------------------|
+| `claude-sdk` / `claude` / `claude-headless` / `claude-terminal` | `stdio`、`sse`、`http` |
+| `codex` | `stdio`、`http` |
+| `opencode` | `stdio`、`http` |
+| `cursor` | `stdio`、`http` |
+| `copilot` | `stdio`、`http` |
+| `kiro` | `stdio`、`http` |
+| `mock` | `stdio` |
+
+不兼容的 transport 不会被静默转换，server 也不会被静默丢弃。
+
+### 旧版 workflow MCP 模式与迁移
+
+旧版和 runtime MCP 配置不能混用。
+
+- `runtime.yaml` 中没有启用的 `mcp` 部分时，使用 workflow 的 `mcp_servers` 和 `workflow_mcp_servers` 策略。
+- 启用了 `mcp` 部分时，只使用 runtime MCP 分配。
+- Runtime MCP 与 workflow 的 `mcp_servers` 同时存在时，TAKT 会立即报错，并显示 workflow/step 和迁移目标。
+
+在 runtime MCP 模式下，workflow 不能指定 MCP server 的 command、URL、header 或 env。这些值应定义在 `runtime.yaml` 的 `mcp` 部分。
+
+| 旧版设置 | Runtime 迁移目标 |
+|----------|------------------|
+| Config 的 `workflow_mcp_servers` 策略 | 这是 transport 许可策略，不能直接复制到 runtime 分配。迁移时移除旧策略。 |
+| Step 的 `mcp_servers` map | 将 server 定义移到 `mcp.servers`，再通过 `mcp.targets.steps` 手动分配名称。 |
+
 ## Provider Profile
 
 Provider profile 可以为不同 provider 设置默认权限模式和按 step 的权限覆盖。
@@ -1095,13 +1418,16 @@ provider_profiles:
 
 ### 权限解析优先级
 
-权限解析顺序（先匹配者优先）：
+先按以下顺序从 provider profile 中选择模式，使用首个匹配的设置：
 
 1. 项目 `provider_profiles.<provider>.step_permission_overrides.<step>`
 2. 全局 `provider_profiles.<provider>.step_permission_overrides.<step>`
 3. 项目 `provider_profiles.<provider>.default_permission_mode`
 4. 全局 `provider_profiles.<provider>.default_permission_mode`
-5. step `required_permission_mode`（作为最低下限）
+
+然后始终将 step 的 `required_permission_mode` 作为下限。如果选中的 profile 模式低于所需模式，就提高到所需模式。例如，step 要求 `edit` 而 profile 解析为 `readonly` 时，实际使用 `edit`。
+
+如果无法从 profile 中选出模式，就使用 step 的 `required_permission_mode`；如果也未指定该值，则使用 `readonly`。
 
 每个 provider 都有 builtin `default_permission_mode: edit`；如果项目和全局 profile 都没有设置，最终模式就是 `edit`，再根据 step 的 `required_permission_mode` 提高。
 
@@ -1232,6 +1558,8 @@ auto_routing:
 
 旧版模式中，顶层 `provider` 和 `model` 是默认值；candidate 只用于 workflow step 执行。没有 workflow-step 上下文的内部操作使用顶层默认值。Assistant 对话不走 auto routing，而解析 `takt_providers.assistant`，必要时回退到顶层 provider/model。runtime 模式下，只有显式选择 pool 的 persona、tag 或 step target 才自动路由。
 
+在 runtime 模式下，`provider.defaults` 指定 profile、ladder 或默认的命名 assignment。指定 assignment 时，使用所选 assignment 的 `defaults` 中的 profile 或 ladder。
+
 candidate 的 `routing_tier` 只能是 `high`、`medium` 或 `low`。CLI 可以用 `--auto-strategy cost|balanced|performance` 覆盖策略。路由决策默认不记录；启用 `telemetry.routing_decisions`（`takt telemetry enable` 或 `routing_decisions: true`）后，以 NDJSON 写入项目 `.takt/events/`，不会上传。
 
 provider option 也可以通过环境变量覆盖。例如 OpenCode model variant 使用 `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high`；provider base URL 可使用 `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` 或 `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`。Pi thinking level 使用 `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high` 设置 `provider_options.pi.thinking_level`。DeepSeek Harness 可使用 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1`；官方 SDK 读取 `DEEPSEEK_API_KEY` 和可选的 `DEEPSEEK_BASE_URL`，TAKT 将其传给官方 TypeScript SDK/runtime。其余 provider option 环境变量按同样的 key 路径规则解析。
@@ -1332,7 +1660,7 @@ provider_options:
     network_access: true
 ```
 
-在 TAKT 管理权限的 Phase 1 中，可以保持文件只读并允许网络访问，适用于 `edit: false` 或解析为 `permission_mode: readonly` 的调用。使用 `permission_control: codex` 时，应在 Codex 中配置网络。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终使用 `read-only` sandbox，并禁用网络访问，即使设置 `network_access: true` 也不例外。
+在 TAKT 管理权限的 Phase 1 中，可以保持文件只读并允许网络访问，适用于 `edit: false` 或解析为 `permission_mode: readonly` 的调用。使用 `permission_control: codex` 时，应在 Codex 中配置网络。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）即使设置 `network_access: true` 也会禁止写入和网络访问。使用 `permission_control: codex` 并设置 `readonly_permission_base` 时，TAKT 会使用继承该基础 profile 并设为只读、禁用网络的权限 profile，因此用户的 `deny` 规则也会生效。
 
 OpenCode 通过 `webfetch` / `websearch` 工具权限实现同一抽象：
 
@@ -1345,6 +1673,28 @@ provider_options:
 
 `network_access` 可以设置在 runtime profile 或 capability preset 中；旧版模式也可设置在 routing、项目或全局配置中。`TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` 可作为覆盖。
 
+#### Codex 上下文压缩后的恢复
+
+Codex 接收一条固定的 developer 规则，优先遵循 TAKT 当前回合的指示。TAKT 通过 `taktCurrentInstructions` 传递当前任务分配、persona 和 phase，通过 `userInstruction` 传递任务输入。当前分配优先于早先的分配和进度记录。该规则覆盖用户已有的 `developer_instructions`，但不修改配置文件。规则引入前创建的 workflow 会话使用不同的 session key，因此会启动包含当前指示的新会话。报告阶段会在新请求中带入已保存的工作结果。
+
+Codex 在 Phase 1 记录 `compacted` 事件后，如果同一会话返回已完成的 turn，TAKT 会检查该响应是否完成了分配的 step。检查使用独立的只读结构化 Codex 会话，不提供 MCP 工具。已完成的 review，包括指出具体问题的 REJECT 结果，会作为原始响应返回。如果 agent 丢失了任务分配，TAKT 会用原始 Phase 1 指示、当前分配和权限恢复工作线程。检查失败或结果无效时，provider 调用失败，不会接受待检查的响应。
+
+连续3个恢复回合都未使用工具、再次发生压缩且仍需恢复时，调用失败。恢复回合使用工具会重置此计数，因此恢复回合的总次数没有上限。恢复后的 step 仍可使用进度记录，但记录是否可用不影响计数。TAKT 不会从 assistant 文本推断发生了压缩。没有相应事件或恢复能力的 provider 保持原有行为。此自动恢复与 workflow 层的 `session: compact` 独立。
+
+#### Codex fast mode（`fast_mode`）
+
+通过 `provider_options.codex.fast_mode` 显式设置可选的 Codex fast mode：
+
+```yaml
+provider_options:
+  codex:
+    fast_mode: true
+```
+
+`true` 和 `false` 都是显式值。省略时，TAKT 不向 Codex 发送 `features.fast_mode`，保留 Codex 自身的默认值。环境变量覆盖为 `TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=true` 或 `TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=false`。
+
+可在 runtime profile、旧版 `provider_routing`、项目或全局的 `provider_options`、环境变量中设置。`takt exec` 使用选定的 runtime 默认值。
+
 #### Codex 权限控制（`permission_control`）
 
 Codex 默认由 TAKT 管理权限，相当于 `permission_control: takt`。写入权限与 `network_access` 分开解析。Phase 1 中，`edit: false` 或解析出的 `permission_mode: readonly` 会禁止写入；即使 `permission_mode: full`，`edit: false` 仍然优先。
@@ -1356,7 +1706,7 @@ Codex 默认由 TAKT 管理权限，相当于 `permission_control: takt`。写�
 | 禁止 | `true` | 不传 sandbox 标志；通过 `--config` 传递继承 `:read-only` 且设置 `network.enabled=true` 的 `takt-readonly-network` 权限 profile |
 | 禁止 | `false` / 未指定 | `read-only` sandbox |
 
-TAKT 管理权限时，会为所有 `codex exec` 添加 `--ignore-rules`，包括可写 step、新 session 和 `exec ... resume <id>`。因此 Codex 不会加载用户或项目的 execpolicy `.rules` 文件，避免 allow 规则让匹配的命令在 sandbox 外执行。使用 `permission_control: codex` 时，规则由用户配置决定，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）例外。Phase 2、这些内部调用和仅允许 MCP 副作用的模式始终添加 `--ignore-rules`，并禁止写入和网络访问。Phase 2 或这些内部调用指定 `config_profile` 时，同时传递 `--ignore-rules` 和 `--profile <name>`。辅助命令 `mcp list` / `mcp get` 不会收到 exec 专用标志。
+TAKT 管理权限时，会为所有 `codex exec` 添加 `--ignore-rules`，包括可写 step、新 session 和 `exec ... resume <id>`。因此 Codex 不会加载用户或项目的 execpolicy `.rules` 文件，避免 allow 规则让匹配的命令在 sandbox 外执行。使用 `permission_control: codex` 时，规则由用户配置决定，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）例外。Phase 2、这些内部调用和仅允许 MCP 副作用的模式始终添加 `--ignore-rules`，并禁止写入和网络访问。Phase 2 或这些内部调用指定 `config_profile` 时，同时传递 `--ignore-rules` 和 `--profile <name>`。`permission_control: codex` 同时指定 `readonly_permission_base` 时，Phase 2 和这些内部调用也会添加 `--ignore-rules`，且不传 `--sandbox`。辅助命令 `mcp list` / `mcp get` 不会收到 exec 专用标志。
 
 ```yaml
 provider_options:
@@ -1371,7 +1721,7 @@ provider_options:
 
 Phase 1 使用 `permission_control: codex` 时，TAKT 从未使用 `strict-readonly` 的 Codex 调用中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
 
-Phase 1 使用 `permission_control: codex` 时，即使设置 `edit: false` 或 `permission_mode: readonly`，TAKT 也不传 sandbox 和网络覆盖，由 Codex 配置决定实际权限，未使用 `strict-readonly` 的结构化调用同样适用。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）是例外：即使委托权限，TAKT 仍管理这些调用的权限，始终传递 `read-only` sandbox 和 `networkAccessEnabled: false`。仅允许 MCP 副作用的模式也保持 `read-only` sandbox，并显式禁用网络和 Web 搜索；该模式不能与 `permission_control: codex` 同时使用。
+Phase 1 使用 `permission_control: codex` 时，即使设置 `edit: false` 或 `permission_mode: readonly`，TAKT 也不传 sandbox 和网络覆盖，由 Codex 配置决定实际权限，未使用 `strict-readonly` 的结构化调用同样适用。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）是例外：即使委托权限，TAKT 仍管理这些调用的权限。未设置 `readonly_permission_base` 时，TAKT 传递 `read-only` sandbox 和 `networkAccessEnabled: false`。设置后，TAKT 通过 `--config` 传递一个继承基础 profile、将工作目录、`/tmp` 和 `$TMPDIR` 设为只读并禁用网络的权限 profile，且不传 `--sandbox`。仅允许 MCP 副作用的模式也保持 `read-only` sandbox，并显式禁用网络和 Web 搜索；该模式不能与 `permission_control: codex` 同时使用。
 
 要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
 
@@ -1383,6 +1733,43 @@ provider_options:
 ```
 
 环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` 也可以设置它。`config_profile` 只接受由 ASCII 字母、数字、连字符和下划线组成的名称；空值和路径会被拒绝，且只有与 `permission_control: codex` 一起使用时才有效。省略 permission control（默认的 `takt`）或明确设置为 `takt` 都会产生配置错误。TAKT 会将名称作为 `codex exec --profile <name>` 传给 CLI，Codex 从 `$CODEX_HOME/<name>.config.toml` 解析 profile，并按照 Codex 规范决定该文件、基础配置、trusted project 设置和运行时 override 的优先级。runtime profile 或旧版项目、全局配置中的 provider options 可选择 profile；Codex 会在运行中应用该 profile 的权限设置，因此只应指定可信的配置和 profile 文件。
+
+##### Phase 2 和 strict-readonly 的继承基础（`readonly_permission_base`）
+
+使用 `permission_control: codex` 时，Phase 2 和以 `strict-readonly` 运行的调用（例如隔离的结构化调用）由 TAKT 管理权限。若要让这些调用同时保留用户 permission profile 的 `deny`，请把基础 profile 的名称设置到 `readonly_permission_base`：
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    readonly_permission_base: review-base
+```
+
+也可以通过环境变量 `TAKT_PROVIDER_OPTIONS_CODEX_READONLY_PERMISSION_BASE=review-base` 设置。与 `config_profile` 一样，名称由 ASCII 字母、数字、连字符和下划线组成，可在 runtime profile 或旧版项目、全局配置中设置。与 `permission_control: codex` 以外（包括省略）组合会产生配置错误。
+
+设置后，Phase 2 和 `strict-readonly` 的新 session 与已恢复线程都会通过 `--config` 接收以下权限 profile：
+
+- 继承（`extends`）指定的基础 profile。
+- 将工作目录、`/tmp`、`$TMPDIR` 设为 `read`。
+- 将 `network.enabled` 设为 `false`。
+
+此时 TAKT 不传 `--sandbox` 以及 `sandbox_mode` / `sandbox_workspace_write` 覆盖，同时保留 `--ignore-rules`、`--profile` 和 `approval_policy: never`。未指定基础 profile 时，以及 Phase 1 和 Phase 3，行为不变。
+
+如果基础 profile 对某个路径单独设置了 `write`，该路径在继承后的 profile 中仍然可写。Codex 优先采用更具体的路径设置，TAKT 不会阻止这一点。Phase 2 不应写入的路径，请在基础 profile 中设为 `read` 或 `deny`。
+
+```toml
+# 基础 profile `review-base` 的示例
+#（放在由 `config_profile` 选择的 $CODEX_HOME/<name>.config.toml 中）
+[permissions.review-base]
+[permissions.review-base.filesystem]
+":minimal" = "read"
+"~/.ssh" = "deny"
+"~/.aws" = "deny"
+[permissions.review-base.network]
+enabled = false
+```
+
+上面的示例拒绝机密文件，且不包含单独的 `write`。TAKT 不会读取或改写用户的 Codex 配置。
 
 #### Codex Skill 继承（`skills`）
 
@@ -1443,7 +1830,7 @@ provider_options:
 | `deny` | 非空字符串列表 | 无 | 写在 TAKT 配置中的规则，按原样传给 Claude，因此不限于 `Read(` 规则。 |
 | `import_user_read_deny` | boolean | `false` | 为 `true` 时，还会从 `~/.claude/settings.json` 的 `permissions.deny` 导入以 `Read(` 开头（区分大小写）的规则。Bash 规则、MCP 规则和其他规则不会导入。 |
 
-- `Read(` 规则拦截的范围由 Claude Code 决定，而不是由 TAKT 决定。
+- `Read(` 规则拦截的范围由 Claude Code 决定。
   根据 [Claude Code 权限文档](https://code.claude.com/docs/en/permissions)，这些规则适用于 Claude 的内置文件工具（Claude 会尽力将 `Read` 规则应用于 Grep、Glob 等工具），以及 Claude Code 在 Bash 中识别的文件命令，如 `cat`、`head`、`tail`、`sed` 和 `tee`。
   它们不适用于不指定文件名就读取文件的命令（如 `grep -r pattern .`），也不适用于自行打开文件的脚本（如 Python 或 Node 脚本）。
   要在操作系统层面阻止 Claude 在 sandbox 中运行的 shell 命令及其启动的进程访问某个路径，请先为该路径添加 `Read(` 拒绝规则，再启用带文件系统隔离的 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。不要将 `sandbox.filesystem.disabled` 设为 `true`，因为这会让 sandbox 中的命令能够读取主机文件。通过 `excludedCommands` 匹配或通过 `allow_unsandboxed_commands` 在 sandbox 外运行的命令不受此限制。
@@ -1652,9 +2039,11 @@ takt update           # 仅更新已安装且版本不匹配的提供者
 takt update codex     # 仅更新指定提供者
 ```
 
-交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+交互入口在执行前确认所需安装并显示容量估算。拒绝安装缺失的 SDK 时不会开始执行；对话会说明安装方法，然后返回输入。拒绝更新时会警告并继续使用完整的旧版本；如果该版本运行失败，TAKT 会说明更新方法。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
 
 容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
+
+不过，Pi 的异常处理不会追加更新提示。如果使用的是旧 SDK，请运行 `takt update pi` 更新。
 
 ## PR 合并设置
 

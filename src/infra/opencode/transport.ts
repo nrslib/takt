@@ -28,6 +28,7 @@ export interface OpenCodeMessage {
 export interface OpenCodeTransport {
   nativeStructuredOutput?: boolean;
   requiresExplicitMcpTools?: boolean;
+  getModelOutputLimit?(input: { directory: string; providerID: string; modelID: string }, options?: RequestOptions): Promise<number>;
   resolveModel?(input: { directory: string; sessionID?: string; agent?: string }, options?: RequestOptions): Promise<OpenCodeResolvedModel>;
   session: {
     create(input: NonNullable<Parameters<V1Client['session']['create']>[0]>, options?: RequestOptions): Promise<Result<{ id: string }>>;

@@ -66,7 +66,7 @@ Useful Tempo TraceQL filters for active workflows include:
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
-After a workflow completes or aborts, TAKT prints a `TraceQL discovery:` block when observability is enabled. The same discovery data is saved in `.takt/runs/<run>/meta.json` under `observability.traceDiscovery` so the run can be found later. The generated queries always include `takt.run.id` and add filters for available task or git metadata, such as `takt.task.pr_number`, `takt.task.issue_number`, and `takt.git.branch`.
+After a workflow completes or aborts, TAKT prints a `TraceQL discovery:` block when observability is enabled. The same discovery data is saved in `.takt/runs/<run>/meta.json` under `observability.traceDiscovery` so the run can be found later. TAKT generates a query for `takt.run.id` and separate queries for available task or git metadata: `takt.task.pr_number`, `takt.task.issue_number`, and `takt.git.branch`. The PR-number query has no run ID condition, so it can also match other runs for that PR.
 
 Example CLI output:
 
@@ -94,7 +94,9 @@ The base endpoint is required for OTLP export:
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional absolute HTTP(S) trace endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Optional absolute HTTP(S) metric endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
 
-TAKT explicitly resolves and validates only these three endpoint variables. The other standard `OTEL_EXPORTER_OTLP_*` variables — such as `_HEADERS`, `_TIMEOUT`, and `_COMPRESSION` — are not interpreted by TAKT and reach the OpenTelemetry SDK unchanged. Child processes are handled more strictly: credential-bearing variables (`_HEADERS`, client certificate, and client key) are excluded from the environment TAKT passes to them, while non-sensitive variables pass through.
+TAKT explicitly resolves and validates only these three endpoint variables. The other standard `OTEL_EXPORTER_OTLP_*` variables — such as `_HEADERS`, `_TIMEOUT`, and `_COMPRESSION` — are not interpreted by TAKT and reach the OpenTelemetry SDK unchanged.
+
+For child processes launched from a command gate, TAKT excludes credential-bearing variables (`_HEADERS`, client certificate, and client key). Some provider launch paths do not apply this exclusion: Devin, Kiro, and Codex receive these variables too.
 
 Endpoint values used for OTLP export must be absolute `http` or `https` URLs. A trace or metric endpoint without `OTEL_EXPORTER_OTLP_ENDPOINT` does not opt in to OTLP export; TAKT keeps the local-only exporter set. When the base endpoint is set, any configured trace or metric override is validated before the run starts. Export delivery failures after startup, such as a stopped local collector, do not block the workflow run.
 
@@ -143,7 +145,7 @@ Records are grouped by workflow phase:
 | `phase3_tag` | Tag fallback status judgment |
 | `phase3_fallback` | AI judge fallback status judgment |
 
-Missing usage is recorded with `usage_missing: true` and a reason. Missing usage is not treated as zero tokens by the analysis command.
+Missing usage is recorded with `usage_missing: true` and a reason. The analysis command excludes these records from token statistics and does not treat them as zero tokens.
 
 Each record also includes the step's `persona` and `tags` when defined. `persona` is a string, and `tags` is an array of strings. Missing values are omitted.
 

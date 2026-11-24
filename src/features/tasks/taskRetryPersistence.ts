@@ -18,6 +18,7 @@ export interface FailedTaskRetryPersistenceOptions {
   readonly retryNote: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
   readonly workflow: string | undefined;
+  readonly runtimeAssignment?: string;
   readonly taskDir: string | undefined;
   readonly sourceRunSlug: string | null;
   readonly restartPoint: WorkflowRestartPoint | undefined;
@@ -63,8 +64,11 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
     }
   };
   assertWorktree();
+  const preflightTask = options.runtimeAssignment === undefined || options.task.data === undefined
+    ? options.task
+    : { ...options.task, data: { ...options.task.data, runtime_assignment: options.runtimeAssignment } };
   await checkQueuedTaskProviders(options.projectDir,
-    options.freshStart ? { ...options.task, kind: 'pending' } : options.task,
+    options.freshStart ? { ...preflightTask, kind: 'pending' } : preflightTask,
     {}, terminalProviderConfirmation(), undefined, {
       workflow: options.workflow,
       worktreePath: options.worktreePath,
@@ -90,6 +94,7 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
         workflow: options.workflow,
+        runtimeAssignment: options.runtimeAssignment,
         taskDir: revision?.taskDirRelative ?? options.taskDir,
         sourceRunSlug: options.sourceRunSlug,
         restartPoint: options.restartPoint,

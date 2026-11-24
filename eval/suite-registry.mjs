@@ -128,6 +128,7 @@ const CLASSIFICATIONS = [
       'scope-architecture-search-unrelated',
       'scope-architecture-boundary',
       'review-adjudication',
+      'adjudication-scope',
       'review-proof-boundary',
       'review-description-verification',
       'testing-proof-boundary',
@@ -620,11 +621,15 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: 'Luna Maxで裁定の証拠境界を比較する明示選択の評価',
   },
+  'adjudication-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '裁定の両フェーズの道具実出力と採否を日英・3モデルで比較する明示選択の評価',
+  },
   'review-adjudication': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: '既存3ケースと修正方式6種の日英・両フェーズ（27ケース）を3モデルで比較する',
+    reason: '既存3ケースと履歴を伴う採否6種の日英・両フェーズ（27ケース）を3モデルで比較する。方式比較は修正計画側で評価する',
   },
   'review-adjudication-report': {
     defaultEligible: false,
@@ -719,6 +724,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'adjudication-scope': ["adjudication-scope-input-local-ja","adjudication-scope-input-local-en","adjudication-scope-input-external-ja","adjudication-scope-input-external-en","adjudication-scope-local-condition-ja","adjudication-scope-local-condition-en","adjudication-scope-long-condition-ja","adjudication-scope-long-condition-en","adjudication-scope-quality-ja","adjudication-scope-quality-en","adjudication-scope-misdirected-evidence-ja","adjudication-scope-misdirected-evidence-en"],
   'review-adjudication': ['review-adjudication', 'repair-strategy'],
   'fix-plan-bounded-proof': ['fix-plan-bounded-proof', 'repair-strategy'],
   'adjudicator-no-fix': ADJUDICATOR_TARGETS,

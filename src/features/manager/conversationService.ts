@@ -78,7 +78,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
-        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary')
+        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary' || command.kind === 'propose_summary')
           && command.conversationId !== input.turn.conversationId) throw new ConversationError('invalid_assignment');
         if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
           if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
@@ -167,9 +167,24 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             kind: 'reply', message: getLabel('interactive.ui.verifyUnavailable', language),
           } };
         }
-        if (human && command.kind !== 'approve_summary' && !verify) {
+        if (human && command.kind !== 'approve_summary' && command.kind !== 'propose_summary' && !verify) {
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
           await state.save({ proposal: { revision: nextRevision(state.current.revision), pending: null } });
+        }
+        if (assignment.kind !== 'daemon' && command.kind === 'propose_summary') {
+          if (priorPending !== null) throw new ConversationError('proposal_pending');
+          const requested = command.repositoryDirectory
+            ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
+          if (requested === undefined) throw new ConversationError('invalid_assignment');
+          const repositoryDirectory = await resolveAssignedProjectRoot(requested, assignment);
+          if (!assignment.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
+          validateManagerSummary(command.summary);
+          validateGoalBranchReferences(repositoryDirectory, command.summary.startBranch, command.summary.integrationBranch);
+          const revision = nextRevision(state.current.revision);
+          await state.save({ proposal: { revision,
+            pending: { revision, repositoryDirectory, summary: command.summary } } });
+          return { kind: 'completed', result: { kind: 'proposal_created', proposal: { revision, repositoryDirectory },
+            message: getLabel('manager.conversation.proposed', language) } };
         }
         if (assignment.kind !== 'daemon' && command.kind === 'approve_summary') {
           const existing = state.current.approval;

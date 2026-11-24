@@ -10,12 +10,15 @@ import {
 import { emitResult } from '../codex/CodexStreamHandler.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
-import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
+import { assertCodexPermissionControlOptions } from '../../core/models/workflow-provider-options.js';
 import { buildCodexSessionConfig } from '../codex/session-config.js';
+import { readCodexModelContextWindow } from '../codex/model-context-window.js';
 import { prepareCodexMcpIsolation } from '../codex/mcp-isolation.js';
 import { createCodexMcpAdapter } from './mcp/codex.js';
 import { buildMcpServerSetIdentity } from '../config/runtime-provider/mcp-schema.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { prepareCodexCallPacket } from '../codex/call-packet.js';
+import { UnsafePrivateArtifactPathError } from '../../shared/utils/private-path-identity.js';
 import {
   assertOutputSchema,
   type AgentSetup,
@@ -26,7 +29,7 @@ import {
 
 function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
   const providerCodexOptions = options.providerOptions?.codex;
-  assertCodexConfigProfilePermissionControl(providerCodexOptions);
+  assertCodexPermissionControlOptions(providerCodexOptions);
   return {
     cwd: options.cwd,
     callerManagedSession: options.callerManagedSession,
@@ -34,6 +37,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    contextWindow: options.contextWindow,
     reasoningEffort: options.effort ?? providerCodexOptions?.reasoningEffort,
     fastMode: providerCodexOptions?.fastMode,
     permissionMode: options.permissionMode,
@@ -41,6 +45,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     edit: options.edit,
     permissionControl: providerCodexOptions?.permissionControl,
     configProfile: providerCodexOptions?.configProfile,
+    readonlyPermissionBase: providerCodexOptions?.readonlyPermissionBase,
     networkAccess: providerCodexOptions?.networkAccess,
     onStream: options.onStream,
     onActivity: options.onActivity,
@@ -71,6 +76,14 @@ export class CodexProvider implements Provider {
   readonly supportsNativeImageInput = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
+  getContextWindowLimits(options: ProviderCallOptions) {
+    return readCodexModelContextWindow(
+      options.model, options.childProcessEnv, options.cwd, options.providerOptions?.codex?.configProfile,
+      typeof options.providerOptions?.codex?.contextWindow === 'object'
+        && options.providerOptions.codex.contextWindow.auto_expand === true,
+    );
+  }
+
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
@@ -91,8 +104,8 @@ export class CodexProvider implements Provider {
     const prepared = await adapter.prepare(resolved, options);
     try {
       const codexOptions = toCodexOptions({ ...options, preparedMcp: prepared });
-      const { config, env } = buildCodexSessionConfig(codexOptions);
-      await prepareCodexMcpIsolation(codexOptions, config, env);
+      const { config, env, configOverrides } = buildCodexSessionConfig(codexOptions);
+      await prepareCodexMcpIsolation(codexOptions, config, env, configOverrides);
     } finally {
       await prepared.dispose();
     }
@@ -100,16 +113,28 @@ export class CodexProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    const sessionInstructions = loadTemplate('codex_session_instructions', 'en');
     const call = async (
       prompt: string,
       options: ProviderCallOptions,
     ): Promise<AgentResponse> => {
       const codexOptions = toCodexOptions(options);
-      return callCodexCustom(name, JSON.stringify({
-        taktCurrentInstructions: systemPrompt ?? null,
-        userInstruction: prompt,
-      }), sessionInstructions, codexOptions);
+      let packet: ReturnType<typeof prepareCodexCallPacket>;
+      try {
+        packet = prepareCodexCallPacket(systemPrompt, prompt, options);
+      } catch (error) {
+        if (!(error instanceof UnsafePrivateArtifactPathError)) throw error;
+        emitResult(options.onStream, false, error.message, options.sessionId, 'provider_error');
+        return {
+          persona: name,
+          status: 'error',
+          content: error.message,
+          error: error.message,
+          failureCategory: 'provider_error',
+          timestamp: new Date(),
+        };
+      }
+      const { input, developerInstructions } = packet;
+      return callCodexCustom(name, input, developerInstructions, codexOptions);
     };
     const recoverFromCompaction: NonNullable<ProviderAgent['recoverFromCompaction']> = async (
       prompt,

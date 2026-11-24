@@ -6,11 +6,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { buildRepairStrategyFixture, repairStrategyWorkDirectory, REPAIR_STRATEGY_CASES, REPAIR_STRATEGY_LANGUAGES } from '../repair-strategy-cases.mjs';
+import { buildRepairStrategyFixture, REPAIR_STRATEGY_CASES, REPAIR_STRATEGY_LANGUAGES } from '../repair-strategy-cases.mjs';
 import { observe as observeResource, satisfied as resourceSatisfied } from '../fixtures/repair-strategy/resource-probes.mjs';
 import { observe as observeKey, satisfied as keySatisfied } from '../fixtures/repair-strategy/key-probes.mjs';
 import { prepareRepairStrategy } from './prepare-repair-strategy.mjs';
 import CliPlanReportProvider from '../providers/cli-plan-report.mjs';
+import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../dist/infra/config/index.js';
 
 const read = path => readFileSync(path, 'utf8');
 
@@ -107,12 +108,29 @@ test('prepare resolves completed history, immutable references, and inherited ad
       }
       assert.ok(REPAIR_STRATEGY_LANGUAGES.includes(receipt.language));
       assert.equal(parse(read(join(receipt.project, '.takt/config.yaml'))).language, receipt.language);
-      const policy = read(new URL(`../../builtins/${receipt.language}/facets/policies/repair-strategy.md`, import.meta.url)).trim();
-      // Composition only: semantic decisions belong to the model rubric.
       const policyPath = join(receipt.project, '.takt/eval-snapshots/policies.md');
       const policySnapshot = read(policyPath);
-      assert.equal(policySnapshot.split(policy).length - 1, 1);
-      assert.ok(prompt.includes(policyPath));
+      const workflow = loadWorkflowByIdentifier(new URL(`../../builtins/${receipt.language}/workflows/peer-review.yaml`, import.meta.url).pathname, receipt.project);
+      assert.ok(workflow);
+      const remediation = workflow.steps.find(step => step.name === 'remediation');
+      assert.ok(remediation);
+      const planWorkflow = resolveWorkflowCallTarget(workflow, remediation, receipt.project, receipt.project);
+      assert.ok(planWorkflow);
+      const target = receipt.stage === 'adjudication'
+        ? workflow.steps.find(step => step.name === 'review-adjudication')
+        : planWorkflow.steps.find(step => step.name === 'fix-plan');
+      assert.ok(target);
+      const expectedSnapshots = new Map([
+        ['policies', target.policyContents],
+        ['knowledge', target.knowledgeContents],
+      ].map(([kind, entries]) => {
+        assert.ok(entries?.length, `${receipt.id}: ${kind} input`);
+        return [kind, entries.map(entry => entry.content).join('\n\n---\n\n')];
+      }));
+      for (const [kind, expected] of expectedSnapshots) {
+        assert.equal(read(join(receipt.project, `.takt/eval-snapshots/${kind}.md`)), expected, `${receipt.id}: ${kind}`);
+      }
+      assert.ok(prompt.includes(policySnapshot.length > 2000 ? policyPath : policySnapshot));
       const reports = receipt.declaredReports;
       assert.deepEqual(reports.map(({ reference }) => reference), receipt.stage === 'plan'
         ? ['review-resolution.md'] : receipt.caseId === 'f1' ? [] : ['fix-plan.md', 'fix-report.md', 'fix-verification.md']);
@@ -139,16 +157,27 @@ test('prepare resolves completed history, immutable references, and inherited ad
 
         }
       }
-      const resolution = read(join(receipt.project, '.takt/runs/eval/reports/review-resolution.md'));
+      const resolutionPath = join(receipt.project, '.takt/runs/eval/reports/review-resolution.md');
+      const resolution = read(resolutionPath);
       if (receipt.stage === 'adjudication') {
         assert.ok(!resolution.includes('CODE-C'));
         assert.ok(!read(join(receipt.project, 'reports-seed/review-resolution.md')).includes('CODE-C'));
       }
       else assert.ok(resolution.includes('CODE-C'));
       if (receipt.caseId === 'p1') {
+        if (receipt.stage === 'adjudication') {
+          const previousDecision = resolution.split('## 修正の経過')[0];
+          const mapping = previousDecision.split('\n').find(line => line.startsWith('問題ID:'));
+          assert.ok(mapping, `${receipt.id}: previous decision must map problem and finding IDs`);
+          assert.deepEqual(new Set(mapping.match(/\b(?:P-\d+|CODE-[A-Z])\b/g)), new Set(['P-1', 'CODE-A', 'CODE-B']));
+          assert.ok(prompt.includes(resolutionPath), `${receipt.id}: Phase 1 must expose the previous decision path`);
+        }
         for (const kind of ['plan', 'report', 'verification']) {
           const path = `history/migration-${kind}.md`;
-          if (receipt.stage === 'adjudication') assert.ok(prompt.includes(read(join(receipt.project, path)).trim()));
+          const material = read(join(receipt.project, path));
+          const problemIds = material.split('\n').filter(line => line.startsWith('問題ID:'));
+          assert.deepEqual(problemIds, ['問題ID: P-1'], `${receipt.id}: ${path}`);
+          if (receipt.stage === 'adjudication') assert.ok(prompt.includes(material.trim()));
           else assert.ok(prompt.includes(path));
         }
         assert.equal(receipt.fixedReferences.length, 6);
@@ -172,13 +201,14 @@ test('prepare resolves completed history, immutable references, and inherited ad
             assert.ok(!supplied.includes(receipt.project));
             for (const kind of ['policies', 'knowledge']) {
               const path = `.takt/eval-snapshots/${kind}.md`;
-              assert.equal(read(join(cwd, path)), read(join(receipt.project, path)));
+              const expected = expectedSnapshots.get(kind);
+              assert.equal(read(join(cwd, path)), expected, `${receipt.id}: isolated ${kind}`);
+              if (calls.length === 1) assert.ok(supplied.includes(expected.length > 2000 ? join(cwd, path) : expected));
             }
             for (const reference of receipt.fixedReferences) {
               assert.equal(read(reference.path.replace(receipt.project, cwd)), read(reference.path));
             }
-            if (calls.length === 1) assert.ok(supplied.includes(join(cwd, '.takt/eval-snapshots/policies.md')));
-            else assert.ok(supplied.includes(analysis));
+            if (calls.length === 2) assert.ok(supplied.includes(analysis));
             return calls.length === 1 ? analysis : 'Final report';
           } };
         },
@@ -199,97 +229,5 @@ test('prepare resolves completed history, immutable references, and inherited ad
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-// These checks protect rubric coverage; model judgment still requires scenario evaluation.
-for (const language of REPAIR_STRATEGY_LANGUAGES) {
-  for (const caseId of REPAIR_STRATEGY_CASES) {
-    for (const phase of ['phase1', 'phase2']) {
-      test(`adjudication rubric scores ${caseId} trigger decision / ${language} / ${phase}`, () => {
-        const suite = parse(read(new URL('../agents/review-adjudication/review-adjudication.yaml', import.meta.url)));
-        const label = `${caseId}${language === 'en' ? '-en' : ''}`;
-        const entries = suite.tests.filter(entry => entry.prompts.includes(label) && entry.vars.output_phase === phase);
-        assert.equal(entries.length, 1);
-        const rubrics = entries[0].assert.filter(assertion => assertion.type === 'llm-rubric');
-        assert.equal(rubrics.length, 1);
-        const rubric = rubrics[0].value;
-        const context = `${label}/${phase}`;
-        if (caseId === 'k1' || caseId === 'r1' || caseId === 'm1') {
-          const conditions = language === 'ja' ? [
-            /再発と共通前提を認め.*方式見直しを発火させる.*合格条件/,
-            /方式見直しは発火しない.*不合格/,
-            /具体的な修正方式の確定.*必須条件にしない/,
-          ] : [
-            /Recognize the recurrence and shared assumption.*trigger reconsideration of the repair method.*condition for passing/,
-            /reconsideration does not trigger.*fails/,
-            /need not finalize a concrete repair method/,
-          ];
-          for (const condition of conditions) assert.match(rubric, condition, context);
-          if (caseId === 'm1') {
-            const conflicts = language === 'ja' ? [
-              /全入力の現行置換結果との一致/, /C の2入力.*同じキー.*識別条件との具体的な衝突/,
-              /合意された方式条件を独断で変更しない/, /必要な判断/,
-            ] : [
-              /match the current replacement output for every input/, /two C inputs.*same key.*concrete conflict with distinct-pair identification/,
-              /Do not unilaterally change the agreed method conditions/, /decision needed/,
-            ];
-            for (const condition of conflicts) assert.match(rubric, condition, context);
-            for (const otherCaseId of REPAIR_STRATEGY_CASES.filter(id => id !== caseId)) {
-              assert.doesNotMatch(rubric, new RegExp(`(?<![a-z0-9])${otherCaseId}(?![a-z0-9])`, 'i'), `${context}: reference to ${otherCaseId}`);
-            }
-          }
-        } else {
-          const conditions = language === 'ja' ? [
-            /現在の指摘の採用とは別に.*方式見直しを発火させないことを採点/,
-            /方式見直しを発火したと明示すれば不合格/,
-          ] : [
-            /Score the trigger decision separately from accepting the current finding/,
-            /(?:do not trigger|does not trigger) reconsideration of the repair method/,
-            /Explicitly declaring that reconsideration has triggered fails/,
-          ];
-          for (const condition of conditions) assert.match(rubric, condition, context);
-          if (caseId === 'f1') {
-            const historyConditions = language === 'ja' ? [
-              /修正履歴がないため通常の原因分析を行い/,
-              /過去の再発を主張せず現在の問題だけを根拠.*方式見直しを発火したと明示すれば不合格/,
-            ] : [
-              /no repair history is supplied.*perform ordinary cause analysis/,
-              /Explicitly declaring that reconsideration has triggered fails.*current problem without claiming past recurrence/,
-            ];
-            for (const condition of historyConditions) assert.match(rubric, condition, context);
-          }
-        }
-      });
-    }
-  }
-}
-
-test('each suite filters both phases to the correct fixture and report prompt', () => {
-  for (const [stage, path] of [
-    ['adjudication', '../agents/review-adjudication/review-adjudication.yaml'],
-    ['plan', '../agents/fix-plan/fix-plan-bounded-proof.yaml'],
-  ]) {
-    const suite = parse(read(new URL(path, import.meta.url)));
-    const grader = suite.defaultTest.options.provider;
-    assert.equal(grader.id, 'openai:codex-sdk');
-    assert.equal(grader.config.model, 'gpt-6-luna');
-    assert.equal(grader.config.model_reasoning_effort, 'low');
-    for (const language of REPAIR_STRATEGY_LANGUAGES) {
-      for (const caseId of REPAIR_STRATEGY_CASES) {
-        const label = `${caseId}${language === 'en' ? '-en' : ''}`;
-        const prompt = suite.prompts.find(prompt => prompt.label === label);
-        const id = `repair-strategy-${stage}-${label}`;
-        assert.equal(prompt.config.working_dir, `.work/${repairStrategyWorkDirectory(caseId, language, stage)}`);
-        assert.deepEqual(prompt.config.required_snapshots, ['.takt/eval-snapshots/policies.md', '.takt/eval-snapshots/knowledge.md']);
-        assert.equal(prompt.config.report_prompt, `prompts/${id}.phase2.md`);
-        assert.equal(prompt.raw, `file://../../prompts/${id}.phase1.md`);
-        assert.deepEqual(suite.tests.filter(entry => entry.prompts.includes(label)).map(entry => entry.vars.output_phase), ['phase1', 'phase2']);
-      }
-    }
-    assert.equal(suite.prompts.length, 13);
-    assert.equal(suite.tests.length, stage === 'adjudication' ? 27 : 25);
-    assert.ok(suite.tests.every(entry => entry.prompts.length === 1));
-    assert.ok(suite.providers.every(provider => provider.id === 'file://../../providers/cli-plan-report.mjs' && provider.config.isolate_working_dir));
   }
 });

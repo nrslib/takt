@@ -420,7 +420,7 @@ test('review investigation replays a prior conflict response and eight current B
   }
 });
 
-test('red mode removes only the Concurrency limit suffix', () => {
+test('red mode removes the concurrency setting and preserves runtime assignments', () => {
   const prior = process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY;
   try {
     const fixture = loadManagerCase('parallel-cli', 'en');
@@ -430,7 +430,9 @@ test('red mode removes only the Concurrency limit suffix', () => {
     const red = buildManagerSystemPrompt(fixture);
     assert.ok(green.includes('Concurrency limit: 3'));
     assert.ok(!red.includes('Concurrency limit:'));
-    assert.equal(green.slice(0, green.indexOf('\n\nConcurrency limit:')), red);
+    const runtimeAssignmentsStart = green.indexOf('\n\nTask runtime assignments by repository:');
+    assert.ok(runtimeAssignmentsStart > 0);
+    assert.equal(green.slice(0, green.indexOf('\n\nConcurrency limit:')) + green.slice(runtimeAssignmentsStart), red);
   } finally { preserveEnv('TAKT_EVAL_MANAGER_OMIT_CONCURRENCY', prior); }
 });
 
@@ -967,7 +969,7 @@ test('baseline adapter passes resolved facets and settings through the productio
         instruction: '{{#if formalSpec}}FIXTURE_FORMAL{{/if}} {{#if formalSpecCommentsEnabled}}FIXTURE_COMMENTS{{/if}} {{formalSpecVerifierConstraints}}' },
       specificationConfiguration: { mode: true, comments: false, modelCheckTimeoutSeconds: 42 },
       formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang), repository: '/workspace/fixture-repository',
-      mainMerge: 'auto', concurrency: 3,
+      mainMerge: 'auto', concurrency: 3, runtimeAssignments: [],
     };
     assert.equal(buildBaselineSystem(input), buildProductionSystem(input));
   }

@@ -12,7 +12,7 @@ As multi-agent systems grow complex, prompts become monolithic. A single prompt 
 
 ## The Idea
 
-Apply **Separation of Concerns** — a foundational software engineering principle — to prompt design.
+Apply the foundational software engineering principle of Separation of Concerns to prompt design.
 
 Instead of one monolithic prompt per agent, decompose it into independent, reusable files organized by *what concern they address*. Then compose them declaratively per workflow step.
 
@@ -64,11 +64,7 @@ User Message:
   └──────────────────────────────────────────────────┘
 ```
 
-Persona defines the agent's role and is kept separate from step-specific instructions in the system prompt. The remaining four are composed into the user message for each step.
-
-TAKT's Phase 1 message places Policy after the reference material and step instructions, as shown in the `perform_phase1_message` template. Placement alone does not guarantee compliance; use workflow permissions and routing rules for constraints that must be enforced.
-
-Below are typical file examples for each facet.
+TAKT's Phase 1 message places Policy after the reference material and step instructions, as shown in the `perform_phase1_message` template. Define constraints that must be enforced in workflow permissions and routing rules as well.
 
 #### Persona — `personas/architecture-reviewer.md`
 
@@ -316,15 +312,15 @@ Independent files are assembled into a single prompt at runtime. Change a file's
 
 **Persona** and **Instruction** are the minimum — you need to define who the agent is and what it should do. But in practice, three more concerns emerge as independent axes:
 
-- **Policy** captures rules and standards that apply across different tasks. A "coding policy" (naming conventions, error handling rules, prohibitions) applies whether the agent is implementing a feature or fixing a bug. Policies define *what to uphold* — prohibitions, quality standards (REJECT/APPROVE criteria), and priorities. They are *cross-cutting concerns* that constrain work regardless of what the work is.
+- Policy defines what to uphold across tasks: prohibitions (such as excessive fallbacks and unused code), quality standards (REJECT/APPROVE criteria), and priorities (correctness > speed). A coding policy is a cross-cutting concern that applies to both feature implementation and bug fixes.
 
-- **Knowledge** captures reference information that agents consult as premises for their judgment. An architecture document is relevant to both the planner and the reviewer. Separating knowledge from instructions prevents duplication and keeps instructions focused on procedures. Knowledge is descriptive ("this is how the domain works"), while prescriptive rules ("you must do this") belong in Policy.
+- **Knowledge** contains reference information that agents consult as premises for their judgment. An architecture document is relevant to both the planner and the reviewer. Separating knowledge from instructions prevents duplication and keeps instructions focused on procedures. Knowledge is descriptive ("this is how the domain works"), while prescriptive rules ("you must do this") belong in Policy.
 
 - **Output Contract** captures output structure independently of the work itself. The same review format can be used by an architecture reviewer and a security reviewer. Separating it allows format changes without touching agent behavior.
 
 ## Declarative Composition
 
-The core mechanism of Faceted Prompting is **declarative composition**: a workflow definition declares *which* concerns to combine for each step, rather than embedding prompt content directly.
+Faceted Prompting uses declarative composition: a workflow definition declares which concerns to combine for each step.
 
 Key properties:
 
@@ -370,7 +366,7 @@ steps:
         next: implement
 ```
 
-The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author never writes a monolithic prompt — only selects which facets to combine.
+The engine resolves each key to its file, reads the content, and assembles the final prompt at runtime. The workflow author selects which facets to use.
 
 Facet files for instructions, policies, knowledge, and output contracts can inherit another facet of the same kind with a standalone directive:
 
@@ -388,11 +384,11 @@ A workflow step's `instruction` accepts one instruction or an array. You can com
 
 | Approach | What it does | How this differs |
 |----------|-------------|-----------------|
-| **Decomposed Prompting** (Khot et al.) | Breaks *tasks* into sub-tasks delegated to different LLMs | We decompose the *prompt structure*, not the task |
+| **Decomposed Prompting** (Khot et al.) | Breaks *tasks* into sub-tasks delegated to different LLMs | Decomposes the *prompt structure* |
 | **Modular Prompting** | Sections within a single prompt using XML/HTML tags | We separate concerns into *independent files* with declarative composition |
-| **Prompt Layering** (Airia) | Stackable prompt segments for enterprise management | A management tool, not a design pattern for prompt architecture |
-| **PDL** (IBM) | YAML-based prompt programming language for data pipelines | Focuses on control flow (if/for/model calls), not concern separation |
-| **Role/Persona Prompting** | Assigns a role to shape responses | Persona is one of five concerns — we also separate policy, instruction, knowledge, and output contract |
+| **Prompt Layering** (Airia) | Stackable prompt segments for enterprise management | A management tool differs from a design pattern for prompt architecture |
+| **PDL** (IBM) | YAML-based prompt programming language for data pipelines | Focuses on control flow (if/for/model calls); Faceted Prompting focuses on concern separation |
+| **Role/Persona Prompting** | Assigns a role to shape responses | Treats persona as one of five concerns and also separates policy, instruction, knowledge, and output contract |
 
 The key distinction: existing approaches either decompose *tasks* (what to do) or *structure prompts* (how to format). Faceted Prompting decomposes *prompt concerns* (why each part exists) into independent, reusable units.
 

@@ -238,7 +238,7 @@ export class TaskLifecycleService {
     return toTaskInfo(this.projectDir, this.tasksFile, created);
   }
 
-  claimNextTasks(count: number): TaskInfo[] {
+  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
     if (count <= 0) {
       return [];
     }
@@ -273,16 +273,14 @@ export class TaskLifecycleService {
           } catch (error) {
             if (task.goal_id === undefined) throw error;
             const reason = sanitizeSensitiveText(getErrorMessage(error));
-            return buildTerminalTaskRecord(next, {
-              status: 'failed', completed_at: nowIso(), owner_pid: null,
-              failure: { error: reason },
-              run_slug: `setup-${randomUUID()}`,
-              completion: {
-                success: false, interrupted: false, workflowResult: 'error',
-                branch: task.branch, failureReason: reason,
-                shaUnavailableReason: 'Workflow execution did not start',
-              },
-            }, this.readTerminalRetryMetadata(task));
+            return this.buildSetupFailedTaskRecord(task, next, reason);
+          }
+          if (task.goal_id !== undefined && goalSetupFailure !== undefined) {
+            const reason = goalSetupFailure(info);
+            if (reason !== undefined) {
+              this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
+              return this.buildSetupFailedTaskRecord(task, next, reason);
+            }
           }
           claimed.push(info);
           remaining--;
@@ -301,6 +299,19 @@ export class TaskLifecycleService {
     }));
 
     return claimed;
+  }
+
+  private buildSetupFailedTaskRecord(task: TaskRecord, next: TaskRecord, reason: string): TaskRecord {
+    return buildTerminalTaskRecord(next, {
+      status: 'failed', completed_at: nowIso(), owner_pid: null,
+      failure: { error: reason },
+      run_slug: `setup-${randomUUID()}`,
+      completion: {
+        success: false, interrupted: false, workflowResult: 'error',
+        branch: task.branch, failureReason: reason,
+        shaUnavailableReason: 'Workflow execution did not start',
+      },
+    }, this.readTerminalRetryMetadata(task));
   }
 
   invalidatePendingGoalTasks(goalId: string): void {

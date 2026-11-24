@@ -108,6 +108,8 @@ export interface RunAgentOptions {
   language?: Language;
   workflowMeta?: WorkflowMeta;
   outputSchema?: Record<string, unknown>;
+  /** Full policy/knowledge sources the assembled step instructs the agent to read. */
+  requiredReferenceContents?: readonly string[];
   failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
   onPromptResolved?: (promptParts: {

@@ -11,6 +11,8 @@ export const requeueGoalTaskInputSchema = goalWriteInputSchema.extend({
   retryNote: enqueueGoalTaskInputSchema.shape.task.optional()
     .describe('Additional instruction passed as a note when resuming the stopped task.'),
   startStep: startStepSchema,
+  runtimeAssignment: enqueueGoalTaskInputSchema.shape.runtimeAssignment
+    .describe('Runtime assignment name from takt_list_runtime_assignments. Replaces the runtime assignment saved on the task when the task returns to pending. Omit to keep the saved assignment.'),
 });
 
 export const retryGoalTaskInputSchema = goalWriteInputSchema.extend({
@@ -18,6 +20,8 @@ export const retryGoalTaskInputSchema = goalWriteInputSchema.extend({
   task: enqueueGoalTaskInputSchema.shape.task
     .describe('Corrected full instructions saved to the canonical task order.'),
   startStep: startStepSchema,
+  runtimeAssignment: enqueueGoalTaskInputSchema.shape.runtimeAssignment
+    .describe('Runtime assignment name from takt_list_runtime_assignments. Replaces the runtime assignment saved on the task when the task returns to pending. Omit to keep the saved assignment.'),
 });
 
 export type RequeueGoalTaskInput = z.infer<typeof requeueGoalTaskInputSchema>;

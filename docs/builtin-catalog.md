@@ -35,7 +35,7 @@ Organized by category.
 |  | `merge-review` | Runs review and the Caccia effect, waits for CI, and comments on the evaluation. |
 |  | `merge-review-fix` | Synchronize; if AI resolves conflicts, run review-fix. Then push → Caccia effect → CI and review checks on the latest head → merge. |
 |  | `merge-review-fix-simple` | Default for takt merge: synchronize; if AI resolves conflicts, review with one reviewer, adjudicate, fix and verify. Then push → Caccia effect → CI and review checks → merge. |
-|  | `merge-prepare` | Synchronize; if AI resolves conflicts, review with one reviewer, adjudicate and fix. Then push, run Caccia and wait for CI before human merge. |
+|  | `merge-prepare` | Synchronize; if AI resolves conflicts, review with one reviewer, adjudicate, fix and verify. Then push, run Caccia and wait for CI before human merge. |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-e2e` | Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-security` | Full security audit. Reads every project file one by one for security review |
@@ -179,4 +179,4 @@ persona_providers:
   ai-antipattern-reviewer: claude   # Keep reviewers on Claude
 ```
 
-This configuration applies globally to all workflows. Any step using the specified persona will be routed to the corresponding provider, regardless of which workflow is being executed.
+In legacy mode, this configuration applies to all workflows. A step using the specified persona runs with the corresponding provider unless a higher-priority setting, such as `provider_routing`, overrides it.

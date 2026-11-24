@@ -114,6 +114,6 @@ Limit path and terminal checks to contracts directly affected by the original re
 
 | Criterion | Verdict |
 |-----------|---------|
-| A local patch is called resolved without checking equivalent lifecycle paths | REJECT |
+| A local patch is called resolved without evidence that the original acceptance criteria hold across equivalent lifecycle paths | REJECT |
 | Tests merely capture current implementation behavior that conflicts with the original requirement | REJECT |
 | Resolution evidence shows the original requirement holds across every affected path | OK |

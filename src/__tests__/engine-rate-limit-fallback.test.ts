@@ -188,6 +188,20 @@ function providerCalls(): Array<{ resolvedProvider?: string; resolvedModel?: str
   });
 }
 
+/**
+ * The parallel sub-steps share one FIFO response mock, so the call order is not deterministic.
+ * Group the calls by the persona argument instead of relying on the array position.
+ */
+function providerCallsByPersona(): Map<string, string[]> {
+  const { mock } = vi.mocked(runAgent);
+  return mock.calls.reduce((calls, [persona, , options]) => {
+    const key = String(persona);
+    const providers = calls.get(key) ?? [];
+    providers.push((options.resolvedExecution?.provider ?? options.resolvedProvider)!);
+    return calls.set(key, providers);
+  }, new Map<string, string[]>());
+}
+
 describe('WorkflowEngine rate limit fallback', () => {
   let tmpDir: string;
 
@@ -1084,18 +1098,20 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'arch-review', content: '[STEP:1] done' }),
       makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
     ]);
+    let rateLimitedArchReview = true;
     vi.mocked(runReportPhase)
-      .mockResolvedValueOnce({
-        rateLimited: true,
-        response: makeRateLimitedResponse('claude', { persona: 'arch-review' }),
-        providerInfo: {
-          provider: 'claude',
-          model: 'claude-sonnet',
-        },
-      })
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined);
+      .mockImplementation(async (step) => {
+        if (step.name !== 'arch-review') return undefined;
+        if (rateLimitedArchReview) {
+          rateLimitedArchReview = false;
+          return {
+            rateLimited: true,
+            response: makeRateLimitedResponse('claude', { persona: 'arch-review' }),
+            providerInfo: { provider: 'claude', model: 'claude-sonnet' },
+          };
+        }
+        return undefined;
+      });
     mockRuleEvaluationSequence([
       { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'phase3_tag' },
@@ -1118,12 +1134,11 @@ describe('WorkflowEngine rate limit fallback', () => {
     )).toBe(1);
     expect(state.stepIterations.has('arch-review')).toBe(false);
     expect(state.stepIterations.has('security-review')).toBe(false);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
-      'claude',
-      'claude',
-      'codex',
-      'claude',
-    ]);
+    const providersByPersona = providerCallsByPersona();
+    expect(providersByPersona).toEqual(new Map([
+      ['../personas/arch-review.md', ['claude', 'codex']],
+      ['../personas/security-review.md', ['claude', 'claude']],
+    ]));
     expect(runReportPhase).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
   });

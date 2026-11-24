@@ -19,6 +19,7 @@ export interface TaskRetryOptions {
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
+  runtimeAssignment?: string;
   taskDir?: string;
   sourceRunSlug?: string | null;
   restartPoint?: WorkflowRestartPoint;
@@ -275,6 +276,7 @@ export class TaskRetryService {
           retryNote: options.retryNote,
           resumePoint: options.resumePoint,
           workflow: options.workflow,
+          runtimeAssignment: options.runtimeAssignment,
           taskDir: options.taskDir,
           resumeSource: resolveResumeSource(options.sourceRunSlug, target, resumeMode),
           restartPoint: options.restartPoint,
@@ -324,6 +326,7 @@ export class TaskRetryService {
           retryNote: options.retryNote,
           resumePoint: options.resumePoint,
           workflow: options.workflow,
+          runtimeAssignment: options.runtimeAssignment,
           taskDir: options.taskDir,
           resumeSource: options.freshStart ? undefined : resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
           restartPoint: options.restartPoint,
