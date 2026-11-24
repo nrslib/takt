@@ -141,8 +141,8 @@ function destinationHasContent(clonePath: string): boolean {
 function cleanupPartialClone(clonePath: string): void {
   try {
     fs.rmSync(clonePath, { recursive: true, force: true });
-  } catch {
-    log.debug('Failed to cleanup partial clone before retry');
+  } catch (err) {
+    log.debug('Failed to cleanup partial clone before retry', { error: getErrorMessage(err) });
   }
 }
 
@@ -325,6 +325,7 @@ export function cloneAndIsolate(
   } catch (err) {
     const stderr = getExecErrorStderr(err);
     if (!destinationHadContent && isShallowReferenceError(stderr)) {
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
@@ -541,6 +542,7 @@ export async function cloneAndIsolateAbortable(
 
     const stderr = getErrorMessage(err);
     if (!destinationHadContent && isShallowReferenceError(stderr)) {
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
