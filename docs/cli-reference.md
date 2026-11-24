@@ -100,7 +100,7 @@ takt director
 takt director --help
 ```
 
-Director is experimental; behavior and saved data formats may change without notice. Human and event turns incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director responsibilities](./goal-management.md#director-responsibilities) for responsibilities, global `director.slack` settings, and Slack setup.
+Director is experimental; behavior and saved data formats may change without notice. Human and event turns incur provider costs. Manager advances goals and executes tasks. Director selects a manager, presents a goal proposal for one human confirmation, answers ordinary questions for delegated goals, and sends human questions to you. It relays explicit human merge instructions to the responsible manager and does not merge PRs itself. See [Using director](./director.md) for registration, question routing, promotion and return, fire, and Slack setup and limitations.
 
 Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers.
 

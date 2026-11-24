@@ -193,7 +193,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `director.slack.channel_id` | string | - | director の Slack チャンネル。グローバル設定のみ。[Slack で director と会話する](#slack-で-director-と会話する)を参照。 |
-| `director.slack.allowed_user_ids` | string[] | - | Slack から director への発言を許可するユーザー。`director.slack` を設定するときは必須。空配列では誰の発言も受け付けない。 |
+| `director.slack.allowed_user_ids` | string[] | - | Slack から director への発言と、director の登録・問い合わせボタンの操作を許可するユーザー。`director.slack` を設定するときは必須。空配列では誰の発言や操作も受け付けない。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
@@ -671,6 +671,8 @@ director:
 manager と同じ Slack App と環境変数 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使います。[Slack App を作る](#slack-app-を作る)に従ってボットを director のチャンネルへ招待し、`takt daemon` を起動するシェルで両変数を設定してください。トークンは設定ファイルに書かず、環境変数で渡します。Slack 設定を変更したら daemon を起動し直してください。
 
 director のチャンネルに許可された人が書いた発言は、manager ではなく director の会話に渡ります。director の返事は元の投稿のスレッドに届きます。`director.slack.allowed_user_ids` にない人の発言は無視します。manager と同じチャンネルを使う場合も、通常の発言は director に渡り、manager の問い合わせボタンの操作には `manager.slack.allowed_user_ids` が適用されます。
+
+director の登録・問い合わせボタンにも `director.slack.allowed_user_ids` が適用されます。リストにない人が「登録する」を押しても登録されません。1回の確認による登録、質問の宛先、今回対応しない Slack の機能は[director の使い方](./director.ja.md)を参照してください。
 
 director は、1回のターンで出た新しい知らせを、このチャンネルへの1件の投稿にまとめます。終わった仕事と、マージ承認や未回答の問い合わせなど人に決めてほしいことを知らせます。既存の重複抑止で除かれた知らせは再投稿しません。`director.slack` がなければ、director は Slack に投稿せず、発言も受け付けません。接続には両方のトークン環境変数が必要です。既存の `TAKT_NOTIFY_WEBHOOK` による通知経路は変わりません。
 
