@@ -4,9 +4,12 @@ import { stringify } from 'yaml';
 import { hasTaskDirectory } from '../infra/task/taskStateReader.js';
 import { readWatchTasks } from '../features/daemon/watchers/state.js';
 
-const { read } = vi.hoisted(() => ({ read: vi.fn() }));
-vi.mock('node:fs/promises', () => ({ readFile: read }));
-beforeEach(() => vi.resetAllMocks());
+const { read, stat } = vi.hoisted(() => ({ read: vi.fn(), stat: vi.fn() }));
+vi.mock('node:fs/promises', () => ({ readFile: read, lstat: stat }));
+beforeEach(() => {
+  vi.resetAllMocks();
+  stat.mockResolvedValue({ isFile: () => true, isSymbolicLink: () => false });
+});
 
 const task = {
   name: 'task-a', status: 'pending', task_dir: '.takt/tasks/image-task',
@@ -36,9 +39,17 @@ it('uses the same saved task directory for watcher observations and image retent
 });
 
 it('treats an absent tasks file as no task references', async () => {
-  read.mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+  stat.mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
   expect(await hasTaskDirectory('/repository', task.task_dir)).toBe(false);
   expect(await readWatchTasks('/repository')).toEqual([]);
+  expect(read).not.toHaveBeenCalled();
+});
+
+it('rejects a broken tasks file symlink before reading task references', async () => {
+  stat.mockResolvedValue({ isFile: () => false, isSymbolicLink: () => true });
+  read.mockRejectedValue(Object.assign(new Error('broken link'), { code: 'ENOENT' }));
+  await expect(hasTaskDirectory('/repository', task.task_dir)).rejects.toThrow();
+  expect(read).not.toHaveBeenCalled();
 });
 
 it('propagates a read failure instead of reporting an absent reference', async () => {
