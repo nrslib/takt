@@ -52,16 +52,39 @@ it('publishes a new image reference only after its bytes and metadata are saved'
   expect(saved).toEqual({ id: expect.any(String), placeholder: '[Image #1]', path: path() });
   expect(state.write).toHaveBeenCalledExactlyOnceWith(path(), png);
   expect(state.ignore).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid, '.gitignore'), '*\n');
-  expect(state.save).toHaveBeenCalledExactlyOnceWith({ images: [{ ...stored(), id: saved.id }], lastIndex: 1 });
-  expect(state.write.mock.invocationCallOrder[0]).toBeLessThan(state.save.mock.invocationCallOrder[0]!);
+  expect(state.save.mock.calls).toEqual([
+    [{ images: [], lastIndex: 1 }],
+    [{ images: [{ ...stored(), id: saved.id }], lastIndex: 1 }],
+  ]);
+  expect(state.save.mock.invocationCallOrder[0]).toBeLessThan(state.write.mock.invocationCallOrder[0]!);
+  expect(state.write.mock.invocationCallOrder[0]).toBeLessThan(state.save.mock.invocationCallOrder[1]!);
 });
 
-it('removes newly written bytes and returns the metadata publication failure instead of publishing a reference', async () => {
-  const failure = new Error('metadata storage unavailable'); state.save.mockRejectedValueOnce(failure);
+it('does not write image bytes or publish a reference when number reservation fails', async () => {
+  const failure = new Error('number reservation unavailable'); state.save.mockRejectedValueOnce(failure);
   const images = new ManagerImageAttachments({ hasImageReference: async () => false });
   await expect(images.prepare(cwd, cid, owner, join(cwd, '.takt', 'tmp', 'images', 'source', 'image.png'))).rejects.toBe(failure);
-  expect(state.unlink).toHaveBeenCalledExactlyOnceWith(path());
+  expect(state.save).toHaveBeenCalledExactlyOnceWith({ images: [], lastIndex: 1 });
+  expect(state.write).not.toHaveBeenCalled();
+  expect(state.unlink).not.toHaveBeenCalled();
   expect(state.metadata).toEqual({ images: [], lastIndex: 0 });
+});
+
+it('removes newly written bytes and keeps the reserved number when metadata publication fails', async () => {
+  const failure = new Error('metadata publication unavailable');
+  state.save.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+  const images = new ManagerImageAttachments({ hasImageReference: async () => false });
+  await expect(images.prepare(cwd, cid, owner, join(cwd, '.takt', 'tmp', 'images', 'source', 'image.png'))).rejects.toBe(failure);
+  expect(state.write).toHaveBeenCalledExactlyOnceWith(path(), png);
+  expect(state.unlink).toHaveBeenCalledExactlyOnceWith(path());
+  expect(state.save.mock.calls).toEqual([
+    [{ images: [], lastIndex: 1 }],
+    [{ images: [{ ...stored(), id: expect.any(String) }], lastIndex: 1 }],
+  ]);
+  expect(state.save.mock.invocationCallOrder[0]).toBeLessThan(state.write.mock.invocationCallOrder[0]!);
+  expect(state.write.mock.invocationCallOrder[0]).toBeLessThan(state.save.mock.invocationCallOrder[1]!);
+  expect(state.save.mock.invocationCallOrder[1]).toBeLessThan(state.unlink.mock.invocationCallOrder[0]!);
+  expect(state.metadata).toEqual({ images: [], lastIndex: 1 });
 });
 
 it('rejects an image belonging to another connection before invoking message admission', async () => {
