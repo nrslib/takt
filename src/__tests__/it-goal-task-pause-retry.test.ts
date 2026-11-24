@@ -294,6 +294,31 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     expect(readFileSync(join(paths.contextTaskAbs, 'attachments', 'image-1.png'))).toEqual(png);
   });
 
+  it('rejects retry instructions that reference a new manager image before changing the saved task', async () => {
+    const f = await prepareManagerImage();
+    const saved = await enqueueImageTask(`Inspect image: \`${f.image.path}\``, 'Inspect the supplied image');
+    await executeEnqueuedTask();
+    const temporary = createSessionImageAttachmentStore(cwd);
+    const source = await temporary.saveImage(Buffer.concat([png, Buffer.from('new')]), 'image/png');
+    const newImage = await f.images.prepare(cwd, f.id, f.owner, source.tempPath);
+    temporary.cleanup();
+    const taskDirectory = join(cwd, saved.taskDir!);
+    const orderPath = join(taskDirectory, 'order.md');
+    const imageMetadataPath = join(taskDirectory, '.manager-images.json');
+    const beforeOrder = readFileSync(orderPath);
+    const beforeMetadata = readFileSync(imageMetadataPath);
+
+    const retry = await client.callTool({ name: 'takt_retry_goal_task', arguments: {
+      cwd, goalId, taskName: saved.name, startStep: 'work', task: `Inspect image: \`${newImage.path}\``,
+    } });
+
+    expect(retry.isError).toBe(true);
+    expect(firstTextContent(retry.content)).toContain('not saved with this task');
+    expect(readFileSync(orderPath)).toEqual(beforeOrder);
+    expect(readFileSync(imageMetadataPath)).toEqual(beforeMetadata);
+    expect(new TaskRunner(cwd).listTaskStateItems().find((task) => task.name === saved.name)?.status).toBe('failed');
+  });
+
   function observeWorkflowReads(sandbox: boolean, probeOverride?: SandboxResult) {
     let home: string | undefined;
     const reads: { cwd: string; order: string; imagePath?: string; bytes?: Buffer; sandboxProbe?: SandboxResult; sandboxResult?: SandboxResult; options: ProviderCallOptions }[] = [];
@@ -321,7 +346,7 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
             const data = fs.readFileSync(process.argv[1]);
             try { fs.writeFileSync('sandbox-write-must-fail', 'x'); process.exit(2); }
             catch (error) { if (!['EPERM', 'EACCES', 'EROFS'].includes(error.code)) throw error; }
-            process.stdout.write(crypto.createHash('sha256').update(data).digest('hex'));`;
+            fs.writeSync(1, crypto.createHash('sha256').update(data).digest('hex'));`;
           const runtime = resolveCodexSdkCli(undefined);
           const args = ['sandbox', '-c', 'sandbox_mode="read-only"', '--', process.execPath, '-e'];
           const processOptions = {
@@ -333,7 +358,7 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
           expect(relative(realpathSync(tmpdir()), realpathSync(processOptions.env.CODEX_HOME)),
             `sandbox CODEX_HOME must be outside tmpdir: ${processOptions.env.CODEX_HOME}`).toMatch(/^\.\.(?:[/\\]|$)/u);
           sandboxProbe = probeOverride ?? spawnSync(runtime.executablePath,
-            [...args, `process.stdout.write(${JSON.stringify(sandboxProbeOutput)})`], processOptions);
+            [...args, `require('node:fs').writeSync(1, ${JSON.stringify(sandboxProbeOutput)})`], processOptions);
           if (sandboxProbe.error === undefined && sandboxProbe.signal === null && sandboxProbe.status === 0
             && sandboxProbe.stdout.trim() === sandboxProbeOutput) {
             sandboxResult = spawnSync(runtime.executablePath, [...args, script, imagePath], processOptions);

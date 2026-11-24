@@ -151,7 +151,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
             change: state.change({ session: { ...state.current.session, sessionId: null,
               ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) }, interruptedMessage: null,
-              ...(assignment.kind === 'daemon' ? {} : { interruptedImageAttachmentIds: [] }) }) };
+              ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) }) };
         }
         let verification: ManagerTurnInput['verify'];
         if (verify) {

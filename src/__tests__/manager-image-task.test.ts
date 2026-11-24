@@ -104,8 +104,17 @@ it('leaves an unselected task unchanged without reserving or copying images', as
 it('restores task reference metadata and normalizes retry instructions without embedding image bytes', () => {
   expect(readManagerImageTask(taskDirectory)).toEqual(marker);
   expect(normalizeManagerImageTaskOrder(taskDirectory, `Inspect \`${source}\``)).toBe('Inspect `attachments/image-1.png`');
+  const other = source.replace('image-1.png', 'image-2.png');
+  expect(() => normalizeManagerImageTaskOrder(taskDirectory, `Inspect \`${other}\``))
+    .toThrow('Corrected task references a manager image that is not saved with this task');
+  expect(() => normalizeManagerImageTaskOrder(taskDirectory, `Inspect \`${source.replace(root, '/other/project')}\``))
+    .toThrow('Corrected task references a manager image that is not saved with this task');
+  expect(normalizeManagerImageTaskOrder(taskDirectory, 'Read src/image-2.png and `attachments/image-2.png`'))
+    .toBe('Read src/image-2.png and `attachments/image-2.png`');
   io.lstat.mockImplementationOnce(() => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); });
   expect(normalizeManagerImageTaskOrder(taskDirectory, 'Text instructions')).toBe('Text instructions');
+  expect(() => normalizeManagerImageTaskOrder(undefined, `Inspect \`${source}\``))
+    .toThrow('Corrected task references a manager image that is not saved with this task');
 });
 
 it('registers each run copy once before staging and rejects a released workflow reference', async () => {

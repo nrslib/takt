@@ -10,6 +10,10 @@ export function selectWorkflowImagePaths(text: string, directory: string): strin
   return [...new Set([...text.matchAll(imagePathPattern(directory))].map((match) => match[2]!))];
 }
 
+export function hasManagerImageSourcePath(text: string): boolean {
+  return /[/\\]\.takt[/\\]manager-images[/\\](?:manager|director)-[a-f0-9]{64}[/\\]attachments[/\\]image-[1-9]\d*\.(?:png|jpg|gif|webp)(?=$|[\s`'")\]>;,!?]|[.:](?=\s|$))/u.test(text);
+}
+
 export function normalizeWorkflowImagePaths(text: string, images: readonly { path: string; fileName: string }[]): string {
   let normalized = text;
   for (const image of images) {

@@ -351,8 +351,9 @@ export function persistTaskOrderRevision(
   lang: 'en' | 'ja',
   attachments: readonly InteractiveImageAttachment[] = [],
 ): PersistedTaskOrderRevision {
-  const managerContent = taskDir === undefined ? approvedOrderContent
-    : normalizeManagerImageTaskOrder(resolveTaskDirPath(projectDir, taskDir), approvedOrderContent);
+  const managerContent = normalizeManagerImageTaskOrder(
+    taskDir === undefined ? undefined : resolveTaskDirPath(projectDir, taskDir), approvedOrderContent,
+  );
   const normalizedContent = ensureOrderAttachmentContent(managerContent, attachments, lang);
   if (normalizedContent.trim().length === 0) {
     throw new Error('Approved task order must not be empty.');

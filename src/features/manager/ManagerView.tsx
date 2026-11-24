@@ -78,6 +78,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [toolView, setToolView] = useState(createToolActivityViewState);
   const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
+  const messageQueue = useRef(Promise.resolve());
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
   const clearOperation = useRef<string | null>(null);
@@ -355,22 +356,20 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
     if (summaryRequest) setSummarizing(true);
     resetChoice();
-    void (async () => {
-      try {
-        const resolved = await images.resolve(text);
-        const id = await send({ kind: 'message', ...(resolved.ids.length === 0 ? {} : { imageAttachmentIds: resolved.ids }),
-          text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : resolved.text,
-          ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
-        (accepted) => {
-          if (summaryRequest) summaryOperation.current = accepted;
-          if (text.trim() === CLEAR_COMMAND) clearOperation.current = accepted;
-        });
-        if (id === null && summaryRequest) setSummarizing(false);
-      } catch (error) {
-        append(getErrorMessage(error));
-        if (summaryRequest) setSummarizing(false);
-      }
-    })();
+    const sending = messageQueue.current.then(async () => {
+      const resolved = await images.resolve(text);
+      void send({ kind: 'message', ...(resolved.ids.length === 0 ? {} : { imageAttachmentIds: resolved.ids }),
+        text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : resolved.text,
+        ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
+      (accepted) => {
+        if (summaryRequest) summaryOperation.current = accepted;
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = accepted;
+      }).then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
+    });
+    messageQueue.current = sending.catch((error: unknown) => {
+      append(getErrorMessage(error));
+      if (summaryRequest) setSummarizing(false);
+    });
   };
   const changeGoal = async (kind: GoalOperation, target: ManagerGoalConfirmationTarget['goal'], confirmed = false, retry = false): Promise<void> => {
     const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));

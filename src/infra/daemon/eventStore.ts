@@ -282,7 +282,8 @@ export class FileEventStore implements EventStore, ConversationTurns {
       await ensurePrivateDirectory(this.directory);
       for await (const entry of await opendir(this.directory)) {
         if (!entry.name.endsWith('.json')) continue;
-        const record = await this.read(join(this.directory, entry.name));
+        const record = await this.readStored(join(this.directory, entry.name));
+        if (record === undefined) continue;
         const event = record.event.event;
         if ((!activeOnly || legacySession || record.state !== 'settled')
           && record.event.conversationId === conversationId && event.kind === 'human_command'

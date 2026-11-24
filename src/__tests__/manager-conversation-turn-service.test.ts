@@ -455,8 +455,14 @@ it('refuses to create a goal proposal while another proposal is pending', async 
   expect(f.execute).not.toHaveBeenCalled();
 });
 
-it('clears the session and interrupted input references on /clear without invoking AI', async () => {
+it.each([false, true])('clears interrupted input references on /clear without invoking AI (daemon: %s)', async (daemon) => {
   const f = fixture();
+  if (daemon) {
+    const id = conversationId({ kind: 'daemon' });
+    f.input.state.assignment = { kind: 'daemon' };
+    f.input.turn.conversationId = id;
+    f.input.event.conversationId = id;
+  }
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
     summary: { objective: 'kept goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
   const imageId = randomUUID();
@@ -469,7 +475,7 @@ it('clears the session and interrupted input references on /clear without invoki
 
   expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', 'en') } });
   expect(outcome.change).toEqual({ operationId: expect.any(String), expectedVersion: f.input.state.version,
-    session: { ...f.input.state.session, sessionId: null, imageAttachmentIds: [] }, interruptedMessage: null,
+    session: { ...f.input.state.session, sessionId: null, imageAttachmentIds: daemon ? [imageId] : [] }, interruptedMessage: null,
     interruptedImageAttachmentIds: [] });
   expect(f.request).not.toHaveBeenCalled();
   expect(f.resolve).not.toHaveBeenCalled();

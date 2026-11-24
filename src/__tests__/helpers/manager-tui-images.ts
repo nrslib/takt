@@ -135,6 +135,29 @@ it('keeps a prepared image draft on the same mounted screen across disconnect an
   expect(context.client.prepareImage.mock.calls[1]![0]).toBe(context.client.prepareImage.mock.calls[0]![0]);
 });
 
+it.each([false, true])('preserves message order while an image is re-prepared after reconnect (failure: %s)', async (failure) => {
+  const context = mountImages();
+  const preparation = deferred<{ id: string; placeholder: string; path: string }>();
+  context.app.stdin.write('\x16');
+  await waitFor(() => expect(promptFrame(context)).toContain('[Image #1]'));
+  context.client.change({ connection: 'disconnected' });
+  context.client.change({ connection: 'connected', readStatus: 'complete' });
+  context.client.prepareImage.mockReturnValueOnce(preparation.promise);
+
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.prepareImage).toHaveBeenCalledTimes(2));
+  context.app.stdin.write('Second message');
+  await waitFor(() => expect(promptFrame(context)).toContain('Second message'));
+  context.app.stdin.write(ENTER);
+  expect(context.client.submit).not.toHaveBeenCalled();
+
+  if (failure) preparation.reject(new Error('Image unavailable'));
+  else preparation.resolve({ id: imageId, placeholder: '[Image #1]', path: '/private/manager-images/image-1.png' });
+  await waitFor(() => expect(context.client.commands()).toEqual(failure
+    ? [{ kind: 'message', text: 'Second message' }]
+    : [{ kind: 'message', text: '[Image #1]', imageAttachmentIds: [imageId] }, { kind: 'message', text: 'Second message' }]));
+});
+
 it('keeps consecutive prepared image numbers and associates only referenced images with each submitted message', async () => {
   const context = mountImages();
   const secondId = '22222222-2222-4222-8222-222222222222';

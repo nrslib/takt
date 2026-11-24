@@ -10,7 +10,7 @@ import { reserveTaskSpecDirectory, cleanupTaskSpecDirectory, type SaveEnqueuedTa
 import { hasTaskDirectory } from '../../infra/task/taskStateReader.js';
 import { readManagerImage } from '../manager/imageAttachments.js';
 import { MAX_INLINE_IMAGE_BYTES } from '../interactive/inlineImagePaste.js';
-import { normalizeWorkflowImagePaths, selectWorkflowImagePaths } from '../manager/workflowImageReferences.js';
+import { hasManagerImageSourcePath, normalizeWorkflowImagePaths, selectWorkflowImagePaths } from '../manager/workflowImageReferences.js';
 
 const metadataFile = '.manager-images.json';
 const imageTask = z.object({ sourceRoot: z.string().refine(isAbsolute), conversationId: ConversationIdSchema,
@@ -119,9 +119,13 @@ export function copyPrivateTaskAttachments(source: string, destination: string, 
   copy(source, destination);
 }
 
-export function normalizeManagerImageTaskOrder(taskDirectory: string, content: string): string {
-  const task = readManagerImageTask(taskDirectory);
-  return task === undefined ? content : normalizeWorkflowImagePaths(content, task.images);
+export function normalizeManagerImageTaskOrder(taskDirectory: string | undefined, content: string): string {
+  const task = taskDirectory === undefined ? undefined : readManagerImageTask(taskDirectory);
+  const normalized = task === undefined ? content : normalizeWorkflowImagePaths(content, task.images);
+  if (hasManagerImageSourcePath(normalized)) {
+    throw new Error('Corrected task references a manager image that is not saved with this task');
+  }
+  return normalized;
 }
 
 export function replacePrivateStagedOrder(root: string, paths: RunPaths, content: string): void {

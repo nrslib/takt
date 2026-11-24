@@ -78,7 +78,8 @@ import { getCurrentBranch, branchExists } from '../infra/task/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { ActiveTaskTargetConflictError } from '../infra/task/activeTaskTarget.js';
-import { prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
+import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
+import { hasTaskDirectory } from '../infra/task/taskStateReader.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -154,8 +155,14 @@ describe('saveTaskFile', () => {
       expect(mockSummarizeTaskName).toHaveBeenCalledOnce();
       expectNoTaskArtifacts(testDir);
       const prepared = prepareTaskSpecDirectory(testDir, 'Scoped task');
-      if (aborted) controller.abort();
-      return publish(prepared);
+      try {
+        if (aborted) controller.abort();
+        return publish(prepared);
+      } finally {
+        if (!await hasTaskDirectory(testDir, prepared.taskDir)) {
+          cleanupTaskSpecDirectory(prepared.taskDir);
+        }
+      }
     });
     const saving = saveTaskFile(testDir, 'Scoped task', undefined, undefined, controller.signal, scope);
     if (aborted) {

@@ -136,6 +136,24 @@ it('does not change image references or copies when task directory lookup fails'
   expect(readFileSync(join(metadata.workflows![0]!.taskDirectory, 'attachments', 'image-1.png'))).toEqual(png);
 });
 
+it('skips an event removed between listing and image reference lookup', async () => {
+  const f = await fixture(); const image = await f.prepare();
+  const event = { ...turnStart().event, conversationId: f.id, event: { kind: 'human_command' as const,
+    command: { kind: 'message' as const, text: image.placeholder, imageAttachmentIds: [image.id] },
+    speaker: { namespace: 'local' as const, id: 'operator' } } };
+  await f.events.accept(event);
+  const read = privateFile.readEntirePrivateFile;
+  vi.spyOn(privateFile, 'readEntirePrivateFile').mockImplementation(async (path) => {
+    if (path.includes('daemon-events') && path.endsWith('.json')) {
+      unlinkSync(path);
+      return undefined;
+    }
+    return read(path);
+  });
+
+  expect(await f.events.hasImageReference(f.id, image.id)).toBe(false);
+});
+
 it.each(['cleanup first', 'publication first'] as const)('serializes cleanup and task publication: %s', async (order) => {
   const f = await fixture(); const image = await f.prepare();
   const entered = deferred<void>(); const resume = deferred<void>(); const cleaned = deferred<void>();
@@ -332,16 +350,17 @@ it('rejects a generated attachment ID collision without changing existing metada
   expect(readdirSync(join(f.cwd, '.takt', 'manager-images', f.id, 'attachments'))).toEqual(['image-1.png']);
 });
 
-it('rejects a generated image filename collision without replacing the existing file or metadata', async () => {
+it('reserves an image number before writing and skips a filename collision on the next preparation', async () => {
   const f = await fixture(); const image = await f.prepare();
-  const metadataPath = join(f.cwd, '.takt', 'manager-images', f.id, 'images.json');
-  const before = readFileSync(metadataPath);
   const occupied = join(f.cwd, '.takt', 'manager-images', f.id, 'attachments', 'image-2.png');
   const original = Buffer.from('previously saved image'); writeFileSync(occupied, original);
   await expect(f.prepare()).rejects.toThrow();
-  expect(readFileSync(metadataPath)).toEqual(before);
+  expect(await new ConversationImageStore(f.cwd, f.id).read()).toMatchObject({ lastIndex: 2, images: [{ id: image.id }] });
   expect(readFileSync(occupied)).toEqual(original);
   expect(readFileSync(image.path)).toEqual(png);
+  const next = await new ManagerImageAttachments(f.events).prepare(f.cwd, f.id, f.owner, f.source.tempPath);
+  expect(next.placeholder).toBe('[Image #3]');
+  expect(readFileSync(next.path)).toEqual(png);
 });
 
 it('removes unused prepared images on owner release and rejects later references to the deleted ID', async () => {

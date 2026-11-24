@@ -77,7 +77,11 @@ export class ManagerImageAttachments {
       await writePrivateFile(join(store.directory, '.gitignore'), '*\n');
       const attachments = createImageAttachmentCollection({ tmpRoot: store.root, sessionId: conversationId,
         initialAttachments: metadata.images.map((image) => ({ ...image, tempPath: store.path(image.fileName) })),
-        initialAttachmentIndex: metadata.lastIndex }, (attachment, data) => writeNewPrivateFile(attachment.tempPath, data));
+        initialAttachmentIndex: metadata.lastIndex }, async (attachment, data) => {
+        const index = Number(attachment.placeholder.match(/\d+/u)![0]);
+        await store.save({ ...metadata, lastIndex: index });
+        await writeNewPrivateFile(attachment.tempPath, data);
+      });
       const saved = await attachments.saveImage(image.data, image.mimeType);
       try {
         await store.save({ ...metadata, images: [...metadata.images, { id, owner, placeholder: saved.placeholder, fileName: saved.fileName }],
