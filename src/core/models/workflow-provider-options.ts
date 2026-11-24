@@ -25,7 +25,10 @@ export interface ProviderGuardOptions {
   callTimeoutMs?: number;
 }
 
-export type ContextWindowSetting = 'auto' | number;
+export type ContextWindowSetting = 'auto' | number | {
+  initial: number;
+  auto_expand?: boolean;
+};
 
 export interface CodexProviderOptions {
   /** Resolved runtime profile setting; not part of provider_options YAML. */

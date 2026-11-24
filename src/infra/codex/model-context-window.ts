@@ -71,7 +71,7 @@ async function configuredWindow(
   home: string,
   cwd: string,
   profile: string | undefined,
-): Promise<number | null | undefined> {
+): Promise<{ window: number | null } | { projectWindowUnknown: true } | undefined> {
   if (profile !== undefined && !/^[A-Za-z0-9_-]+$/.test(profile)) return undefined;
   let selected: number | null = null;
   const systemPath = process.platform === 'win32' ? await windowsSystemConfigPath() : '/etc/codex/config.toml';
@@ -95,6 +95,7 @@ async function configuredWindow(
   }
   // Project config is loaded only for trusted projects. Trust is decided by
   // Codex, so a project override cannot be treated as the effective default.
+  let projectWindowUnknown = false;
   for (const path of projectConfigPaths(cwd)) {
     if (resolve(path) === basePath) continue;
     if (canonicalBasePath !== undefined) {
@@ -105,9 +106,10 @@ async function configuredWindow(
       }
     }
     const value = await readConfigWindow(path);
-    if (value === undefined || value.customCatalog || value.window !== null) return undefined;
+    if (value === undefined || value.customCatalog) return undefined;
+    if (value.window !== null) projectWindowUnknown = true;
   }
-  return selected;
+  return projectWindowUnknown ? { projectWindowUnknown: true } : { window: selected };
 }
 
 export async function readCodexModelContextWindow(
@@ -115,6 +117,7 @@ export async function readCodexModelContextWindow(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   cwd?: string,
   profile?: string,
+  allowUnknownProjectWindow = false,
 ): Promise<ContextWindowLimits | undefined> {
   if (model === undefined) return undefined;
   const environment = { ...process.env, ...childProcessEnv };
@@ -137,9 +140,10 @@ export async function readCodexModelContextWindow(
   const nativeWindow = await configuredWindow(home, cwd ?? process.cwd(), profile);
   if (nativeWindow === undefined) return undefined;
   const maximum = positiveInteger(entry.max_context_window);
+  if ('projectWindowUnknown' in nativeWindow && (!allowUnknownProjectWindow || maximum === undefined)) return undefined;
   const percent = positiveInteger(entry.effective_context_window_percent);
   return {
-    default: nativeWindow ?? defaultWindow,
+    ...('window' in nativeWindow ? { default: nativeWindow.window ?? defaultWindow } : {}),
     ...(maximum !== undefined ? { maximum } : {}),
     ...(percent !== undefined && percent <= 100 ? { effectivePercent: percent } : {}),
   };

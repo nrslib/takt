@@ -8,6 +8,7 @@ import {
   selectContextWindow,
 } from '../infra/providers/context-window.js';
 import { readCodexModelContextWindow } from '../infra/codex/model-context-window.js';
+import { CodexProvider } from '../infra/providers/codex.js';
 import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
 import { buildV2ServerConfig } from '../infra/opencode/v2-config.js';
 import { RuntimeProviderFileSchema } from '../infra/config/runtime-provider/schema.js';
@@ -26,7 +27,7 @@ describe('runtime context_window', () => {
       provider: {
         defaults: { profile: 'child' },
         profiles: {
-          base: { provider: 'codex', model: 'model-a', context_window: 500_000 },
+          base: { provider: 'codex', model: 'model-a', context_window: { initial: 500_000, auto_expand: true } },
           child: { extends: 'base' },
           other: { provider: 'opencode', model: 'provider/model-b', context_window: 'auto' },
         },
@@ -34,9 +35,10 @@ describe('runtime context_window', () => {
       },
     }).provider!;
     const environment = compileRuntimeProviderEnvironment(section);
-    expect(environment.providerOptions?.codex?.contextWindow).toBe(500_000);
+    expect(environment.providerOptions?.codex?.contextWindow).toEqual({ initial: 500_000, auto_expand: true });
     expect(environment.providerRouting?.steps?.['demo/review']?.providerOptions?.opencode?.contextWindow).toBe('auto');
-    for (const invalid of [0, -1, 1.5, 'high', '500000']) {
+    for (const invalid of [0, -1, 1.5, 'high', '500000', {}, { initial: 0 }, { initial: 1.5 },
+      { initial: 500_000, auto_expand: 'true' }, { initial: 500_000, extra: true }]) {
       expect(RuntimeProviderFileSchema.safeParse({
         version: 1, provider: { defaults: { profile: 'base' }, profiles: {
           base: { provider: 'codex', context_window: invalid },
@@ -65,6 +67,23 @@ describe('runtime context_window', () => {
     expect(fixed.override).toBe(400_000);
     expect(promoteContextWindow(fixed)).toEqual(fixed);
     expect(estimateContextTokens('日本語')).toBeGreaterThan('日本語'.length / 4);
+  });
+
+  it('starts an explicit window unchanged and promotes only when enabled and bounded', () => {
+    const limits = { default: 272_000, maximum: 872_000 };
+    const enabled = selectContextWindow({ initial: 500_000, auto_expand: true }, limits, ['A'.repeat(2_000_000)]);
+    expect(enabled.override).toBe(500_000);
+    expect(promoteContextWindow(enabled).override).toBe(872_000);
+
+    const disabled = selectContextWindow({ initial: 500_000 }, limits, []);
+    expect(promoteContextWindow(disabled).override).toBe(500_000);
+    const unknown = selectContextWindow({ initial: 500_000, auto_expand: true }, undefined, []);
+    expect(promoteContextWindow(unknown).override).toBe(500_000);
+    const atMaximum = selectContextWindow({ initial: 900_000, auto_expand: true }, limits, []);
+    expect(promoteContextWindow(atMaximum).override).toBe(900_000);
+    const belowDefault = selectContextWindow({ initial: 200_000, auto_expand: true }, limits, []);
+    expect(belowDefault.override).toBe(200_000);
+    expect(promoteContextWindow(belowDefault).override).toBe(272_000);
   });
 
   it('reads model-specific Codex cache metadata through child CODEX_HOME', async () => {
@@ -125,6 +144,52 @@ describe('runtime context_window', () => {
     rmSync(join(project, '.codex', 'config.toml'));
     writeFileSync(join(home, 'review.config.toml'), 'model_context_window = [broken\n');
     expect(await readCodexModelContextWindow('synthetic-model', environment, project, 'review')).toBeUndefined();
+  });
+
+  it('uses a confirmed Codex maximum for an explicit initial window when project default trust is unknown', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'takt-codex-explicit-window-'));
+    temporaryDirectories.push(home);
+    const project = join(home, 'project');
+    mkdirSync(join(project, '.codex'), { recursive: true });
+    writeFileSync(join(home, 'models_cache.json'), JSON.stringify({
+      models: [{ slug: 'synthetic-model', context_window: 272_000, max_context_window: 872_000 }],
+    }));
+    writeFileSync(join(project, '.codex', 'config.toml'), 'model_context_window = 800_000\n');
+    const provider = new CodexProvider();
+    const options = {
+      cwd: project,
+      model: 'synthetic-model',
+      childProcessEnv: { CODEX_HOME: home },
+      providerOptions: { codex: { contextWindow: { initial: 500_000, auto_expand: true } } },
+    };
+
+    const limits = await provider.getContextWindowLimits(options);
+    expect(limits).toEqual({ maximum: 872_000 });
+    const selected = selectContextWindow(options.providerOptions.codex.contextWindow, limits, ['A'.repeat(2_000_000)]);
+    expect(selected.override).toBe(500_000);
+    expect(promoteContextWindow(selected).override).toBe(872_000);
+    expect(buildCodexSessionConfig({ cwd: project, contextWindow: selected.override }).config.model_context_window).toBe(500_000);
+    expect(await readCodexModelContextWindow('synthetic-model', { CODEX_HOME: home }, project)).toBeUndefined();
+
+    writeFileSync(join(home, 'models_cache.json'), JSON.stringify({
+      models: [{ slug: 'synthetic-model', context_window: 272_000 }],
+    }));
+    expect(await provider.getContextWindowLimits(options)).toBeUndefined();
+    writeFileSync(join(home, 'models_cache.json'), JSON.stringify({
+      models: [{ slug: 'synthetic-model', context_window: 272_000, max_context_window: 872_000 }],
+    }));
+
+    mkdirSync(join(home, '.codex'));
+    writeFileSync(join(home, '.codex', 'config.toml'), 'model_catalog_json = "/custom/catalog.json"\n');
+    expect(await provider.getContextWindowLimits(options)).toBeUndefined();
+    writeFileSync(join(home, '.codex', 'config.toml'), 'model_context_window = [broken\n');
+    expect(await provider.getContextWindowLimits(options)).toBeUndefined();
+    rmSync(join(home, '.codex', 'config.toml'));
+
+    writeFileSync(join(home, 'config.toml'), 'model_catalog_json = "/custom/catalog.json"\n');
+    expect(await provider.getContextWindowLimits(options)).toBeUndefined();
+    writeFileSync(join(home, 'config.toml'), 'model_context_window = [broken\n');
+    expect(await provider.getContextWindowLimits(options)).toBeUndefined();
   });
 
   it('does not mistake CODEX_HOME under HOME for an unknown project config', async () => {
