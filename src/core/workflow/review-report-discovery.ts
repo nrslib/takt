@@ -16,6 +16,8 @@ import {
   workflowCallNamespaceSegmentMatchesInvocation,
 } from './workflow-call-namespace.js';
 import { buildWorkflowCallSiteIdentity } from './workflow-call-site-identity.js';
+import { buildWorkflowStepParticipationIdentity } from './workflow-step-participation-index.js';
+import type { ReportExecutionStore } from './report-execution-store.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { buildDynamicParallelSelectionIdentity } from './dynamic-parallel/identity.js';
 import {
@@ -38,6 +40,7 @@ export type ReviewReportDiscoveryFailure =
   | { readonly kind: 'fatal'; readonly reason: string };
 
 export interface InheritedReportSourceResolverContext {
+  readonly reportExecutions?: Pick<ReportExecutionStore, 'isInheritedProducer'>;
   readonly step: WorkflowStep;
   readonly workflow: WorkflowConfig;
   readonly workflowCallResolver?: WorkflowCallResolver;
@@ -49,6 +52,7 @@ export interface InheritedReportSourceResolverContext {
 }
 
 export interface ReviewReportDiscoveryContextOptions {
+  readonly reportExecutions?: Pick<ReportExecutionStore, 'isInheritedProducer'>;
   readonly step: WorkflowStep;
   readonly workflow: WorkflowConfig;
   readonly workflowCallResolver?: WorkflowCallResolver;
@@ -67,6 +71,7 @@ export function createReviewReportDiscoveryContext(
   options: ReviewReportDiscoveryContextOptions,
 ): InheritedReportSourceResolverContext {
   return {
+    reportExecutions: options.reportExecutions,
     step: options.step,
     workflow: options.workflow,
     workflowCallResolver: options.workflowCallResolver,
@@ -182,6 +187,12 @@ function resolveReviewReportSourceStepGroups(
     const participation = resolveParticipation(candidate, context);
     if (participation.kind === 'not-participated') continue;
     if (participation.kind === 'invalid') {
+      if (context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+        getWorkflowReference(context.workflow), candidate.name, context.resumeStackPrefix,
+      ))) {
+        log.warn('Ignoring unavailable inherited report participation', { step: candidate.name });
+        continue;
+      }
       failures.push({ kind: 'fatal', reason: participation.reason });
       continue;
     }
@@ -215,6 +226,12 @@ function resolveWorkflowCallReportNames(
   depth: number,
 ): InheritedReviewReportNamesResult {
   if (context.requireCompletedCalls === true && reportParticipation.invocation.completed !== true) {
+    if (context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+      getWorkflowReference(context.workflow), step.name, reportParticipation.resumeStackPrefix,
+    ))) {
+      log.warn('Ignoring incomplete inherited workflow call reports', { step: step.name });
+      return { reportNames: [], failures: [] };
+    }
     return {
       reportNames: [],
       failures: [{ kind: 'fatal', reason: `workflow_call_input_not_completed:${step.name}` }],
@@ -342,6 +359,13 @@ function resolveWorkflowStepReportNames(
   parallelParentStepName?: string,
 ): InheritedReviewReportNamesResult {
   const participation = resolveParticipation(step, context, parallelParentStepName);
+  const inherited = context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+    getWorkflowReference(context.workflow), step.name, context.resumeStackPrefix, parallelParentStepName,
+  )) === true;
+  if (inherited && participation.kind !== 'participated') {
+    log.warn('Ignoring unavailable inherited report participation', { step: step.name });
+    return { reportNames: [], failures: [] };
+  }
   if (participation.kind === 'not-participated') {
     const staticParallelParent = parallelParentStepName === undefined
       ? undefined
@@ -374,12 +398,12 @@ function resolveWorkflowStepReportNames(
         buildDynamicParallelSelectionIdentity(context.workflow, step.name, context.resumeStackPrefix),
       )
     : undefined;
-  const missingSelectedReviewers = context.requireCompletedCalls === true && dynamicSelection !== undefined
+  const missingSelectedReviewers = !inherited && context.requireCompletedCalls === true && dynamicSelection !== undefined
     ? dynamicSelection.effective_selection_ids.filter((id) =>
         !participation.parallelParticipants.some((candidate) => candidate.name === id))
     : [];
   const contractedReportNames = getReportFiles(step.outputContracts);
-  const missingContractedReports = context.requireCompletedCalls === true
+  const missingContractedReports = !inherited && context.requireCompletedCalls === true
     ? contractedReportNames.filter((fileName) => !generatedReportNames.has(fileName))
     : [];
   const reportNames = contractedReportNames

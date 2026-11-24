@@ -22,6 +22,11 @@ import { resolveReportReferenceDetailed } from './report-reference.js';
 import type { DeclaredReportInputs } from './prepared-instruction.js';
 import { CURRENT_REPORT_BODY_LIMIT } from './prepared-instruction.js';
 import { pinReportContent } from '../report-writer.js';
+import { collectWorkflowReportProducers } from '../workflow-resume-records.js';
+import { parseWorkflowExecutionIdentity, serializeWorkflowExecutionIdentity } from '../workflow-execution-identity-codec.js';
+import { createLogger } from '../../../shared/utils/index.js';
+
+const log = createLogger('declared-report-inputs');
 
 export interface DeclaredReportInputContext {
   readonly workflow: WorkflowConfig;
@@ -133,7 +138,52 @@ function resolveReportInputEntry(
       unavailable: [{ producer: source.name, names }],
     };
   }
+  const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(context.workflow), source.name, context.resumeStackPrefix);
+  const store = context.sharedRuntime.reportExecutions;
+  const invocation = source.kind === 'workflow_call'
+    ? invocationEvidence.index.get(context.workflow, source.name, context.resumeStackPrefix) : undefined;
+  if (source.kind === 'workflow_call'
+    && invocation?.completed !== true) {
+    if (store?.isInheritedProducer(identity)) {
+      log.warn('Ignoring incomplete inherited workflow call report input', { step: source.name });
+      return { declaredNames: names, reports: [] };
+    }
+    if (invocation !== undefined) throw new Error(`Report input from "${declaration.fromStep}" is incomplete: workflow_call_input_not_completed:${source.name}`);
+  }
+  const producers = store === undefined ? [] : collectWorkflowReportProducers(context, source, context.resumeStackPrefix,
+    invocationEvidence.index.serialized());
+  const inheritedNames = new Set(names.filter((name) => {
+    const owners = producers.filter((producer) => basename(producer.reportName) === name);
+    return owners.length === 0 ? store?.isInheritedProducer(identity) === true
+      : owners.every((producer) => store?.isInheritedProducer(producer.identity) === true);
+  }));
+  const participations = new Set(participationIndex.snapshot().keys());
+  // Resume matching already limits unqualified records to a unique parallel scope.
+  for (const producer of producers) {
+    const { parallel_parent: parallelParent, ...unqualified } = parseWorkflowExecutionIdentity(producer.identity)!;
+    if (parallelParent !== undefined && participations.has(serializeWorkflowExecutionIdentity(unqualified))) {
+      participations.add(producer.identity);
+    }
+  }
+  const inheritedReports = [...inheritedNames].flatMap((name) => {
+    const candidates = producers.filter((producer) => basename(producer.reportName) === name
+      && participations.has(producer.identity));
+    if (candidates.length !== 1) {
+      log.warn(candidates.length === 0 ? 'Ignoring missing inherited report input' : 'Ignoring ambiguous inherited report input',
+        { step: source.name, report: name, count: candidates.length });
+      return [];
+    }
+    const candidate = candidates[0]!;
+    const report = store!.readInherited(candidate.identity, candidate.reportName, declaration.history?.previous);
+    if (report === undefined) {
+      log.warn('Ignoring missing inherited report input', { step: source.name, report: name });
+      return [];
+    }
+    return [{ ...report, reference: name, scope: 'declared-producer' as const, producer: source.name }];
+  });
+  if (inheritedNames.size === names.length && names.length > 0) return { declaredNames: names, reports: inheritedReports };
   const result = resolveWorkflowStepReportNamesWithDiagnostics(source, createReviewReportDiscoveryContext({
+    reportExecutions: store,
     step: source,
     workflow: context.workflow,
     workflowCallResolver: context.workflowCallResolver,
@@ -151,8 +201,8 @@ function resolveReportInputEntry(
     throw new Error(`Report input from "${source.name}" is incomplete: ${result.failures.map((failure) => failure.reason).join('; ')}`);
   }
   const selected = declaration.reports === 'all'
-    ? result.reportNames
-    : declaration.reports.map((report) => {
+    ? result.reportNames.filter((report) => !inheritedNames.has(basename(report)))
+    : declaration.reports.filter((report) => !inheritedNames.has(basename(report))).map((report) => {
         const matches = result.reportNames.filter((name) => basename(name) === report);
         if (matches.length !== 1) {
           throw new Error(`Report input "${report}" from "${source.name}" has ${matches.length} matching completed reports`);
@@ -162,8 +212,6 @@ function resolveReportInputEntry(
   if (selected.length === 0) {
     throw new Error(`Report input from "${source.name}" has no completed reports`);
   }
-  const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(context.workflow), source.name, context.resumeStackPrefix);
-  const store = context.sharedRuntime.reportExecutions;
   let selectedExecution: string | undefined;
   const reports = selected.map((report) => {
     const fixed = store?.current(identity, report);
@@ -195,7 +243,11 @@ function resolveReportInputEntry(
       producer: logicalProducer(source.name, report),
     };
   });
-  return { declaredNames: reports.map(({ reference }) => reference), reports };
+  const availableReports = [...inheritedReports, ...reports];
+  return {
+    declaredNames: [...inheritedNames, ...reports.map(({ reference }) => reference)],
+    reports: availableReports,
+  };
 }
 
 export function resolveDeclaredReportInputs(

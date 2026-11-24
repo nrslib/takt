@@ -26,11 +26,17 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import type { WorkflowCallInvocationRecord, WorkflowConfig } from '../core/models/index.js';
+import type {
+  DynamicParallelPoolSubStep,
+  NormalAgentWorkflowStep,
+  WorkflowCallInvocationRecord,
+  WorkflowConfig,
+} from '../core/models/index.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -374,17 +380,17 @@ describe('WorkflowEngine report inheritance', () => {
     const fixed = makeStep('architecture', {
       outputContracts: [{ name: 'architecture.md', format: '# Architecture' }],
       rules: [makeRule('approved', 'COMPLETE')],
-    });
+    }) as NormalAgentWorkflowStep;
     const frontend = makeStep('frontend', {
       description: 'Review frontend changes',
       outputContracts: [{ name: 'frontend.md', format: '# Frontend' }],
       rules: [makeRule('approved', 'COMPLETE')],
-    });
+    }) as DynamicParallelPoolSubStep;
     const backend = makeStep('backend', {
       description: 'Review backend changes',
       outputContracts: [{ name: 'backend.md', format: '# Backend' }],
       rules: [makeRule('approved', 'COMPLETE')],
-    });
+    }) as DynamicParallelPoolSubStep;
     const reviewers = makeStep('reviewers', {
       parallel: {
         kind: 'dynamic',
@@ -441,7 +447,7 @@ describe('WorkflowEngine report inheritance', () => {
       [architectureReport, architectureContent],
       [frontendReport, frontendContent],
       [backendReport, backendContent],
-    ]) {
+    ] as const) {
       const sourcePath = join(sourceReportDir, ...reportName.split('/'));
       mkdirSync(join(sourcePath, '..'), { recursive: true });
       writeFileSync(sourcePath, content, 'utf-8');
@@ -487,7 +493,7 @@ describe('WorkflowEngine report inheritance', () => {
     expect(instruction).toContain(frontendContent);
   });
 
-  it('rejects missing workflow-call invocation state before a resumed fix agent starts', async () => {
+  it('warns and continues when the resumed workflow-call invocation is missing', async () => {
     const child: WorkflowConfig = {
       name: 'child-review',
       subworkflow: { callable: true },
@@ -509,7 +515,8 @@ describe('WorkflowEngine report inheritance', () => {
         }),
       ],
     };
-    expect(() => new WorkflowEngine(workflow, cwd, 'test task', {
+    const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    engine = new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
       startStep: 'fix',
       resumeSource: { sourceRunSlug, resumeMode: 'retry' },
@@ -529,10 +536,16 @@ describe('WorkflowEngine report inheritance', () => {
         workflow_step_participations: {},
       },
       workflowCallResolver: ({ step }) => step.call === 'child-review' ? child : null,
-    })).toThrow(
-      'Invalid review report discovery state: workflow_call_invocation_missing:delegate',
-    );
-    expect(runAgent).not.toHaveBeenCalled();
+    });
+    mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'fix complete' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls.some(([level, , message]) => level === 'WARN'
+      && message === 'Ignoring unavailable inherited report participation')).toBe(true);
   });
 
   it('preserves available reports and writes partial discovery diagnostics', async () => {

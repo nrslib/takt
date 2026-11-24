@@ -673,6 +673,116 @@ describe('report execution versions', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+  it('reads the adopted fixed version and its history without requiring a public file', () => {
+    const saved = buildWorkflowStepParticipationIdentity('old-definition', 'plan', []);
+    const current = buildWorkflowStepParticipationIdentity('current-definition', 'plan', []);
+    const first = store.begin(saved, 'plan', root, ['plan.md']);
+    store.capture(root, 'plan.md', 'PREVIOUS');
+    store.finish(first, true);
+    const latest = store.begin(saved, 'plan', root, ['plan.md']);
+    store.capture(root, 'plan.md', 'SAVED');
+    store.finish(latest, true);
+    const restored = new ReportExecutionStore(root);
+    restored.restoreInheritedReports([{ identity: current, savedIdentity: saved, reportName: 'plan.md', reportPath: 'plan.md' }]);
+    const report = restored.readInherited(current, 'plan.md', 1);
+    expect(report?.content).toBe('SAVED');
+    expect(report?.origin?.id).toContain(latest);
+    expect(report?.history).toContain(first);
+    expect(report?.history).toContain('1 / 1');
+  });
+
+  it.each([false, true])('reads the fixed body by producer and namespace after the saved participation identity was rebound (legacy parallel scope: %s)', (legacyParallel) => {
+    const saved = buildWorkflowStepParticipationIdentity('old-definition', 'plan', [], legacyParallel ? 'reviews' : undefined);
+    const rebound = buildWorkflowStepParticipationIdentity('new-definition', 'plan', [], legacyParallel ? 'reviews' : undefined);
+    const participation = buildWorkflowStepParticipationIdentity('new-definition', 'plan', []);
+    const id = store.begin(saved, 'plan', root, ['plan.md']);
+    store.capture(root, 'plan.md', 'SAVED');
+    store.finish(id, true);
+    const restored = new ReportExecutionStore(root);
+    restored.restoreInheritedReports([{ identity: rebound, savedIdentity: participation, reportName: 'plan.md', reportPath: 'plan.md' }]);
+    const report = restored.readInherited(rebound, 'plan.md', 1);
+    expect(report?.content).toBe('SAVED');
+    expect(report?.origin?.id).toContain(id);
+    expect(report?.history).not.toContain('execution history unavailable');
+    expect(restored.executions(rebound)).toEqual([]);
+  });
+
+  it('preserves an adopted public body through parent execution and invalidates it when its producer starts', () => {
+    const current = buildWorkflowStepParticipationIdentity('current-definition', 'plan', []);
+    const saved = buildWorkflowStepParticipationIdentity('old-definition', 'plan', []);
+    writeFileSync(join(root, 'plan.md'), 'PUBLIC');
+    store.restoreInheritedReports([{ identity: current, savedIdentity: saved, reportName: 'plan.md', reportPath: 'plan.md' }]);
+    const parent = store.begin('parent', 'remediation', root, []);
+    store.finish(parent, true);
+    expect(store.isInheritedProducer(current)).toBe(true);
+    expect(store.readInherited(current, 'plan.md')).toEqual({ content: 'PUBLIC', path: join(root, 'plan.md') });
+    store.begin(current, 'plan', root, ['plan.md']);
+    expect(store.isInheritedProducer(current)).toBe(false);
+    expect(store.readInherited(current, 'plan.md')).toBeUndefined();
+    expect(() => store.current(current, 'plan.md')).toThrow('no completed execution');
+  });
+
+  it('does not adopt an incomplete saved producer even if its public body exists', () => {
+    const saved = buildWorkflowStepParticipationIdentity('old-definition', 'plan', []);
+    const current = buildWorkflowStepParticipationIdentity('current-definition', 'plan', []);
+    store.begin(saved, 'plan', root, ['plan.md']);
+    store.capture(root, 'plan.md', 'PARTIAL');
+    writeFileSync(join(root, 'plan.md'), 'PARTIAL');
+    const restored = new ReportExecutionStore(root);
+    restored.restoreInheritedReports([{ identity: current, savedIdentity: saved, reportName: 'plan.md', reportPath: 'plan.md' }]);
+    expect(restored.readInherited(current, 'plan.md')).toBeUndefined();
+  });
+
+  it.each(['unrecorded', 'missing-version', 'mismatched-version'] as const)(
+    'distinguishes an inherited output that is %s from a missing public file', (condition) => {
+      const saved = buildWorkflowStepParticipationIdentity('old-definition', 'plan', []);
+      const current = buildWorkflowStepParticipationIdentity('current-definition', 'plan', []);
+      const earlier = store.begin(saved, 'plan', root, ['plan.md']);
+      store.capture(root, 'plan.md', 'EARLIER-PLAN');
+      store.finish(earlier, true);
+      const latest = store.begin(saved, 'plan', root, ['plan.md']);
+      if (condition !== 'unrecorded') store.capture(root, 'plan.md', 'SAVED-PLAN');
+      store.finish(latest, true);
+      writeFileSync(join(root, 'plan.md'), condition === 'unrecorded'
+        ? 'OLD-PLAN' : condition === 'mismatched-version' ? 'DIFFERENT-PLAN' : 'SAVED-PLAN');
+      if (condition !== 'unrecorded') {
+        rmSync(join(root, store.executions(saved).at(-1)!.reports['plan.md']!));
+      }
+      const restored = new ReportExecutionStore(root);
+      restored.restoreInheritedReports([{ identity: current, savedIdentity: saved, reportName: 'plan.md', reportPath: 'plan.md' }]);
+      if (condition === 'unrecorded') expect(restored.readInherited(current, 'plan.md')).toBeUndefined();
+      else if (condition === 'missing-version') expect(restored.readInherited(current, 'plan.md')?.content).toBe('SAVED-PLAN');
+      else expect(restored.readInherited(current, 'plan.md')).toBeUndefined();
+    },
+  );
+
+  it.each(['namespace', 'parallel parent', 'step'] as const)('omits a missing adopted body instead of an indexed report from another %s', (difference) => {
+    const directory = difference === 'namespace' ? join(root, 'elsewhere') : root;
+    const wrongStep = difference === 'step' ? 'other-plan' : 'plan';
+    const wrong = buildWorkflowStepParticipationIdentity('old-definition', wrongStep, [],
+      difference === 'parallel parent' ? 'other-reviewers' : undefined);
+    const current = buildWorkflowStepParticipationIdentity('current-definition', 'plan', [],
+      difference === 'parallel parent' ? 'selected-reviewers' : undefined);
+    const id = store.begin(wrong, wrongStep, directory, ['plan.md']);
+    store.capture(directory, 'plan.md', 'UNRELATED');
+    store.finish(id, true);
+    store.restoreInheritedReports([{ identity: current, savedIdentity: current, reportName: 'plan.md', reportPath: 'plan.md' }]);
+    expect(store.readInherited(current, 'plan.md')).toBeUndefined();
+  });
+
+  it('moves adopted references with a rebound call while retaining their saved body location', () => {
+    const from = JSON.stringify({ workflow: 'root', step: 'delegate', calls: [] });
+    const calls = (instance: number) => [{ workflow: 'root', step: 'delegate', kind: 'workflow_call' as const, instance }];
+    const oldIdentity = JSON.stringify({ workflow: 'child', step: 'plan', calls: calls(4) });
+    const newIdentity = JSON.stringify({ workflow: 'child', step: 'plan', calls: calls(1) });
+    writeFileSync(join(root, 'plan.md'), 'SAVED');
+    store.restoreInheritedReports([{ identity: oldIdentity, savedIdentity: oldIdentity, reportName: 'plan.md', reportPath: 'plan.md' }]);
+    store.rebindInheritedInvocation(from, from, 4, 1);
+    expect(store.readInherited(oldIdentity, 'plan.md')).toBeUndefined();
+    expect(store.readInherited(newIdentity, 'plan.md')?.content).toBe('SAVED');
+    expect(() => store.rebindInheritedInvocation('invalid', from, 4, 1)).toThrow('Invalid inherited invocation identity');
+  });
+
   it('keeps incomplete executions out of selection and explains their state', () => {
     const unfinished = store.begin('source', 'remediation', root, ['plan.md']);
     store.capture(root, 'plan.md', 'unfinished');

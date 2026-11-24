@@ -294,6 +294,26 @@ describe('workflow-reference', () => {
       },
     )).toBe(true);
   });
+  it('workflow_call entry は occurrence でなく call_instance で比較する', () => {
+    expect(workflowEntriesMatch(
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call',
+        occurrence: 2,
+        call_instance: 1,
+      },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+        call_instance: 1,
+      },
+    )).toBe(true);
+  });
   it('core は非公開 metadata の opaque ref で resume_point を解決する', () => {
     const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
       name: 'shared/workflow',

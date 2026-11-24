@@ -19,6 +19,9 @@ import {
   serializeWorkflowExecutionIdentity,
   type WorkflowExecutionIdentity,
 } from './workflow-execution-identity-codec.js';
+import { createLogger } from '../../shared/utils/index.js';
+
+const log = createLogger('workflow-call-invocation');
 
 export function buildWorkflowCallInvocationIdentity(
   workflowReference: string,
@@ -442,7 +445,8 @@ export class WorkflowCallInvocationIndex {
         resumePoint.stack.slice(0, index),
       );
       if (this.records.get(identity)?.call_instance !== entry.call_instance) {
-        throw new Error(`Workflow-call invocation identity does not match resume entry "${entry.step}"`);
+        log.warn('Ignoring inherited invocation that does not match the saved position', { step: entry.step, identity });
+        this.records.delete(identity);
       }
     });
   }
