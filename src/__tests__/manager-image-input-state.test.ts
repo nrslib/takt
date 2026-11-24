@@ -5,6 +5,7 @@ import type { StoredImageAttachment } from '../shared/types/image-attachments.js
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
 import { deferred } from './helpers/daemon-turn.js';
+import { selectReferencedImageAttachments } from '../shared/utils/imageAttachmentSelection.js';
 
 const doubles = vi.hoisted(() => ({
   save: vi.fn(), cleanup: vi.fn(), seal: vi.fn(), list: vi.fn(), select: vi.fn(),
@@ -71,6 +72,30 @@ it('reprepares a draft after a rapid disconnect and reconnect without an interve
     doubles.prepare.mockResolvedValueOnce(resumed);
     expect(await images.resolve('Inspect ' + image.placeholder)).toEqual({ text: 'Inspect ' + resumed.placeholder, ids: [resumed.id] });
     expect(doubles.prepare).toHaveBeenCalledTimes(2);
+  } finally { unsubscribe(); }
+});
+
+it('resolves both the original and reassigned image numbers after reconnect without repeating the ID', async () => {
+  doubles.select.mockImplementation(selectReferencedImageAttachments);
+  const images = create();
+  const unsubscribe = (doubles.effect.mock.calls[0]![0] as () => () => void)();
+  try {
+    await doubles.pasteInput!.sink.saveInlineImage({ data: Buffer.from('png'), mimeType: 'image/png' });
+    doubles.connection = 'disconnected'; doubles.listener!();
+    doubles.connection = 'connected'; doubles.listener!();
+    const resumed = { id: '22222222-2222-4222-8222-222222222222', placeholder: '[Image #8]', path: '/persistent/image-8.png' };
+    doubles.prepare.mockResolvedValueOnce(resumed);
+    expect(await images.resolve(`Inspect ${image.placeholder}`)).toEqual({ text: `Inspect ${resumed.placeholder}`, ids: [resumed.id] });
+    expect(await images.resolve(`Inspect ${resumed.placeholder}`)).toEqual({ text: `Inspect ${resumed.placeholder}`, ids: [resumed.id] });
+    expect(await images.resolve(`Inspect ${image.placeholder} and ${resumed.placeholder}`))
+      .toEqual({ text: `Inspect ${resumed.placeholder} and ${resumed.placeholder}`, ids: [resumed.id] });
+    doubles.connection = 'disconnected'; doubles.listener!();
+    doubles.connection = 'connected'; doubles.listener!();
+    const second = { id: '33333333-3333-4333-8333-333333333333', placeholder: '[Image #9]', path: '/persistent/image-9.png' };
+    doubles.prepare.mockResolvedValueOnce(second);
+    expect(await images.resolve(`Inspect ${resumed.placeholder}`)).toEqual({ text: `Inspect ${second.placeholder}`, ids: [second.id] });
+    expect(await images.resolve(`Inspect ${image.placeholder} and ${second.placeholder}`))
+      .toEqual({ text: `Inspect ${second.placeholder} and ${second.placeholder}`, ids: [second.id] });
   } finally { unsubscribe(); }
 });
 

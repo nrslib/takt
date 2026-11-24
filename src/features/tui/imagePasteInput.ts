@@ -92,6 +92,15 @@ function isMarkerPrefix(text: string): boolean {
   return text.length < INLINE_IMAGE_MARKER.length && INLINE_IMAGE_MARKER.startsWith(text);
 }
 
+function hasInlineImageParam(text: string): boolean {
+  if (!text.startsWith(INLINE_IMAGE_MARKER)) return false;
+  const payload = text.slice(INLINE_IMAGE_MARKER.length);
+  const separator = payload.indexOf(':');
+  const terminator = imageTerminator(payload, true);
+  const headerEnd = separator < 0 ? terminator : terminator < 0 ? separator : Math.min(separator, terminator);
+  return payload.slice(0, headerEnd < 0 ? undefined : headerEnd).split(';').includes('inline=1');
+}
+
 /**
  * Reads one key event against the buffer.
  *
@@ -129,8 +138,7 @@ export function consumeImagePasteInput(
 
   const accumulated = buffer.held + chunk;
   if (chunk === '' || endsHold(chunk)) {
-    if (rejectInvalidImages && accumulated.startsWith(INLINE_IMAGE_MARKER)
-      && accumulated.slice(INLINE_IMAGE_MARKER.length).split(':', 1)[0]!.split(';').includes('inline=1')) {
+    if (rejectInvalidImages && hasInlineImageParam(accumulated)) {
       const end = imageTerminator(accumulated, true);
       // Controls after a complete image belong to its trailing text, not its payload.
       if (end < 0 || endsHold(accumulated.slice(0, end))) {
@@ -140,7 +148,7 @@ export function consumeImagePasteInput(
     } else return release(buffer.held, false);
   }
   if (accumulated.length > MAX_PENDING_INLINE_IMAGE_CHARS) {
-    if (rejectInvalidImages && accumulated.startsWith(INLINE_IMAGE_MARKER) && accumulated.includes('inline=1')) return invalid(accumulated);
+    if (rejectInvalidImages && hasInlineImageParam(accumulated)) return invalid(accumulated);
     return release(accumulated, true);
   }
   if (isMarkerPrefix(accumulated)) {
@@ -167,7 +175,7 @@ export function consumeImagePasteInput(
     return { buffer: { held: accumulated }, outcome: { kind: 'pending' } };
   }
   if (parsed.status === 'passthrough') {
-    return release(accumulated, true);
+    return rejectInvalidImages && hasInlineImageParam(accumulated) ? invalid(accumulated) : release(accumulated, true);
   }
 
   return {

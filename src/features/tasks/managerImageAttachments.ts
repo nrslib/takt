@@ -62,7 +62,7 @@ export async function withManagerImageTask<T>(input: {
       })));
       writePrivateImageCopy(input.repositoryDirectory, join(prepared.taskDir, 'order.md'), Buffer.from(task));
       return publish(prepared);
-    } finally {
+    } catch (error) {
       // Publication can succeed even when a later log/response fails. Reconcile against the authoritative task record.
       const published = await hasTaskDirectory(input.repositoryDirectory, prepared.taskDir);
       if (!published) {
@@ -70,6 +70,7 @@ export async function withManagerImageTask<T>(input: {
         const latest = await store.read();
         await store.save({ ...latest, workflows: latest.workflows?.filter((workflow) => workflow.id !== referenceId) });
       }
+      throw error;
     }
   });
   const save: SaveEnqueuedTaskFile = (cwd, content, options, prepare, signal) =>

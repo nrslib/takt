@@ -9,13 +9,13 @@ import type { SaveEnqueuedTaskFile } from '../infra/task/enqueueService.js';
 import { conversationId } from '../infra/conversations/identity.js';
 
 const io = vi.hoisted(() => ({ metadata: { images: [], lastIndex: 1 } as ConversationImageMetadata,
-  tasks: [] as { task_dir: string }[], read: vi.fn(), lstat: vi.fn(), open: vi.fn(), close: vi.fn(), list: vi.fn(),
+  tasks: [] as { task_dir: string }[], hasTaskDirectory: vi.fn(), read: vi.fn(), lstat: vi.fn(), open: vi.fn(), close: vi.fn(), list: vi.fn(),
   save: vi.fn(), ensure: vi.fn(), copy: vi.fn(), rename: vi.fn(), remove: vi.fn(), cleanup: vi.fn(), reserve: vi.fn(), resolve: vi.fn() }));
 vi.mock('node:fs', () => ({ constants: { O_RDONLY: 0, O_NOFOLLOW: 1 }, lstatSync: io.lstat,
   openSync: io.open, closeSync: io.close, readFileSync: io.read, readdirSync: io.list, renameSync: io.rename, rmSync: io.remove }));
 vi.mock('../infra/fs/private-image-copy.js', () => ({ ensurePrivateImageDirectory: io.ensure, writePrivateImageCopy: io.copy }));
 vi.mock('../infra/task/taskStateReader.js', () => ({
-  hasTaskDirectory: async (repository: string, directory: string) => io.tasks.some((task) => resolve(repository, task.task_dir) === directory),
+  hasTaskDirectory: (repository: string, directory: string) => io.hasTaskDirectory(repository, directory),
 }));
 vi.mock('../infra/task/enqueueService.js', () => ({ reserveTaskSpecDirectory: io.reserve, cleanupTaskSpecDirectory: io.cleanup }));
 vi.mock('../features/manager/imageAttachments.js', () => ({ readManagerImage: io.resolve }));
@@ -48,6 +48,8 @@ beforeEach(() => {
     isDirectory: () => path.endsWith('attachments'), size: png.length }));
   io.reserve.mockReturnValue({ taskDir: taskDirectory, taskDirRelative: '.takt/tasks/task-a' });
   io.resolve.mockResolvedValue(png);
+  io.hasTaskDirectory.mockImplementation(async (repository: string, directory: string) =>
+    io.tasks.some((task) => resolve(repository, task.task_dir) === directory));
 });
 
 it('normalizes a selected task, reserves its ownership before publication and keeps published ownership', async () => {
@@ -61,16 +63,59 @@ it('normalizes a selected task, reserves its ownership before publication and ke
     });
   });
   const result = await withManagerImageTask({ imageRoot: root, conversationId: cid, repositoryDirectory: root,
-    task: `Inspect \`${source}\``, saveTaskFile: save }, async (task, publish, selectedImagePaths) => {
+    task: `確認画像：${source} と \`${source}\``, saveTaskFile: save }, async (task, publish, selectedImagePaths) => {
     expect(selectedImagePaths).toEqual([source]);
     expect(io.metadata.workflows).toBeUndefined();
     return publish(root, task);
   });
   expect(result.taskName).toBe('task-a');
-  expect(save.mock.calls[0]).toEqual([root, 'Inspect `attachments/image-1.png`', undefined, undefined, undefined, expect.any(Function)]);
+  expect(save.mock.calls[0]).toEqual([root, '確認画像：`attachments/image-1.png` と `attachments/image-1.png`', undefined, undefined, undefined, expect.any(Function)]);
   expect(io.resolve).toHaveBeenCalledExactlyOnceWith(root, source);
   expect(io.cleanup).not.toHaveBeenCalled();
   expect(io.metadata.workflows?.[0]?.imageIds).toEqual([id]);
+});
+
+it('returns a published task even if a later ownership lookup would fail', async () => {
+  io.hasTaskDirectory.mockRejectedValue(Object.assign(new Error('read failed'), { code: 'EIO' }));
+  const save: SaveEnqueuedTaskFile = async (_cwd, _content, _options, _prepare, _signal, scope) => {
+    if (scope === undefined) throw new Error('Missing publication scope');
+    return scope(() => ({ taskName: 'task-a', tasksFile: join(root, '.takt', 'tasks.yaml') }));
+  };
+  const result = await withManagerImageTask({ imageRoot: root, conversationId: cid, repositoryDirectory: root,
+    task: `Inspect \`${source}\``, saveTaskFile: save }, (task, publish) => publish(root, task));
+  expect(result.taskName).toBe('task-a');
+  expect(io.hasTaskDirectory).not.toHaveBeenCalled();
+  expect(io.cleanup).not.toHaveBeenCalled();
+  expect(io.metadata.workflows).toHaveLength(1);
+});
+
+it('keeps a committed image task reference when publication throws after writing the task', async () => {
+  const failure = new Error('logging failed');
+  const save: SaveEnqueuedTaskFile = async (_cwd, _content, _options, _prepare, _signal, scope) => {
+    if (scope === undefined) throw new Error('Missing publication scope');
+    return scope(() => {
+      io.tasks = [{ task_dir: '.takt/tasks/task-a' }];
+      throw failure;
+    });
+  };
+  await expect(withManagerImageTask({ imageRoot: root, conversationId: cid, repositoryDirectory: root,
+    task: `Inspect \`${source}\``, saveTaskFile: save }, (task, publish) => publish(root, task))).rejects.toBe(failure);
+  expect(io.hasTaskDirectory).toHaveBeenCalledExactlyOnceWith(root, taskDirectory);
+  expect(io.cleanup).not.toHaveBeenCalled();
+  expect(io.metadata.workflows).toHaveLength(1);
+});
+
+it('removes an uncommitted image task reference when publication throws', async () => {
+  const failure = new Error('publication failed');
+  const save: SaveEnqueuedTaskFile = async (_cwd, _content, _options, _prepare, _signal, scope) => {
+    if (scope === undefined) throw new Error('Missing publication scope');
+    return scope(() => { throw failure; });
+  };
+  await expect(withManagerImageTask({ imageRoot: root, conversationId: cid, repositoryDirectory: root,
+    task: `Inspect \`${source}\``, saveTaskFile: save }, (task, publish) => publish(root, task))).rejects.toBe(failure);
+  expect(io.hasTaskDirectory).toHaveBeenCalledExactlyOnceWith(root, taskDirectory);
+  expect(io.cleanup).toHaveBeenCalledExactlyOnceWith(taskDirectory);
+  expect(io.metadata.workflows).toEqual([]);
 });
 
 it('reads and copies selected images sequentially, preserving the validated bytes and digest', async () => {
@@ -104,8 +149,12 @@ it('leaves an unselected task unchanged without reserving or copying images', as
 it('restores task reference metadata and normalizes retry instructions without embedding image bytes', () => {
   expect(readManagerImageTask(taskDirectory)).toEqual(marker);
   expect(normalizeManagerImageTaskOrder(taskDirectory, `Inspect \`${source}\``)).toBe('Inspect `attachments/image-1.png`');
+  expect(normalizeManagerImageTaskOrder(taskDirectory, `確認画像：${source} と \`${source}\``))
+    .toBe('確認画像：`attachments/image-1.png` と `attachments/image-1.png`');
   const other = source.replace('image-1.png', 'image-2.png');
   expect(() => normalizeManagerImageTaskOrder(taskDirectory, `Inspect \`${other}\``))
+    .toThrow('Corrected task references a manager image that is not saved with this task');
+  expect(() => normalizeManagerImageTaskOrder(taskDirectory, `確認画像：${other}`))
     .toThrow('Corrected task references a manager image that is not saved with this task');
   expect(() => normalizeManagerImageTaskOrder(taskDirectory, `Inspect \`${source.replace(root, '/other/project')}\``))
     .toThrow('Corrected task references a manager image that is not saved with this task');

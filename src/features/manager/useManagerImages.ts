@@ -99,17 +99,18 @@ export function useManagerImages(input: {
     async resolve(text: string): Promise<{ text: string; ids: string[] }> {
       const referenced = resolveReferencedImageAttachments(text, [...images.current].map(([placeholder, { source }]) => ({ ...source, placeholder })));
       const replacements = new Map<string, string>();
-      const ids: string[] = [];
+      const ids = new Set<string>();
       for (const { placeholder } of referenced) {
         const entry = images.current.get(placeholder)!;
         if (entry.epoch !== epoch.current) {
           entry.image = await latest.current.client.prepareImage(entry.source.tempPath);
           entry.epoch = epoch.current;
+          images.current.set(entry.image.placeholder, entry);
         }
         replacements.set(placeholder, entry.image.placeholder);
-        ids.push(entry.image.id);
+        ids.add(entry.image.id);
       }
-      return { text: text.replace(/\[Image #\d+\]/gu, (placeholder) => replacements.get(placeholder) ?? placeholder), ids };
+      return { text: text.replace(/\[Image #\d+\]/gu, (placeholder) => replacements.get(placeholder) ?? placeholder), ids: [...ids] };
     },
     stop,
   };

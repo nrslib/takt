@@ -2,7 +2,7 @@ import { basename, join } from 'node:path';
 
 function imagePathPattern(directory: string): RegExp {
   const prefix = directory.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  return new RegExp('(^|[\\s`\'"(\\[<:=])(' + prefix
+  return new RegExp('(^|[\\s`\'"(\\[<:=：])(' + prefix
     + '[/\\\\]image-[1-9]\\d*\\.(?:png|jpg|gif|webp))(?=$|[\\s`\'"\\)\\]>;,!?]|[.:](?=\\s|$))', 'gu');
 }
 

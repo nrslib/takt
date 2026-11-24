@@ -171,6 +171,33 @@ describe('inline image paste reassembly', () => {
     expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
   });
 
+  it.each(['\x07', '\\'])('rejects a manager inline file without a data separator ending in %j', (terminator) => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const result = consumeImagePasteInput(first.buffer, `1337;File=inline=1;AAAA${terminator}tail`, true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
+  });
+
+  it('rejects a manager inline file whose terminator directly follows its parameter', () => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const result = consumeImagePasteInput(first.buffer, '1337;File=inline=1\x07tail', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
+  });
+
+  it('rejects a manager inline file whose data separator never arrives across events', () => {
+    let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    result = consumeImagePasteInput(result.buffer, '1337;File=inline=1;AAAA', true);
+    expect(result.outcome).toEqual({ kind: 'pending' });
+    result = consumeImagePasteInput(result.buffer, '\x07tail', true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'error', rest: 'tail' } });
+  });
+
+  it.each(['1337;File=inline=10:AAAA;inline=1\x07tail', '1337;File=inline=10\x07inline=1 tail'])
+  ('keeps non-inline OSC data out of the manager image rejection path', (input) => {
+    const first = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
+    const result = consumeImagePasteInput(first.buffer, input, true);
+    expect(result).toEqual({ buffer: { held: '' }, outcome: { kind: 'passthrough', text: `]${input}`, consumed: true } });
+  });
+
   it('keeps discarding a malformed manager image across control bytes until its terminator', () => {
     let result = consumeImagePasteInput(createImagePasteBuffer(), OPENER, true);
     result = consumeImagePasteInput(result.buffer, '1337;File=inline=1:AAAA', true);

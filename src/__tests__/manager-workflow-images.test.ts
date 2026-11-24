@@ -51,6 +51,14 @@ it('rewrites selected saved paths into readable task attachment references witho
     .toBe(`Inspect \`attachments/image-1.png\`, \`attachments/image-1.png\`, ${path}.bak and ${other}`);
 });
 
+it('selects and rewrites a saved image after a full-width colon', () => {
+  const text = `確認画像：${path} と \`${path}\``;
+  expect(selectWorkflowImagePaths(`確認画像：${path}`, directory)).toEqual([path]);
+  expect(selectWorkflowImagePaths(text, directory)).toEqual([path]);
+  expect(normalizeWorkflowImagePaths(text, [{ path, fileName: 'image-1.png' }]))
+    .toBe('確認画像：`attachments/image-1.png` と `attachments/image-1.png`');
+});
+
 it('rejects an outside destination before creating a private directory', () => {
   expect(() => ensurePrivateImageDirectory(root, resolve(root, '..', 'outside'))).toThrow();
   expect(io.mkdirSync).not.toHaveBeenCalled();
