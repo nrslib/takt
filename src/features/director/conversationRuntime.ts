@@ -6,6 +6,7 @@ import { createDirectorConversationPlan } from './conversationPlan.js';
 import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME, DIRECTOR_TOOL_ALLOWLIST, type DirectorStateActions } from './mcp.js';
 import { startLocalMcpConnection } from '../mcp/localConnection.js';
 import { createDirectorTurnExecutor } from './turnExecutor.js';
+import { getDirectorOutputSchema } from './turnResponse.js';
 
 export async function prepareDirectorTurn(
   configDirectory: string,
@@ -27,6 +28,7 @@ export async function prepareDirectorTurn(
   })();
   try {
     await plan.ctx.provider.preflight?.({ cwd: plan.cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+      outputSchema: getDirectorOutputSchema(plan.ctx.providerType),
       permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,
       mcpServers: { [DIRECTOR_MCP_SERVER_NAME]: connection.config }, abortSignal: signal });
     signal.throwIfAborted();

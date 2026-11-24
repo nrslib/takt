@@ -445,6 +445,7 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 director:
+  slackGoalRegistered: "ゴール登録完了: {id}"
   slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
   patrolFailed: "director の見回りに失敗しました"
   projectUnreadable: "director が project を読み取れませんでした"
@@ -547,6 +548,7 @@ manager:
   goSummaryUnavailable: "材料が不足しているため、ゴールの登録案を作れませんでした。会話を続けてください。"
   summaryWorking: "ゴールの登録案を作っています"
   summary:
+    manager: "担当 manager"
     title: "ゴールの登録案"
     repository: "リポジトリ"
     objective: "目的"

@@ -15,6 +15,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-watch-goals.integration.test.ts',
   'src/__tests__/daemon-turn-process.integration.test.ts',
   'src/__tests__/it-daemon-conversations.test.ts',
+  'src/__tests__/it-daemon-director-slack-proposal.test.ts',
   'src/__tests__/it-conversation-goal-registration.test.ts',
   'src/__tests__/projectLocalTaktSync.test.ts',
   'src/__tests__/mcp-entrypoint.integration.test.ts',
@@ -392,6 +393,8 @@ export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
+  'src/__tests__/daemon-slack-ports.test.ts',
+  'src/__tests__/manager-conversation-transfer.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 

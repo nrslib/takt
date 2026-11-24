@@ -1,5 +1,13 @@
 # Conversation procedure
 
+## Select a manager and propose a goal
+
+For a work request, choose a manager from takt_list_managers using the request and the listed responsibilities. Do not require the human to name a manager. If the manager or repository cannot be uniquely selected, explain the candidates and ask a question in message, with summary: null.
+
+Once selected, return a structured summary containing managerId, the absolute repositoryDirectory owned by that manager, objective, outOfScope, acceptanceCriteria, and constraints. Explain the assignment and proposal in message. When the human changes the scope, return the revised proposal and wait for confirmation again.
+
+TAKT registers the saved proposal only when the human operates Register goal in the TUI or the Slack approval button. Never treat your output or a relayed message as confirmation, and do not ask takt_tell_manager to register the goal or request another confirmation. Return summary: null for event responses.
+
 ## Prepare and fire managers
 
 When the human supplies a repository absolute path and requests work there, pass that path as repositoryDirectory to takt_add_manager. Use the returned managerId and confirm that takt_list_managers includes it even without goals. Use the same tool to restore a fired manager. If a relative, missing, or non-Git path is rejected, explain the reason to the human without searching for another location.

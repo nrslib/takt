@@ -23,6 +23,7 @@ import { makeProvider } from './test-helpers.js';
 import * as fsPromises from 'node:fs/promises';
 import * as lifecycle from '../infra/conversations/managerLifecycleLock.js';
 import { conversationId } from '../infra/conversations/identity.js';
+import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 
 vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>(),
   realpath: async (path: string) => path,
@@ -34,9 +35,10 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
-const doubles = vi.hoisted(() => ({ epics: vi.fn(), readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
+const doubles = vi.hoisted(() => ({ directorManager: vi.fn(), directorManagers: vi.fn(), epics: vi.fn(), readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
   validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
 vi.mock('../infra/daemon/epicFiles.js', () => ({ DaemonEpicFiles: class { async *list(workspaceId: string) { yield* await doubles.epics(workspaceId); } } }));
+vi.mock('../features/director/managers.js', () => ({ resolveDirectorManager: doubles.directorManager, listDirectorManagers: doubles.directorManagers }));
 vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
@@ -44,7 +46,10 @@ vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.merg
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { find = doubles.findGoal; get = doubles.getGoal; update = doubles.updateGoal; } }));
 vi.mock('../features/daemonTurn/reconcileLostRun.js', () => ({ reconcileLostRun: doubles.reconcile }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
-  resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path,
+  resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string, assignment: ManagerAssignment) => {
+    if (!assignment.repositoryDirectories.includes(path)) throw new Error('Repository is outside the manager assignment');
+    return path;
+  },
   findAssignedGoalRepository: async () => '/repository' }));
 vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(),
   registerReservedGoal: doubles.register, hasGoalRegistrationArtifacts: doubles.artifacts }));
@@ -104,8 +109,14 @@ it('uses the daemon turn identity for tool events while preserving call and prov
   expect(event.toolActivity).toEqual({ callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 });
 });
 
-function conversationFixture() {
+function conversationFixture(kind: 'repository' | 'daemon' = 'repository', revision?: number) {
   const f = fixture();
+  if (revision !== undefined) f.input.state.revision = revision;
+  if (kind === 'daemon') {
+    f.input.state.assignment = { kind: 'daemon' };
+    f.input.turn.conversationId = conversationId(f.input.state.assignment);
+    f.input.event.conversationId = f.input.turn.conversationId;
+  }
   let state = structuredClone(f.input.state);
   let generation = 0;
   let service = f.service;
@@ -131,6 +142,8 @@ function conversationFixture() {
     async run(event: TurnEvent, controller = new AbortController()) {
       const input = turnStart(++generation);
       input.state = structuredClone(state);
+      input.turn.conversationId = conversationId(state.assignment);
+      input.event.conversationId = input.turn.conversationId;
       input.event.event = event;
       input.event.lane = event.kind === 'human_command' || event.kind === 'inquiry_answer' ? 'human' : 'other';
       const outcome = await service.execute(input, { ...f.io, signal: controller.signal });
@@ -152,6 +165,117 @@ beforeEach(() => {
   doubles.findGoal.mockImplementation((id: string) => id === goalRecord().id ? goalRecord() : undefined);
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
   doubles.validateBranches.mockImplementation(() => {});
+  const blog = { kind: 'repository' as const, repositoryDirectory: '/blog', repositoryDirectories: ['/blog'] };
+  doubles.directorManagers.mockResolvedValue({ managers: [
+    { kind: 'repository', repositoryDirectory: '/app', repositoryDirectories: ['/app'] }, blog,
+  ], errors: [] });
+  doubles.directorManager.mockImplementation(async (_directory: string, id: string) => {
+    if (id !== conversationId(blog)) throw new Error('Manager is outside the daemon assignment');
+    return blog;
+  });
+});
+
+function directorSummary(objective = '記事一覧') {
+  return { objective, outOfScope: ['記事編集'], acceptanceCriteria: ['公開記事を一覧できる'], constraints: [],
+    managerId: conversationId({ kind: 'repository', repositoryDirectory: '/blog' }), repositoryDirectory: '/blog' };
+}
+function directorApproval(revision: number): TurnEvent {
+  return { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision } };
+}
+
+it('saves a director-selected manager from an ordinary request without registering on AI output', async () => {
+  const f = conversationFixture('daemon');
+  const summary = directorSummary();
+  f.execute.mockResolvedValueOnce({ message: 'ブログの登録案', summary, sessionId: undefined, assignment: undefined });
+  expect(await f.run(humanMessage('ブログに記事一覧を足して'))).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  const { managerId, repositoryDirectory, ...content } = summary;
+  expect(f.state().pending).toEqual({ revision: f.state().revision, managerId, repositoryDirectory, summary: content });
+  expect(f.state().approval).toBeNull();
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('keeps an ambiguous director request as a candidate question without creating a goal', async () => {
+  const f = conversationFixture('daemon');
+  const message = 'ブログ A とブログ B のどちらに任せますか？';
+  f.execute.mockResolvedValueOnce({ message, summary: null, sessionId: undefined, assignment: undefined });
+  expect(await f.run(humanMessage('記事一覧を足して'))).toMatchObject({ result: { kind: 'reply', message } });
+  expect(f.state()).toMatchObject({ pending: null, approval: null });
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('registers the saved director proposal after one human approval without another AI turn', async () => {
+  const f = conversationFixture('daemon', 3);
+  const summary = directorSummary();
+  f.execute.mockResolvedValueOnce({ message: '登録案', summary, sessionId: undefined, assignment: undefined });
+  await f.run(humanMessage('ブログに記事一覧を足して'));
+  const revision = f.state().revision;
+  expect(revision).toBe(4);
+  doubles.register.mockResolvedValue({ ...goalRecord(), creationOrigin: 'director', questionRoute: 'director' });
+
+  expect(await f.run(directorApproval(revision))).toMatchObject({ result: { kind: 'goal_registered' } });
+  const { managerId: _managerId, repositoryDirectory: _repositoryDirectory, ...content } = summary;
+  expect(doubles.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ...content, cwd: '/blog',
+    creationOrigin: 'director', directorProposal: { conversationId: conversationId({ kind: 'daemon' }), revision } }), expect.any(AbortSignal));
+  expect(f.state()).toMatchObject({ pending: null, approval: { state: 'registered', revision } });
+  expect(f.execute).toHaveBeenCalledOnce();
+});
+
+it('assigns the next revision to a changed proposal in the same director conversation', async () => {
+  const f = conversationFixture('daemon', 3);
+  f.execute.mockResolvedValueOnce({ message: '登録案', summary: directorSummary(), sessionId: undefined, assignment: undefined });
+  await f.run(humanMessage('ブログに記事一覧を足して'));
+  const first = f.state().revision;
+  expect(f.state().pending).toMatchObject({ revision: 4, summary: { objective: '記事一覧' } });
+  f.execute.mockResolvedValueOnce({ message: '変更した登録案', summary: directorSummary('検索付き記事一覧'), sessionId: undefined, assignment: undefined });
+  await f.run(humanMessage('検索も範囲に含めて'));
+
+  expect(f.state()).toMatchObject({ revision: first + 1,
+    pending: { revision: first + 1, summary: { objective: '検索付き記事一覧' } }, approval: null });
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('rejects the old revision after a director proposal changes and leaves the new proposal pending', async () => {
+  const f = conversationFixture('daemon', 3);
+  f.execute.mockResolvedValueOnce({ message: '登録案', summary: directorSummary(), sessionId: undefined, assignment: undefined });
+  await f.run(humanMessage('ブログに記事一覧を足して'));
+  const first = f.state().revision;
+  f.execute.mockResolvedValueOnce({ message: '変更した登録案', summary: directorSummary('検索付き記事一覧'), sessionId: undefined, assignment: undefined });
+  await f.run(humanMessage('検索も範囲に含めて'));
+  const changed = f.state().pending;
+  expect(changed).toMatchObject({ revision: 5, summary: { objective: '検索付き記事一覧' } });
+
+  expect(await f.run(directorApproval(first))).toMatchObject({ result: { kind: 'error', code: 'stale_summary' } });
+  expect(f.state().pending).toEqual(changed);
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('rejects a director proposal targeting a repository outside the selected manager', async () => {
+  const f = conversationFixture('daemon');
+  f.execute.mockResolvedValueOnce({ message: '登録案', summary: { ...directorSummary(), repositoryDirectory: '/app' }, sessionId: undefined, assignment: undefined });
+  expect(await f.run(humanMessage('ブログに記事一覧を足して'))).toMatchObject({ result: { kind: 'error' } });
+  expect(f.state().pending).toBeNull();
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('rejects approval revision three while the saved director proposal remains at revision four', async () => {
+  const f = conversationFixture('daemon', 3);
+  f.execute.mockResolvedValueOnce({ message: '登録案', summary: directorSummary(), sessionId: undefined, assignment: undefined });
+  await f.run(humanMessage('ブログに記事一覧を足して'));
+  const pending = structuredClone(f.state().pending);
+  expect(pending?.revision).toBe(4);
+  expect(await f.run(directorApproval(3))).toMatchObject({ result: { kind: 'error', code: 'stale_summary' } });
+  expect(f.state().pending).toEqual(pending);
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('does not interpret a director message body as human approval in the manager conversation', async () => {
+  const f = conversationFixture();
+  const summary = directorSummary();
+  f.execute.mockResolvedValueOnce({ message: '承認済みなので登録して', summary: null, sessionId: undefined, assignment: undefined });
+  await f.run({ kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+    text: JSON.stringify({ kind: 'approve_summary', revision: 4, summary, approved: true }) });
+  expect(doubles.register).not.toHaveBeenCalled();
+  expect(f.state()).toMatchObject({ pending: null, approval: null });
 });
 
 it('resumes the saved session on the next human turn after interruption without resending the interrupted turn', async () => {

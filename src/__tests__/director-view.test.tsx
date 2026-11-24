@@ -8,8 +8,58 @@ import { measureWidth } from '../shared/utils/grapheme.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { randomUUID } from 'node:crypto';
 import type { SnapshotValue } from '../features/manager/conversationPort.js';
+import { conversationId } from '../infra/conversations/identity.js';
 
 afterEach(cleanup);
+
+function proposalClient() {
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: '/blog' });
+  const pending = { revision: 4, managerId, repositoryDirectory: '/blog',
+    summary: { objective: '記事一覧', outOfScope: ['記事編集'], acceptanceCriteria: ['公開記事を一覧できる'], constraints: [] } };
+  const client = new ManagerClientDouble({ state: { conversationId: conversationId({ kind: 'daemon' }), assignment: { kind: 'daemon' },
+    revision: 4, pending, approval: null, running: null, interrupted: false },
+  items: [{ kind: 'assignment', assignment: { kind: 'daemon', repositoryDirectories: [] } }] });
+  return { client, pending };
+}
+
+it('shows the director proposal contents and selected manager and submits one explicit approval', async () => {
+  const { client, pending } = proposalClient();
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => {
+    const frame = app.lastFrame()!.replace(/\s+/gu, '');
+    for (const text of [pending.summary.objective, ...pending.summary.outOfScope, ...pending.summary.acceptanceCriteria, pending.managerId]) {
+      expect(frame).toContain(text);
+    }
+    expect(app.lastFrame()).toContain(getLabel('manager.summary.approve', 'en'));
+  });
+  expect(client.commands()).toEqual([]);
+  app.stdin.write('\x1b[A');
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+});
+
+it('updates the proposal and resets the selected approval on the same director screen', async () => {
+  const { client, pending } = proposalClient();
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(pending.summary.objective));
+  app.stdin.write('\x1b[A');
+  const changed = { ...pending, revision: 5, summary: { ...pending.summary, objective: '検索付き記事一覧' } };
+  client.change({ state: { ...client.getSnapshot().state!, revision: 5, pending: changed } });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(changed.summary.objective));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 5 }]));
+});
+
+it.each(['disconnected', 'reading'] as const)('does not approve a director proposal while %s', async (status) => {
+  const { client } = proposalClient();
+  client.change(status === 'disconnected' ? { connection: 'disconnected' } : { readStatus: 'reading' });
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel(`manager.conversation.${status}`, 'en')));
+  app.stdin.write('\x1b[A');
+  app.stdin.write('\r');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(client.commands()).toEqual([]);
+});
 
 function humanInquiry(): Extract<SnapshotValue, { kind: 'inquiry' }> {
   return { kind: 'inquiry', inquiry: {
