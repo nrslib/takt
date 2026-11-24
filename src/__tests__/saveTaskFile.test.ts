@@ -78,6 +78,8 @@ import { getCurrentBranch, branchExists } from '../infra/task/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { ActiveTaskTargetConflictError } from '../infra/task/activeTaskTarget.js';
+import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
+import { hasTaskDirectory } from '../infra/task/taskStateReader.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -147,6 +149,32 @@ afterEach(() => {
 });
 
 describe('saveTaskFile', () => {
+  it.each([false, true])('prepares before entering the publication scope and respects pre-publication abort (%s)', async (aborted) => {
+    const controller = new AbortController();
+    const scope = vi.fn(async (publish: (prepared: ReturnType<typeof prepareTaskSpecDirectory>) => { taskName: string; tasksFile: string }) => {
+      expect(mockSummarizeTaskName).toHaveBeenCalledOnce();
+      expectNoTaskArtifacts(testDir);
+      const prepared = prepareTaskSpecDirectory(testDir, 'Scoped task');
+      try {
+        if (aborted) controller.abort();
+        return publish(prepared);
+      } finally {
+        if (!await hasTaskDirectory(testDir, prepared.taskDir)) {
+          cleanupTaskSpecDirectory(prepared.taskDir);
+        }
+      }
+    });
+    const saving = saveTaskFile(testDir, 'Scoped task', undefined, undefined, controller.signal, scope);
+    if (aborted) {
+      await expect(saving).rejects.toThrow();
+      expectNoTaskArtifacts(testDir);
+    } else {
+      const saved = await saving;
+      expect(loadTasks(testDir).tasks[0]!.name).toBe(saved.taskName);
+    }
+    expect(scope).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { target: 'Issue', options: { issue: 1465 }, running: false },
     { target: 'Issue', options: { issue: 1465 }, running: true },

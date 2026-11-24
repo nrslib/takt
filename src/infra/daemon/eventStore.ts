@@ -272,6 +272,27 @@ export class FileEventStore implements EventStore, ConversationTurns {
     });
   }
 
+  async hasImageReference(conversationId: string, imageId: string, activeOnly = false): Promise<boolean> {
+    return this.conversations.withConversationLock(conversationId, async () => this.exclusive(async () => {
+      const state = activeOnly ? (await this.conversations.read(conversationId))?.state : undefined;
+      if (state?.interruptedImageAttachmentIds?.includes(imageId)) return true;
+      if (state?.session.sessionId !== null && state?.session.imageAttachmentIds?.includes(imageId)) return true;
+      // Task 1 sessions did not record ownership. Preserve their accepted images until an explicit session switch.
+      const legacySession = state !== undefined && state.session.sessionId !== null && state.session.imageAttachmentIds === undefined;
+      await ensurePrivateDirectory(this.directory);
+      for await (const entry of await opendir(this.directory)) {
+        if (!entry.name.endsWith('.json')) continue;
+        const record = await this.readStored(join(this.directory, entry.name));
+        if (record === undefined) continue;
+        const event = record.event.event;
+        if ((!activeOnly || legacySession || record.state !== 'settled')
+          && record.event.conversationId === conversationId && event.kind === 'human_command'
+          && event.command.kind === 'message' && event.command.imageAttachmentIds?.includes(imageId)) return true;
+      }
+      return false;
+    }));
+  }
+
   async hasGoalRegistration(repositoryDirectory: string, goalId: string): Promise<boolean> {
     await ensurePrivateDirectory(this.directory);
     for await (const entry of await opendir(this.directory)) {

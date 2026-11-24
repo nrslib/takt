@@ -8,10 +8,13 @@ import { buildTaskInstruction } from '../../../infra/task/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 import {
   copyTaskAttachmentsToRunContext,
+  assertTaskAttachmentsMatchManifest,
   resolveTaskAttachmentManifest,
   type TaskAttachmentManifest,
 } from '../attachments.js';
 import { readTaskSpecFile } from '../taskSpecFile.js';
+import { readManagerImageTask, replacePrivateStagedOrder } from '../managerImageAttachments.js';
+import { ensurePrivateImageDirectory, writePrivateImageCopy } from '../../../infra/fs/private-image-copy.js';
 
 export interface ResolvedTaskSpec {
   readonly runSlug: string;
@@ -95,9 +98,18 @@ export function stageTaskSpecForExecution(
       `Task spec run "${taskSpec.runSlug}" does not match reserved run "${runPaths.slug}"`,
     );
   }
+  const managerTask = readManagerImageTask(taskSpec.sourceTaskDir) !== undefined;
+  const root = runPaths.runRootAbs;
+  if (managerTask) {
+    let existing = root;
+    while (!fs.existsSync(existing)) existing = path.dirname(existing);
+    ensurePrivateImageDirectory(existing, runPaths.contextTaskAbs);
+    if (fs.readdirSync(runPaths.contextTaskAbs).length !== 0) throw new Error('Manager image run context already exists');
+  }
   try {
     fs.mkdirSync(runPaths.contextTaskAbs, { recursive: true });
-    fs.writeFileSync(
+    if (managerTask) writePrivateImageCopy(root, runPaths.contextTaskOrderAbs, Buffer.from(taskSpec.stagedOrderContent));
+    else fs.writeFileSync(
       runPaths.contextTaskOrderAbs,
       taskSpec.stagedOrderContent,
       'utf-8',
@@ -117,6 +129,14 @@ export function restageTaskSpecForExecution(
   taskSpec: ResolvedTaskSpec,
   runPaths: RunPaths,
 ): void {
+  if (readManagerImageTask(taskSpec.sourceTaskDir) !== undefined) {
+    const root = runPaths.runRootAbs;
+    ensurePrivateImageDirectory(root, runPaths.contextTaskAbs);
+    assertTaskAttachmentsMatchManifest(taskSpec.sourceTaskDir, taskSpec.attachmentManifest);
+    assertTaskAttachmentsMatchManifest(runPaths.contextTaskAbs, taskSpec.attachmentManifest);
+    replacePrivateStagedOrder(root, runPaths, taskSpec.stagedOrderContent);
+    return;
+  }
   const temporaryRoot = fs.mkdtempSync(path.join(runPaths.contextAbs, '.task-restage-'));
   const temporaryTaskDir = path.join(temporaryRoot, 'task');
   const temporaryOrderPath = path.join(temporaryTaskDir, path.basename(runPaths.contextTaskOrderAbs));

@@ -15,6 +15,8 @@ import { createTurnActivityReporter, reportManagerStream } from './turnActivity.
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
 import { randomUUID } from 'node:crypto';
 import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
+import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 
 const managerToolNames = [
@@ -32,6 +34,7 @@ export interface ManagerTurnInput {
   requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
   operationId?: string;
   prompt: string;
+  imageAttachments?: ImageAttachmentReference[];
   sessionId: string | undefined;
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
@@ -87,14 +90,18 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           }
           signal.throwIfAborted();
           const additions = new Set<string>();
+          const native = plan.ctx.provider.supportsNativeImageInput;
+          const prompt = native ? input.prompt : expandImageAttachmentPlaceholders(input.prompt, input.imageAttachments);
+          if (!native && input.imageAttachments?.length) input.onText?.(`Provider "${plan.ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
           const response = await callWithManagerSessionRecovery(agent, {
-            resume: input.prompt,
+            resume: prompt,
             fresh: input.recovery === undefined || input.recovery.context.length === 0
-              ? input.prompt : `${input.prompt}\n\nBusiness context (not approval): ${input.recovery.context}`,
+              ? prompt : `${prompt}\n\nBusiness context (not approval): ${input.recovery.context}`,
           }, {
             cwd, model: plan.ctx.model, sessionId: input.patrol ? undefined : input.sessionId, abortSignal: signal,
             providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
             aiReviewPermissions: plan.ctx.aiReviewPermissions,
+            ...(native && input.imageAttachments?.length ? { imageAttachments: input.imageAttachments } : {}),
             ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined
               && (plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk')
               ? { allowedTools: managerToolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`) }
