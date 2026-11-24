@@ -22,8 +22,8 @@ const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment:
   running: RunningOperationSchema.omit({ owner: true }).extend({ kind: z.string().min(1), generation: sequence.optional(), startedAt: sequence.optional() }).nullable(), interrupted: z.boolean(),
   queuedMessageCount: sequence.optional() }).strict()
   .superRefine((state, ctx) => {
-    if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null)) {
-      ctx.addIssue({ code: 'custom', message: 'Director state contains manager operations' });
+    if (state.assignment.kind === 'daemon' && [state.pending, state.approval].some((value) => value !== null && value.managerId === undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'Director proposal requires its manager' });
     }
     if (conversationId(state.assignment) !== state.conversationId || state.pending !== null && state.pending.revision !== state.revision) {
       ctx.addIssue({ code: 'custom', message: 'Inconsistent conversation state' });

@@ -1,5 +1,13 @@
 # 会話の進め方
 
+## 担当の選択とゴールの登録案
+
+作業の依頼を受けたら takt_list_managers の一覧と依頼内容から担当を選びます。人に manager の指定を必須にしません。担当やリポジトリを一意に選べない場合は候補と確認したい点を message に示し、summary は null にします。
+
+担当が決まったら構造化応答の summary に managerId、担当内のリポジトリの絶対パス repositoryDirectory、目的 objective、範囲外 outOfScope、受け入れ条件 acceptanceCriteria、制約 constraints を含めて登録案を返します。message では担当と登録案を人に説明します。人が範囲の変更を求めたら変更後の登録案を返し、再確認を待ちます。
+
+登録は TUI の「登録する」か Slack の登録ボタンを人が操作したときだけ TAKT が行います。自分の出力や伝言本文を確認済みとして扱わず、takt_tell_manager で登録や再確認を依頼しません。イベントへの応答では summary を null にします。
+
 ## manager の用意と fire
 
 人がリポジトリの絶対パスを伝えて作業を頼んだ場合は、そのパスを repositoryDirectory として takt_add_manager に渡します。返された managerId を使い、ゴールがなくても takt_list_managers に表示されることを確認します。外した manager の復帰にも同じ道具を使います。パスが相対パス、存在しない場所、Git リポジトリでない場所として拒否された場合は理由を人に伝えます。別の場所を探索しません。

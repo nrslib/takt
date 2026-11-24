@@ -1,9 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { GoalQuestionSchema, GoalSchema, StandaloneInquirySchema } from '../infra/goals/schema.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
+import { GoalCreateInputSchema, GoalQuestionSchema, GoalSchema, StandaloneInquirySchema } from '../infra/goals/schema.js';
+import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
 import { isGoalPaused, transitionGoalExecution } from '../infra/goals/state.js';
 
+describe('Public goal creation input', () => {
+  const input = { ...goalInput(), cwd: '/project', id: goalRecord().id };
+  it.each([undefined, 'manager'])('allows manager creation with origin %s', (creationOrigin) => {
+    expect(GoalCreateInputSchema.parse({ ...input, creationOrigin }).creationOrigin).toBe('manager');
+  });
+  it.each([
+    { creationOrigin: 'director' },
+    ...[undefined, 'manager', 'director'].map((creationOrigin) => ({ creationOrigin,
+      directorProposal: { conversationId: `director-${'a'.repeat(64)}`, revision: 4 } })),
+  ])('rejects public director registration metadata %j', (metadata) => {
+    expect(GoalCreateInputSchema.safeParse({ ...input, ...metadata }).success).toBe(false);
+  });
+});
+
 describe('Goal saved record schema', () => {
+  it('preserves the confirmed director proposal reference in a saved goal', () => {
+    const directorProposal = { conversationId: `director-${'a'.repeat(64)}`, revision: 4 };
+    const record = { ...goalRecord(), creationOrigin: 'director', directorProposal };
+    expect(GoalSchema.parse(record)).toEqual(record);
+  });
+
+  it.each([
+    { conversationId: `manager-${'a'.repeat(64)}`, revision: 4 },
+    { conversationId: `director-${'a'.repeat(64)}`, revision: 0 },
+    { conversationId: `director-${'a'.repeat(64)}` },
+  ])('rejects an invalid confirmed director proposal reference %j', (directorProposal) => {
+    expect(GoalSchema.safeParse({ ...goalRecord(), creationOrigin: 'director', directorProposal }).success).toBe(false);
+  });
+
   it('discards retired PR retry state while continuing to reject unknown fields', () => {
     const goal = goalRecord();
     expect(GoalSchema.parse({ ...goal, pullRequestFailure: {

@@ -30,6 +30,24 @@ function fixture(assignment?: ConversationAssignment) {
   return { receiver, observer, state, metadata, event, frames };
 }
 
+it('restores a director proposal and its approval through snapshots and live state transfers', async () => {
+  const f = fixture({ kind: 'daemon' });
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: '/blog' });
+  const pending = { revision: 4, repositoryDirectory: '/blog', managerId,
+    summary: { objective: '記事一覧', outOfScope: ['編集'], acceptanceCriteria: ['一覧できる'], constraints: [] } };
+  const state = { ...f.state, pending };
+  const read = f.metadata(4, 1);
+  for (const frame of await f.frames(read, [{ kind: 'state', state },
+    { kind: 'assignment', assignment: { kind: 'daemon', repositoryDirectories: [] } }])) f.receiver.receive(frame);
+  expect(f.observer.state).toHaveBeenLastCalledWith(state, read);
+
+  const approved = { ...state, revision: 5, pending: null, approval: { revision: 4, repositoryDirectory: '/blog', managerId,
+    state: 'registered', goalId: '11111111-1111-4111-8111-111111111111' } };
+  const update = f.metadata(5, 2);
+  for (const frame of await f.frames(update, [{ kind: 'pending', state: approved }], 'output')) f.receiver.receive(frame);
+  expect(f.observer.state).toHaveBeenLastCalledWith(approved, expect.objectContaining({ revision: 5, stateSequence: 2 }));
+});
+
 it('transfers identified tool starts, replacement tails and completions in order', async () => {
   const operationId = randomUUID();
   const source = new ToolActivityHistory(() => 1000);

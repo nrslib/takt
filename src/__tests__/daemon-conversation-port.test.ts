@@ -32,7 +32,7 @@ async function fixture(kind: 'repository' | 'daemon' = 'repository') {
     command: { kind: 'message', text } });
   return { port, ingress, loadSnapshot, selected, opened, submit, delivery };
 }
-it('admits a director TUI question answer without enabling manager proposal commands', async () => {
+it('admits a director TUI question answer as an inquiry answer', async () => {
   const f = await fixture('daemon');
   const command = { kind: 'answer_question' as const, questionId: '11111111-1111-4111-8111-111111111111',
     target: { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/repo' }, answer: { text: 'CSV' } };
@@ -40,10 +40,27 @@ it('admits a director TUI question answer without enabling manager proposal comm
     .toMatchObject({ kind: 'accepted' });
   expect(f.ingress.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'tui',
     event: { kind: 'inquiry_answer', command } }));
-  await expect(f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'proposal', speaker: f.selected.speaker,
-    command: { kind: 'dismiss_summary', revision: 3 } })).rejects.toMatchObject({ code: 'invalid_input' });
   expect(f.ingress.accept).toHaveBeenCalledOnce();
   f.port.close();
+});
+
+it.each(['approve_summary', 'dismiss_summary'] as const)('admits director %s only for the currently saved proposal', async (kind) => {
+  const f = await fixture('daemon');
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  const pending = { revision: 3, repositoryDirectory: '/blog',
+    managerId: 'manager-' + 'b'.repeat(64),
+    summary: { objective: '記事一覧', outOfScope: [], acceptanceCriteria: ['一覧できる'], constraints: [] } };
+  f.loadSnapshot.mockResolvedValue({ ...snapshot, turnState: { ...snapshot.turnState, pending } });
+  try {
+    expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'old', speaker: f.selected.speaker,
+      command: { kind, revision: 2 } })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+    expect(f.ingress.accept).not.toHaveBeenCalled();
+    const command = { kind, revision: 3 };
+    expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'current', speaker: f.selected.speaker, command }))
+      .toMatchObject({ kind: 'accepted' });
+    expect(f.ingress.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'tui',
+      conversationId: f.selected.conversationId, event: expect.objectContaining({ kind: 'human_command', command }) }));
+  } finally { f.port.close(); }
 });
 it('admits messages while an earlier save is paused and permits snapshot and interruption independently', async () => {
   const f = await fixture();

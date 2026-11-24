@@ -148,8 +148,13 @@ export const GoalSummarySchema = z.object({
   integrationBranch: goalBranch.optional(),
 }).strict();
 
+const directorProposalSchema = z.object({
+  conversationId: z.string().regex(/^director-[a-f0-9]{64}$/),
+  revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
 export const GoalCreateInputSchema = GoalSummarySchema.extend({
-  creationOrigin: GoalCreationOriginSchema.default('manager'),
+  creationOrigin: z.literal('manager').default('manager'),
   id: GoalIdSchema,
   cwd: z.string().refine(isAbsolute),
 });
@@ -189,6 +194,7 @@ export const GoalWorkLogSchema = GoalWorkLogInputSchema.extend({
 });
 
 export const GoalRecordObjectSchema = z.object({
+  directorProposal: directorProposalSchema.optional(),
   creationOrigin: GoalCreationOriginSchema.default('manager'),
   questionRoute: GoalQuestionRouteSchema.default('human'),
   id: GoalIdSchema,

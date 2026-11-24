@@ -8,6 +8,7 @@ import { createAgentFailureError, isAgentFailureError } from '../../shared/types
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
 import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
+import { getDirectorOutputSchema, parseDirectorResponse } from './turnResponse.js';
 
 export function createDirectorTurnExecutor(plan: DirectorConversationPlan, config: McpHttpServerConfig) {
   const agent = plan.ctx.provider.setup({ name: 'director', systemPrompt: withProgressNotesGuidance(plan.systemPrompt, plan.ctx.lang) });
@@ -24,6 +25,7 @@ export function createDirectorTurnExecutor(plan: DirectorConversationPlan, confi
         input.abortSignal.throwIfAborted();
         const response = await agent.call(input.prompt, {
           cwd: plan.cwd, model: plan.ctx.model, language: plan.ctx.lang, sessionId,
+          outputSchema: getDirectorOutputSchema(plan.ctx.providerType),
           permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,
           providerOptions: plan.ctx.providerOptions, abortSignal: input.abortSignal,
           callerManagedSession: true, callerManagedMcp: true, mcpServers: servers, preparedMcp: prepared,
@@ -45,7 +47,7 @@ export function createDirectorTurnExecutor(plan: DirectorConversationPlan, confi
         response = await call();
       }
       input.abortSignal.throwIfAborted();
-      return { message: response.content, summary: null, sessionId: response.sessionId ?? sessionId, assignment: undefined };
+      return { ...parseDirectorResponse(response, plan.ctx.providerType), sessionId: response.sessionId ?? sessionId, assignment: undefined };
     } finally { await prepared.dispose(); }
   }) };
 }

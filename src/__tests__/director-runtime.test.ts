@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonConversationRuntime, prepareDirectorTurn } from '../features/director/conversationRuntime.js';
 import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
 import * as directorMcp from '../features/director/mcp.js';
+import { getDirectorOutputSchema } from '../features/director/turnResponse.js';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), executor: vi.fn(), preflight: vi.fn(),
   managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn() }));
@@ -27,7 +28,8 @@ afterEach(() => vi.restoreAllMocks());
 it('prepares an isolated readonly turn and passes its connection to the executor', async () => {
   const abortSignal = signal();
   const prepared = await prepareDirectorTurn('/config', notices, abortSignal, {});
-  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST, abortSignal }));
+  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST, abortSignal,
+    outputSchema: getDirectorOutputSchema('mock') }));
   expect(doubles.executor).toHaveBeenCalledWith(doubles.plan.mock.results[0]!.value, expect.objectContaining({ type: 'http' }));
   expect(prepared).toMatchObject({ provider: 'mock', language: 'en', model: null });
   expect(doubles.dispose).not.toHaveBeenCalled();

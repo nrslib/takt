@@ -445,6 +445,7 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 director:
+  slackGoalRegistered: "Goal registered: {id}"
   slackNotifications: "Director updates: completed work and decisions for the human"
   patrolFailed: "Director patrol failed"
   projectUnreadable: "Director could not read a project"
@@ -547,6 +548,7 @@ manager:
   goSummaryUnavailable: "There is not enough information to prepare a goal proposal. Please continue the conversation."
   summaryWorking: "Preparing a goal proposal"
   summary:
+    manager: "Manager"
     title: "Proposed goal"
     repository: "Repository"
     objective: "Objective"

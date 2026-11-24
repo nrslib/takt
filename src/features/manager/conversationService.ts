@@ -19,7 +19,7 @@ import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssign
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
-import { listDirectorManagers } from '../director/managers.js';
+import { listDirectorManagers, resolveDirectorManager } from '../director/managers.js';
 import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import type { Goal } from '../../infra/goals/schema.js';
@@ -144,7 +144,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           return { kind: 'completed', result: { kind: 'notice', message: getLabel(eventGoal.goal.executionStatus === 'paused'
             ? 'manager.goalPaused' : 'manager.goalAborted', language, { goalId: eventGoal.goal.id }) } };
         }
-        if (identity.kind === 'daemon' && command.kind !== 'message' && command.kind !== 'answer_question') throw new ConversationError('invalid_input');
+        if (identity.kind === 'daemon' && !['message', 'answer_question', 'approve_summary', 'dismiss_summary'].includes(command.kind)) throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
         if (clear) {
@@ -169,19 +169,27 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
           await state.save({ proposal: { revision: nextRevision(state.current.revision), pending: null } });
         }
-        if (assignment.kind !== 'daemon' && command.kind === 'approve_summary') {
+        if (human && command.kind === 'approve_summary') {
           const existing = state.current.approval;
           if (command.requirePending && (priorPending?.revision !== command.revision || state.current.revision !== command.revision)) throw new ConversationError('stale_summary');
+          const approvedProposal = existing?.revision === command.revision ? existing : priorPending;
+          const selectedManagerId = approvedProposal?.managerId;
+          const approvedManager = assignment.kind !== 'daemon' ? assignment : selectedManagerId === undefined
+            ? undefined : await resolveDirectorManager(configDirectory, selectedManagerId);
+          if (approvedManager === undefined) throw new ConversationError('stale_summary');
           if (existing?.revision === command.revision && existing.state === 'registered') {
-            if (!assignment.repositoryDirectories.includes(existing.repositoryDirectory)) throw new ConversationError('invalid_assignment');
+            if (assignment.kind === 'daemon') await resolveAssignedProjectRoot(existing.repositoryDirectory, approvedManager);
+            else if (!assignment.repositoryDirectories.includes(existing.repositoryDirectory)) throw new ConversationError('invalid_assignment');
             result = { kind: 'goal_registered', goal: await new GoalStore(existing.repositoryDirectory).get(existing.goalId) };
           } else {
             if (priorPending === null || priorPending.revision !== command.revision || state.current.revision !== command.revision) throw new ConversationError('stale_summary');
-            if (!assignment.repositoryDirectories.includes(priorPending.repositoryDirectory)) throw new ConversationError('invalid_assignment');
+            if (assignment.kind === 'daemon') await resolveAssignedProjectRoot(priorPending.repositoryDirectory, approvedManager);
+            else if (!assignment.repositoryDirectories.includes(priorPending.repositoryDirectory)) throw new ConversationError('invalid_assignment');
             validateManagerSummary(priorPending.summary);
             nextRevision(state.current.revision);
             const reservation = existing?.revision === command.revision ? existing
-              : { state: 'reserved' as const, revision: command.revision, goalId: randomUUID(), repositoryDirectory: priorPending.repositoryDirectory };
+              : { state: 'reserved' as const, revision: command.revision, goalId: randomUUID(), repositoryDirectory: priorPending.repositoryDirectory,
+                ...(priorPending.managerId === undefined ? {} : { managerId: priorPending.managerId }) };
             let reservationSaved = existing?.state === 'reserved';
             try {
               if (new GoalStore(reservation.repositoryDirectory).find(reservation.goalId) === undefined) {
@@ -196,7 +204,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               const repositoryDirectory = await realpath(reservation.repositoryDirectory);
               const managerId = conversationId({ kind: 'repository', repositoryDirectory });
               const goal = await withManagerLifecycleLock(configDirectory, managerId, io.signal,
-                () => registerReservedGoal({ ...priorPending.summary, creationOrigin: 'manager', cwd: repositoryDirectory, id: reservation.goalId }, io.signal));
+                () => registerReservedGoal({ ...priorPending.summary,
+                  ...(assignment.kind === 'daemon' ? { creationOrigin: 'director' as const,
+                    directorProposal: { conversationId: input.turn.conversationId, revision: reservation.revision } } : { creationOrigin: 'manager' as const }),
+                  cwd: repositoryDirectory, id: reservation.goalId }, io.signal));
               return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
                 approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
               }) };
@@ -263,7 +274,17 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               io.progress(getLabel('manager.conversation.assignment_changed', language));
             }
             let pending: PendingSummary | null = null;
-            if (output.summary !== null && (!human || assignment.kind === 'daemon')) throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && !human) throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && human && assignment.kind === 'daemon') {
+              const summary = output.summary as typeof output.summary & { managerId?: string };
+              if (summary.managerId === undefined || summary.repositoryDirectory === undefined) throw new ConversationError('invalid_assignment');
+              const { managerId, repositoryDirectory: requested, ...content } = summary;
+              const manager = await resolveDirectorManager(configDirectory, managerId);
+              const repositoryDirectory = await resolveAssignedProjectRoot(requested, manager);
+              validateManagerSummary(content);
+              validateGoalBranchReferences(repositoryDirectory, content.startBranch, content.integrationBranch);
+              pending = { revision: state.current.revision, repositoryDirectory, managerId, summary: content };
+            }
             if (output.summary !== null && human && command.requestProposal === true && !verify && assignment.kind !== 'daemon') {
               const { repositoryDirectory: requested, ...summary } = output.summary;
               const target = requested ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
@@ -277,9 +298,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },
               ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
-              ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
+              ...(human && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
             }) }) };
           } finally { await resolved.release?.(); }
+        } else if (human && command.kind === 'dismiss_summary') {
+          result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) };
         } else if (assignment.kind === 'daemon' && command.kind === 'answer_question') {
           const target = command.target;
           if (target.goalId === null) throw new ConversationError('invalid_assignment');
@@ -287,7 +310,6 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           if (manager === undefined) throw new ConversationError('invalid_assignment');
           result = await answerConversationInquiry(command, manager, configDirectory, io, language);
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
-          case 'dismiss_summary': result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) }; break;
           case 'answer_question': result = await answerConversationInquiry(command, assignment, configDirectory, io, language); break;
           case 'pause_goal': case 'resume_goal': case 'abort_goal': {
             const repository = await findAssignedGoalRepository(command.goalId, assignment);

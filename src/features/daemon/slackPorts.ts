@@ -9,6 +9,8 @@ import { createDirectorSlackConversationPort } from '../director/slackConversati
 import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
 import type { GlobalConfig } from '../../core/models/config-types.js';
 import type { Language } from '../../core/models/types.js';
+import { conversationId } from '../../infra/conversations/identity.js';
+import { parseSlackGoalProposal } from '../manager/slackGoalProposal.js';
 
 
 type SlackPort = ReturnType<typeof createSlackConversationPort>;
@@ -51,10 +53,12 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
           || !Array.isArray(body.actions) || body.actions.length !== 1) return;
         const action: unknown = body.actions[0];
         if (!isRecord(action) || action.type !== 'button' || typeof action.action_id !== 'string' || typeof action.value !== 'string') return;
-        const parentTs = action.action_id === SLACK_GOAL_APPROVE || action.action_id === SLACK_GOAL_DISMISS
-          ? body.message.thread_ts : body.container.message_ts;
+        const goalAction = action.action_id === SLACK_GOAL_APPROVE || action.action_id === SLACK_GOAL_DISMISS;
+        const parentTs = goalAction ? body.message.thread_ts ?? body.container.message_ts : body.container.message_ts;
         if (typeof parentTs !== 'string') return;
-        const destination = director?.channelId === channelId && await director.port.isInquiryThread(channelId, parentTs) ? director : selected;
+        const directorAction = goalAction ? parseSlackGoalProposal(action.value)?.conversationId === conversationId({ kind: 'daemon' })
+          : await director?.port.isInquiryThread(channelId, parentTs);
+        const destination = director?.channelId === channelId && directorAction ? director : selected;
         if (destination === undefined || !destination.allowedUserIds.includes(userId)) return;
         await destination.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
           action.value, requestId);

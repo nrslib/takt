@@ -108,7 +108,7 @@ export function createDaemonConversationInput(options: {
             return { kind: 'accepted', operationId: command.operationId };
           } finally { snapshot.cancel(); }
         }
-        if (attachment.input.assignment.kind === 'daemon' && command.kind !== 'message' && command.kind !== 'answer_question') throw new ConversationError('invalid_input');
+        if (attachment.input.assignment.kind === 'daemon' && !['message', 'answer_question', 'approve_summary', 'dismiss_summary'].includes(command.kind)) throw new ConversationError('invalid_input');
         if (command.kind === 'approve_summary' || command.kind === 'dismiss_summary') {
           const snapshot = await options.ingress.snapshot(id);
           try {

@@ -11,6 +11,9 @@ import { SlackInquiryBindings, slackInquiryKey } from '../../infra/slack/inquiry
 import { createSlackInquiryDelivery } from '../manager/slackInquiryDelivery.js';
 import { buildSlackInquiry, SLACK_INQUIRY_ACTION } from '../manager/slackInquiryBlocks.js';
 import type { ConversationCommand, QuestionTarget } from '../manager/conversationPort.js';
+import { buildSlackGoalProposal, parseSlackGoalProposal, SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS } from '../manager/slackGoalProposal.js';
+import type { ConversationRecord, PendingSummary } from '../../infra/conversations/schema.js';
+import type { SlackDeliveryResult } from '../../infra/slack/client.js';
 
 interface DirectorSlackEndpoint extends SlackThread { teamId: string; userId: string }
 
@@ -28,6 +31,46 @@ export function createDirectorSlackConversationPort(options: {
   const postings = new Set<Promise<unknown>>();
   let accepting = true;
   let closed = false;
+  const proposalPosts: SlackThread[] = [];
+  let proposalState: { revision: number; delivered: boolean } | null = null;
+  let proposalDelivery = Promise.resolve<SlackDeliveryResult>({ kind: 'delivered' });
+  const updateProposal = (pending: PendingSummary | null, approval: ConversationRecord['approval'], terminal?: string): Promise<SlackDeliveryResult> => {
+    const sending = proposalDelivery.then(async (): Promise<SlackDeliveryResult> => {
+      if (closed) return { kind: 'unavailable', reason: 'Slack port closed' };
+      if (terminal === undefined && pending?.revision === proposalState?.revision && proposalState?.delivered) return { kind: 'delivered' };
+      if (pending === null) {
+        if (terminal === undefined && proposalState === null) return { kind: 'delivered' };
+        const text = terminal ?? (approval?.state === 'registered' && approval.revision === proposalState?.revision
+          ? getLabel('director.slackGoalRegistered', options.language, { id: approval.goalId })
+          : getLabel('manager.slackGoalDismiss', options.language));
+        for (const thread of proposalPosts) {
+          const result = await options.client.updateMessage(thread, text, []);
+          if (result.kind === 'unavailable') return result;
+        }
+        proposalState = null;
+        return { kind: 'delivered' };
+      }
+      proposalState = { revision: pending.revision, delivered: false };
+      const messages = buildSlackGoalProposal(id, pending, options.language);
+      for (let index = 0; index < Math.max(messages.length, proposalPosts.length); index++) {
+        const message = messages[index];
+        const thread = proposalPosts[index];
+        if (thread !== undefined) {
+          const result = await options.client.updateMessage(thread, message?.text ?? getLabel('manager.summary.title', options.language), message?.blocks ?? []);
+          if (result.kind === 'unavailable') return result;
+        } else if (message !== undefined) {
+          const result = await options.client.postMessage(options.channelId, message.text, message.blocks);
+          if (result.kind === 'unavailable') return result;
+          proposalPosts.push({ channelId: options.channelId, parentTs: result.parentTs });
+        }
+      }
+      proposalState = { revision: pending.revision, delivered: true };
+      return { kind: 'delivered' };
+    });
+    proposalDelivery = sending.catch(() => ({ kind: 'unavailable', reason: 'Slack proposal unavailable' }));
+    postings.add(sending);
+    return sending.finally(() => { postings.delete(sending); });
+  };
   const detach = (attachmentId: string): void => {
     if (attachments.delete(attachmentId)) options.input.detach(attachmentId);
   };
@@ -48,18 +91,16 @@ export function createDirectorSlackConversationPort(options: {
     delivery: {
       async deliver(currentId, output, version) {
         if (output.kind === 'snapshot') output.read.cancel();
+        if (currentId === id && output.kind === 'pending') return updateProposal(output.state.pending, output.state.approval);
         if (currentId === id && output.kind === 'inquiry' && output.target.goalId !== null) {
           if (!accepting) return { kind: 'unavailable', reason: 'Slack port closed' };
           return inquiryDelivery.deliver(output.target, output.question, () => accepting);
         }
-        if (currentId !== id || output.kind !== 'result' || version.operationId !== output.operationId) return { kind: 'delivered' };
-        const target = targets.get(output.operationId);
-        if (target === undefined) return { kind: 'delivered' };
-        targets.delete(output.operationId);
-        try {
-          if (output.result.kind === 'goal_registered') return { kind: 'delivered' };
-          return await postReply(target.endpoint, output.result.message);
-        } finally { detach(target.attachmentId); }
+        if (currentId !== id || output.kind !== 'result' || version.operationId !== output.operationId
+          || output.result.kind !== 'goal_registered') return { kind: 'delivered' };
+        const goal = output.result.goal;
+        return updateProposal(null, null, getLabel('manager.goalRegistered', options.language,
+          { name: goal.objective, id: goal.id, branch: goal.branch }));
       },
     },
   };
@@ -69,13 +110,19 @@ export function createDirectorSlackConversationPort(options: {
     let admitted!: () => void;
     const admission = new Promise<void>((resolve) => { admitted = resolve; });
     const delivery: ConversationDelivery = { async deliver(...args) {
-      const [, output] = args;
-      if (output.kind === 'result') {
-        // submit の完了前に届く結果も、その操作の返信先へ対応付ける。
-        await admission;
-        if (output.operationId !== operationId) return { kind: 'delivered' };
-      }
-      return port.delivery.deliver(...args);
+      const [currentId, output, version] = args;
+      if (output.kind === 'pending') return { kind: 'delivered' };
+      if (output.kind !== 'result') return port.delivery.deliver(...args);
+      // submit の完了前に届く結果も、その操作の返信先へ対応付ける。
+      await admission;
+      if (currentId !== id || version.operationId !== output.operationId || output.operationId !== operationId) return { kind: 'delivered' };
+      const target = targets.get(output.operationId);
+      if (target === undefined) return { kind: 'delivered' };
+      targets.delete(output.operationId);
+      try {
+        return output.result.kind === 'goal_registered' ? { kind: 'delivered' }
+          : await postReply(target.endpoint, output.result.message);
+      } finally { detach(target.attachmentId); }
     } };
     try {
       const resolved = await port.resolve(endpoint);
@@ -127,6 +174,14 @@ export function createDirectorSlackConversationPort(options: {
     return receiveMessage(endpoint, { kind: 'answer_question', target: binding.target, questionId: binding.questionId, answer: { text }, source: 'slack' }, requestId);
   };
   const receiveAction = async (endpoint: DirectorSlackEndpoint, actionId: string, value: string, requestId: string) => {
+    if (endpoint.channelId !== options.channelId) return;
+    if (actionId === SLACK_GOAL_APPROVE || actionId === SLACK_GOAL_DISMISS) {
+      const proposal = parseSlackGoalProposal(value);
+      if (proposal?.conversationId !== id) return;
+      return receiveMessage(endpoint, actionId === SLACK_GOAL_APPROVE
+        ? { kind: 'approve_summary', revision: proposal.revision, requirePending: true }
+        : { kind: 'dismiss_summary', revision: proposal.revision }, requestId);
+    }
     const binding = await bindings.find(endpoint.channelId, endpoint.parentTs);
     if (binding === undefined || actionId !== `${SLACK_INQUIRY_ACTION}_${value}`) return;
     const current = await loadInquiry(endpoint, binding.target, binding.questionId);

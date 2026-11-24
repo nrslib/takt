@@ -59,12 +59,39 @@ describe('Goal registration service', () => {
     { creationOrigin: 'manager', questionRoute: 'human' },
     { creationOrigin: 'director', questionRoute: 'director' },
   ] as const)('registers a $creationOrigin goal with initial route $questionRoute', async ({ creationOrigin, questionRoute }) => {
-    const input = { ...request(), creationOrigin };
+    const directorProposal = { conversationId: `director-${'a'.repeat(64)}`, revision: 4 };
+    const input = { ...request(), ...(creationOrigin === 'director'
+      ? { creationOrigin, directorProposal } : { creationOrigin }) };
 
-    const goal = await createGoal(input);
+    const goal = await registerReservedGoal(input);
 
     expect(goal).toMatchObject({ creationOrigin, questionRoute });
     expect(doubles.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ creationOrigin, questionRoute }));
+    if (creationOrigin === 'director') expect(goal.directorProposal).toEqual(directorProposal);
+  });
+
+  it.each([
+    { creationOrigin: 'director' },
+    ...[undefined, 'manager', 'director'].map((creationOrigin) => ({ creationOrigin,
+      directorProposal: { conversationId: `director-${'a'.repeat(64)}`, revision: 4 } })),
+  ])('rejects public creation metadata before any registration side effects %j', async (metadata) => {
+    const input = { ...request(), ...metadata } as unknown as Parameters<typeof createGoal>[0];
+    await expect(createGoal(input)).rejects.toThrow();
+    expect(doubles.project).not.toHaveBeenCalled();
+    expect(doubles.assertAbsent).not.toHaveBeenCalled();
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(doubles.createBranch).not.toHaveBeenCalled();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
+  });
+
+  it('requires a proposal reference for internal director registration before side effects', async () => {
+    const input = { ...request(), creationOrigin: 'director' } as unknown as Parameters<typeof registerReservedGoal>[0];
+    await expect(registerReservedGoal(input)).rejects.toThrow();
+    expect(doubles.find).not.toHaveBeenCalled();
+    expect(doubles.project).not.toHaveBeenCalled();
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
   });
 
   it('recovers a manager registration without resetting the route changed after registration', async () => {
@@ -79,7 +106,8 @@ describe('Goal registration service', () => {
 
   it('rejects recovery against a different creation origin before creating another goal', async () => {
     doubles.find.mockReturnValue({ ...goalRecord(), creationOrigin: 'manager', questionRoute: 'director' });
-    const input = { ...request(), creationOrigin: 'director' as const };
+    const input = { ...request(), creationOrigin: 'director' as const,
+      directorProposal: { conversationId: `director-${'a'.repeat(64)}`, revision: 4 } };
 
     await expect(registerReservedGoal(input)).rejects.toThrow();
     expect(doubles.find).toHaveBeenCalledWith(goalRecord().id);
