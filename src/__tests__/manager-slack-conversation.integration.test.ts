@@ -7,6 +7,7 @@ import { SlackInquiryBindings } from '../infra/slack/inquiryBindings.js';
 import { randomUUID } from 'node:crypto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createDaemonSlackPorts } from '../features/daemon/slackPorts.js';
+import { ManagerImageAttachments } from '../features/manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../features/manager/daemonConversationPort.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
@@ -83,12 +84,12 @@ beforeEach(async () => {
       return snapshot;
     }),
   };
-  input = createDaemonConversationInput({ ingress, resolveAssignment: async (selected) => selected });
+  input = createDaemonConversationInput({ configDirectory: process.env.TAKT_CONFIG_DIR!, images: new ManagerImageAttachments({ hasImageReference: async () => false }), onImageCleanupError: (error: unknown) => { throw error; }, ingress, resolveAssignment: async (selected) => selected });
   slack = await createDaemonSlackPorts({ configDirectory: process.env.TAKT_CONFIG_DIR!, input,
     repositories: [{ repositoryDirectory, resolveAssignment: async () => assignment, channelId: 'C1', allowedUserIds: ['U1', 'U2'], language: 'en' }],
     tokens: { appToken: 'fake-app', botToken: 'fake-bot' }, clientFactory: createSlackClient });
 });
-afterEach(async () => { await slack.close(); input.close(); });
+afterEach(async () => { await slack.close(); await input.close(); });
 function message(text: string, ts = '1700000000.000002', extra: Record<string, unknown> = {}): SlackEvent {
   return { type: 'events_api', body: { team_id: 'T1', event: { type: 'message', channel: 'C1', user: 'U1',
     ts, thread_ts: '1700000000.000001', text, ...extra } } };

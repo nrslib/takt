@@ -63,16 +63,26 @@ export function reportInputNames(
   const reserved = new Set<string>();
   return reportInputEntries(consumer.inputReports).map((input) => {
     const source = workflow.steps.find((step) => step.name === input.fromStep);
-    if (source === undefined || source.name === consumer.name || source.kind === 'system') {
+    if (source === undefined || source.name === consumer.name && input.previousOnly !== true || source.kind === 'system') {
       throw new Error(`Invalid report input source "${input.fromStep}"`);
     }
     if (source.kind !== 'workflow_call' && source.parallel === undefined && getReportFiles(source.outputContracts).length === 0) {
       throw new Error(`Report input source "${input.fromStep}" has no report output contract`);
     }
     const selected = input.reports === 'all' ? undefined : new Set(input.reports);
-    const paths = input.reports !== 'all' && skipNestedContractResolution?.(input) === true
+    const paths = input.reports !== 'all' && input.fallbackFromStep === undefined && skipNestedContractResolution?.(input) === true
       ? input.reports
       : [...new Set(collect(source, workflow, [getWorkflowReference(workflow)], selected))];
+    if (input.fallbackFromStep !== undefined) {
+      const fallback = workflow.steps.find((step) => step.name === input.fallbackFromStep);
+      if (fallback === undefined || fallback.kind === 'system' || fallback.name === consumer.name
+        || fallback.name === source.name) throw new Error(`Invalid report input fallback source "${input.fallbackFromStep}"`);
+      const fallbackPaths = [...new Set(collect(fallback, workflow, [getWorkflowReference(workflow)], selected))];
+      const names = (values: readonly string[]) => values.map((path) => basename(path)).sort();
+      if (JSON.stringify(names(paths)) !== JSON.stringify(names(fallbackPaths))) {
+        throw new Error(`Report input fallback "${input.fallbackFromStep}" has a different report contract`);
+      }
+    }
     if (selected !== undefined) {
       for (const name of selected) {
         const matches = paths.filter((path) => basename(path) === name);

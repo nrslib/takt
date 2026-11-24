@@ -8,7 +8,7 @@ const doubles = vi.hoisted(() => ({ config: vi.fn(), error: vi.fn(), port: vi.fn
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error }) }));
 vi.mock('../features/manager/slackConversationPort.js', () => ({ createSlackConversationPort: doubles.port,
   SLACK_GOAL_APPROVE: 'takt_goal_approve', SLACK_GOAL_DISMISS: 'takt_goal_dismiss' }));
-const input: ConversationInput = { open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
+const input: ConversationInput = { prepareImage: vi.fn<ConversationInput['prepareImage']>().mockRejectedValue(new Error('Images are not supported by Slack')), open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
 beforeEach(() => {
   vi.resetAllMocks();
 });

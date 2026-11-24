@@ -8,8 +8,10 @@ export function normalizeReportInputs(input: RawInput | undefined): WorkflowStep
   if (input === undefined) return undefined;
   const normalize = (entry: Exclude<RawInput, unknown[]>): WorkflowReportInput => ({
     fromStep: entry.from_step,
+    ...(entry.fallback_from_step === undefined ? {} : { fallbackFromStep: entry.fallback_from_step }),
     reports: entry.reports,
     optionalIfUnrun: entry.optional_if_unrun,
+    ...(entry.previous_only === undefined ? {} : { previousOnly: entry.previous_only }),
     ...(entry.history === undefined ? {} : { history: entry.history }),
   });
   return Array.isArray(input) ? input.map(normalize) : normalize(input);

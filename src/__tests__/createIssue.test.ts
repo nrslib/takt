@@ -208,7 +208,7 @@ describe('createIssue', () => {
     expect(mockLogError).toHaveBeenCalledWith(
       expect.any(String),
       {
-        error: 'Failed to extract issue number from created issue URL',
+        error: 'Issue URL must end with a positive issue number',
         url: 'https://github.com/owner/repo/issues/not-a-number',
       },
     );

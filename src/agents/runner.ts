@@ -28,6 +28,7 @@ import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
+import { progressNotesDirectory } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -54,7 +55,7 @@ export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
 const MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS = 3;
-const contextWindowSessions = new Map<string, ContextWindowSelection>();
+const contextWindowSessions = new Map<string, { setting: string; selection: ContextWindowSelection }>();
 
 function contextWindowSessionKey(provider: ProviderType, options: ProviderCallOptions, sessionId: string): string {
   return JSON.stringify([provider, options.cwd, options.model, sessionId]);
@@ -271,6 +272,9 @@ export class AgentRunner {
       ...(options.workflowMeta?.context === undefined ? {} : {
         compactionAssignment: options.workflowMeta.context.assignment.stepName,
       }),
+      ...(options.executionPhase === 1 && options.progressNotes !== undefined
+        ? { compactionHandoffDirectory: progressNotesDirectory(options.progressNotes.reportDir) }
+        : {}),
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -309,10 +313,11 @@ export class AgentRunner {
         ? options.providerOptions?.opencode?.contextWindow
         : undefined;
     let selection: ContextWindowSelection | undefined;
+    let initialSelection: ContextWindowSelection | undefined;
     if (providerName === 'codex' || providerName === 'opencode') {
       const effectiveSetting = setting ?? 'auto';
       let limits;
-      if (effectiveSetting === 'auto') {
+      if (effectiveSetting === 'auto' || (typeof effectiveSetting === 'object' && effectiveSetting.auto_expand === true)) {
         try {
           limits = await provider.getContextWindowLimits?.(options);
         } catch (error) {
@@ -325,10 +330,15 @@ export class AgentRunner {
         ...(options.outputSchema === undefined ? [] : [JSON.stringify(options.outputSchema)]),
         ...(runOptions.requiredReferenceContents ?? []),
       ];
-      selection = selectContextWindow(effectiveSetting, limits, fixedTexts);
-      if (options.sessionId !== undefined && effectiveSetting === 'auto' && selection.reason !== 'unknown') {
-        const previous = contextWindowSessions.get(contextWindowSessionKey(providerName, options, options.sessionId));
-        const previousSize = previous?.stages[previous.stageIndex]?.size;
+      initialSelection = selectContextWindow(effectiveSetting, limits, fixedTexts);
+      selection = initialSelection;
+      if (options.sessionId !== undefined) {
+        const sessionKey = contextWindowSessionKey(providerName, options, options.sessionId);
+        const previous = contextWindowSessions.get(sessionKey);
+        const previousSize = previous?.setting === JSON.stringify(effectiveSetting) && selection.autoExpand
+          ? previous.selection.stages[previous.selection.stageIndex]?.size
+          : undefined;
+        if (previousSize === undefined) contextWindowSessions.delete(sessionKey);
         if (previousSize !== undefined && previousSize > selection.stages[selection.stageIndex]!.size) {
           const stageIndex = selection.stages.findIndex((stage) => stage.size >= previousSize);
           const boundedIndex = stageIndex === -1 ? selection.stages.length - 1 : stageIndex;
@@ -351,8 +361,16 @@ export class AgentRunner {
       });
     }
     const selectedOptions = selection?.override === undefined ? options : { ...options, contextWindow: selection.override };
-    const recordSelection = (sessionId: string | undefined, compacted: boolean): void => {
-      if (selection === undefined || selection.reason === 'manual' || sessionId === undefined) return;
+    const recordSelection = (sessionId: string | undefined, sourceSessionId: string | undefined, compacted: boolean): void => {
+      if (selection === undefined || sessionId === undefined) return;
+      if (sourceSessionId !== undefined && sessionId !== sourceSessionId && initialSelection !== undefined) {
+        selection = initialSelection;
+      }
+      const sessionKey = contextWindowSessionKey(providerName, options, sessionId);
+      if (!selection.autoExpand) {
+        contextWindowSessions.delete(sessionKey);
+        return;
+      }
       if (compacted) {
         const previous = selection;
         selection = promoteContextWindow(selection);
@@ -362,7 +380,7 @@ export class AgentRunner {
           });
         }
       }
-      contextWindowSessions.set(contextWindowSessionKey(providerName, options, sessionId), selection);
+      contextWindowSessions.set(sessionKey, { setting: JSON.stringify(setting ?? 'auto'), selection });
     };
     const recoverFromCompaction = agent.recoverFromCompaction;
     if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
@@ -378,7 +396,7 @@ export class AgentRunner {
       const response = await agent.call(task, observedOptions);
       recorder?.finish(response);
       const responseSessionId = response.sessionId ?? options.sessionId;
-      recordSelection(responseSessionId, compactionSessionId !== undefined && compactionSessionId === responseSessionId);
+      recordSelection(responseSessionId, options.sessionId, compactionSessionId !== undefined && compactionSessionId === responseSessionId);
       return response;
     }
 
@@ -420,9 +438,9 @@ export class AgentRunner {
         || compactionSessionId === responseSessionId;
       const compactionMatchesPromotion = compactionSessionId !== undefined
         && compactionSessionId === responseSessionId;
-      recordSelection(responseSessionId, compactionDetected && compactionMatchesPromotion);
-      if (selection?.override !== undefined) {
-        currentOptions = { ...currentOptions, contextWindow: selection.override };
+      recordSelection(responseSessionId, currentOptions.sessionId, compactionDetected && compactionMatchesPromotion);
+      if (selection !== undefined) {
+        currentOptions = { ...currentOptions, contextWindow: selection.override ?? options.contextWindow };
       }
       if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
         if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);

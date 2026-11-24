@@ -1,3 +1,4 @@
+import { managerImageDirectory, resolveManagerImages } from './imageAttachments.js';
 import { randomUUID } from 'node:crypto';
 import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -148,7 +149,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
         if (clear) {
           return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
-            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+            change: state.change({ session: { ...state.current.session, sessionId: null,
+              ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) }, interruptedMessage: null,
+              ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) }) };
         }
         let verification: ManagerTurnInput['verify'];
         if (verify) {
@@ -236,6 +239,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               if (changed || state.current.session.contextKey === undefined || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
                 await state.save({ session: { provider: resolved.provider, model: resolved.model,
                   sessionId: changed ? null : state.current.session.sessionId,
+                  ...(assignment.kind === 'daemon' ? {} : changed ? { imageAttachmentIds: [] }
+                    : state.current.session.imageAttachmentIds === undefined ? {} : { imageAttachmentIds: state.current.session.imageAttachmentIds }),
                   contextKey: resolved.contextKey,
                   ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
               }
@@ -245,10 +250,21 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const question = event.kind === 'inquiry_answered'
               ? eventGoal?.goal.questions?.find(({ id }) => id === event.questionId)?.body : undefined;
-            const prompt = buildManagerTurnPrompt({ lang: language, event: promptEvent, question,
+            const imageIds = [...new Set([
+              ...(human && command.kind === 'message' ? command.imageAttachmentIds ?? [] : []),
+              ...(patrol || verify ? [] : state.current.interruptedImageAttachmentIds ?? []),
+            ])];
+            const imageAttachments = imageIds.length === 0 ? [] : await resolveManagerImages(
+              await managerImageDirectory(identity, configDirectory), input.turn.conversationId, imageIds);
+            if (!patrol && assignment.kind !== 'daemon' && imageIds.length > 0 && state.current.session.imageAttachmentIds !== undefined) {
+              await state.save({ session: { ...state.current.session,
+                imageAttachmentIds: [...new Set([...state.current.session.imageAttachmentIds, ...imageIds])] } });
+            }
+            const prompt = buildManagerTurnPrompt({ ...(imageAttachments.length === 0 ? {} : { imageAttachments }), lang: language, event: promptEvent, question,
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
+              ...(imageAttachments.length === 0 ? {} : { imageAttachments }),
               requestDaemon: io.request,
               operationId: input.turn.operationId,
               ...(verification === undefined ? {} : { verify: verification }),
@@ -264,7 +280,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
                 } as IdentifiedToolActivityEvent });
               },
               patrol,
-              recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
+              recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null,
+                ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) } }) },
             });
             if (verify) verificationMessage = output.message;
             interruptedMessageDelivered = interruptedMessage != null && !verify;
@@ -287,8 +304,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
-              session: { ...state.current.session, sessionId: output.sessionId ?? null },
-              ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
+              session: { ...state.current.session, sessionId: output.sessionId ?? null,
+                ...(assignment.kind === 'daemon' || state.current.session.imageAttachmentIds === undefined && state.current.session.sessionId !== null ? {}
+                  : { imageAttachmentIds: output.sessionId === undefined ? []
+                    : [...new Set([...(state.current.session.imageAttachmentIds ?? []), ...imageIds])] }) },
+              ...(interruptedMessageDelivered ? { interruptedMessage: null,
+                ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) } : {}),
               ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
             }) }) };
           } finally { await resolved.release?.(); }
@@ -319,14 +340,19 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
           return { kind: 'interrupted', ...(verificationMessage === undefined ? {} : { message: verificationMessage }), ...(human && command.kind === 'message' && !verify
             ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
-              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
+              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}`,
+              ...(command.imageAttachmentIds === undefined && state.current.interruptedImageAttachmentIds === undefined ? {} : {
+                interruptedImageAttachmentIds: [...new Set([...(interruptedMessageDelivered ? [] : state.current.interruptedImageAttachmentIds ?? []),
+                  ...command.imageAttachmentIds ?? []])],
+              }) }) } : {}) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
           const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error, input.turn.operationId);
           if (notice !== undefined) io.progress(notice);
         }
         return { kind: 'completed', result: conversationErrorResult(error, language),
-          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null }) } : {}) };
+          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null,
+            ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) }) } : {}) };
       } finally {
         if (assignment.kind !== 'daemon' && command.kind === 'message') {
           for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);

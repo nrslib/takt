@@ -1,4 +1,5 @@
 import { isQuietMode } from '../../../shared/context.js';
+import { registerManagerImageRun } from '../managerImageAttachments.js';
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
@@ -301,6 +302,7 @@ async function executeWorkflowInternal(
       throw new Error(errors.map(({ message }) => message).join('\n'));
     }
     if (options.taskSpec !== undefined) {
+      await registerManagerImageRun(options.taskSpec.sourceTaskDir, activeRun.runPaths);
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
     goalSpecificationPaths = stageGoalSpecificationsForExecution(options.projectCwd, options.goalId, activeRun.runPaths);

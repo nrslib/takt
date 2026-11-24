@@ -2,7 +2,7 @@ Adjudicate submitted review findings against the requirements and threat model, 
 
 ## Establish the Items to Adjudicate
 
-List finding IDs by submitting source from the currently available review reports. Include plan caveats and items inherited from the previous decision, and associate each item with its source and previous treatment. Use repair and verification reports as evidence for decisions.
+List finding IDs by submitting source from the latest review in the declared report inputs. Use the supplied fixed versions of the previous decision and latest plan, repair, and verification records to associate each item with its source and previous treatment. Treat versions that were not supplied as unavailable; do not fill them by searching other runs or report indexes. Use repair and verification reports as evidence for decisions.
 
 To carry plan caveats into adjudication, include items in "Caveats" ("Open Questions (if any)" in a regular plan) and items recorded as "carried forward as a plan caveat." For "Non-Finding Concerns" ("Unverified Scope" in testing-review), include rows whose Classification column is "plan-caveat-carry-forward." Reviewers record carry-forward in this column, so the row's Classification column establishes whether it is a target. Proceed with the decisions below for the targets established here.
 

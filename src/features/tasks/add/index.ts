@@ -26,6 +26,7 @@ import {
   createIssueAndEnqueueTask,
   formatIssueEnqueueFailure,
   type PrepareEnqueuedTaskSpec,
+  type EnqueuedTaskPublicationScope,
   type IssueEnqueueResult,
   type SaveEnqueuedTaskFile,
   type SaveEnqueuedTaskFileOptions,
@@ -48,6 +49,7 @@ export async function saveTaskFile(
   options?: SaveTaskOptions,
   prepareTaskSpec?: PrepareEnqueuedTaskSpec,
   abortSignal?: AbortSignal,
+  publicationScope?: EnqueuedTaskPublicationScope,
 ): Promise<{ taskName: string; tasksFile: string }> {
   const { attachments, ...saveOptions } = options ?? {};
   await withTaskSaveRuntimeAssignment(saveOptions.runtimeAssignment, async () => {
@@ -57,7 +59,7 @@ export async function saveTaskFile(
   const attachmentPrepareTaskSpec = attachments !== undefined
     ? (saveCwd: string, saveTaskContent: string) => prepareTaskSpecDirectory(saveCwd, saveTaskContent, attachments)
     : prepareTaskSpec;
-  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, attachmentPrepareTaskSpec, abortSignal);
+  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, attachmentPrepareTaskSpec, abortSignal, publicationScope);
 }
 
 

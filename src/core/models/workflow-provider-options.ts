@@ -25,7 +25,10 @@ export interface ProviderGuardOptions {
   callTimeoutMs?: number;
 }
 
-export type ContextWindowSetting = 'auto' | number;
+export type ContextWindowSetting = 'auto' | number | {
+  initial: number;
+  auto_expand?: boolean;
+};
 
 export interface CodexProviderOptions {
   /** Resolved runtime profile setting; not part of provider_options YAML. */
@@ -34,6 +37,7 @@ export interface CodexProviderOptions {
   networkAccess?: boolean;
   permissionControl?: CodexPermissionControl;
   configProfile?: string;
+  readonlyPermissionBase?: string;
   reasoningEffort?: CodexReasoningEffort;
   fastMode?: boolean;
   guards?: ProviderGuardOptions;
@@ -45,12 +49,17 @@ export interface CodexProviderOptions {
 
 export type CodexPermissionControl = 'takt' | 'codex';
 
-export function assertCodexConfigProfilePermissionControl(
+export function assertCodexPermissionControlOptions(
   options: CodexProviderOptions | undefined,
 ): void {
   if (options?.configProfile !== undefined && options.permissionControl !== 'codex') {
     throw new Error(
       'Configuration error: provider_options.codex.config_profile requires permission_control: codex.',
+    );
+  }
+  if (options?.readonlyPermissionBase !== undefined && options.permissionControl !== 'codex') {
+    throw new Error(
+      'Configuration error: provider_options.codex.readonly_permission_base requires permission_control: codex.',
     );
   }
 }

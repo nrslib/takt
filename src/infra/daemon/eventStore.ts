@@ -20,6 +20,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private readonly ids = new Map<string, string>();
   private readonly requests = new Map<string, string>();
   private readonly sequences = new Map<number, string>();
+  private readonly byConversation = new Map<string, Map<string, string>>();
   private readonly knownFiles = new Set<string>();
   private readonly lock = new FileAsyncLock();
   private readonly conversations: ConversationStateStore;
@@ -39,8 +40,18 @@ export class FileEventStore implements EventStore, ConversationTurns {
   }
 
   private async read(path: string): Promise<EventRecord> {
+    const record = await this.readStored(path);
+    if (record === undefined) throw new Error(`Missing stored event: ${path}`);
+    return record;
+  }
+
+  // The rollback in accept() unlinks after releasing the lock, so a file
+  // another instance has just confirmed in refresh() can still disappear
+  // before it is read. Callers that iterate stored events tolerate the
+  // disappearance through this variant instead of failing the whole read.
+  private async readStored(path: string): Promise<EventRecord | undefined> {
     const content = await readEntirePrivateFile(path);
-    if (content === undefined) throw new Error(`Missing stored event: ${path}`);
+    if (content === undefined) return undefined;
     const input: unknown = JSON.parse(content.toString('utf8'));
     const record = EventRecordSchema.parse(input);
     if (path !== this.path(record.event.eventId)) throw new Error('Stored event identity mismatch');
@@ -83,6 +94,12 @@ export class FileEventStore implements EventStore, ConversationTurns {
     this.ids.set(event.eventId, path);
     this.requests.set(request, path);
     this.sequences.set(event.acceptedSequence, event.eventId);
+    let conversation = this.byConversation.get(event.conversationId);
+    if (conversation === undefined) {
+      conversation = new Map<string, string>();
+      this.byConversation.set(event.conversationId, conversation);
+    }
+    conversation.set(event.eventId, path);
     this.lastSequence = Math.max(this.lastSequence, event.acceptedSequence);
     this.knownFiles.add(path);
   }
@@ -92,12 +109,18 @@ export class FileEventStore implements EventStore, ConversationTurns {
       await this.refresh();
       const turns: Awaited<ReturnType<ConversationTurns['readTurns']>>[number][] = [];
       // Completed turns and background-turn order must survive missed live
-      // delivery. Read durable events without keeping a separate history index.
-      for await (const entry of await opendir(this.directory)) {
-        if (!entry.name.endsWith('.json')) continue;
-        const record = await this.read(join(this.directory, entry.name));
+      // delivery. Read the durable events of this conversation through the
+      // index that refresh() and accept() maintain, instead of reading every
+      // event file in the shared directory on every call.
+      const paths = this.byConversation.get(conversationId);
+      if (paths === undefined) return turns;
+      for (const path of [...paths.values()]) {
+        const record = await this.readStored(path);
+        if (record === undefined) {
+          this.forget(path);
+          continue;
+        }
         const { event } = record;
-        if (event.conversationId !== conversationId) continue;
         const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
           && event.event.command.display !== false ? event.event.command.text : undefined;
         turns.push({ operationId: event.operationId, ...(message === undefined ? {} : { message }),
@@ -110,13 +133,47 @@ export class FileEventStore implements EventStore, ConversationTurns {
 
   private async refresh(): Promise<void> {
     await ensurePrivateDirectory(this.directory);
+    const present = new Set<string>();
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
-      const path = join(this.directory, entry.name);
+      present.add(join(this.directory, entry.name));
+    }
+    // A file another instance indexed can disappear afterwards (the
+    // rollback in accept() unlinks after releasing the lock). Drop index
+    // entries whose file is gone before registering new files: a new
+    // event may reuse the vanished event's sequence or request key, and
+    // registering it against the stale entry would throw a conflict.
+    for (const path of this.knownFiles) {
+      if (!present.has(path)) this.forget(path);
+    }
+    for (const path of present) {
       if (!this.knownFiles.has(path)) {
-        const record = await this.read(path);
+        const record = await this.readStored(path);
+        if (record === undefined) continue;
         this.index(record, path);
       }
+    }
+  }
+
+  private forget(path: string): void {
+    this.knownFiles.delete(path);
+    const removedIds = new Set<string>();
+    for (const [eventId, candidate] of this.ids) {
+      if (candidate === path) {
+        this.ids.delete(eventId);
+        removedIds.add(eventId);
+      }
+    }
+    for (const [request, candidate] of this.requests) {
+      if (candidate === path) this.requests.delete(request);
+    }
+    if (removedIds.size === 0) return;
+    for (const [sequence, eventId] of this.sequences) {
+      if (removedIds.has(eventId)) this.sequences.delete(sequence);
+    }
+    for (const [conversationId, conversation] of this.byConversation) {
+      for (const eventId of removedIds) conversation.delete(eventId);
+      if (conversation.size === 0) this.byConversation.delete(conversationId);
     }
   }
 
@@ -153,6 +210,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
         this.ids.delete(event.eventId);
         this.requests.delete(requestKey(event));
         this.sequences.delete(event.acceptedSequence);
+        this.byConversation.get(event.conversationId)?.delete(event.eventId);
         this.knownFiles.delete(this.path(event.eventId));
       }
       throw error;
@@ -212,6 +270,27 @@ export class FileEventStore implements EventStore, ConversationTurns {
       await this.refresh();
       return { lastAcceptedSequence: this.lastSequence, pending: this.pending() };
     });
+  }
+
+  async hasImageReference(conversationId: string, imageId: string, activeOnly = false): Promise<boolean> {
+    return this.conversations.withConversationLock(conversationId, async () => this.exclusive(async () => {
+      const state = activeOnly ? (await this.conversations.read(conversationId))?.state : undefined;
+      if (state?.interruptedImageAttachmentIds?.includes(imageId)) return true;
+      if (state?.session.sessionId !== null && state?.session.imageAttachmentIds?.includes(imageId)) return true;
+      // Task 1 sessions did not record ownership. Preserve their accepted images until an explicit session switch.
+      const legacySession = state !== undefined && state.session.sessionId !== null && state.session.imageAttachmentIds === undefined;
+      await ensurePrivateDirectory(this.directory);
+      for await (const entry of await opendir(this.directory)) {
+        if (!entry.name.endsWith('.json')) continue;
+        const record = await this.readStored(join(this.directory, entry.name));
+        if (record === undefined) continue;
+        const event = record.event.event;
+        if ((!activeOnly || legacySession || record.state !== 'settled')
+          && record.event.conversationId === conversationId && event.kind === 'human_command'
+          && event.command.kind === 'message' && event.command.imageAttachmentIds?.includes(imageId)) return true;
+      }
+      return false;
+    }));
   }
 
   async hasGoalRegistration(repositoryDirectory: string, goalId: string): Promise<boolean> {

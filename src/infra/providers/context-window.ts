@@ -2,7 +2,7 @@ import type { ContextWindowSetting } from '../../core/models/workflow-provider-o
 
 export interface ContextWindowLimits {
   /** Native configured/catalog context size. */
-  readonly default: number;
+  readonly default?: number;
   /** Confirmed expandable maximum, if known. */
   readonly maximum?: number;
   /** Effective capacity percentage; omitted means 100%. */
@@ -10,7 +10,7 @@ export interface ContextWindowLimits {
 }
 
 export interface ContextWindowStage {
-  readonly name: 'default' | 'high' | 'max';
+  readonly name: 'initial' | 'default' | 'high' | 'max';
   readonly size: number;
   readonly effectiveSize: number;
 }
@@ -19,6 +19,7 @@ export interface ContextWindowSelection {
   readonly override?: number;
   readonly stages: readonly ContextWindowStage[];
   readonly stageIndex: number;
+  readonly autoExpand: boolean;
   readonly requiredTokens?: number;
   readonly fixedTokens?: number;
   readonly reason: 'manual' | 'fits' | 'maximum' | 'unknown';
@@ -52,19 +53,32 @@ export function selectContextWindow(
   limits: ContextWindowLimits | undefined,
   texts: readonly string[],
 ): ContextWindowSelection {
-  if (setting !== 'auto') {
-    return { override: setting, stages: [], stageIndex: 0, reason: 'manual' };
+  if (typeof setting === 'number') {
+    return { override: setting, stages: [], stageIndex: 0, autoExpand: false, reason: 'manual' };
   }
-  if (limits === undefined || !Number.isSafeInteger(limits.default) || limits.default <= 0) {
-    return { stages: [], stageIndex: 0, reason: 'unknown' };
+  if (setting !== 'auto' && !setting.auto_expand) {
+    return { override: setting.initial, stages: [], stageIndex: 0, autoExpand: false, reason: 'manual' };
+  }
+  const defaultWindow = limits?.default;
+  if (limits === undefined || (setting === 'auto' && (defaultWindow === undefined || !Number.isSafeInteger(defaultWindow) || defaultWindow <= 0))) {
+    return {
+      ...(setting === 'auto' ? {} : { override: setting.initial }),
+      stages: [], stageIndex: 0, autoExpand: false, reason: 'unknown',
+    };
   }
   const percent = limits.effectivePercent ?? 100;
-  const stages: ContextWindowStage[] = [stage('default', limits.default, percent)];
+  const initial = setting === 'auto' ? defaultWindow! : setting.initial;
+  const stages: ContextWindowStage[] = [stage(setting === 'auto' ? 'default' : 'initial', initial, percent)];
   const maximum = limits.maximum;
-  if (maximum !== undefined && Number.isSafeInteger(maximum) && maximum > limits.default) {
+  if (maximum !== undefined && Number.isSafeInteger(maximum) && maximum > initial) {
+    if (defaultWindow !== undefined && Number.isSafeInteger(defaultWindow)
+      && defaultWindow > initial && defaultWindow < maximum) stages.push(stage('default', defaultWindow, percent));
     const high = Math.min(500_000, maximum);
-    if (high > limits.default) stages.push(stage('high', high, percent));
+    if (high > stages[stages.length - 1]!.size) stages.push(stage('high', high, percent));
     if (maximum > stages[stages.length - 1]!.size) stages.push(stage('max', maximum, percent));
+  }
+  if (setting !== 'auto') {
+    return { override: initial, stages, stageIndex: 0, autoExpand: stages.length > 1, reason: 'manual' };
   }
   const { fixedTokens, requiredTokens } = estimateRequiredContextTokens(texts);
   const fittingIndex = stages.findIndex((candidate) => requiredTokens <= candidate.effectiveSize);
@@ -73,6 +87,7 @@ export function selectContextWindow(
     ...(stageIndex === 0 ? {} : { override: stages[stageIndex]!.size }),
     stages,
     stageIndex,
+    autoExpand: true,
     fixedTokens,
     requiredTokens,
     reason: fittingIndex === -1 ? 'maximum' : 'fits',
@@ -80,7 +95,7 @@ export function selectContextWindow(
 }
 
 export function promoteContextWindow(selection: ContextWindowSelection): ContextWindowSelection {
-  if (selection.reason === 'manual' || selection.reason === 'unknown') return selection;
+  if (!selection.autoExpand) return selection;
   const nextIndex = selection.stageIndex + 1;
   const next = selection.stages[nextIndex];
   if (next === undefined) return selection;

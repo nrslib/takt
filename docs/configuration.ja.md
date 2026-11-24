@@ -142,7 +142,7 @@ assistant:
 
 `takt_providers.selector` は dynamic parallel、`dynamic_facets`、Companion pool の選抜に使います。provider と model は CLI・環境変数による明示指定、project の selector、global の selector、project の最上位設定、global の最上位設定の順に選ばれます。model は選ばれた provider に対応する設定を使います。
 
-selector の `provider_options` は global と project の selector 設定を項目単位で統合し、対応する provider の環境変数で上書きできます。最上位、persona、pool 内 step の options は selector に引き継がれません。Codex selector で `config_profile` を指定する場合は、同じ selector の有効な options に `permission_control: codex` も指定してください。空の selector 設定や空の `provider_options` はエラーになります。
+selector の `provider_options` は global と project の selector 設定を項目単位で統合し、対応する provider の環境変数で上書きできます。最上位、persona、pool 内 step の options は selector に引き継がれません。Codex selector で `config_profile` または `readonly_permission_base` を指定する場合は、同じ selector の有効な options に `permission_control: codex` も指定してください。空の selector 設定や空の `provider_options` はエラーになります。
 
 dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`Read`、`Glob`、`Grep` だけを許可します。Companion selector には固定のツール一覧を渡さず、設定した `allowed_tools` を使えます。ツール制限は対応する provider が適用します。
 
@@ -1284,19 +1284,20 @@ takt run --runtime-assignment personal
 
 `provider.profiles` に provider、model、options を名前付きで定義します。`capabilities` には provider-options preset 名を指定でき、project → global → builtin の順に探します。profile の `options` は preset より優先されます。必要なら `permission_mode` や別の profile を継承する `extends` も指定できます。global と project に同名の profile がある場合は project の定義が全体を置き換えます。
 
-profile の `provider`、`model` と同じ階層に `context_window: auto` または正の整数を指定できます。省略時は `auto` です。`extends` で継承され、選ばれた profile から defaults、persona/tag/step target、ladder、auto routing、内部エージェントへ伝わります。workflow や `config.yaml` に指定するキーではありません。設定能力のないプロバイダーでは無視します。この設定でモデルは変更しません。
+profile の `provider`、`model` と同じ階層に `context_window: auto`、正の整数、または `{ initial: 正の整数, auto_expand: 真偽値 }` を指定できます。`auto_expand` の省略時は `false` です。省略した `context_window` は `auto` です。`extends` で継承され、選ばれた profile から defaults、persona/tag/step target、ladder、auto routing、内部エージェントへ伝わります。workflow や `config.yaml` に指定するキーではありません。設定能力のないプロバイダーでは無視します。この設定でモデルは変更しません。
 
 ```yaml
 provider:
   profiles:
     reviewer: { provider: codex, model: gpt-6-luna, context_window: auto }
     reviewer-fixed: { extends: reviewer, context_window: 500000 }
+    reviewer-expand: { extends: reviewer, context_window: { initial: 500000, auto_expand: true } }
   defaults: { profile: reviewer }
 ```
 
 `auto` は組み立て済みのsystem/user指示、構造化出力schema、指示で全文を読む必要があるpolicy/knowledgeを固定量として概算します。本文に含まれるreportは本文として数え、重ねて加算しません。初期の必要量は `ceil((固定量 * 2 + 150000) * 1.2)` です。これはtokenizerによる実測や後続のツール使用量の予測ではありません。ASCIIは4文字で1 token、CJKは1文字で0.75 token、その他の非ASCIIは1文字で0.5 tokenとして概算します。係数は日本語中心のPhase 1観測を参考にした粗い値で、実際のtoken数はモデルと内容で変わります。各段階の実効容量を比較し、収まるならモデルの既定値を維持し、必要に応じて500000と確認済み上限を検討します。同じ容量以下の段階は飛ばします。圧縮を検知すると同じセッションの次回呼び出し・復帰で次の段階へ上げ、完了済み応答はやり直しません。整数指定は固定値として渡し、自動選定や圧縮時昇格を適用しません。
 
-Codexは実効`CODEX_HOME`の`models_cache.json`から、選択モデルの`context_window`、`max_context_window`、`effective_context_window_percent`を読みます。Codexのbase設定と選択された`config_profile`に`model_context_window`があれば、設定の優先順位に従った値を既定容量として扱います。作業ディレクトリ側の設定に同じキーがある場合は、Codexの信頼判定をTAKT側で確定できないため`auto`による上書きを見送ります。設定を読めない場合やモデル情報が欠けている場合も上書きを見送ります。OpenCode v1/v2のモデルカタログにある`limit.context`は、拡張可能な上限を示しません。現在は確認済みの上限を登録していないため、`auto`は既定値を維持し、モデル情報を調べるための追加サーバーを起動しません。整数指定は両プロバイダーのnative設定へ渡します。選択値と概算理由は本文を含めずログへ記録します。
+Codexは実効`CODEX_HOME`の`models_cache.json`から、選択モデルの`context_window`、`max_context_window`、`effective_context_window_percent`を読みます。Codexのbase設定と選択された`config_profile`に`model_context_window`があれば、設定の優先順位に従った値を既定容量として扱います。作業ディレクトリ側の設定に同じキーがある場合は、Codexの信頼判定をTAKT側で確定できないため`auto`による上書きを見送ります。この場合も明示的な`initial`を持つobjectは初期値をそのまま渡し、全設定レイヤーの検査後にcacheの上限が確認できればcompaction時に昇格します。設定を読めない場合、custom catalogを指定した場合、モデル情報が欠けている場合は上限も使いません。OpenCode v1/v2のモデルカタログにある`limit.context`は、拡張可能な上限を示しません。現在は確認済みの上限を登録していないため、`auto`は既定値を維持し、モデル情報を調べるための追加サーバーを起動しません。整数指定とobjectの`initial`は両プロバイダーのnative設定へそのまま渡します。objectの`auto_expand: true`は初回の見積による変更をせず、同じセッションのcompaction時だけ確認済みの次段階へ昇格します。上限が不明な場合や`initial`が確認済み上限以上の場合は昇格しません。`auto_expand: false`と省略時は整数指定と同様に固定します。選択値と概算理由は本文を含めずログへ記録します。
 
 `provider` は継承解決後も必須です。codex、claude、claude-sdk、claude-headless、claude-terminal、copilot、cursor、kiro、pi、deepseek-harness、mock では `model` を省略できます。`extends` で親に model があれば継承し、継承後も model がなければプロバイダーの既定モデルに委ねます。選択されなかった defaults や低優先度の別 profile から model を補完しません。明示的な CLI `--model` または環境変数 `TAKT_MODEL` は優先されます。opencode は例外で、`provider/model` 形式の `model` が必要です。
 
@@ -1836,7 +1837,7 @@ provider_options:
     network_access: true
 ```
 
-TAKT が権限を管理する Phase 1 では、書き込みを禁止したまま通信を許可できます。`edit: false` の step と `permission_mode: readonly` に解決された呼び出しが対象です。`permission_control: codex` では Codex 側で通信を設定してください。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は常に `read-only` sandbox を使い、`network_access: true` でも通信を禁止します。
+TAKT が権限を管理する Phase 1 では、書き込みを禁止したまま通信を許可できます。`edit: false` の step と `permission_mode: readonly` に解決された呼び出しが対象です。`permission_control: codex` では Codex 側で通信を設定してください。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は、`network_access: true` でも書き込みと通信を禁止します。`permission_control: codex` で `readonly_permission_base` を指定すると、その継承元を読み取り専用・通信なしにした権限プロファイルを使うため、利用者の `deny` も効きます。
 
 OpenCode はネイティブのサンドボックスを持ちません。TAKT は `webfetch` / `websearch` ツールの権限を抽象化レイヤーで制御し、同じキーで設定できます。
 
@@ -1892,7 +1893,7 @@ Codex の権限はデフォルトで TAKT が管理します。これは `permis
 | 禁止 | `true` | sandbox フラグを渡さず、`:read-only` を継承して `network.enabled=true` にした `takt-readonly-network` 権限プロファイルを `--config` で渡す |
 | 禁止 | `false` / 未指定 | `read-only` sandbox |
 
-TAKT が権限を管理する場合は、書き込み可能な step を含むすべての `codex exec` に `--ignore-rules` を付けます。新規セッションと `exec ... resume <id>` の両方が対象です。これにより、サンドボックス外でのコマンド実行を許可する利用者・プロジェクトの execpolicy `.rules` ファイルを読み込ませません。`permission_control: codex` ではルールを利用者の設定に委ねます。ただし Phase 2、`strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）、MCP のみに副作用を許可するモードは常に `--ignore-rules` を付け、書き込みと通信を禁止します。Phase 2 またはこれらの内部呼び出しで `config_profile` を指定した場合は `--ignore-rules` と `--profile <name>` の両方を渡します。補助コマンドの `mcp list` / `mcp get` には exec 用のフラグを付けません。
+TAKT が権限を管理する場合は、書き込み可能な step を含むすべての `codex exec` に `--ignore-rules` を付けます。新規セッションと `exec ... resume <id>` の両方が対象です。これにより、サンドボックス外でのコマンド実行を許可する利用者・プロジェクトの execpolicy `.rules` ファイルを読み込ませません。`permission_control: codex` ではルールを利用者の設定に委ねます。ただし Phase 2、`strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）、MCP のみに副作用を許可するモードは常に `--ignore-rules` を付け、書き込みと通信を禁止します。Phase 2 またはこれらの内部呼び出しで `config_profile` を指定した場合は `--ignore-rules` と `--profile <name>` の両方を渡します。`permission_control: codex` で `readonly_permission_base` を指定した場合も、Phase 2 と `strict-readonly` の呼び出しには `--ignore-rules` を付け、`--sandbox` は渡しません。補助コマンドの `mcp list` / `mcp get` には exec 用のフラグを付けません。
 
 Codex 側へ権限制御を委譲する場合だけ、明示的に opt-in します。
 
@@ -1909,7 +1910,7 @@ provider_options:
 
 `permission_control: codex` ではサンドボックスとネットワークの権限を Codex の設定に委ねます。この場合、TAKT の `network_access` は Codex の実効権限に反映されません。非対話実行の `approvalPolicy: never` は引き続き適用されるため、使用する Codex の設定を確認してください。`reasoning_effort`、`fast_mode`、`skills` は通常どおり適用されます。
 
-Phase 1 の `permission_control: codex` では `edit: false` や `permission_mode: readonly` でも TAKT の sandbox・ネットワーク指定を省略し、実効権限を Codex の設定に委ねます。`strict-readonly` を指定しない構造化呼び出しにも同じ規則を適用します。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は例外で、権限の委譲時も TAKT が管理し、常に `read-only` sandbox と `networkAccessEnabled: false` を渡します。MCP のみに副作用を許可するモードも `read-only` sandbox を維持し、通信と Web 検索を明示的に禁止します。このモードと `permission_control: codex` は併用できません。
+Phase 1 の `permission_control: codex` では `edit: false` や `permission_mode: readonly` でも TAKT の sandbox・ネットワーク指定を省略し、実効権限を Codex の設定に委ねます。`strict-readonly` を指定しない構造化呼び出しにも同じ規則を適用します。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は例外で、権限の委譲時も TAKT が管理します。`readonly_permission_base` の指定が無いときは `read-only` sandbox と `networkAccessEnabled: false` を渡します。指定があるときは、継承元を `extends` して作業フォルダ・`/tmp`・`$TMPDIR` を `read`、通信を無効にした権限プロファイルを `--config` で渡し、`--sandbox` は渡しません。MCP のみに副作用を許可するモードも `read-only` sandbox を維持し、通信と Web 検索を明示的に禁止します。このモードと `permission_control: codex` は併用できません。
 
 Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
 
@@ -1923,6 +1924,43 @@ provider_options:
 環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_CONFIG_PROFILE=automation-review` でも設定できます。
 
 `config_profile` に使えるのは ASCII の英字・数字・ハイフン・アンダースコアからなる名前です。`permission_control: codex` と組み合わせ、runtime profile または従来の project・global 設定で指定します。TAKT は `codex exec --profile <name>` を渡し、Codex が `$CODEX_HOME/<name>.config.toml` を読み込みます。権限を含む profile の内容を確認してから使用してください。
+
+##### Phase 2 と strict-readonly の継承元 (`readonly_permission_base`)
+
+`permission_control: codex` の Phase 2 と `strict-readonly` の呼び出し（隔離された構造化呼び出しなど）でも、利用者の permission profile の `deny` を効かせたい場合は、継承元の profile 名を `readonly_permission_base` に指定します。
+
+```yaml
+provider_options:
+  codex:
+    permission_control: codex
+    readonly_permission_base: review-base
+```
+
+環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_READONLY_PERMISSION_BASE=review-base` でも指定できます。`config_profile` と同じく、ASCII の英字・数字・ハイフン・アンダースコアからなる名前を使い、runtime profile または従来の project・global 設定で指定します。`permission_control: codex` 以外（未指定を含む）との併用は設定エラーになります。
+
+指定すると、Phase 2 と `strict-readonly` の新しいセッション・既存スレッドの再開の両方で、TAKT は次の権限プロファイルを `--config` で渡します。
+
+- 継承元を `extends` する。
+- 作業フォルダ、`/tmp`、`$TMPDIR` を `read` にする。
+- `network.enabled` を `false` にする。
+
+TAKT はこのとき `--sandbox` と `sandbox_mode` / `sandbox_workspace_write` の上書きを渡さず、`--ignore-rules`、`--profile`、`approval_policy: never` はそのまま維持します。継承元を指定しない場合や Phase 1・Phase 3 の動きは変わりません。
+
+継承元の profile がパスを個別に `write` にしている場合、そのパスは継承先でも `write` のまま残ります。Codex はより具体的なパスの指定を優先するためで、TAKT はこれを防ぎません。Phase 2 で書かせたくないパスは、継承元の profile 側で `read` か `deny` にしてください。
+
+```toml
+# 継承元 profile `review-base` の定義例
+#（`config_profile` で選ぶ $CODEX_HOME/<name>.config.toml などに置く）
+[permissions.review-base]
+[permissions.review-base.filesystem]
+":minimal" = "read"
+"~/.ssh" = "deny"
+"~/.aws" = "deny"
+[permissions.review-base.network]
+enabled = false
+```
+
+上の例は機密ファイルを `deny` し、個別の `write` を持たない継承元です。TAKT は利用者の Codex 設定を読み書きせず、この定義を変更しません。
 
 #### Codex Skill の継承 (`skills`)
 

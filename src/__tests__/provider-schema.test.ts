@@ -245,6 +245,20 @@ describe('Codex config profile provider option', () => {
   });
 });
 
+describe('Codex readonly permission base provider option', () => {
+  it.each(['takt-review-p2', 'review_2', 'profile123'])('accepts a profile name: %s', (readonlyPermissionBase) => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { readonly_permission_base: readonlyPermissionBase },
+    })).toEqual({ codex: { readonly_permission_base: readonlyPermissionBase } });
+  });
+
+  it.each(['', '   ', '../other', 'team/review', 'team\\review'])('rejects an invalid profile name: %j', (readonlyPermissionBase) => {
+    expect(() => StepProviderOptionsSchema.parse({
+      codex: { readonly_permission_base: readonlyPermissionBase },
+    })).toThrow(/readonly_permission_base|profile/i);
+  });
+});
+
 describe('Claude terminal provider contract', () => {
   beforeEach(() => {
     ProviderRegistry.resetInstance();

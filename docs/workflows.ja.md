@@ -928,6 +928,8 @@ agent step、`workflow_call`、parallel の親・子 step は同じ workflow 内
 
 `reports: all` は指定した step の完了済み実行から全レポートを選びます。選択された並列レビュアーや入れ子の呼び出しで作成された報告も対象です。ファイル名を列挙した場合は一致する公開レポートだけを選び、欠落や重複があれば失敗します。`{report:filename}` は選択した本文をその位置に展開します。入力側や祖先に同名のレポートがあっても宣言した生成元の本文を使います。`reports: all` が同名の報告を複数選ぶ場合、その名前の `{report:filename}` は曖昧として失敗します。構文で参照しなかった選択済みの報告は agent の Phase 1 指示の末尾へ追加します。選択名は宣言した生成元をまたいで一意でなければなりません。`reports: all` と任意の未実行生成元も含め、placeholder がなくても doctor とランタイムは曖昧な宣言を拒否します。`workflow_call` は入れ子の呼び出し先まで同じ入力を渡します。parallel の親にある宣言は子にも適用されますが、子自身の宣言があればそちらを使います。報告がない場合や呼び出しが未完了の場合、近隣のディレクトリから探さずに失敗します。実行前の経路から入力側へ進む場合に限り `optional_if_unrun: true` を指定してください。入力元の実行前も出力契約にある報告名は予約され、同名の無関係なローカル・祖先の報告にはフォールバックしません。入力元が開始した後は報告が必須です。
 
+`fallback_from_step` は `from_step` が未実行の場合だけ、同じ報告契約を持つ別の step の完了版を選びます。主生成元が開始した後の未完了や欠落は失敗として扱います。`previous_only: true` と自己 step の `from_step` を組み合わせると、今回の実行前に完了した最新のレポートを選びます。前回版がなければ未供給と表示します。`previous_only` には報告名を列挙し、`fallback_from_step` と `optional_if_unrun` は併用しません。
+
 複数の生成元は空でない配列で宣言できます。既存の単一オブジェクト形も使用できます。`optional_if_unrun` と `history` は要素ごとに適用します。
 
 ```yaml
@@ -940,9 +942,11 @@ input_reports:
     optional_if_unrun: true
 ```
 
-`{report:filename}` は現在のレポートを UTF-16 のコード単位で8,000文字まで展開します。超過時は先頭の本文と省略表示に加え、展開したバージョンを固定した正確なパスを渡します。続きはそのパスから読んでください。自動追加する現在のレポートにも同じコード定数を適用し、YAML では設定できません。
+`{report:filename}` は現在のレポートを UTF-16 のコード単位で8,000文字まで展開します。超過時は先頭の本文と省略表示に加え、展開したバージョンを固定した正確なパスを渡します。続きはそのパスから読んでください。完了済み実行の固定版パスと実行識別は本文の長さにかかわらず渡します。自動追加する現在のレポートにも同じコード定数を適用し、YAML では設定できません。
 
 `history: {previous: N}` は、同じ生成元・実行系列から、現在のレポートに対応する実行を除いて完了済みの過去の実行を最大 N 回選びます。N は非負の安全な整数で、0なら過去の実行を選びません。`{report_history:filename}` は本文を含まない一覧を古い順に展開します。各行には実行の識別情報、順序、完了状態、生成元、固定したバージョンのパスを示します。同じ実行の計画と報告には共通の識別情報を使います。
+
+実行記録のない旧runでも完了した公開レポートの本文は渡します。その場合は元の完了実行の固定版と実行IDを未供給と表示します。長文のために作るパスは今回の入力用snapshotと表示し、元の実行で固定した版とは区別します。
 
 選択した全行を渡し、別の件数上限は設けません。履歴不足・未完了・報告欠落を明示し、別の実行や古いバージョンでは補いません。並列・入れ子・再開でも実行の識別情報とバージョンを保持します。実行記録のない旧 run の履歴は取得不能とし、日時から推定しません。参照されなかった宣言済み履歴も自動追加します。
 
@@ -1009,9 +1013,9 @@ workflow YAML では provider と model を指定できません。runtime profi
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
 
-TAKT が Codex の権限を管理する場合、明示した `edit: false` は解決済みの permission mode にかかわらず Phase 1 の書き込みを禁止します。`network_access: true` なら通信を許可する読み取り専用の権限プロファイルを渡し、それ以外は `read-only` sandbox を使います。`permission_control: codex` では `edit: false` でも書き込み可否と通信可否を Codex 側の設定に委ねます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は権限の委譲時も常に `read-only` sandbox を使い、通信を禁止します。共通の権限解決とほかの provider の動作は変わりません。詳細は [Codex の permission control](./configuration.ja.md#codex-の-permission-control-permission_control) を参照してください。
+TAKT が Codex の権限を管理する場合、明示した `edit: false` は解決済みの permission mode にかかわらず Phase 1 の書き込みを禁止します。`network_access: true` なら通信を許可する読み取り専用の権限プロファイルを渡し、それ以外は `read-only` sandbox を使います。`permission_control: codex` では `edit: false` でも書き込み可否と通信可否を Codex 側の設定に委ねます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は権限の委譲時も TAKT が管理します。`readonly_permission_base` の指定が無いときは `read-only` sandbox を使い、指定があるときは継承元を読み取り専用・通信なしにした権限プロファイルを使います。共通の権限解決とほかの provider の動作は変わりません。詳細は [Codex の permission control](./configuration.ja.md#codex-の-permission-control-permission_control) を参照してください。
 
-TAKT が権限を管理する Codex 呼び出しは、書き込み可能な step と新規・再開セッションにも `--ignore-rules` を渡します。利用者・プロジェクトの execpolicy `.rules` によるサンドボックスの制限回避を防ぐためです。権限を Codex に委譲した呼び出しはルールを維持しますが、Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は常にルールを無効にして書き込みと通信を禁止します。Phase 2 とこれらの内部呼び出しで選択した `config_profile` は `--ignore-rules` と併せて適用されます。
+TAKT が権限を管理する Codex 呼び出しは、書き込み可能な step と新規・再開セッションにも `--ignore-rules` を渡します。利用者・プロジェクトの execpolicy `.rules` によるサンドボックスの制限回避を防ぐためです。権限を Codex に委譲した呼び出しはルールを維持しますが、Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は常にルールを無効にして書き込みと通信を禁止します。Phase 2 とこれらの内部呼び出しで選択した `config_profile` は `--ignore-rules` と併せて適用されます。`readonly_permission_base` を指定した場合は、さらに `--sandbox` を渡しません。
 
 ## Workflow レベルの設定
 

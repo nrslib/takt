@@ -158,7 +158,7 @@ describe('WorkflowCallInvocationIndex', () => {
     expect(index.get(outer, 'delegate', [])).toMatchObject({ completed: true });
   });
 
-  it('should reject a persisted invocation that disagrees with the resume stack', () => {
+  it('should discard a persisted invocation that disagrees with the resume stack', () => {
     const parent = makeWorkflow('parent');
     const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
     const invocation = {
@@ -181,7 +181,8 @@ describe('WorkflowCallInvocationIndex', () => {
       elapsed_ms: 0,
       workflow_call_invocations: { [identity]: invocation },
       workflow_step_participations: {},
-    })).toThrow('Workflow-call invocation identity does not match resume entry "delegate"');
+    })).not.toThrow();
+    expect(index.get(parent, 'delegate', [])).toBeUndefined();
   });
 
   it('should serialize a defensive snapshot of the current invocation per canonical path', () => {

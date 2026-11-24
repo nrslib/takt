@@ -65,6 +65,8 @@ export const ConversationRecordSchema = z.object({
   contextKey: nonempty.max(128).optional(),
   agentOverrides: ConversationAgentOverridesSchema.optional(),
   interruptedMessage: z.string().nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
+  sessionImageAttachmentIds: z.array(z.uuid()).optional(),
   bindings: z.array(PortBindingSchema), revision,
   pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
   running: RunningOperationSchema.nullable(),

@@ -28,6 +28,9 @@ import { DaemonRouting } from '../features/daemon/routing.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import * as privateFiles from '../infra/daemon/privateFile.js';
 import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
+import { createSessionImageAttachmentStore } from '../features/interactive/imageAttachments.js';
+import { ManagerImageAttachments, resolveManagerImages } from '../features/manager/imageAttachments.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -100,6 +103,213 @@ it('restores an accepted message after detaching and settling before reattachmen
     ]);
     fixture.input.detach(next.attachmentId);
   } finally { release.resolve(); }
+});
+
+it('reprepares an unsent image after a real attachment detach and accepts the draft on reconnect', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('draft screenshot')]);
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const source = await temporary.saveImage(png, 'image/png');
+    const first = await open();
+    const image = await fixture.input.prepareImage({ attachmentId: first.attachmentId, sourcePath: source.tempPath });
+    fixture.input.detach(first.attachmentId);
+    await vi.waitFor(async () => expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' }));
+    const reopened = await open();
+    const prepared = await fixture.input.prepareImage({ attachmentId: reopened.attachmentId, sourcePath: source.tempPath });
+    expect(prepared.id).not.toBe(image.id);
+    expect(await fixture.input.submit({ attachmentId: reopened.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Inspect ' + prepared.placeholder, imageAttachmentIds: [prepared.id],
+      } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect(execute.mock.calls.at(-1)![0].imageAttachments).toEqual([prepared]);
+  } finally { temporary.cleanup(); }
+});
+
+it('waits for a conversation save before deciding whether an image is unreferenced', async () => {
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const port = await open();
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    const images = new ManagerImageAttachments(fixture.events);
+    const referenceCheck = deferred<void>();
+    const actualReferenceCheck = fixture.events.hasImageReference.bind(fixture.events);
+    vi.spyOn(fixture.events, 'hasImageReference').mockImplementation((...args) => {
+      referenceCheck.resolve();
+      return actualReferenceCheck(...args);
+    });
+    let finished = false;
+    let releasing!: Promise<void>;
+    await fixture.store.withConversationLock(id, async () => {
+      releasing = images.release(repository, id, port.attachmentId).then(() => { finished = true; });
+      await referenceCheck.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+      const path = join(getGlobalConfigDir(), 'conversations', `${id}.json`);
+      const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...saved, sessionId: 'saved-session', sessionImageAttachmentIds: [image.id] }));
+    });
+    await releasing;
+    expect(await readFile(image.path)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  } finally { temporary.cleanup(); }
+});
+
+it('retains an image for a resumed provider session and releases it when that session context changes', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('session screenshot')]);
+  const temporary = createSessionImageAttachmentStore(repository);
+  const source = await temporary.saveImage(png, 'image/png');
+  const first = await open();
+  const image = await fixture.input.prepareImage({ attachmentId: first.attachmentId, sourcePath: source.tempPath });
+  expect(await fixture.input.submit({ attachmentId: first.attachmentId, requestId: randomUUID(),
+    speaker: { namespace: 'local', id: 'operator' }, command: {
+      kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+    } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute.mock.calls.at(-1)![0].imageAttachments).toEqual([image]);
+  fixture.input.detach(first.attachmentId);
+  await fixture.close();
+  temporary.cleanup();
+
+  fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
+  const images = new ManagerImageAttachments(new FileEventStore(getGlobalConfigDir()));
+  await images.release(repository, id, first.attachmentId);
+  expect(await readFile(image.path)).toEqual(png);
+  const resumed = await open();
+  expect(await resumed.submit('Continue without attaching another image')).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute.mock.calls.at(-1)![0].sessionId).toBe('persisted-session');
+  await images.release(repository, id, first.attachmentId);
+  expect(await readFile(image.path)).toEqual(png);
+
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'changed-context', executor: { execute } });
+  execute.mockImplementationOnce(async (value) => ({ message: value.prompt, summary: null, sessionId: 'new-session', assignment: value.assignment }));
+  expect(await resumed.submit('Start the new context without images')).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute.mock.calls.at(-1)![0].sessionId).toBeUndefined();
+  expect(execute.mock.calls.at(-1)![0].imageAttachments).toBeUndefined();
+  await images.release(repository, id, first.attachmentId);
+
+  await expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(resolveManagerImages(repository, id, [image.id])).rejects.toThrow();
+});
+
+it.each([
+  { clear: false, newImage: false },
+  { clear: true, newImage: false },
+  { clear: true, newImage: true },
+])('handles interrupted images on the next turn (clear: $clear, new image: $newImage)', async ({ clear, newImage }) => {
+  const entered = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', content: '',
+    timestamp: new Date(), sessionId: 'next-session', structuredOutput: { message: 'done', summary: null } });
+  call.mockImplementationOnce(async (_prompt, options) => {
+    entered.resolve();
+    await new Promise<void>((resolve) => options.abortSignal!.addEventListener('abort', () => resolve(), { once: true }));
+    options.abortSignal!.throwIfAborted();
+    throw new Error('Expected interruption');
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ supportsNativeImageInput: true, setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const port = await open();
+    const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    const admission = await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Interrupted inspection ' + image.placeholder, imageAttachmentIds: [image.id],
+      } });
+    if (admission.kind !== 'accepted') throw new Error('Expected acceptance');
+    await entered.promise;
+    const running = port.outputs.find((output) => output.kind === 'running' && output.state.running?.operationId === admission.operationId);
+    if (running?.kind !== 'running' || running.state.running?.generation === undefined) throw new Error('Missing running turn');
+    await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'abort_turn', operationId: admission.operationId,
+        generation: running.state.running.generation } });
+    await fixture.settled();
+    expect((await fixture.store.read(id))!.state.interruptedImageAttachmentIds).toEqual([image.id]);
+    if (clear) {
+      expect(await port.submit('/clear')).toMatchObject({ kind: 'accepted' });
+      await fixture.settled();
+    }
+    const nextSource = newImage ? await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), 'image/png') : undefined;
+    const nextImage = nextSource === undefined ? undefined
+      : await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: nextSource.tempPath });
+    expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text: 'Next request' + (nextImage === undefined ? '' : ' ' + nextImage.placeholder),
+        ...(nextImage === undefined ? {} : { imageAttachmentIds: [nextImage.id] }) } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect(call).toHaveBeenCalledTimes(2);
+    const [prompt, options] = call.mock.calls[1]!;
+    const expectedImages = nextImage === undefined ? clear ? [] : [image] : [nextImage];
+    expect(options.imageAttachments ?? []).toEqual(expectedImages);
+    const metadata = prompt.split('\n\n').find((part) => part.startsWith('Image attachments: '));
+    expect(metadata === undefined ? [] : JSON.parse(metadata.slice('Image attachments: '.length))).toEqual(expectedImages);
+    expect(prompt.includes('Interrupted inspection')).toBe(!clear);
+  } finally { temporary.cleanup(); }
+});
+
+it.each([false, true])('releases old session images after a text-only turn only when cleared (clear: %s)', async (clear) => {
+  const state = (await fixture.store.read(id))!.state;
+  expect(await fixture.store.save({ conversationId: id, operationId: randomUUID(), generation: 1 }, {
+    operationId: randomUUID(), expectedVersion: state.version,
+    session: { ...state.session, sessionId: null, imageAttachmentIds: [] },
+  }, new AbortController().signal)).toMatchObject({ kind: 'state_saved' });
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const port = await open();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const source = await temporary.saveImage(png, 'image/png');
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+      } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual([image.id]);
+    if (clear) {
+      expect(await port.submit('/clear')).toMatchObject({ kind: 'accepted' });
+      await fixture.settled();
+    }
+    expect(await port.submit('Next request without images')).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    const next = execute.mock.calls.at(-1)![0];
+    expect(next.imageAttachments).toBeUndefined();
+    expect(next.sessionId).toBe(clear ? undefined : 'persisted-session');
+    expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual(clear ? [] : [image.id]);
+    const images = new ManagerImageAttachments(fixture.events);
+    await images.release(repository, id, port.attachmentId);
+    if (clear) {
+      await expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(resolveManagerImages(repository, id, [image.id])).rejects.toThrow();
+    } else expect(await readFile(image.path)).toEqual(png);
+  } finally { temporary.cleanup(); }
+});
+
+it('retains newly delivered images when a continuing provider session fails before returning its response', async () => {
+  const signal = new AbortController().signal;
+  expect(await fixture.store.save({ conversationId: id, operationId: randomUUID(), generation: 1 }, {
+    operationId: randomUUID(), expectedVersion: 0,
+    session: { provider: 'mock', model: null, sessionId: 'provider-session', contextKey: 'test', imageAttachmentIds: [] },
+  }, signal)).toMatchObject({ kind: 'state_saved' });
+  const temporary = createSessionImageAttachmentStore(repository);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const source = await temporary.saveImage(png, 'image/png');
+  const port = await open();
+  const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+  execute.mockRejectedValueOnce(new Error('Provider failed after receiving the image'));
+  expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+    speaker: { namespace: 'local', id: 'operator' }, command: {
+      kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+    } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  fixture.input.detach(port.attachmentId);
+  const images = new ManagerImageAttachments(fixture.events);
+  await images.release(repository, id, port.attachmentId);
+  expect(await readFile(image.path)).toEqual(png);
+  expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual([image.id]);
+  temporary.cleanup();
 });
 
 it('persists the session and applies the human response to the current proposal', async () => {

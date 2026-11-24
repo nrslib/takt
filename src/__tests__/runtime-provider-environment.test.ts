@@ -397,6 +397,55 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
     });
   });
 
+  it('carries Codex readonly permission base through defaults and persona/tag/step routing entries', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'base' },
+      profiles: {
+        base: {
+          provider: 'codex',
+          model: 'base-m',
+          options: { permission_control: 'codex', readonly_permission_base: 'base-readonly' },
+        },
+        persona: {
+          provider: 'codex',
+          model: 'persona-m',
+          options: { permission_control: 'codex', readonly_permission_base: 'persona-readonly' },
+        },
+        tag: {
+          provider: 'codex',
+          model: 'tag-m',
+          options: { permission_control: 'codex', readonly_permission_base: 'tag-readonly' },
+        },
+        step: {
+          provider: 'codex',
+          model: 'step-m',
+          options: { permission_control: 'codex', readonly_permission_base: 'step-readonly' },
+        },
+      },
+      targets: {
+        personas: { coder: { profile: 'persona' } },
+        tags: { 'high-stakes': { profile: 'tag' } },
+        steps: { 'wf/impl': { profile: 'step' } },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section);
+
+    expect(env.providerOptions?.codex).toMatchObject({
+      permissionControl: 'codex',
+      readonlyPermissionBase: 'base-readonly',
+    });
+    expect(env.personaProviders?.coder?.providerOptions?.codex).toMatchObject({
+      readonlyPermissionBase: 'persona-readonly',
+    });
+    expect(env.providerRouting?.tags?.['high-stakes']?.providerOptions?.codex).toMatchObject({
+      readonlyPermissionBase: 'tag-readonly',
+    });
+    expect(env.providerRouting?.steps?.['wf/impl']?.providerOptions?.codex).toMatchObject({
+      readonlyPermissionBase: 'step-readonly',
+    });
+  });
+
   it('rejects the removed DeepSeek Python executable override from a global runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },

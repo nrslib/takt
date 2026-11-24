@@ -176,6 +176,7 @@ export class CloneManager {
         if (options.pullRequestBaseBranch !== undefined) {
           throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
         }
+        // eslint-disable-next-line takt/catch-log-includes-error -- The git error can contain the source repository path or credentials, so it is deliberately not logged
         log.info('Failed to prefetch branch from origin, continuing', {
           branch,
         });
@@ -298,6 +299,7 @@ export class CloneManager {
           }
           throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
         }
+        // The git error can contain the source repository path or credentials, so it is deliberately not logged
         log.info('Failed to prefetch branch from origin, continuing', {
           branch,
         });

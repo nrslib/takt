@@ -32,7 +32,7 @@ import {
   type Stats,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import {
   assertPrivateDirectoryReadSnapshot,
   capturePrivateDirectoryReadSnapshot,
@@ -44,7 +44,9 @@ import {
   type PrivateDirectoryReadSnapshot,
 } from '../../../shared/utils/private-file.js';
 import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
-import { isResumeReportConsumerKey } from './resume-report-consumer.js';
+import { classifyResumeReportConsumerKey } from './resume-report-consumer.js';
+
+const log = createLogger('resume-report-snapshot');
 
 // reports/ 直下の予約名（単一情報源は core/models/reserved-report-names.ts）。
 // 継承 manifest はスナップショットの一部として reports 内に置かれ、次回 resume
@@ -165,11 +167,14 @@ function parseResumeReportConsumers(
     throw new Error('Resume report snapshot: manifest resumeReportConsumers must be an array');
   }
   const seenConsumers = new Set<string>();
-  return value.map((entry, consumerIndex): ResumeReportSnapshotConsumerEntry => {
+  return value.flatMap((entry, consumerIndex): ResumeReportSnapshotConsumerEntry[] => {
     if (!isRecord(entry) || !hasOnlyKeys(entry, MANIFEST_CONSUMER_KEYS)) {
       throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}] has an invalid shape`);
     }
-    if (typeof entry.consumerKey !== 'string' || !isResumeReportConsumerKey(entry.consumerKey)) {
+    const keyKind = typeof entry.consumerKey === 'string'
+      ? classifyResumeReportConsumerKey(entry.consumerKey)
+      : 'invalid';
+    if (keyKind === 'invalid' || typeof entry.consumerKey !== 'string') {
       throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].consumerKey is invalid`);
     }
     if (seenConsumers.has(entry.consumerKey)) {
@@ -208,11 +213,15 @@ function parseResumeReportConsumers(
       return { reference: referenceEntry.reference, path: referenceEntry.path };
     });
     seenConsumers.add(entry.consumerKey);
-    return {
+    if (keyKind === 'legacy') {
+      log.warn('Ignoring inherited report consumer without call instances', { consumerKey: entry.consumerKey });
+      return [];
+    }
+    return [{
       consumerKey: entry.consumerKey,
       reportDirectories: [...new Set(entry.reportDirectories)],
       references,
-    };
+    }];
   });
 }
 

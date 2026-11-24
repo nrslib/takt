@@ -835,6 +835,9 @@ it('ends the goal proposal request when its live result arrives after the snapsh
   const context = mount('en');
   const { app, client } = context;
   await typeAndSubmit(context, '/make-goal');
+  await waitFor(() => expect(client.commands()).toEqual([{
+    kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true,
+  }]));
   const operationId = await client.operation();
   const state = client.getSnapshot().state!;
   client.change({ state: { ...state, running: { operationId, generation: 1, kind: 'message' } } });

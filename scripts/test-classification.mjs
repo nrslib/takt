@@ -395,6 +395,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
+  'src/__tests__/manager-image-attachments.integration.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 
