@@ -362,7 +362,9 @@ takt director --help
 
 对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和事件处理都会调用 provider 并产生费用。
 
-manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，将需要处理的事项告知人，并通过 manager 对话传达信息。决定仍由人作出；director 只把人明确提出的合并指令转发给负责的 manager，自己不执行合并。
+manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 为请求选择 manager，需要时按人提供的 Git 仓库绝对路径准备 manager，并提出只需人工确认一次的注册方案。它回答受托目标的普通问题，需要人工判断的问题直接交给人。director 只将人明确提出的合并指令转发给负责的 manager，自己不执行合并。
+
+manager 选择、注册、Slack 按钮、问题接收方、提升与交回、移除 manager（fire）和 Slack 限制，参阅 [director 使用指南](./director.zh-CN.md)。
 
 通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和状态确认会说明无法读取的 project 及其原因，并继续处理其余 manager。
 

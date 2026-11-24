@@ -193,7 +193,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `director.slack.channel_id` | string | - | Director Slack channel. Global-only; see [Slack conversations with director](#slack-conversations-with-director). |
-| `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director from Slack. Required when `director.slack` is configured; an empty list accepts no users. |
+| `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director and use its registration and inquiry buttons on Slack. Required when `director.slack` is configured; an empty list accepts no users' messages or actions. |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
@@ -678,6 +678,8 @@ director:
 Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` environment variables as manager. Follow [Create the Slack App](#create-the-slack-app), invite the bot to the director channel, and set both variables in the shell that starts `takt daemon`. Tokens belong in environment variables, not configuration files. Restart the daemon after changing Slack settings.
 
 Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons use `manager.slack.allowed_user_ids`.
+
+Director registration and inquiry buttons also use `director.slack.allowed_user_ids`. Clicking “Register goal” outside that list does not register a goal. See [Using director](./director.md) for one-confirmation registration, question routing, and the Slack features outside this scope.
 
 Director groups new notices from one turn into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
 
