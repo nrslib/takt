@@ -17,6 +17,12 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it('roundtrips request cancellation using the existing launch, turn and request identity', () => {
+    const cancellation = { ...common, kind: 'cancel_daemon_request', turn, requestId: 'rpc-1' };
+    expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(cancellation)), common.launchId)).toEqual(cancellation);
+    expect(() => parseTurnProcessMessage({ ...cancellation, requestId: '' }, common.launchId)).toThrow();
+    expect(() => parseTurnProcessMessage({ ...cancellation, launchId: 'old' }, common.launchId)).toThrow();
+  });
   it('roundtrips tool identities, batched completions and results larger than the intermediate text limit', () => {
     const toolActivity = { callId: 'call', operationId: turn.operationId, generation: turn.generation };
     const toolId = 'provider-tool-'.repeat(30);

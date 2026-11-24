@@ -8,6 +8,7 @@ import { readWorkspaceRegistry } from '../../infra/config/global/workspaceRegist
 import { createLogger } from '../../shared/utils/debug.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { DirectorManagerStateStore } from '../../infra/director/managerState.js';
 
 const log = createLogger('director');
 
@@ -47,7 +48,12 @@ export async function listDirectorManagers(configDirectory: string): Promise<Dir
       errors.push({ repositoryDirectory, reason: sanitizeSensitiveText(getErrorMessage(error)) });
     }
   }
-  return { managers: [...managers.values()], errors };
+  const states = new DirectorManagerStateStore(configDirectory);
+  const active: ManagerAssignment[] = [];
+  for (const assignment of managers.values()) {
+    if (!await states.isFired(conversationId(assignment))) active.push(assignment);
+  }
+  return { managers: active, errors };
 }
 
 export async function resolveDirectorManager(configDirectory: string, id: string): Promise<ManagerAssignment> {

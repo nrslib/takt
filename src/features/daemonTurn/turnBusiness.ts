@@ -10,6 +10,7 @@ import type { TurnBusiness, TurnIo } from './processRuntime.js';
 import { createDaemonConversationRuntime } from '../director/conversationRuntime.js';
 import { createConversationTurnService } from '../manager/conversationService.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
+import { assertDirectorManagerHumanMessage } from '../../core/daemon/directorAuthorization.js';
 
 export async function createTurnBusiness(configDirectory: string, assignment: ConversationAssignment): Promise<TurnBusiness> {
   if (assignment.kind !== 'daemon') {
@@ -18,6 +19,26 @@ export async function createTurnBusiness(configDirectory: string, assignment: Co
   }
   let current: { input: TurnStart; io: TurnIo } | undefined;
   const runtime = createDaemonConversationRuntime(configDirectory, {
+    authorizeAddManager() {
+      if (current === undefined || current.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
+      assertDirectorManagerHumanMessage(current.input.event.event);
+    },
+    async addManager(repositoryDirectory, signal) {
+      const turn = current;
+      if (turn === undefined || turn.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
+      const reply = await turn.io.request({ kind: 'add_director_manager', repositoryDirectory }, signal);
+      if (reply.kind === 'error') throw new Error(reply.message);
+      if (reply.kind !== 'director_manager_added') throw new Error('Manager was not prepared');
+      return { managerId: reply.managerId };
+    },
+    async fireManager(managerId, signal) {
+      const turn = current;
+      if (turn === undefined || turn.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
+      const reply = await turn.io.request({ kind: 'fire_director_manager', managerId }, signal);
+      if (reply.kind === 'error') throw new Error(reply.message);
+      if (reply.kind !== 'director_manager_fired' || reply.managerId !== managerId) throw new Error('Manager was not fired');
+      return { managerId: reply.managerId };
+    },
     async tellManager(managerId, text, origin) {
       const turn = current;
       if (turn === undefined || turn.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');

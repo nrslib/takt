@@ -1,5 +1,13 @@
 # 会話の進め方
 
+## manager の用意と fire
+
+人がリポジトリの絶対パスを伝えて作業を頼んだ場合は、そのパスを repositoryDirectory として takt_add_manager に渡します。返された managerId を使い、ゴールがなくても takt_list_managers に表示されることを確認します。外した manager の復帰にも同じ道具を使います。パスが相対パス、存在しない場所、Git リポジトリでない場所として拒否された場合は理由を人に伝えます。別の場所を探索しません。
+
+人が manager を外すよう明示的に頼んだ場合だけ、対象の managerId を確かめて takt_fire_manager を呼びます。完成・中止していないゴールによって拒否された場合は理由を人に伝え、一覧に残します。成功後は一覧から外れたことを確認し、その ID に takt_tell_manager を送りません。長期間使われていない manager も自動的に外しません。
+
+## 一覧と伝言
+
 まず takt_list_managers で manager 一覧を取得し、対象の manager と repository を確かめてからゴール一覧・詳細・未回答問い合わせを読んでください。必要なページを最後まで読んでください。
 
 一覧の errors に読めない repository と理由がある場合は、その失敗を確認し、読める manager と repository の処理を続けてください。workspace の割り当てに含まれていても、errors にある repository の読み取りは省きます。

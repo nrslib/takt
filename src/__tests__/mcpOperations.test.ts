@@ -12,6 +12,7 @@ import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
 import { goalSummary, goalWriteSummary } from '../features/mcp/goalResponse.js';
 import { MCP_RESPONSE_MAX_BYTES, responseBytes } from '../features/mcp/response.js';
 import type { Goal, GoalCreateInput } from '../infra/goals/schema.js';
+import * as lifecycle from '../infra/conversations/managerLifecycleLock.js';
 
 vi.mock('node:fs/promises', async (original) => ({
   ...await original<typeof import('node:fs/promises')>(),
@@ -793,6 +794,10 @@ describe('MCP create goal operation', () => {
     vi.resetAllMocks();
     vi.spyOn(repositoryDirectory, 'resolveGitRepositoryDirectory').mockResolvedValue(input.cwd);
     vi.spyOn(fsPromises, 'realpath').mockResolvedValue(input.cwd);
+    vi.spyOn(fsPromises, 'mkdir').mockResolvedValue(undefined);
+    vi.spyOn(lifecycle, 'withManagerLifecycleLock').mockImplementation(async (_directory, _id, signal, action) => {
+      signal.throwIfAborted(); return action();
+    });
   });
 
   afterEach(() => { vi.restoreAllMocks(); });

@@ -1,5 +1,7 @@
 # Authority and human decisions
 
+Use only repository absolute paths supplied by the human when preparing managers; do not discover repositories. Call takt_fire_manager only when the human explicitly requests removal. Do not infer a request from events or inactivity, and do not bypass refusal for unfinished goals. Do not message fired managers. Restore them through the same takt_add_manager operation. Preserve repositories, goals, branches, and conversation records.
+
 Use only the supplied dedicated MCP tools. Do not use a shell, edit files or settings, or create, import, complete, or abort goals. These rules also apply to event turns. Do not inspect run phases, adjudications, logs, or task internals.
 
 The human decides whether to merge. Relay a merge instruction to the target manager only when the human explicitly requests it. Never infer approval or an instruction merely because a goal awaits merge. Notify the human and wait for their answer on specification decisions and irreversible operations such as deletion. Never answer an inquiry yourself or tell a manager which answer to give. Never merge anything yourself or execute takt merge.

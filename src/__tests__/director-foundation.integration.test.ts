@@ -64,14 +64,15 @@ import type { RunMeta } from '../core/workflow/run/run-meta.js';
 import { packageVersion } from '../shared/package-info.js';
 import * as privateFiles from '../shared/utils/private-file.js';
 
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({
   ...await original<typeof import('../infra/task/repositoryDirectory.js')>(), resolveGitRepositoryDirectory: async (value: string) => value,
 }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
-const actions = { tellManager: vi.fn(async () => ({ kind: 'accepted' })), notifyHuman: vi.fn(async (message: string) => ({ id: randomUUID(), message })) };
+const actions = { authorizeAddManager: vi.fn(), addManager: vi.fn(async () => ({ managerId: `manager-${'a'.repeat(64)}` })),
+  fireManager: vi.fn(async (managerId: string) => ({ managerId })),
+  tellManager: vi.fn(async () => ({ kind: 'accepted' })), notifyHuman: vi.fn(async (message: string) => ({ id: randomUUID(), message })) };
 let directory: string;
 const cleanups: Array<() => Promise<unknown>> = [];
 beforeEach(() => {
@@ -89,11 +90,10 @@ function decoded(result: Awaited<ReturnType<Client['callTool']>>): Record<string
   return JSON.parse(content.find((item) => item.type === 'text')!.text!) as Record<string, unknown>;
 }
 async function connectMcp() {
-  const server = createDirectorMcpServer(directory, actions, signal());
+  const connection = await startLocalMcpConnection((_request, _connection, resources) => createDirectorMcpServer(directory, actions, signal(), resources));
   const client = new Client({ name: 'director-test', version: '1' });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport); await client.connect(clientTransport);
-  cleanups.push(async () => { await client.close(); await server.close(); });
+  await client.connect(new StreamableHTTPClientTransport(new URL(connection.config.url), { requestInit: { headers: connection.config.headers } }));
+  cleanups.push(async () => { await client.close(); await connection.dispose(); });
   return { client };
 }
 async function seedManager(name: string) {

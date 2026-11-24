@@ -20,6 +20,13 @@ import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
+import * as fsPromises from 'node:fs/promises';
+import * as lifecycle from '../infra/conversations/managerLifecycleLock.js';
+import { conversationId } from '../infra/conversations/identity.js';
+
+vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>(),
+  realpath: async (path: string) => path,
+}));
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -47,6 +54,11 @@ vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.aut
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
 vi.mock('../features/daemonTurn/turnContext.js', () => ({ buildTurnBusinessContext: async () => 'saved-goal-memory' }));
 vi.mock('../infra/config/resolveConfigValue.js', () => ({ resolveConfigValue: () => 'en' }));
+vi.mock('../infra/conversations/managerLifecycleLock.js', () => ({
+  withManagerLifecycleLock: async (_directory: string, _id: string, signal: AbortSignal, action: () => Promise<unknown>) => {
+    signal.throwIfAborted(); return action();
+  },
+}));
 
 function fixture() {
   const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({ message: 'reply', summary: null, sessionId: 'session-after', assignment: undefined }));
@@ -591,6 +603,26 @@ it('saves approval reservation before registering a goal and uses the returned s
     approval: { state: 'registered' }, proposal: { revision: 2, pending: null } } });
   expect(f.execute).not.toHaveBeenCalled();
 });
+
+it('uses the canonical destination repository for workspace approval locking and registration', async () => {
+  const f = fixture();
+  const assignment = { kind: 'workspace' as const, workspaceId: randomUUID() };
+  f.input.state.assignment = assignment;
+  f.input.turn.conversationId = conversationId(assignment);
+  f.input.event.conversationId = conversationId(assignment);
+  doubles.assignment.mockResolvedValue({ ...assignment, name: 'apps', repositoryDirectories: ['/repository', '/second'] });
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/second',
+    summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  vi.spyOn(fsPromises, 'realpath').mockResolvedValue('/canonical');
+  const lock = vi.spyOn(lifecycle, 'withManagerLifecycleLock');
+  doubles.register.mockResolvedValue(goalRecord());
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered' } });
+  expect(fsPromises.realpath).toHaveBeenCalledWith('/second');
+  expect(lock).toHaveBeenCalledWith('/config', conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }), f.io.signal, expect.any(Function));
+  expect(doubles.register).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/canonical' }), f.io.signal);
+});
+
 it('never creates a goal if the reservation is rejected', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };

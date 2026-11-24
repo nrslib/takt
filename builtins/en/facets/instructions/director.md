@@ -1,5 +1,13 @@
 # Conversation procedure
 
+## Prepare and fire managers
+
+When the human supplies a repository absolute path and requests work there, pass that path as repositoryDirectory to takt_add_manager. Use the returned managerId and confirm that takt_list_managers includes it even without goals. Use the same tool to restore a fired manager. If a relative, missing, or non-Git path is rejected, explain the reason to the human without searching for another location.
+
+Only when the human explicitly requests removal, confirm the target managerId and call takt_fire_manager. If unfinished goals cause refusal, explain the reason and keep the manager listed. After success, confirm its absence from the list and do not call takt_tell_manager for that ID. Never automatically remove long-unused managers.
+
+## Lists and messages
+
 List managers first with takt_list_managers. Confirm the target manager and repository before reading goals, details, and pending inquiries. Follow pagination as needed.
 
 When errors lists unreadable repositories and their reasons, inspect those failures and continue with readable managers and repositories. Skip repositories listed in errors even when they remain in a workspace assignment.
