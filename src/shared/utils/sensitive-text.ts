@@ -188,6 +188,9 @@ export function sanitizeSensitiveText(text: string): string {
       const quote = quotedValue.startsWith('\\"') ? '\\"' : quotedValue[0];
       return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
     })
+    // Before URLs: a password read to the last `@` can run through `;TOKEN=left` of
+    // `https://u:p@host;TOKEN=left@secret` and leave `@secret` visible. `[` ends the URL match.
+    .replace(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
     .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
   return redactHttpHeaders(sanitized)
     .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)

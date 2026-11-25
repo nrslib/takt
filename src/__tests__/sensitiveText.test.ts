@@ -91,6 +91,16 @@ describe('sensitiveText', () => {
       .toBe('url=https://[REDACTED]@example.test');
   });
 
+  it('redacts the whole value of a secret assignment that follows a URL after `;`', () => {
+    const text = 'curl https://u:p@host;TOKEN=left@RIGHT_SECRET';
+    const expected = 'curl https://[REDACTED]@host;TOKEN=[REDACTED]';
+
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(sanitizeSensitiveText(text)).not.toContain('RIGHT_SECRET');
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).not.toContain('RIGHT_SECRET');
+    expect(sanitizeSensitiveTextWithKnownValues('echoed left@RIGHT_SECRET', { command: text })).toBe('echoed [REDACTED]');
+  });
+
   it.each([
     'url=https://u:pa55-word@db.internal;owner=ops@example.test',
     'https://u:pa55-word@host&notify=ops@example.test',
