@@ -7,6 +7,7 @@ import {
   fetchPrReviewComments,
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitReviewThreads,
+  hasCodeRabbitReviewThreads,
   fetchCacciaPullRequestDetails,
   fetchPrDetails,
   fetchCacciaPullRequestHeadSha,
@@ -444,6 +445,126 @@ describe('GitHub PR command boundary', () => {
       'number,title,body,url,headRefName,baseRefName,comments,reviews,files']);
     expect(execFileSync.mock.calls).toHaveLength(4);
     for (const [, args] of execFileSync.mock.calls.slice(1)) expect((args as string[]).slice(-2)).toEqual(['--hostname', hostname]);
+  });
+
+  describe('CodeRabbit review thread presence', () => {
+    const locator = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
+    function thread(login: string | null, isResolved = false) {
+      return { id: 'thread-7', isResolved,
+        comments: { nodes: [{ author: login === null ? null : { login } }] } };
+    }
+    function page(nodes: Array<ReturnType<typeof thread> & { isOutdated?: boolean }>, hasNextPage = false, endCursor: string | null = null, headRefOid = 'head-7') {
+      return { data: { repository: { pullRequest: { headRefOid,
+        reviewThreads: { nodes, pageInfo: { hasNextPage, endCursor } } } } } };
+    }
+
+    it('stops at the first unresolved CodeRabbit starter without fetching later pages or replies', async () => {
+      const signal = new AbortController().signal;
+      queueAsyncGhResponses(locator, page([thread('CodeRabbitAI')], true, 'later-page'));
+
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7', signal)).resolves.toBe(true);
+
+      expect(execFile).toHaveBeenCalledTimes(2);
+      for (const [, , options] of execFile.mock.calls) expect(options).toMatchObject({ cwd: '/source', signal });
+      const args = execFile.mock.calls[1]![1] as string[];
+      expect(args).toEqual(expect.arrayContaining(['owner=org', 'repo=repo', 'number=7']));
+      const query = args.find((arg) => arg.startsWith('query='))!;
+      expect(query).toMatch(/comments\(first:1\)/u);
+      for (const field of ['body', 'path', 'line', 'originalLine', 'url', 'resolvedBy']) {
+        expect(query).not.toMatch(new RegExp(`\\b${field}\\b`, 'u'));
+      }
+      expect(args.some((arg) => arg.startsWith('threadId=') || arg.startsWith('endCursor='))).toBe(false);
+    });
+
+    it('keeps outdated unresolved CodeRabbit starters eligible', async () => {
+      queueAsyncGhResponses(locator, page([{ ...thread('coderabbitai'), isOutdated: true }]));
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).resolves.toBe(true);
+    });
+
+    it.each([
+      ['no threads', []],
+      ['resolved CodeRabbit starter', [thread('coderabbitai', true)]],
+      ['deleted starter author', [thread(null)]],
+      ['CodeRabbit reply to a human starter', [{ ...thread('reviewer'), comments: {
+        ...thread('reviewer').comments, pageInfo: { hasNextPage: true, endCursor: 'coderabbit-reply' },
+      } }]],
+    ])('returns false for %s without fetching replies', async (_label, nodes) => {
+      queueAsyncGhResponses(locator, page(nodes));
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).resolves.toBe(false);
+      expect(execFile).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([false, true])('checks later pages before returning presence=%s', async (resolved) => {
+      queueAsyncGhResponses(locator, page([thread('reviewer')], true, 'next-page'), page([thread('coderabbitai', resolved)]));
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).resolves.toBe(!resolved);
+      expect(execFile).toHaveBeenCalledTimes(3);
+      expect(execFile.mock.calls[2]![1]).toContain('endCursor=next-page');
+    });
+
+    it.each(['github.com', 'ghe.example.test'])('uses the published target on %s', async (hostname) => {
+      const target = parseGitHubPullRequestTarget(`https://${hostname}/acme/target/pull/123`);
+      queueAsyncGhResponses({ url: target.url, headRefOid: 'head-7' }, page([], true, 'next-page'), page([thread('coderabbitai')]));
+      await expect(hasCodeRabbitReviewThreads(123, '/source', 'head-7', undefined, target)).resolves.toBe(true);
+      expect(execFile.mock.calls[0]![1]).toEqual(['pr', 'view', target.url, '--json', 'url,headRefOid']);
+      for (const [, args] of execFile.mock.calls.slice(1)) {
+        expect(args).toEqual(expect.arrayContaining(['owner=acme', 'repo=target', 'number=123']));
+        expect((args as string[]).slice(-2)).toEqual(['--hostname', hostname]);
+      }
+    });
+
+    it('rejects a locator for a different published target', async () => {
+      const target = parseGitHubPullRequestTarget('https://github.com/acme/target/pull/7');
+      queueAsyncGhResponses(locator);
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7', undefined, target)).rejects.toThrow();
+      expect(execFile).toHaveBeenCalledOnce();
+    });
+
+    it('rejects a changed locator head before querying threads', async () => {
+      queueAsyncGhResponses({ ...locator, headRefOid: 'other-head' });
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).rejects.toThrow();
+      expect(execFile).toHaveBeenCalledOnce();
+    });
+
+    it.each([false, true])('rejects a changed page head before accepting a match (later page=%s)', async (later) => {
+      queueAsyncGhResponses(locator, ...(later ? [page([], true, 'next-page')] : []),
+        page([thread('coderabbitai')], false, null, 'other-head'));
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).rejects.toThrow();
+    });
+
+    it.each([
+      new Error('GitHub query failed'),
+      new DOMException('The operation was aborted', 'AbortError'),
+    ])('propagates command failures: %s', async (failure) => {
+      queueAsyncGhResponses(locator, failure);
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).rejects.toBe(failure);
+    });
+
+    it('rejects GraphQL errors rather than reporting no threads', async () => {
+      queueAsyncGhResponses(locator, { errors: [{ message: 'Forbidden' }] });
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).rejects.toThrow();
+    });
+
+    it('rejects a missing starter on an unresolved thread', async () => {
+      queueAsyncGhResponses(locator, page([{ id: 'missing-starter', isResolved: false, comments: { nodes: [] } }]));
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).rejects.toThrow();
+    });
+
+    it('rejects a missing cursor when more pages are required', async () => {
+      queueAsyncGhResponses(locator, page([], true));
+      await expect(hasCodeRabbitReviewThreads(7, '/source', 'head-7')).rejects.toThrow();
+      expect(execFile).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['match', 'last-page', 'more-pages'] as const)('handles page 100 with %s', async (boundary) => {
+      queueAsyncGhResponses(locator,
+        ...Array.from({ length: 99 }, (_, index) => page([], true, `page-${index + 2}`)),
+        page(boundary === 'match' ? [thread('coderabbitai')] : [], boundary !== 'last-page', 'page-101'));
+      const result = hasCodeRabbitReviewThreads(7, '/source', 'head-7');
+      if (boundary === 'more-pages') await expect(result).rejects.toThrow();
+      else await expect(result).resolves.toBe(boundary === 'match');
+      expect(execFile).toHaveBeenCalledTimes(101);
+      expect(execFile.mock.calls[100]![1]).toContain('endCursor=page-100');
+    });
   });
 
   it('returns only unresolved CodeRabbit threads, using the first comment and all thread pages asynchronously', async () => {

@@ -1202,6 +1202,8 @@ caccia:
 
 ### Caccia system effect
 
+在 GitHub 上，effect 验证开始时的 head 后，检查由 `coderabbitai` 发起且尚未解决的线程。没有符合条件的线程时，不等待审查，直接返回 `skipped`，原因为 `skipReason: no_review_threads`。合并 workflow 继续进入 `wait_ci`，等待返回 head 的 CI 完成。有符合条件的线程时，执行既有的审查处理循环。独立命令 `takt caccia` 和 PR 发布后的自动 Caccia 保留初次审查等待。
+
 此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时跳过 CodeRabbit 审查等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
 
 在 GitHub 上执行前，effect 将 PR head 与 clone 开始时的 HEAD 比较。不一致时每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。同一次 PR 信息获取中观测到不同 head 时，也在同一期限内重试。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后观测到的 SHA 的 `error`。如果最后一次观测不一致，还会显示冲突的两个 SHA。PR 身份信息变化、认证失败等其他获取异常或取消都会立即导致失败。如果存在执行元数据和 push 记录器，记录跳过结果前也会执行相同检查，因此关闭或未配置时仍可能等待 GitHub head 更新。此固定等待独立于 `wait_timeout_ms` 控制的审查等待，不适用于非 GitHub 的跳过检查或执行结束后的 head 验证。
@@ -1221,7 +1223,7 @@ caccia:
         next: wait_ci
 ```
 
-正常结果包含 `success: true`、`failed: false`、`outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason` 和 `reason`；不适用的原因字段为 `null`。条件使用 `effect.<step>.caccia.*`，模板使用 `{effect:<step>.caccia.<field>}`。跳过原因包括 `config_disabled`、`github_unavailable`、`initial_review_unavailable`、`review_rate_limited` 和 `review_skipped`。失败返回 `success: false`、`failed: true` 与 `error`，不保证 head。读取正常字段前先判断失败。
+正常结果包含 `success: true`、`failed: false`、`outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason` 和 `reason`；不适用的原因字段为 `null`。条件使用 `effect.<step>.caccia.*`，模板使用 `{effect:<step>.caccia.<field>}`。跳过原因包括 `config_disabled`、`github_unavailable`、`no_review_threads`、`initial_review_unavailable`、`review_rate_limited` 和 `review_skipped`。失败返回 `success: false`、`failed: true` 与 `error`，不保证 head。读取正常字段前先判断失败。
 
 修复 push 后验证 SHA 并对同一个 clone 进行 fast-forward。CI 将 PR status 的 head 与 `effect.caccia.caccia.headSha` 对照，合并使用 clone 当前 HEAD 作为 expected SHA。此前 push effect 的结果作为历史记录保留。
 

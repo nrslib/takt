@@ -393,6 +393,26 @@ query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
 }
 `;
 
+const CODERABBIT_REVIEW_THREAD_PRESENCE_QUERY = `
+query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      headRefOid
+      reviewThreads(first:${REVIEW_THREADS_PER_PAGE}, after:$endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          comments(first:1) {
+            nodes { author { login } }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+
 const CODERABBIT_REVIEW_THREADS_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
   repository(owner:$owner, name:$repo) {
@@ -602,6 +622,32 @@ function parseReviewThreadsResponse(raw: string): GhGraphqlReviewThreadsConnecti
   }
 
   return pullRequest.reviewThreads;
+}
+
+const codeRabbitThreadPresencePageSchema = z.object({
+  pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }),
+  nodes: z.array(z.object({
+    id: z.string().min(1),
+    isResolved: z.boolean(),
+    comments: z.object({
+      nodes: z.array(z.object({ author: z.object({ login: z.string() }).nullable() })).max(1),
+    }),
+  })),
+});
+
+function parseCodeRabbitThreadPresencePage(raw: string, prNumber: number, expectedHeadSha: string) {
+  const parsed = JSON.parse(raw) as {
+    data?: { repository?: { pullRequest?: { headRefOid?: unknown; reviewThreads?: unknown } | null } | null };
+    errors?: Array<{ message: string }>;
+  };
+  if (parsed.errors && parsed.errors.length > 0) {
+    throw new Error(parsed.errors.map((error) => error.message).join('; '));
+  }
+  const pullRequest = parsed.data?.repository?.pullRequest;
+  if (pullRequest?.headRefOid !== expectedHeadSha) {
+    throw new Error(`Pull request #${prNumber} head changed while reading review threads`);
+  }
+  return codeRabbitThreadPresencePageSchema.parse(pullRequest.reviewThreads);
 }
 
 function parseCodeRabbitReviewThreadsResponse(
@@ -1255,6 +1301,45 @@ function parseCodeRabbitReviewRateLimit(
   if (!Number.isFinite(observedAt)) return undefined;
   const delayMs = parseReviewRetryDelayMs(block);
   return { observedAt, ...(delayMs === undefined ? {} : { retryAt: observedAt + delayMs }) };
+}
+
+export async function hasCodeRabbitReviewThreads(
+  prNumber: number,
+  cwd: string,
+  expectedHeadSha: string,
+  signal?: AbortSignal,
+  target?: GitHubPullRequestTarget,
+): Promise<boolean> {
+  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal, target);
+  if (locator.headSha !== expectedHeadSha) {
+    throw new Error(`Pull request #${prNumber} head changed before reading review threads`);
+  }
+  let endCursor: string | undefined;
+  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
+    const raw = await runGhCommand(
+      buildCodeRabbitGraphqlArgs(locator.owner, locator.repo, prNumber, CODERABBIT_REVIEW_THREAD_PRESENCE_QUERY, endCursor),
+      cwd,
+      undefined,
+      signal,
+      undefined,
+      locator.hostname,
+    );
+    const response = parseCodeRabbitThreadPresencePage(raw, prNumber, expectedHeadSha);
+    for (const thread of response.nodes) {
+      if (thread.isResolved) continue;
+      const starter = thread.comments.nodes[0];
+      if (!starter) {
+        throw new Error(`Missing starter comment for review thread ${thread.id} in pull request #${prNumber}`);
+      }
+      if (starter.author?.login.toLowerCase() === CODERABBIT_LOGIN) return true;
+    }
+    if (!response.pageInfo.hasNextPage) return false;
+    if (!response.pageInfo.endCursor) {
+      throw new Error(`Missing reviewThreads endCursor for pull request #${prNumber}`);
+    }
+    endCursor = response.pageInfo.endCursor;
+  }
+  throw new Error(`Pagination limit exceeded while fetching pull request #${prNumber} review threads (>${GRAPHQL_PAGINATION_HARD_CAP} pages)`);
 }
 
 /** Returns unresolved review threads whose first comment was created by CodeRabbit. */
