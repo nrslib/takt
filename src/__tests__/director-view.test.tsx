@@ -35,7 +35,7 @@ it('shows the director proposal contents and selected manager and submits one ex
   expect(client.commands()).toEqual([]);
   app.stdin.write('\x1b[A');
   app.stdin.write('\r');
-  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: client.getSnapshot().state!.conversationId }]));
 });
 
 it('updates the proposal and resets the selected approval on the same director screen', async () => {
@@ -47,19 +47,20 @@ it('updates the proposal and resets the selected approval on the same director s
   client.change({ state: { ...client.getSnapshot().state!, revision: 5, pending: changed } });
   await vi.waitFor(() => expect(app.lastFrame()).toContain(changed.summary.objective));
   app.stdin.write('\r');
-  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 5 }]));
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 5, conversationId: client.getSnapshot().state!.conversationId }]));
 });
 
-it.each(['disconnected', 'reading'] as const)('does not approve a director proposal while %s', async (status) => {
-  const { client } = proposalClient();
-  client.change(status === 'disconnected' ? { connection: 'disconnected' } : { readStatus: 'reading' });
-  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel(`manager.conversation.${status}`, 'en')));
-  app.stdin.write('\x1b[A');
-  app.stdin.write('\r');
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(client.commands()).toEqual([]);
-});
+it.each(['disconnected', 'reading'].flatMap((status) => [true, false].map((approve) => ({ status, approve }))))(
+  'does not submit a director proposal while $status (approve: $approve)', async ({ status, approve }) => {
+    const { client } = proposalClient();
+    client.change(status === 'disconnected' ? { connection: 'disconnected' } : { readStatus: 'reading' });
+    const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel(`manager.conversation.${status}`, 'en')));
+    if (approve) app.stdin.write('\x1b[A');
+    app.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(client.commands()).toEqual([]);
+  });
 
 function humanInquiry(): Extract<SnapshotValue, { kind: 'inquiry' }> {
   return { kind: 'inquiry', inquiry: {

@@ -288,7 +288,17 @@ it.each([SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS])('submits a director %s button 
     await port.receiveAction(endpoint, actionId, JSON.stringify({ conversationId: id, revision: 4 }), 'button-request');
     expect(input.open).toHaveBeenCalledWith(expect.objectContaining({ conversationId: id, assignment: { kind: 'daemon' } }), expect.any(Object));
     expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ requestId: 'button-request', command:
-      actionId === SLACK_GOAL_APPROVE ? { kind: 'approve_summary', revision: 4, requirePending: true } : { kind: 'dismiss_summary', revision: 4 } }));
+      actionId === SLACK_GOAL_APPROVE ? { kind: 'approve_summary', revision: 4, conversationId: id, requirePending: true } : { kind: 'dismiss_summary', revision: 4, conversationId: id } }));
+  } finally { await port.close(); }
+});
+
+it.each([SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS])('rejects a director %s button for another conversation', async (actionId) => {
+  const { port, input } = fixture();
+  try {
+    const foreign = conversationId({ kind: 'repository', repositoryDirectory: '/other' });
+    await port.receiveAction(endpoint, actionId, JSON.stringify({ conversationId: foreign, revision: 4 }), 'button-request');
+    expect(input.open).not.toHaveBeenCalled();
+    expect(input.submit).not.toHaveBeenCalled();
   } finally { await port.close(); }
 });
 

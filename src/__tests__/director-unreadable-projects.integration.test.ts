@@ -90,7 +90,7 @@ async function projectsWithNonGitDirectory() {
 
 async function withMcp(action: (client: Client) => Promise<void>): Promise<void> {
   const connection = await startLocalMcpConnection((_request, _connection, resources) => createDirectorMcpServer(directory,
-    { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn(), addManager: vi.fn(), fireManager: vi.fn(), tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal, resources));
+    { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<(repositoryDirectory: string) => void>(), addManager: vi.fn(), fireManager: vi.fn(), tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal, resources));
   const client = new Client({ name: 'unreadable-project-test', version: '1' });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(connection.config.url), { requestInit: { headers: connection.config.headers } }));

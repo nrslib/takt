@@ -460,7 +460,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     if (signal.aborted) { response.reject(signal.reason); return; }
     const event = active.event.event;
     if (request.kind === 'add_director_manager') {
-      try { assertDirectorManagerHumanMessage(event); }
+      try { assertDirectorManagerHumanMessage(event, request.repositoryDirectory); }
       catch (error) {
         response.resolve({ kind: 'error', code: 'forbidden', message: getErrorMessage(error) });
         return;

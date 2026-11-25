@@ -30,7 +30,7 @@ export const DIRECTOR_TOOL_ALLOWLIST = DIRECTOR_TOOL_NAMES.map((name) => `mcp__$
 
 export interface DirectorStateActions {
   setQuestionRoute(target: DirectorGoalTarget, route: 'human' | 'director', origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
-  authorizeAddManager(): void;
+  authorizeAddManager(repositoryDirectory: string): void;
   addManager(repositoryDirectory: string, signal: AbortSignal): Promise<{ managerId: string }>;
   fireManager(managerId: string, signal: AbortSignal): Promise<{ managerId: string }>;
   tellManager(managerId: string, text: string, origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
@@ -54,7 +54,7 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
       try {
         const input = addInput.parse(message.params.arguments);
         if (!isAbsolute(input.repositoryDirectory)) throw new Error('Repository directory must be an absolute path');
-        actions.authorizeAddManager();
+        actions.authorizeAddManager(input.repositoryDirectory);
         value = { suppliedDirectory: input.repositoryDirectory, directory: await resolveGitRepositoryDirectory(input.repositoryDirectory) };
       } catch (error) { value = { error }; }
       prepared.push([message.id, value]); repositories.set(message.id, value);

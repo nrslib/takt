@@ -28,7 +28,7 @@ vi.mock('../infra/conversations/assignmentLock.js', () => ({ acquireRepositoryAs
 beforeEach(() => { vi.resetAllMocks(); doubles.handlers.clear(); doubles.schemas.clear(); doubles.requests.clear();
   doubles.git.mockImplementation(async (path: string) => path); doubles.acquire.mockResolvedValue(vi.fn(async () => {})); });
 function fixture() {
-  const actions = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn(), tellManager: vi.fn(async () => ({ kind: 'accepted', operationId: 'operation', managerId: 'manager' })),
+  const actions = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<(repositoryDirectory: string) => void>(), tellManager: vi.fn(async () => ({ kind: 'accepted', operationId: 'operation', managerId: 'manager' })),
     addManager: vi.fn(async (_repositoryDirectory: string) => ({ managerId: `manager-${'a'.repeat(64)}` })),
     fireManager: vi.fn(async (managerId: string) => ({ managerId })),
     notifyHuman: vi.fn(async (message: string) => ({ id: 'notice', message })) };
@@ -62,7 +62,7 @@ it('delegates the supplied repository to the daemon action and returns its manag
   const handler = doubles.handlers.get('takt_add_manager');
   expect(handler).toBeTypeOf('function');
   const result = await handler!({ repositoryDirectory: '/work/blog' });
-  expect(f.actions.authorizeAddManager).toHaveBeenCalledExactlyOnceWith();
+  expect(f.actions.authorizeAddManager).toHaveBeenCalledExactlyOnceWith('/work/blog');
   expect(f.actions.addManager).toHaveBeenCalledExactlyOnceWith('/work/blog', f.controller.signal);
   expect(result.isError).toBeUndefined();
   expect(JSON.parse(firstTextContent(result.content))).toEqual({ managerId: `manager-${'a'.repeat(64)}` });
@@ -92,6 +92,7 @@ it('keeps the supplied path separate from the canonical lock path', async () => 
   const f = fixture();
   doubles.git.mockResolvedValueOnce('/canonical/blog');
   expect((await doubles.handlers.get('takt_add_manager')!({ repositoryDirectory: '/work/blog' })).isError).not.toBe(true);
+  expect(f.actions.authorizeAddManager).toHaveBeenCalledExactlyOnceWith('/work/blog');
   expect(doubles.acquire).toHaveBeenCalledWith('/config', ['/canonical/blog'], f.controller.signal);
   expect(f.actions.addManager).toHaveBeenCalledWith('/work/blog', f.controller.signal);
 });

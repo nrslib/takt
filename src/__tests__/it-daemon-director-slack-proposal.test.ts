@@ -198,13 +198,13 @@ async function expectRegistered(f: Awaited<ReturnType<typeof fixture>>, revision
 it.each(['approve_summary', 'dismiss_summary'] as const)('reflects TUI %s on the original Slack post and rejects revision three', async (kind) => {
   const f = await fixture();
   await propose(f);
-  expect(await f.submit({ kind, revision: 3 })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  expect(await f.submit({ kind, revision: 3, conversationId: id })).toMatchObject({ kind: 'error', code: 'stale_summary' });
   await f.settled();
   expect((await f.state()).pending?.revision).toBe(4);
   expect(f.client.updateMessage).not.toHaveBeenCalled();
   expect(f.events()).toEqual([]);
 
-  expect(await f.submit({ kind, revision: 4 })).toMatchObject({ kind: 'accepted' });
+  expect(await f.submit({ kind, revision: 4, conversationId: id })).toMatchObject({ kind: 'accepted' });
   await f.settled();
   if (kind === 'approve_summary') await expectRegistered(f, 4);
   else {
@@ -247,7 +247,7 @@ it.each(['delivered', 'unavailable'] as const)('keeps both revised posts registe
   f.updateResults.push({ kind: 'delivered' }, { kind: 'delivered' },
     ...(detail === 'delivered' ? [{ kind: 'delivered' as const }, { kind: 'delivered' as const }]
       : [{ kind: 'unavailable' as const, reason: 'detail-offline' }]));
-  expect(await f.submit({ kind: 'approve_summary', revision: 5 })).toMatchObject({ kind: 'accepted' });
+  expect(await f.submit({ kind: 'approve_summary', revision: 5, conversationId: id })).toMatchObject({ kind: 'accepted' });
   await f.settled();
   const goal = await registeredGoal(f, 5, revised, 2);
   expect(f.outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: { kind: 'goal_registered', goal } }));
@@ -418,7 +418,7 @@ it('reports failed registration updates without rolling back or repeating regist
   await propose(f);
   const original = structuredClone(f.posts.get('posted'));
   f.client.updateMessage.mockResolvedValue({ kind: 'unavailable', reason: 'update-offline' });
-  await f.submit({ kind: 'approve_summary', revision: 4 });
+  await f.submit({ kind: 'approve_summary', revision: 4, conversationId: id });
   await f.settled();
   const state = await f.state();
   expect(state).toMatchObject({ pending: null, approval: { state: 'registered', revision: 4 } });
@@ -443,7 +443,7 @@ it.each(['tui', 'slack'] as const)('retains a registered receipt after a %s appr
   const approve = buttons(f.posts.get('posted')!.blocks).find((button) => button.action_id === SLACK_GOAL_APPROVE)!;
   f.updateResults.push({ kind: 'delivered' }, { kind: 'unavailable', reason: 'detail-offline' });
   if (origin === 'slack') await f.receive(actionEvent(approve.action_id, approve.value, 'U_ALLOWED'));
-  else { await f.submit({ kind: 'approve_summary', revision: 4 }); await f.settled(); }
+  else { await f.submit({ kind: 'approve_summary', revision: 4, conversationId: id }); await f.settled(); }
   const goal = await registeredGoal(f, 4);
   expect(f.client.updateMessage).toHaveBeenCalledTimes(2);
   expect(f.updateResults).toEqual([]);

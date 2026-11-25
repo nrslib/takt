@@ -55,9 +55,9 @@ it.each(['approve_summary', 'dismiss_summary'] as const)('admits director %s onl
   f.loadSnapshot.mockResolvedValue({ ...snapshot, turnState: { ...snapshot.turnState, pending } });
   try {
     expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'old', speaker: f.selected.speaker,
-      command: { kind, revision: 2 } })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+      command: { kind, revision: 2, conversationId: f.selected.conversationId } })).toMatchObject({ kind: 'error', code: 'stale_summary' });
     expect(f.ingress.accept).not.toHaveBeenCalled();
-    const command = { kind, revision: 3 };
+    const command = { kind, revision: 3, conversationId: f.selected.conversationId };
     expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'current', speaker: f.selected.speaker, command }))
       .toMatchObject({ kind: 'accepted' });
     expect(f.ingress.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'tui',

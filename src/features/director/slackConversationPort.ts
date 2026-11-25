@@ -179,8 +179,8 @@ export function createDirectorSlackConversationPort(options: {
       const proposal = parseSlackGoalProposal(value);
       if (proposal?.conversationId !== id) return;
       return receiveMessage(endpoint, actionId === SLACK_GOAL_APPROVE
-        ? { kind: 'approve_summary', revision: proposal.revision, requirePending: true }
-        : { kind: 'dismiss_summary', revision: proposal.revision }, requestId);
+        ? { kind: 'approve_summary', revision: proposal.revision, conversationId: proposal.conversationId, requirePending: true }
+        : { kind: 'dismiss_summary', revision: proposal.revision, conversationId: proposal.conversationId }, requestId);
     }
     const binding = await bindings.find(endpoint.channelId, endpoint.parentTs);
     if (binding === undefined || actionId !== `${SLACK_INQUIRY_ACTION}_${value}`) return;

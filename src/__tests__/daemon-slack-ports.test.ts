@@ -139,7 +139,7 @@ it.each([SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS])('routes the emitted director %
     await receive(goalAction('C0DIR', 'U0AAA', actionId, button.value));
     expect(input.open).toHaveBeenCalledWith(expect.objectContaining({ conversationId: id, assignment: { kind: 'daemon' } }), expect.any(Object));
     expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command:
-      actionId === SLACK_GOAL_APPROVE ? { kind: 'approve_summary', revision: 4, requirePending: true } : { kind: 'dismiss_summary', revision: 4 } }));
+      actionId === SLACK_GOAL_APPROVE ? { kind: 'approve_summary', revision: 4, conversationId: id, requirePending: true } : { kind: 'dismiss_summary', revision: 4, conversationId: id } }));
     expect(managerPort.receiveAction).not.toHaveBeenCalled();
     expect(managerPort.receive).not.toHaveBeenCalled();
   } finally { await ports.close(); }
@@ -152,7 +152,7 @@ it('routes a director proposal button in its thread even without an inquiry bind
     const value = JSON.stringify({ conversationId: conversationId({ kind: 'daemon' }), revision: 4 });
     await client.start.mock.calls[0]![0](goalAction('C0DIR', 'U0AAA', SLACK_GOAL_APPROVE, value, 'parent'));
     expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      command: { kind: 'approve_summary', revision: 4, requirePending: true } }));
+      command: { kind: 'approve_summary', revision: 4, conversationId: conversationId({ kind: 'daemon' }), requirePending: true } }));
   } finally { await ports.close(); }
 });
 

@@ -182,7 +182,7 @@ function directorSummary(objective = '記事一覧') {
     managerId: conversationId({ kind: 'repository', repositoryDirectory: '/blog' }), repositoryDirectory: '/blog' };
 }
 function directorApproval(revision: number): TurnEvent {
-  return { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision } };
+  return { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision, conversationId: conversationId({ kind: 'daemon' }) } };
 }
 
 it('saves a director-selected manager from an ordinary request without registering on AI output', async () => {
@@ -807,7 +807,7 @@ it('uses the canonical destination repository for workspace approval locking and
   doubles.assignment.mockResolvedValue({ ...assignment, name: 'apps', repositoryDirectories: ['/repository', '/second'] });
   f.input.state.pending = { revision: 1, repositoryDirectory: '/second',
     summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: f.input.turn.conversationId } };
   vi.spyOn(fsPromises, 'realpath').mockResolvedValue('/canonical');
   const lock = vi.spyOn(lifecycle, 'withManagerLifecycleLock');
   doubles.register.mockResolvedValue(goalRecord());

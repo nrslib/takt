@@ -41,7 +41,7 @@ describe('event driven daemon dispatcher', () => {
   ])('rejects $kind from a human command that is not a message without blocking other state requests', async (request) => {
     const h = await harness();
     await h.dispatcher.accept({ ...input('summary'), event: { kind: 'human_command',
-      command: { kind: 'dismiss_summary', revision: 1 }, speaker: { namespace: 'test', id: 'operator' } } });
+      command: { kind: 'dismiss_summary', revision: 1, conversationId: input('summary').conversationId }, speaker: { namespace: 'test', id: 'operator' } } });
     const active = await h.runner.started(1);
     try {
       expect(await h.dispatcher.request(active.turn, request, active.signal))

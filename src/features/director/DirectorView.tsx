@@ -133,8 +133,9 @@ export function DirectorView({ client, lang, onExit }: {
         || current.state?.running != null || current.state?.pending?.revision !== pending.revision) return;
       submittingProposal.current = true;
       const chosen = proposalChoiceRef.current;
-      void client.submit(chosen?.revision === pending.revision && chosen.approve && !key.escape ? { kind: 'approve_summary', revision: pending.revision }
-        : { kind: 'dismiss_summary', revision: pending.revision }).then((result) => {
+      void client.submit(chosen?.revision === pending.revision && chosen.approve && !key.escape
+        ? { kind: 'approve_summary', revision: pending.revision, conversationId: current.state.conversationId }
+        : { kind: 'dismiss_summary', revision: pending.revision, conversationId: current.state.conversationId }).then((result) => {
         if (result.kind === 'error') append(result.message);
       }).catch((error: unknown) => append(getErrorMessage(error))).finally(() => { submittingProposal.current = false; });
       return;

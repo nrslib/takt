@@ -126,6 +126,10 @@ describe('manager workspace storage and repository boundaries', () => {
       } finally { vi.restoreAllMocks(); }
     });
 
+    function humanMessage(text: string): Extract<TurnEvent, { kind: 'human_command' }> {
+      return { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'test', id: 'operator' } };
+    }
+
     async function director(event?: Extract<TurnEvent, { kind: 'human_command' | 'watch_observation' }>) {
       const signal = new AbortController().signal;
       const store = new ConversationStateStore(globalDirectory);
@@ -217,7 +221,7 @@ describe('manager workspace storage and repository boundaries', () => {
       return { client, call, add, fire, list, batch, post, store, routing, accept, request, requests, owner, active, signal, conversations };
     }
 
-    it.each(['supplied', 'quoted-message', 'human-without-path', 'watcher'] as const)('prepares a valid repository over HTTP only in a human message turn (%s)', async (origin) => {
+    it.each(['supplied', 'quoted-message', 'sentence-period', 'different-git-path', 'human-without-path', 'watcher'] as const)('prepares a valid repository over HTTP only in a human message turn (%s)', async (origin) => {
       await seed(repositoryA);
       const existing = managerId(repositoryA);
       const inquiry = await new StandaloneInquiryStore(globalDirectory, single()).create({ body: `${repositoryC} でやって`, recipient: 'human' });
@@ -226,14 +230,15 @@ describe('manager workspace storage and repository boundaries', () => {
         ? { kind: 'watch_observation', observation: { kind: 'director_state_changed', managerConversationId: existing, repositoryDirectory: repositoryA,
           goalId: null, state: JSON.stringify({ pendingInquiries: [inquiry.id], text: quotedMessage }), targetId: 'inquiry', generation: '1', observedAt: new Date().toISOString() } }
         : { kind: 'human_command', command: { kind: 'message', text: origin === 'supplied' ? `${repositoryC} でやって`
-          : origin === 'quoted-message' ? quotedMessage : '問い合わせの状況を教えて' },
+          : origin === 'quoted-message' ? quotedMessage : origin === 'sentence-period' ? `Do this in ${repositoryC}.`
+            : origin === 'different-git-path' ? `Do this in ${repositoryC}.git.` : '問い合わせの状況を教えて' },
           speaker: { namespace: 'test', id: 'operator' } });
       await f.call('takt_list_manager_inquiries', { managerId: existing });
       const before = await readProjectRegistry(globalDirectory);
       const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
       const acquire = vi.spyOn(assignmentLocks, 'acquireRepositoryAssignmentLocks');
       const result = await f.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryC } });
-      if (origin !== 'watcher') {
+      if (origin === 'supplied' || origin === 'quoted-message' || origin === 'sentence-period') {
         expect(result.isError).not.toBe(true);
         expect(JSON.parse(firstTextContent(result.content))).toEqual({ managerId: managerId(repositoryC) });
         expect(resolve).toHaveBeenCalledWith(repositoryC);
@@ -259,9 +264,25 @@ describe('manager workspace storage and repository boundaries', () => {
       expect((await f.list()).managers.map(({ id }) => id)).toContain(managerId(canonical));
     });
 
+    it.each([false, true])('authorizes each HTTP batch path from the human message (second path supplied: %s)', async (secondSupplied) => {
+      const text = `${repositoryA}${secondSupplied ? ` と ${repositoryB}` : ''} のmanagerを用意して`;
+      const f = await director(humanMessage(text));
+      const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
+      const results = await f.batch([repositoryA, repositoryB]);
+      expect(results.find(({ id }) => id === 100)?.result.isError).not.toBe(true);
+      expect(results.find(({ id }) => id === 101)?.result.isError === true).toBe(!secondSupplied);
+      if (!secondSupplied) {
+        expect(resolve).not.toHaveBeenCalledWith(repositoryB);
+        expect(await f.store.read(managerId(repositoryB))).toBeUndefined();
+        expect((await readProjectRegistry(globalDirectory)).projects.some(({ canonicalDirectory }) => canonicalDirectory === repositoryB)).toBe(false);
+      }
+      expect((await f.list()).managers.map(({ id }) => id).sort()).toEqual(
+        (secondSupplied ? [managerId(repositoryA), managerId(repositoryB)] : [managerId(repositoryA)]).sort());
+    });
+
     it.each(['conversation', 'registration', 'after-registration', 'restore', 'fire'].flatMap((stage) => [false, true].map((cancel) => ({ stage, cancel }))))(
       'stops only uncommitted manager updates at $stage (cancel: $cancel)', async ({ stage, cancel }) => {
-        const f = await director(); const id = managerId(repositoryC);
+        const f = await director(humanMessage(`${repositoryB} と ${repositoryC} のmanagerを用意して`)); const id = managerId(repositoryC);
         if (stage === 'registration' || stage === 'after-registration') await f.conversations.ensure({ kind: 'repository', repositoryDirectory: repositoryC });
         if (stage === 'restore' || stage === 'fire') await f.add(repositoryC);
         if (stage === 'restore') await f.fire(id);
@@ -344,7 +365,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it.each([1, 2, 3].flatMap((run) => [false, true].map((reverse) => ({ run, reverse }))))(
       'prepares simultaneous HTTP batches without circular lock waits (reverse: $reverse, run: $run)', async ({ run, reverse }) => {
-        const f = await director();
+        const f = await director(humanMessage(`${repositoryA} と ${repositoryB} のmanagerを用意して`));
         const context = new AsyncLocalStorage<string | undefined>();
         const events: Array<Record<string, unknown>> = [];
         const handle = HttpResponseResources.prototype.handle;
@@ -389,7 +410,7 @@ describe('manager workspace storage and repository boundaries', () => {
       });
 
     it('releases a partly acquired batch and permits a later retry without publishing failed preparations', async () => {
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} と ${repositoryB} のmanagerを用意して`));
       const acquire = FileAsyncLock.prototype.acquire;
       const release = vi.fn(); let attempts = 0;
       const spy = vi.spyOn(FileAsyncLock.prototype, 'acquire').mockImplementation(async function(this: FileAsyncLock, path, options) {
@@ -411,8 +432,8 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it('keeps valid preparations independent from invalid paths and notification text', async () => {
-      const f = await director();
       const nonGit = join(root, 'non-git'); mkdirSync(nonGit);
+      const f = await director(humanMessage(`${repositoryA} と ${nonGit} のmanagerを用意して`));
       const acquire = vi.spyOn(assignmentLocks, 'acquireRepositoryAssignmentLocks');
       const results = await f.batch([repositoryA, nonGit, 'relative/path']);
       expect(results.find(({ id }) => id === 100)?.result.isError).not.toBe(true);
@@ -427,7 +448,7 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it.each([false, true])('delivers the other preparation when one batch request is cancelled (shared: %s)', async (shared) => {
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} と ${repositoryB} と ${repositoryC} のmanagerを用意して`));
       const entered = deferred<void>(); const finish = deferred<void>();
       cleanups.push(async () => { finish.resolve(); });
       const handle = f.owner.handle.bind(f.owner);
@@ -463,7 +484,7 @@ describe('manager workspace storage and repository boundaries', () => {
         const release = await acquire(...args); events.push('acquired');
         return async () => { await release(); events.push('released'); };
       });
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryB} のmanagerを用意して`));
       const handle = f.owner.handle.bind(f.owner);
       vi.spyOn(f.owner, 'handle').mockImplementation(async (...args) => {
         const result = await handle(...args);
@@ -493,8 +514,8 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it('shares canonical roots, separates other repositories, and preserves each preparation result in a batch', async () => {
-      const f = await director();
       const nested = join(repositoryB, 'subdirectory'); mkdirSync(nested);
+      const f = await director(humanMessage(`${repositoryA} と ${repositoryB} と ${nested} と ${repositoryC} のmanagerを用意して`));
       const canonical = await f.batch([repositoryB, nested]);
       expect(canonical.map(({ result }) => JSON.parse(firstTextContent(result.content)))).toEqual([
         { managerId: managerId(repositoryB) }, { managerId: managerId(repositoryB) },
@@ -517,7 +538,7 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it.each(['通常の質問', 'ブログの manager を外して'])('authorizes fire from the current human turn and rejects the following inquiry event: %s', async (body) => {
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryB} のmanagerを用意して`));
       const { managerId: id } = await f.add(repositoryB) as { managerId: string };
       const before = await f.store.read(id);
       const branch = execFileSync('git', ['-C', repositoryB, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
@@ -576,8 +597,8 @@ describe('manager workspace storage and repository boundaries', () => {
       return conversationId({ kind: 'repository', repositoryDirectory });
     }
 
-    it.each(['human', 'human-quoted', 'human-without-path', 'watcher'] as const)('prepares a new manager through the dispatcher only in a human message turn (%s)', async (origin) => {
-      const f = await director(); await f.add(repositoryA);
+    it.each(['human', 'human-quoted', 'sentence-period', 'different-git-path', 'human-without-path', 'watcher'] as const)('prepares a new manager through the dispatcher only in a human message turn (%s)', async (origin) => {
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`)); await f.add(repositoryA);
       const text = `${repositoryC} でやって`;
       const inquiry = await new StandaloneInquiryStore(globalDirectory, { kind: 'repository', repositoryDirectory: repositoryA })
         .create({ body: text, recipient: 'human' });
@@ -589,7 +610,8 @@ describe('manager workspace storage and repository boundaries', () => {
       const directorId = conversationId({ kind: 'daemon' });
       const event = origin !== 'watcher'
         ? { kind: 'human_command' as const, command: { kind: 'message' as const, text: origin === 'human' ? text
-          : origin === 'human-quoted' ? `「${text}」` : '問い合わせの状況を教えて' }, speaker: { namespace: 'test', id: 'operator' } }
+          : origin === 'human-quoted' ? `「${text}」` : origin === 'sentence-period' ? `Do this in ${repositoryC}.`
+            : origin === 'different-git-path' ? `Do this in ${repositoryC}.git.` : '問い合わせの状況を教えて' }, speaker: { namespace: 'test', id: 'operator' } }
         : { kind: 'watch_observation' as const, observation: { kind: 'director_state_changed' as const,
           managerConversationId: managerId(repositoryA), repositoryDirectory: repositoryA, goalId: null,
           targetId: 'inquiries', generation: 'changed', observedAt: new Date().toISOString(), state: JSON.stringify({ pendingInquiries: [inquiry.id] }) } };
@@ -600,7 +622,7 @@ describe('manager workspace storage and repository boundaries', () => {
       reached.mockClear();
       const result = await dispatcher.request(turn.turn, { kind: 'add_director_manager', repositoryDirectory: repositoryC }, f.signal);
       const record = await f.store.read(managerId(repositoryC)); const listed = (await f.list()).managers.map(({ id }) => id);
-      if (origin !== 'watcher') {
+      if (origin === 'human' || origin === 'human-quoted' || origin === 'sentence-period') {
         expect(result).toEqual({ kind: 'director_manager_added', managerId: managerId(repositoryC) });
         expect(reached).toHaveBeenCalledOnce();
         expect(record?.state.assignment).toEqual({ kind: 'repository', repositoryDirectory: repositoryC });
@@ -661,7 +683,7 @@ describe('manager workspace storage and repository boundaries', () => {
           name: 'apps', repositoryDirectories: [repositoryA] }) : undefined;
         const source = workspace === undefined ? { kind: 'repository' as const, repositoryDirectory: repositoryA }
           : { kind: 'workspace' as const, workspaceId: workspace.id };
-        const f = await director(); const states = new DirectorManagerStateStore(globalDirectory);
+        const f = await director(humanMessage(`${repositoryB} のmanagerを用意して`)); const states = new DirectorManagerStateStore(globalDirectory);
         const entered = deferred<void>(); const resume = deferred<void>();
         if (stage === 'preparing') {
           const ensure = DaemonConversations.prototype.ensure;
@@ -751,7 +773,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it.each([true, false])('orders preparation with workspace removal (removal first: %s)', async (before) => {
       const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: 'apps', repositoryDirectories: [repositoryA, repositoryB] });
-      const source = { kind: 'workspace' as const, workspaceId: workspace.id }; const f = await director();
+      const source = { kind: 'workspace' as const, workspaceId: workspace.id }; const f = await director(humanMessage(`${repositoryB} のmanagerを用意して`));
       let changing: ReturnType<typeof membership>;
       if (before) { changing = membership(source, true); await changing.finish(); }
       const entered = deferred<void>(); const resume = deferred<void>();
@@ -778,7 +800,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it('restores only the current fired workspace after successful preparation and preserves failure state', async () => {
       const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: 'apps', repositoryDirectories: [repositoryA, repositoryB] });
-      const id = conversationId({ kind: 'workspace', workspaceId: workspace.id }); const f = await director();
+      const id = conversationId({ kind: 'workspace', workspaceId: workspace.id }); const f = await director(humanMessage(`${repositoryB} のmanagerを用意して`));
       await f.add(repositoryB); await f.fire(id);
       const states = new DirectorManagerStateStore(globalDirectory);
       await states.setFired(managerId(repositoryB), true, f.signal);
@@ -801,7 +823,7 @@ describe('manager workspace storage and repository boundaries', () => {
     }
 
     it('adds a goal-free repository manager and immediately lists its returned identity', async () => {
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`));
       expect((await f.list()).managers).toEqual([]);
       const added = await f.add(repositoryA);
       expect(added.managerId).toBe(managerId(repositoryA));
@@ -812,7 +834,7 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it('keeps a failed first preparation out of the list and delivery until retry succeeds with the same identity', async () => {
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`));
       const id = managerId(repositoryA);
       vi.spyOn(DaemonConversations.prototype, 'ensure').mockRejectedValueOnce(new Error('Preparation failed'));
       expect((await f.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryA } })).isError).toBe(true);
@@ -832,7 +854,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it('preserves existing registrations and conversations when re-preparation fails', async () => {
       await seed(repositoryA); await seed(repositoryB);
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`));
       const ids = [managerId(repositoryA), managerId(repositoryB)];
       const before = ids.map((id) => readFileSync(join(globalDirectory, 'conversations', `${id}.json`), 'utf8'));
       vi.spyOn(DaemonConversations.prototype, 'ensure').mockRejectedValueOnce(new Error('Preparation failed'));
@@ -843,10 +865,18 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it('restores a fired manager only after re-preparation succeeds', async () => {
       await seed(repositoryA);
-      const f = await director(); const id = managerId(repositoryA);
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`)); const id = managerId(repositoryA);
       const path = join(globalDirectory, 'conversations', `${id}.json`);
       const before = readFileSync(path, 'utf8');
       await f.fire(id);
+      const withoutPath = await director();
+      const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
+      expect((await withoutPath.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryA } })).isError).toBe(true);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(await new DirectorManagerStateStore(globalDirectory).isFired(id)).toBe(true);
+      expect((await withoutPath.list()).managers).toEqual([]);
+      expect(readFileSync(path, 'utf8')).toBe(before);
+      resolve.mockRestore();
       vi.spyOn(DaemonConversations.prototype, 'ensure').mockRejectedValueOnce(new Error('Preparation failed'));
       expect((await f.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryA } })).isError).toBe(true);
       expect((await f.list()).managers).toEqual([]);
@@ -869,7 +899,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it('reuses the existing manager without duplicating it or overwriting either conversation', async () => {
       await seed(repositoryA); await seed(repositoryB);
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`));
       const ids = [managerId(repositoryA), managerId(repositoryB)];
       const before = ids.map((id) => readFileSync(join(globalDirectory, 'conversations', `${id}.json`), 'utf8'));
       for (let count = 0; count < 2; count++) expect((await f.add(repositoryA)).managerId).toBe(ids[0]);
@@ -878,13 +908,15 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it.each(['relative', 'missing', 'non-git'] as const)('rejects a %s repository without creating a registration or conversation', async (kind) => {
-      const f = await director();
       const notGit = join(root, 'not-git');
       mkdirSync(notGit);
-      expect((await f.client.listTools()).tools.map(({ name }) => name)).toContain('takt_add_manager');
       const path = kind === 'relative' ? 'relative/repository' : kind === 'missing' ? join(root, 'missing') : notGit;
+      const f = await director(humanMessage(`${path} のmanagerを用意して`));
+      expect((await f.client.listTools()).tools.map(({ name }) => name)).toContain('takt_add_manager');
+      const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
       const result = await f.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: path } });
       expect(result.isError).toBe(true);
+      if (kind !== 'relative') expect(resolve).toHaveBeenCalledWith(path);
       expect((await readProjectRegistry(globalDirectory)).projects).toEqual([]);
       expect(await f.store.read(managerId(path))).toBeUndefined();
       expect((await f.list()).managers).toEqual([]);
@@ -895,7 +927,7 @@ describe('manager workspace storage and repository boundaries', () => {
       await seed(repositoryA); await seed(repositoryB);
       const goal = finishedGoal('completed');
       await new GoalStore(repositoryA).create(goal);
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`));
       const id = managerId(repositoryA);
       const history = new FileEventStore(globalDirectory);
       await history.accept({ ...turnStart().event, conversationId: id });
@@ -1008,7 +1040,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
     it('reuses a workspace manager and checks unfinished goals in every member before fire', async () => {
       const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: 'apps', repositoryDirectories: [repositoryA, repositoryB] });
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} と ${repositoryB} のmanagerを用意して`));
       const id = conversationId({ kind: 'workspace', workspaceId: workspace.id });
       expect((await f.add(repositoryA)).managerId).toBe(id);
       expect((await f.list()).managers.map((entry) => entry.id)).toEqual([id]);
@@ -1049,7 +1081,7 @@ describe('manager workspace storage and repository boundaries', () => {
     });
 
     it('rejects lifecycle state requests from a manager conversation', async () => {
-      const f = await director();
+      const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`));
       const id = managerId(repositoryA);
       await f.add(repositoryA);
       const add = f.requests.at(-1)!;

@@ -16,7 +16,7 @@ export function managerApproval(configDirectory: string, assignment: Exclude<Con
   input.state.assignment = assignment;
   input.state.pending = { revision: 1, repositoryDirectory, summary: { ...goalInput(), startBranch: 'main', integrationBranch: 'main' } };
   input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'approve_summary', revision: 1 } };
+    command: { kind: 'approve_summary', revision: 1, conversationId: id } };
   const service = createConversationTurnService(configDirectory, {
     resolve: async () => { throw new Error('Approval must not execute a provider'); }, close: async () => {},
   });

@@ -71,7 +71,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: ゴールの仕様ファイルを実 provider が読み、識別子だけを渡した受け入れ条件を満たせることを確認（provider 共通 suite と Cursor suite）。GitHub は不要。
   - LLM: 実 provider を呼び出す（API 課金あり）。
   - 手順（ユーザー行動/コマンド）:
-    - `createLocalRepo()` と `createIsolatedEnv()` で一時環境を用意し、`GoalStore.create()` でランダム値を含む gherkin の AC-2 を保存する。
+    - `createLocalRepo()` と `createIsolatedEnv()` で一時環境を用意する。`creationOrigin: 'manager'`、`questionRoute: 'human'` を明示したゴールに、`GoalStore.create()` でランダム値を含む gherkin の AC-2 を保存する。
     - 本番の `enqueueTaktGoalTask()` と同じく `worktree: true`、ゴールのブランチを `base_branch` に指定する。`prepareTaskSpecDirectory()` と `TaskRunner.addTask()` で、本文が AC-2 の達成指示だけのタスクを `tasks.yaml` に保存する。
     - 既存の単一ステップ `simple.yaml` を使い、`takt run` を実行する。
     - 成功終了とタスクの完了、隔離クローンの `answer.txt` の1行目とランダム値の一致を確認する。

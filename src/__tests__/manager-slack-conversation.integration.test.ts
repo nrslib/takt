@@ -312,12 +312,22 @@ it('posts inquiry changes from delivery and routes a bound reply through a lazy 
     questionId: question.id, answer: { text: '80' }, source: 'slack' } });
   expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: parentTs }));
 });
-it('keeps approval revision and conversation identity through a Slack button', async () => {
+it.each(['approve_summary', 'dismiss_summary'] as const)('keeps revision and conversation identity through a Slack %s button', async (kind) => {
   await emit({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C1' }, user: { id: 'U1' },
     container: { type: 'message', channel_id: 'C1', message_ts: 'proposal' }, message: { ts: 'proposal', thread_ts: 'origin' },
-    actions: [{ type: 'button', action_id: 'takt_goal_approve', value: JSON.stringify({ conversationId: id, revision: 4 }) }] } });
-  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, conversationId: id, requirePending: true } });
+    actions: [{ type: 'button', action_id: kind === 'approve_summary' ? 'takt_goal_approve' : 'takt_goal_dismiss', value: JSON.stringify({ conversationId: id, revision: 4 }) }] } });
+  expect(events).toHaveLength(1);
+  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind, revision: 4, conversationId: id,
+    ...(kind === 'approve_summary' ? { requirePending: true } : {}) } });
   expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: 'origin' }));
+});
+it.each(['takt_goal_approve', 'takt_goal_dismiss'])('rejects a Slack %s button for another conversation before admission', async (actionId) => {
+  const foreign = conversationId({ kind: 'repository', repositoryDirectory: '/other' });
+  await emit({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C1' }, user: { id: 'U1' },
+    container: { type: 'message', channel_id: 'C1', message_ts: 'proposal' }, message: { ts: 'proposal', thread_ts: 'origin' },
+    actions: [{ type: 'button', action_id: actionId, value: JSON.stringify({ conversationId: foreign, revision: 4 }) }] } });
+  expect(events).toEqual([]);
+  expect(ingress.accept).not.toHaveBeenCalled();
 });
 it('reports failed persistence without claiming business acceptance or retrying', async () => {
   vi.mocked(ingress.accept).mockResolvedValueOnce({ kind: 'rejected', reason: 'storage' });

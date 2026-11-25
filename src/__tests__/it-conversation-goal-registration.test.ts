@@ -132,7 +132,7 @@ it('hands a director goal to the selected manager through the registration inbox
     if (proposed?.state.pending == null) throw new Error('Expected a saved director proposal');
     const revision = proposed.state.pending.revision;
 
-    expect(await submit({ kind: 'approve_summary', revision })).toMatchObject({ kind: 'accepted' });
+    expect(await submit({ kind: 'approve_summary', revision, conversationId: selected.conversationId })).toMatchObject({ kind: 'accepted' });
     await daemon.settled();
     const state = (await daemon.store.read(selected.conversationId))!.state;
     expect(state).toMatchObject({ pending: null, approval: { state: 'registered', revision } });
