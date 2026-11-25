@@ -66,6 +66,7 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // Past the first `@` it stops at quotes, commas and brackets, which keeps the host and a later
 // address readable in `"https://user:pass@host","admin@example.test"`.
 const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:[^/?#\s@]+(?:@[^/?#\s@"'`,<>()[\]{}]*)*)@/g;
+const MAX_TRACKED_URL_USERINFO_LENGTH = 256;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,
@@ -220,19 +221,24 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
   collectHttpHeaderSensitiveValues(text, values);
   for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
     const userinfo = match[2]!;
-    addSensitiveValue(values, userinfo);
     const firstAt = userinfo.indexOf('@');
     if (firstAt < 0) {
+      addSensitiveValue(values, userinfo);
       addCredentialComponents(values, userinfo);
       continue;
     }
     // The userinfo may run past an `@` that ends the password, as in
-    // `https://u:secret@db;owner=ops@example.test`, so the part up to the first `@` is kept too.
-    // Only that part is split like a cookie: past the first `@`, `owner=ops` is not a credential.
-    const separator = userinfo.indexOf(':');
-    if (separator + 1 < userinfo.length) values.add(userinfo.slice(separator + 1));
+    // `https://u:secret@db;owner=ops@example.test`. The part up to the first `@` goes first, and
+    // only that part is split like a cookie: past the first `@`, `owner=ops` is not a credential.
     addSensitiveValue(values, userinfo.slice(0, firstAt));
     addCredentialComponents(values, userinfo.slice(0, firstAt));
+    // The whole userinfo also covers a password with an unencoded `@`. A long one is still hidden
+    // where it appears, but is not tracked for later output: it would use up the bounded budget of
+    // tracked values and stop the tracking of every later value.
+    if (userinfo.length > MAX_TRACKED_URL_USERINFO_LENGTH) continue;
+    addSensitiveValue(values, userinfo);
+    const separator = userinfo.indexOf(':');
+    if (separator + 1 < userinfo.length) values.add(userinfo.slice(separator + 1));
   }
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);

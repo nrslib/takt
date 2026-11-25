@@ -46,15 +46,20 @@ describe('sanitizeSensitiveText performance', () => {
 });
 
 describe('sensitive text stream redactor performance', () => {
-  // The password of this URL runs to its last `@`, so the whole password becomes one long known
-  // value. Trying every prefix of that value against the end of the text is quadratic in its length.
-  it('stays linear on a URL whose password is a long run of @-separated words', () => {
+  // A long tracked value used to be matched against the end of each committed text by trying
+  // every prefix of it, which is quadratic in its length.
+  it.each([
+    ['a URL whose password is a long run of @-separated words',
+      (bytes: number) => ({ text: 'https://u:' + 'p@'.repeat(bytes / 2) + 'host\n', source: {} })],
+    ['a long known value',
+      (bytes: number) => ({ text: 'p@'.repeat(bytes / 2) + '\n', source: { token: 'p@'.repeat(bytes / 2) } })],
+  ])('stays linear on %s', (_name, input) => {
     const elapsed = (bytes: number): number => {
-      const input = 'https://u:' + 'p@'.repeat(bytes / 2) + 'host\n';
+      const { text, source } = input(bytes);
       const start = performance.now();
       const redactor = createSensitiveTextStreamRedactor();
-      redactor.write(input, {});
-      redactor.flush({});
+      redactor.write(text, source);
+      redactor.flush(source);
       return performance.now() - start;
     };
     elapsed(1024); // warm up regexes and JIT
