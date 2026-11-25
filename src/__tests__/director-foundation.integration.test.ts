@@ -72,7 +72,7 @@ vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
-const actions = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<(repositoryDirectory: string) => void>(), addManager: vi.fn(async () => ({ managerId: `manager-${'a'.repeat(64)}` })),
+const actions = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<() => void>(), addManager: vi.fn(async () => ({ managerId: `manager-${'a'.repeat(64)}` })),
   fireManager: vi.fn(async (managerId: string) => ({ managerId })),
   tellManager: vi.fn(async () => ({ kind: 'accepted' })), notifyHuman: vi.fn(async (message: string) => ({ id: randomUUID(), message })) };
 let directory: string;
