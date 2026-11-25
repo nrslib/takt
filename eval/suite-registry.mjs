@@ -132,6 +132,7 @@ const CLASSIFICATIONS = [
       'review-proof-boundary',
       'review-description-verification',
       'review-proportionality',
+      'review-carry-forward',
       'testing-proof-boundary',
       'testing-proof-new-behavior',
       'review-proof-required-check',
@@ -622,6 +623,10 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
     reason: '技術的成立と必須修正、人の不採用判断、重大な実欠陥を日英で比較する明示選択の評価',
   },
+  'review-carry-forward': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '前回裁定で不採用とした保証の無再提出継承と根拠ある更新を日英の実Phase1/2で評価する',
+  },
   'review-proof-boundary': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: 'Luna Maxで裁定の証拠境界を比較する明示選択の評価',
@@ -731,6 +736,8 @@ const EXECUTION_OVERRIDES = {
 const PREPARE_TARGET_OVERRIDES = {
   'review-proportionality': ['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) =>
     ['ja', 'en'].map((language) => `review-proportionality-${caseId}-${language}`)),
+  'review-carry-forward': ['carry', 'update'].flatMap((caseId) =>
+    ['ja', 'en'].map((language) => `review-adjudication-carry-forward-${caseId}-${language}`)),
   'adjudication-scope': ["adjudication-scope-input-local-ja","adjudication-scope-input-local-en","adjudication-scope-input-external-ja","adjudication-scope-input-external-en","adjudication-scope-local-condition-ja","adjudication-scope-local-condition-en","adjudication-scope-long-condition-ja","adjudication-scope-long-condition-en","adjudication-scope-quality-ja","adjudication-scope-quality-en","adjudication-scope-misdirected-evidence-ja","adjudication-scope-misdirected-evidence-en"],
   'review-adjudication': ['review-adjudication', 'repair-strategy'],
   'fix-plan-bounded-proof': ['fix-plan-bounded-proof', 'repair-strategy'],

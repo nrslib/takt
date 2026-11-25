@@ -1,0 +1,98 @@
+description: "前回の不採用保証を次の裁定報告へ引き継ぐ"
+prompts:
+  - label: carry-ja
+    raw: file://../../prompts/review-adjudication-carry-forward-carry-ja.phase1.md
+    config:
+      working_dir: .work/review-adjudication-carry-forward-carry-ja
+      report_prompt: prompts/review-adjudication-carry-forward-carry-ja.phase2.md
+  - label: carry-en
+    raw: file://../../prompts/review-adjudication-carry-forward-carry-en.phase1.md
+    config:
+      working_dir: .work/review-adjudication-carry-forward-carry-en
+      report_prompt: prompts/review-adjudication-carry-forward-carry-en.phase2.md
+  - label: update-ja
+    raw: file://../../prompts/review-adjudication-carry-forward-update-ja.phase1.md
+    config:
+      working_dir: .work/review-adjudication-carry-forward-update-ja
+      report_prompt: prompts/review-adjudication-carry-forward-update-ja.phase2.md
+  - label: update-en
+    raw: file://../../prompts/review-adjudication-carry-forward-update-en.phase1.md
+    config:
+      working_dir: .work/review-adjudication-carry-forward-update-en
+      report_prompt: prompts/review-adjudication-carry-forward-update-en.phase2.md
+providers:
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: high
+      isolate_working_dir: true
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-luna-high
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: high
+      isolate_working_dir: true
+  - id: file://../../providers/cli-plan-report.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  vars:
+    previous_response: ""
+    output_phase: phase2
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-6-luna
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        cli_config:
+          features:
+            memories: false
+tests:
+  - description: "再提出がなくても前回の不採用判断を引き継ぐ / ja"
+    prompts: [carry-ja]
+    vars:
+      task: "requirements.md、usage.md、宣言された最新レビューと前回の裁定を現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/carry-forward-ja
+        value: >-
+          最新レビューはF-KEYだけを提出し、前回裁定D-42が退けた現在の発言へのパス文字列照合を再提出していない。それでも最終報告の「採らない保証の引き継ぎ」に元の裁定D-42、二発言の正常利用と独立した要求根拠の欠如という理由、人のturnかつ絶対Gitパス検証を維持する適用範囲を保持する。F-KEYの未認証key漏えいは修正対象とし、人のturnやAPI-key秘匿まで免除しない。人の事前不採用判断があったとは推測しない。特定の語句や欄順ではなく意味を評価する。
+  - description: "Carry a declined guarantee without resubmission / en"
+    prompts: [carry-en]
+    vars:
+      task: "Adjudicate the declared latest review and supplied previous decision against requirements.md, usage.md, and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/carry-forward-en
+        value: >-
+          The latest review submits only F-KEY, not the literal current-message path match declined by prior adjudication D-42. Even without resubmission, the final report carries D-42 as the original source, the reason that the two-message flow is valid without an independent matching requirement, and the scope of human turns retaining absolute existing Git-path validation. It must repair the unauthenticated key disclosure and must not waive the human-turn gate or key confidentiality. Do not invent a prior human decision. Grade meaning rather than wording or column order.
+  - description: "明示要求の変更を根拠に前回判断を見直す / ja"
+    prompts: [update-ja]
+    vars:
+      task: "requirements.md、宣言された最新レビューと前回の裁定を現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/carry-update-ja
+        value: >-
+          前回のH-42は現在の発言との文字列照合を、当時の二発言利用と要求根拠の欠如により不採用とした。しかし現在のrequirements.mdは認可発言と同じ発言に絶対パスを含むことを明示し、F-PROVENANCEは現在コードの違反を示す。最終報告で前回判断の出典・理由・当時の適用範囲を認識し、今回の要求変更が前提を変えることと今回修正する範囲を根拠付きで示す。特定のregex方式を必須とはしない。黙った上書きと旧判断の無条件維持を不合格にする。
+  - description: "Revise the prior decision for a changed explicit requirement / en"
+    prompts: [update-en]
+    vars:
+      task: "Adjudicate the declared latest review and supplied previous decision against requirements.md and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/carry-update-en
+        value: >-
+          Earlier H-42 declined literal current-message matching because the two-message flow was valid and no matching requirement existed. Current requirements explicitly require the absolute path in the same authorizing message; F-PROVENANCE identifies a real violation. The final report acknowledges the original source, reason, and former scope and explains that this changed requirement defeats the premise and now requires a repair without making the proposed regex mandatory. Silent override or unconditional preservation of the old decision fails.

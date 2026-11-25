@@ -6,6 +6,10 @@ List finding IDs by submitting source from the latest review in the declared rep
 
 If the current request or declared report inputs explicitly supply a human decision not to adopt a guarantee, check its reason and applicable scope. Do not assume access to decisions from other runs or invent a decision that was not supplied.
 
+If the supplied previous decision contains Guarantees Not Adopted, carry their sources, reasons, and applicable scopes into the current decision even when the latest review does not resubmit the same guarantee. To revise one, identify a changed requirement, new concrete evidence that defeats its premise, or how the new case relates to its applicable scope, and record what changes. Do not search for or copy decisions from unsupplied history.
+
+Distinguish the decision maker recorded in each supplied source. Inclusion in a previous adjudication alone does not make a decision a human decision; do not add a decision maker absent from the record.
+
 To carry plan caveats into adjudication, include items in "Caveats" ("Open Questions (if any)" in a regular plan) and items recorded as "carried forward as a plan caveat." For "Non-Finding Concerns" ("Unverified Scope" in testing-review), include rows whose Classification column is "plan-caveat-carry-forward." Reviewers record carry-forward in this column, so the row's Classification column establishes whether it is a target. Proceed with the decisions below for the targets established here.
 
 Consult background material where a target finding has an undecided matter that could change acceptance and the material is needed to establish that matter.

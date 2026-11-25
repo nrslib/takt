@@ -30,7 +30,7 @@
 ## Guarantees Not Adopted
 | Decision Source | Guarantee or Method Not Adopted | Reason and Applicable Scope | Relationship to Current Findings | Conditions for Reconsideration |
 |-----------------|---------------------------------|-----------------------------|----------------------------------|--------------------------------|
-| {Supplied human decision or current adjudication source} | {Guarantee, input restriction, or proof method not added} | {Requirements or existing contracts, impact on normal use, and scope of the decision} | {Finding ID or plan caveat, and whether this is the same proposal or a distinct problem} | {None, or new evidence or requirement change invalidating premises and the decision needed} |
+| {Original decision source recorded in the supplied previous adjudication, supplied human decision, or current adjudication source} | {Guarantee, input restriction, or proof method not added} | {Requirements or existing contracts, impact on normal use, and scope of the decision} | {Finding ID or plan caveat and whether this is the same proposal or a distinct problem; none if not resubmitted} | {None, or new evidence or requirement change invalidating premises and the decision needed} |
 
 ## Awaiting External Confirmation
 | Problem ID | Unverified Acceptance Criterion | Requirement Basis | Repairs and Verification Completed in This Environment (Including Target Code State) | Where and How to Confirm | Evidence Needed to Decide |
@@ -52,7 +52,7 @@
 - Include rows from Non-Finding Concerns (Unverified Scope in testing-review) in the report only when their Classification column is plan-caveat-carry-forward. Omit explanations of all other rows from the report
 - Record problems accepted through adjudication in Problems to Repair. Do not copy an item from history as an accepted problem merely because it appears there
 - Omit Problems to Repair when no repair is required
-- If a supplied human decision or the current adjudication declines a guarantee or method, retain its source, reason, and applicable scope in Guarantees Not Adopted. Omit this section otherwise. Another run can carry it forward only if this report is supplied as an input
+- Carry the source, reason, and applicable scope of each entry in the supplied previous decision's Guarantees Not Adopted into this section even when the latest review does not resubmit that guarantee. Identify the decision maker from the recorded source; inclusion in a previous adjudication alone does not make it a human decision. Also record supplied human decisions and guarantees or methods declined in this adjudication. If revising an entry, state the changed requirement, new concrete evidence defeating its premise, or the new case's relationship to its applicable scope. Omit this section when no such decision is supplied or made. Another run can carry it forward only if this report is supplied as an input
 
 - Omit Awaiting External Confirmation and Cannot Verify in This Environment when there are no corresponding items
 - When the entire task does not need replanning and there are no problems to repair or factual investigations to decide acceptance that can proceed within the current scope, select No problems require repair. This includes cases where only items awaiting external confirmation or unverifiable in this environment remain
