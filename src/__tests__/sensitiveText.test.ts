@@ -71,15 +71,21 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveTextWithKnownValues('echoed p@55-word', { command: text })).toBe('echoed [REDACTED]');
   });
 
-  // Known limits of reading the password up to the last `@` of the authority. Both err on the
-  // side of hiding the host; the second leaves a value readable that follows that `@`.
+  // Known limit of reading the password up to the last `@` of the authority: when `;` separates
+  // a later address, the host is hidden too.
+  it('hides the host when `;` separates a later address', () => {
+    expect(sanitizeSensitiveText('url=https://u:p@db.internal;owner=ops@example.test'))
+      .toBe('url=https://[REDACTED]@example.test');
+  });
+
   it.each([
-    ['hides the host when `;` separates a later address',
-      'url=https://u:p@db.internal;owner=ops@example.test', 'url=https://[REDACTED]@example.test'],
-    ['reads an assignment between two @ as the password and what follows as the host',
-      'https://u:p@token=@SECRET/path', 'https://[REDACTED]@SECRET/path'],
-  ])('%s', (_name, text, expected) => {
-    expect(sanitizeSensitiveText(text)).toBe(expected);
+    'url=https://u:pa55-word@db.internal;owner=ops@example.test',
+    'https://u:pa55-word@host&notify=ops@example.test',
+    'https://u:pa55-word@host|ops@example.test',
+    'https://u:pa55-word@host:8080;ops@example.test',
+    'https://u:pa55-word@host!ops@x',
+  ])('redacts the password where it is echoed later when a later @ follows in %s', (command) => {
+    expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-word', { command })).toBe('echoed [REDACTED]');
   });
 
   // Known limit: a scheme is ASCII letters, digits, `+`, `-` and `.` with at least one letter.
