@@ -66,7 +66,7 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // Past the first `@` it stops at quotes, commas and brackets, which keeps the host and a later
 // address readable in `"https://user:pass@host","admin@example.test"`.
 const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:[^/?#\s@]+(?:@[^/?#\s@"'`,<>()[\]{}]*)*)@/g;
-const MAX_TRACKED_URL_USERINFO_LENGTH = 256;
+const MAX_TRACKED_URL_CREDENTIAL_LENGTH = 256;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,
@@ -232,13 +232,13 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
     // only that part is split like a cookie: past the first `@`, `owner=ops` is not a credential.
     addSensitiveValue(values, userinfo.slice(0, firstAt));
     addCredentialComponents(values, userinfo.slice(0, firstAt));
-    // The whole userinfo also covers a password with an unencoded `@`. A long one is still hidden
-    // where it appears, but is not tracked for later output: it would use up the bounded budget of
-    // tracked values and stop the tracking of every later value.
-    if (userinfo.length > MAX_TRACKED_URL_USERINFO_LENGTH) continue;
-    addSensitiveValue(values, userinfo);
-    const separator = userinfo.indexOf(':');
-    if (separator + 1 < userinfo.length) values.add(userinfo.slice(separator + 1));
+    // The whole userinfo and the whole password also cover a password with an unencoded `@`. Each
+    // is tracked for later output only up to a length limit, checked on its own so that a long user
+    // does not drop a short password. A longer one is still hidden where it appears; tracking it
+    // would use up the bounded budget of tracked values and stop the tracking of every later value.
+    if (userinfo.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) addSensitiveValue(values, userinfo);
+    const password = userinfo.slice(userinfo.indexOf(':') + 1);
+    if (password.length > 0 && password.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) values.add(password);
   }
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);

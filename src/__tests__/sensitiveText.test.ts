@@ -102,6 +102,15 @@ describe('sensitiveText', () => {
     expect(redactor.write('echoed pa55-word\n', {})).toBe('echoed [REDACTED]\n');
   });
 
+  it('redacts a password with an @ where it is echoed later when the user is long', () => {
+    const command = `clone https://${'u'.repeat(250)}:pa55@word@host failed\n`;
+    const redactor = createSensitiveTextStreamRedactor();
+    redactor.write(command, {});
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed pa55@word', { command })).toBe('echoed [REDACTED]');
+    expect(redactor.write('echoed pa55@word\n', {})).toBe('echoed [REDACTED]\n');
+  });
+
   // Known limit: a scheme is ASCII letters, digits, `+`, `-` and `.` with at least one letter.
   it.each(['aé://user:name@host', 'é://user:name@host'])('does not treat %s as a URL with credentials', (text) => {
     expect(sanitizeSensitiveText(text)).toBe(text);
