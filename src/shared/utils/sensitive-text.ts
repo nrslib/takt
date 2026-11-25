@@ -62,10 +62,11 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // of scheme characters, so `1-http://`, `9http://` and `_http://` all count.
 // The user ends at the first colon and may be empty (`redis://:password@host`): trying each
 // colon as the separator rescans the rest of a colon-separated run every time.
-// The password runs to the last `@` of the authority, so an unencoded `@` in it stays hidden.
-// Past the first `@` it stops at quotes, commas and brackets, which keeps the host and a later
-// address readable in `"https://user:pass@host","admin@example.test"`.
-const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:[^/?#\s@]+(?:@[^/?#\s@"'`,<>()[\]{}]*)*)@/g;
+// The password is non-empty, may start with `@`, and runs to the last `@` of the authority so
+// unencoded `@` characters in it stay hidden. Past the first `@` a single character class (not
+// a repeated group) keeps long `@` runs in bounded regexp stack and stops at quotes, commas and
+// brackets, keeping the host and a later address readable in `"https://user:pass@host","admin@example.test"`.
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:(?:[^/?#\s@]+(?:@[^/?#\s"'`,<>()[\]{}]*)?|@[^/?#\s"'`,<>()[\]{}]*))@/g;
 const MAX_TRACKED_URL_CREDENTIAL_LENGTH = 256;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
@@ -227,17 +228,21 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
       addCredentialComponents(values, userinfo);
       continue;
     }
+    const separator = userinfo.indexOf(':');
     // The userinfo may run past an `@` that ends the password, as in
-    // `https://u:secret@db;owner=ops@example.test`. The part up to the first `@` goes first, and
-    // only that part is split like a cookie: past the first `@`, `owner=ops` is not a credential.
-    addSensitiveValue(values, userinfo.slice(0, firstAt));
-    addCredentialComponents(values, userinfo.slice(0, firstAt));
+    // `https://u:secret@db;owner=ops@example.test`. The part up to the first `@` goes first when
+    // the password does not start with `@`, and only that part is split like a cookie: past the
+    // first `@`, `owner=ops` is not a credential.
+    if (firstAt > separator + 1) {
+      addSensitiveValue(values, userinfo.slice(0, firstAt));
+      addCredentialComponents(values, userinfo.slice(0, firstAt));
+    }
     // The whole userinfo and the whole password also cover a password with an unencoded `@`. Each
     // is tracked for later output only up to a length limit, checked on its own so that a long user
     // does not drop a short password. A longer one is still hidden where it appears; tracking it
     // would use up the bounded budget of tracked values and stop the tracking of every later value.
     if (userinfo.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) addSensitiveValue(values, userinfo);
-    const password = userinfo.slice(userinfo.indexOf(':') + 1);
+    const password = userinfo.slice(separator + 1);
     if (password.length > 0 && password.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) values.add(password);
   }
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);

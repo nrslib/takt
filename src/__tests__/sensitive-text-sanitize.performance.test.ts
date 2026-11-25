@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createSensitiveTextStreamRedactor, sanitizeSensitiveText } from '../shared/utils/sensitiveText.js';
+import {
+  createBoundedSensitiveValues,
+  createSensitiveTextStreamRedactor,
+  sanitizeSensitiveText,
+} from '../shared/utils/sensitiveText.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -31,6 +35,7 @@ describe('sanitizeSensitiveText performance', () => {
     ['colons only without an @', 'https://', ':', ''],
     ['a password of @-separated words', 'https://user:pass', '@a', ''],
     ['a password of @ only', 'https://user:pass', '@', ''],
+    ['a leading-@ password without a closing @', 'https://user:@', 'a', ''],
   ])('stays linear on %s', (_name, head, unit, tail) => {
     const elapsed = (bytes: number): number => {
       const input = head + unit.repeat(Math.ceil(bytes / unit.length)) + tail;
@@ -42,6 +47,20 @@ describe('sanitizeSensitiveText performance', () => {
 
     expect(elapsed(64 * 1024)).toBeLessThan(500);
     expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
+
+  // 4MiB of `@` characters exceeds V8's regexp stack when a repeated group matches each `@`.
+  it('redacts a 4MiB run of @ in a URL password without exhausting the regexp stack', () => {
+    const input = 'https://u:p' + '@'.repeat(4 * 1024 * 1024) + 'host';
+
+    expect(sanitizeSensitiveText(input)).toBe('https://[REDACTED]@host');
+
+    const bounded = createBoundedSensitiveValues();
+    bounded.collect(input);
+    expect(bounded.values.has('p')).toBe(true);
+
+    const redactor = createSensitiveTextStreamRedactor();
+    expect(redactor.write(input + '\n', {}) + redactor.flush({})).toBe('https://[REDACTED]@host\n');
   });
 });
 

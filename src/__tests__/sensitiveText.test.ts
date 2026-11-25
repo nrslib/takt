@@ -48,7 +48,10 @@ describe('sensitiveText', () => {
     ['an @ in the password', 'https://user:p@ss@host/path', 'https://[REDACTED]@host/path'],
     ['several @ in the password', 'https://user:p@s@s@host', 'https://[REDACTED]@host'],
     ['an @ at the end of the password', 'https://user:pass@@host', 'https://[REDACTED]@host'],
+    ['an @ at the start of the password', 'https://u:@pa55@host', 'https://[REDACTED]@host'],
+    ['a password of @ only', 'https://u:@@host', 'https://[REDACTED]@host'],
     ['an empty user and an @ in the password', 'redis://:p@ss@host', 'redis://[REDACTED]@host'],
+    ['an empty user and an @ at the start of the password', 'redis://:@pa55@host', 'redis://[REDACTED]@host'],
   ])('redacts URL userinfo with %s', (_name, text, expected) => {
     expect(sanitizeSensitiveText(text)).toBe(expected);
   });
@@ -69,6 +72,16 @@ describe('sensitiveText', () => {
 
     expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe('clone https://[REDACTED]@host/repo.git failed');
     expect(sanitizeSensitiveTextWithKnownValues('echoed p@55-word', { command: text })).toBe('echoed [REDACTED]');
+  });
+
+  it('redacts a password that starts with @ when streaming and where it is echoed later', () => {
+    const text = 'clone https://alice:@pa55@host/repo.git failed';
+
+    expect(sanitizeSensitiveText(text)).toBe('clone https://[REDACTED]@host/repo.git failed');
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe('clone https://[REDACTED]@host/repo.git failed');
+    expect(sanitizeSensitiveTextWithKnownValues('echoed @pa55', { command: text })).toBe('echoed [REDACTED]');
+    expect(sanitizeSensitiveTextWithKnownValues('alice: ready', { command: text })).toBe('alice: ready');
+    expect(sanitizeSensitiveTextWithKnownValues('{"k": "v"}', { command: 'redis://:@pa55@host' })).toBe('{"k": "v"}');
   });
 
   // Known limit of reading the password up to the last `@` of the authority: when `;` separates
@@ -129,6 +142,11 @@ describe('sensitiveText', () => {
     'https://user@host:8080/path@v2',
     'https://:@host',
     'https://user:@host',
+    'https://user:@host,admin@example.test',
+    '["https://user:@host","admin@example.test"]',
+    '(https://user:@host)(admin@example.test)',
+    'https://user:@host/admin@example.test',
+    'https://user:@host admin@example.test',
     'https://host:8080/path@v2',
     'https://host/a:b@c',
     'mailto:user:name@host',
