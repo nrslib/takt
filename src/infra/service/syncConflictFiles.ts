@@ -87,8 +87,14 @@ function unmergedEntries(cwd: string, env?: NodeJS.ProcessEnv): Map<string, stri
 }
 
 // Compares entries, not index file bytes: `git status` / `git diff` rewrite the file to refresh stat data.
+// `ls-files` shows an intent-to-add entry like a staged empty file, so the cached diff against HEAD is
+// compared too, in `--raw` form: the same path staged as empty shows `M` and intent-to-add shows `D`.
 function indexEntries(cwd: string, env?: NodeJS.ProcessEnv): Buffer {
-  return git(cwd, ['ls-files', '-s', '-v', '-z'], env);
+  return Buffer.concat([
+    git(cwd, ['ls-files', '-s', '-v', '-z'], env),
+    Buffer.from('\0'),
+    git(cwd, ['diff-index', '--cached', '--raw', '-z', '--ita-invisible-in-index', 'HEAD'], env),
+  ]);
 }
 
 function indexEntriesOf(cwd: string, indexPath: string, content: Buffer, env?: NodeJS.ProcessEnv): Buffer {

@@ -100,6 +100,11 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe(original);
   }
 
+  function stageEmptyFile(): void {
+    writeFileSync(join(cwd, 'empty.txt'), '');
+    git(['add', 'empty.txt']);
+  }
+
   function preparePlainConflict(markerSize?: number, conflictStyle?: 'diff3' | 'zdiff3'): void {
     git(['init', '-b', 'main']);
     git(['config', 'user.name', 'Driver Test']);
@@ -220,8 +225,12 @@ describe('PR custom merge drivers and conflict recovery', () => {
       ['ls-files', '-s', 'notes.txt'], () => /^100755 /u],
     ['別の操作が変えたblob', (blob: string) => `--cacheinfo 100644,${blob},notes.txt`,
       ['ls-files', '-s', 'notes.txt'], (blob: string) => new RegExp(`^100644 ${blob} 0\tnotes\\.txt$`, 'u')],
+    ['別の操作が空のファイルをintent-to-addに変えたこと',
+      () => '--force-remove empty.txt && env -u GIT_INDEX_FILE git add -N empty.txt',
+      ['diff-index', '--cached', '--name-only', '--ita-invisible-in-index', 'HEAD', '--', 'empty.txt'], () => /^$/u],
   ] as const)('runtime stagingの途中で%sは上書きせずに停止する', (_name, updateIndexArgs, inspect, expected) => {
     preparePlainConflict();
+    stageEmptyFile();
     writeFileSync(join(cwd, '.gitattributes'), 'code.txt filter=concurrent\n');
     const blob = git(['rev-parse', 'HEAD:.gitattributes']);
     git(['config', 'filter.concurrent.clean', 'if [ -n "$GIT_INDEX_FILE" ]; then '
@@ -232,6 +241,46 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git([...inspect])).toMatch(expected(blob));
     expect(git(['ls-files', '-u'])).not.toBe('');
     expect(existsSync(join(cwd, '.git', 'index.lock'))).toBe(false);
+  });
+
+  it('AIが空のファイルをintent-to-addに変えたら解決をstageせずに停止する', () => {
+    preparePlainConflict();
+    stageEmptyFile();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    git(['rm', '--cached', '-q', 'empty.txt']);
+    git(['add', '-N', 'empty.txt']);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('AI changed the Git index before runtime validation');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it('AIがHEADにある空でないファイルをstagedの空ファイルからintent-to-addへ変えたら解決をstageせずに停止する', () => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, 'notes.txt'), '');
+    git(['add', 'notes.txt']);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    git(['rm', '--cached', '-q', 'notes.txt']);
+    git(['add', '-N', 'notes.txt']);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('AI changed the Git index before runtime validation');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+    expect(git(['diff-index', '--cached', '--raw', '--ita-invisible-in-index', 'HEAD', '--', 'notes.txt']))
+      .toMatch(/^:100644 000000 \S+ 0{40} D\tnotes\.txt$/u);
+  });
+
+  it('AIの作業前からintent-to-addのパスがあっても解決をstageする', () => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, 'planned.txt'), 'planned\n');
+    git(['add', '-N', 'planned.txt']);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+    expect(git(['diff-index', '--cached', '--name-only', '--ita-visible-in-index', 'HEAD', '--', 'planned.txt']))
+      .toBe('planned.txt');
+    expect(git(['diff-index', '--cached', '--name-only', '--ita-invisible-in-index', 'HEAD', '--', 'planned.txt']))
+      .toBe('');
   });
 
   it('Gitの8文字競合マーカーを残す解決はstageしない', () => {
