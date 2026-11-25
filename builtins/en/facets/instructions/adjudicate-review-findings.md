@@ -4,6 +4,8 @@ Adjudicate submitted review findings against the requirements and threat model, 
 
 List finding IDs by submitting source from the latest review in the declared report inputs. Use the supplied fixed versions of the previous decision and latest plan, repair, and verification records to associate each item with its source and previous treatment. Treat versions that were not supplied as unavailable; do not fill them by searching other runs or report indexes. Use repair and verification reports as evidence for decisions.
 
+If the current request or declared report inputs explicitly supply a human decision not to adopt a guarantee, check its reason and applicable scope. Do not assume access to decisions from other runs or invent a decision that was not supplied.
+
 To carry plan caveats into adjudication, include items in "Caveats" ("Open Questions (if any)" in a regular plan) and items recorded as "carried forward as a plan caveat." For "Non-Finding Concerns" ("Unverified Scope" in testing-review), include rows whose Classification column is "plan-caveat-carry-forward." Reviewers record carry-forward in this column, so the row's Classification column establishes whether it is a target. Proceed with the decisions below for the targets established here.
 
 Consult background material where a target finding has an undecided matter that could change acceptance and the material is needed to establish that matter.
@@ -13,6 +15,8 @@ Consult background material where a target finding has an undecided matter that 
 {{include:instructions/review-adjudication-check}}
 
 ## Match Existing Problems and Repair Plans
+
+If the original acceptance criteria have been met, do not merge a distinct guarantee proposed later into unfinished work on that problem; decide separately whether it is needed in this task.
 
 Match each finding's cause, violated condition, and acceptance criteria to problems in previous decisions or repair plans in progress. For a corresponding problem, use the supplied decision, plan, repair, and verification records to organize the established method, applied and verified portions, and remaining work, associating them with problem and finding IDs and sources. If those records do not settle the merge destination or carry-forward, check the necessary portions of the corresponding fixed-version references. When no plan is in progress and a problem previously considered repaired recurs within the applicable scope, with a confirmed common mechanism violating the same condition, also record whether reconsideration of the method is needed and why. Where reconsideration is needed, identify the mechanism linking the previous repair to the new counterexample, conditions to preserve, and conflicts with requirements. Pass the inherited plan and remaining work to repair planning.
 

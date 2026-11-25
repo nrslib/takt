@@ -193,11 +193,14 @@ steps:
         next: review-adjudication
   - name: reviewers
     input_reports:
-      from_step: remediation
-      reports:
-        - fix-plan.md
-        - fix-report.md
-        - fix-verification.md
+      - from_step: remediation
+        reports:
+          - fix-plan.md
+          - fix-report.md
+          - fix-verification.md
+      - from_step: review-adjudication
+        reports: [review-resolution.md]
+        previous_only: true
     uses: peer-review-suite-call
     vars:
       review_mode: follow_up

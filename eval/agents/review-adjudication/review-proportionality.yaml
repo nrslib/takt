@@ -1,0 +1,81 @@
+description: "裁定: 技術的成立、今回の必須修正、人の不採用判断を分ける"
+prompts:
+  - label: ordinary-ja
+    raw: file://../../prompts/review-proportionality-ordinary-ja.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/ordinary
+  - label: ordinary-en
+    raw: file://../../prompts/review-proportionality-ordinary-en.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/ordinary
+  - label: reconsider-ja
+    raw: file://../../prompts/review-proportionality-reconsider-ja.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/reconsider
+  - label: reconsider-en
+    raw: file://../../prompts/review-proportionality-reconsider-en.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/reconsider
+providers:
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-luna-high
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: high
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  vars:
+    previous_response: ""
+    output_phase: phase1
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-6-luna
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        cli_config:
+          features:
+            memories: false
+tests:
+  - description: "通常の保証追加と重大漏えいを区別する / ja"
+    prompts: [ordinary-ja]
+    vars:
+      task: "requirements.mdと宣言された最新レビューを現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-ordinary-ja
+        value: >-
+          F-SOURCE は人のmessage turnで指定されたGitパスが現在の発言に文字どおり現れないという技術的事実を認めるが、二発言の正常利用と人の明示的な不採用判断を踏まえ、regex照合を今回の必須修正や元のhuman-turn問題の修正不足にしない。F-GATE はコードにhuman message gateがあるため反証する。F-KEY は未認証の403応答にkeyが入る具体的な重大漏えいとして修正対象にする。重大な実欠陥を修正コストで免除せず、採らない保証の理由と範囲を引き継ぐ。見出しや語句の一致ではなく判断の意味を評価する。
+  - description: "Distinguish added proof from serious leakage / en"
+    prompts: [ordinary-en]
+    vars:
+      task: "Adjudicate the declared latest review against requirements.md and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-ordinary-en
+        value: >-
+          Recognize that F-SOURCE holds technically for a human message without the literal path, but do not require regex matching or treat the repaired human-turn gate as incomplete. The documented two-message flow and explicit human rejection govern. Disprove F-GATE because the human-message gate exists. Require repair of F-KEY because the unauthenticated 403 response includes the stored key. Preserve the reason and scope of the declined guarantee. Grade meaning, not headings or exact words.
+  - description: "新しい実欠陥を採り人の判断を黙って覆さない / ja"
+    prompts: [reconsider-ja]
+    vars:
+      task: "requirements.mdと宣言された最新レビューを現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-reconsider-ja
+        value: >-
+          F-WATCH は現在のコードにhuman message gateがなくwatcherから追加できる実在の要求違反として修正対象にする。人が退けた現在発言のパス文字列照合を、watcher欠陥の必須修正や元の判断の撤回として黙って追加しない。人の判断の適用範囲外にあるwatcher経路を区別し、human message gateと絶対Gitパス確認を受入条件にする。見出しや語句の一致ではなく判断の意味を評価する。
+  - description: "Repair a real watcher defect without silently overriding the human decision / en"
+    prompts: [reconsider-en]
+    vars:
+      task: "Adjudicate the declared latest review against requirements.md and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-reconsider-en
+        value: >-
+          Require repair of F-WATCH: current code lacks the human-message gate and allows a watcher to add a manager. Do not silently reinstate literal matching of the current message path as a required repair or reversal of the human decision. Distinguish the watcher path outside that decision's scope, and retain the absolute Git path validation. Grade meaning, not headings or exact words.
