@@ -37,8 +37,8 @@ node eval/scripts/run-evals.mjs review-proportionality --no-cache --repeat 2 --f
 ```sh
 git worktree add --detach /private/tmp/takt-review-proportionality-base 5d7581a8589b1a3be57bcd79369dfe60f0d9e866
 rsync -a --exclude=.work --exclude=.results --exclude=prompts eval/ /private/tmp/takt-review-proportionality-base/eval/
-git diff --name-only 5d7581a8589b1a3be57bcd79369dfe60f0d9e866 HEAD -- builtins/ja builtins/en | while IFS= read -r path; do
-  git show "5d7581a8589b1a3be57bcd79369dfe60f0d9e866:$path" | cmp - "/private/tmp/takt-review-proportionality-base/$path" || exit 1
+git diff --name-only 5d7581a8589b1a3be57bcd79369dfe60f0d9e866 HEAD -- builtins/ja builtins/en | while IFS= read -r facet_path; do
+  git show "5d7581a8589b1a3be57bcd79369dfe60f0d9e866:$facet_path" | cmp - "/private/tmp/takt-review-proportionality-base/$facet_path" || exit 1
 done
 cd /private/tmp/takt-review-proportionality-base
 npm ci
