@@ -11,6 +11,7 @@ import type { SystemStepServicesOptions } from '../core/workflow/system/system-s
 import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workflow/system/system-sync-effects.js';
 import { stageAndCommit } from '../infra/task/git.js';
 import { captureSyncConflictFiles } from '../infra/service/syncConflictFiles.js';
+import { createGitEnvironment } from '../infra/task/git-environment-settings.js';
 import { createCheckoutFilter } from './helpers/checkout-filter.js';
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -375,6 +376,60 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git(['ls-files', '-u'])).toBe('');
     git(['commit', '--no-edit']);
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('kept\n');
+  });
+
+  it('racy-cleanな競合外エントリへ、mtimeを保つ同サイズ編集が入ってもstageする', () => {
+    preparePlainConflict();
+    git(['config', 'core.trustctime', 'false']);
+    const notes = join(cwd, 'notes.txt');
+    const index = join(cwd, '.git', 'index');
+    const racyTime = new Date(Date.now() - 60_000);
+    utimesSync(notes, racyTime, racyTime);
+    git(['status', '--porcelain']);
+    utimesSync(index, racyTime, racyTime);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    utimesSync(index, racyTime, racyTime);
+    writeFileSync(notes, 'NOTES\nmiddle\nthird\n', { flag: 'r+' });
+    utimesSync(notes, racyTime, racyTime);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+
+    conflictFiles.validateAndStage();
+
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':notes.txt'])).toBe('NOTES\nmiddle\nthird');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+  });
+
+  it('親プロセスのGIT_DIRがあっても、linked worktreeの競合を現在のHEADで検証する', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    writeFileSync(join(cwd, 'code.txt'), 'original\n');
+    git(['add', '.']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    writeFileSync(join(cwd, 'code.txt'), 'feature\n');
+    git(['commit', '-am', 'feature']);
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'code.txt'), 'base\n');
+    git(['commit', '-am', 'base']);
+    const linked = join(root, 'linked');
+    git(['worktree', 'add', linked, 'feature/pr']);
+    expect(() => execFileSync('git', ['merge', 'main'], { cwd: linked, stdio: 'pipe' })).toThrow();
+    const env = createGitEnvironment(false);
+    expect(env.GIT_DIR).toBeUndefined();
+    const inheritedGitDir = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(cwd, '.git');
+    try {
+      const conflictFiles = captureSyncConflictFiles(linked, env);
+      writeFileSync(join(linked, 'code.txt'), 'resolved\n');
+      conflictFiles.validateAndStage();
+    } finally {
+      if (inheritedGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = inheritedGitDir;
+    }
+
+    expect(execFileSync('git', ['ls-files', '-u'], { cwd: linked, encoding: 'utf8' })).toBe('');
+    expect(execFileSync('git', ['show', ':code.txt'], { cwd: linked, encoding: 'utf8' }).trim()).toBe('resolved');
   });
 
   function setupFilter(kind: 'smudge' | 'process', attributed: boolean, conflict: boolean) {

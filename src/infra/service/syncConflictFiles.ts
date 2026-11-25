@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { closeSync, lstatSync, mkdtempSync, mkdirSync, openSync, readFileSync, readlinkSync,
-  renameSync, rmSync, writeFileSync } from 'node:fs';
+  renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -102,7 +102,7 @@ function indexEntriesOf(cwd: string, indexPath: string, content: Buffer, env?: N
   try {
     const snapshot = join(directory, 'index');
     writeFileSync(snapshot, content);
-    return indexEntries(cwd, { ...process.env, ...env, GIT_INDEX_FILE: snapshot });
+    return indexEntries(cwd, { ...(env ?? process.env), GIT_INDEX_FILE: snapshot });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -142,6 +142,8 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
   if (entries.size === 0) throw new Error('No unmerged files were found for AI conflict resolution');
   const reportedIndexPath = git(cwd, ['rev-parse', '--git-path', 'index'], env).toString('utf8').trim();
   const indexPath = isAbsolute(reportedIndexPath) ? reportedIndexPath : resolve(cwd, reportedIndexPath);
+  // Stat the index before reading it: Git judges racy-clean entries against the index file's mtime.
+  const originalIndexTimes = statSync(indexPath);
   const originalIndexContent = readFileSync(indexPath);
   const originalIndex = indexEntriesOf(cwd, indexPath, originalIndexContent, env);
   const conflictPaths = new Set(entries.keys());
@@ -185,7 +187,9 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
       const temporaryIndex = join(indexDirectory, 'index');
       try {
         writeFileSync(temporaryIndex, originalIndexContent);
-        const stageEnv = { ...process.env, ...env, GIT_INDEX_FILE: temporaryIndex };
+        // A fresh mtime would make racy-clean entries look clean and let `git add` skip same-size edits.
+        utimesSync(temporaryIndex, originalIndexTimes.atime, originalIndexTimes.mtime);
+        const stageEnv = { ...(env ?? process.env), GIT_INDEX_FILE: temporaryIndex };
         const directlyStaged = [...files.map((file) => file.path), ...newFiles];
         for (const path of changedTracked) {
           const original = initialUnstaged.get(path);
