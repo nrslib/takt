@@ -19,4 +19,28 @@ describe('sanitizeSensitiveText performance', () => {
     expect(sanitized).toBe(input);
     expect(elapsedMs).toBeLessThan(200);
   });
+
+  // Each input is a long run that looks like the start of a URL with credentials but never
+  // completes one. A URL userinfo pattern that restarts at every letter after a `-`, or tries
+  // every colon as the user/password separator, rescans the rest of the run each time and
+  // takes seconds at 256KiB.
+  it.each([
+    ['a scheme-like run of letters and hyphens without ://', '', 'abc-', ''],
+    ['a run of digits and hyphens before a scheme', '', '1-', 'x://user:pass@host'],
+    ['colon-separated words without an @', 'https://', 'a:', ''],
+    ['colons only without an @', 'https://', ':', ''],
+    ['a password of @-separated words', 'https://user:pass', '@a', ''],
+    ['a password of @ only', 'https://user:pass', '@', ''],
+  ])('stays linear on %s', (_name, head, unit, tail) => {
+    const elapsed = (bytes: number): number => {
+      const input = head + unit.repeat(Math.ceil(bytes / unit.length)) + tail;
+      const start = performance.now();
+      sanitizeSensitiveText(input);
+      return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
 });

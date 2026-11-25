@@ -11,9 +11,96 @@ import {
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
-import { maskSensitiveRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
+import { maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
 
 describe('sensitiveText', () => {
+  describe.each([
+    ['a plain scheme', 'https://', 'https://'],
+    ['a scheme with a plus', 'git+https://', 'git+https://'],
+    ['a scheme after a digit and a hyphen', '1-http://', '1-http://'],
+    ['a scheme after a long hyphenated run', 'abc-'.repeat(64) + 'ssh://', 'abc-'.repeat(64) + 'ssh://'],
+    ['a scheme after a digit', '9http://', '9http://'],
+    ['a scheme after an underscore', '_http://', '_http://'],
+    ['a scheme that ends in digits', 'see s3://', 'see s3://'],
+  ])('URL userinfo behind %s', (_name, scheme, keptPrefix) => {
+    const text = `clone ${scheme}user:pa55-word@host/repo.git failed`;
+
+    it('redacts the user and password', () => {
+      expect(sanitizeSensitiveText(text)).toBe(`clone ${keptPrefix}[REDACTED]@host/repo.git failed`);
+    });
+
+    it('redacts the same range when streaming', () => {
+      expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set())))
+        .toBe(`clone ${keptPrefix}[REDACTED]@host/repo.git failed`);
+    });
+
+    it('redacts the password where it is echoed later', () => {
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-word', { command: text })).toBe('echoed [REDACTED]');
+    });
+  });
+
+  it.each([
+    ['a password that contains colons', 'https://user:pa:ss:word@host', 'https://[REDACTED]@host'],
+    ['an empty user followed by a colon in the password', 'https://::word@host', 'https://[REDACTED]@host'],
+    ['each URL in a list', 'a://u:p@h,b://v:q@i', 'a://[REDACTED]@h,b://[REDACTED]@i'],
+    ['the URL after one without credentials', 'a://b://u:p@h', 'a://b://[REDACTED]@h'],
+    ['an empty user', 'redis://:pa55-word@host:6379/0', 'redis://[REDACTED]@host:6379/0'],
+    ['an @ in the password', 'https://user:p@ss@host/path', 'https://[REDACTED]@host/path'],
+    ['several @ in the password', 'https://user:p@s@s@host', 'https://[REDACTED]@host'],
+    ['an @ at the end of the password', 'https://user:pass@@host', 'https://[REDACTED]@host'],
+    ['an empty user and an @ in the password', 'redis://:p@ss@host', 'redis://[REDACTED]@host'],
+  ])('redacts URL userinfo with %s', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+  });
+
+  it.each([
+    ['a quoted list', '["https://user:pass@host","admin@example.test"]', '["https://[REDACTED]@host","admin@example.test"]'],
+    ['a comma-separated list', 'https://user:pass@host,admin@example.test', 'https://[REDACTED]@host,admin@example.test'],
+    ['a parenthesized URL', '(https://user:pass@host)(admin@example.test)', '(https://[REDACTED]@host)(admin@example.test)'],
+    ['a path', 'https://user:pass@host/admin@example.test', 'https://[REDACTED]@host/admin@example.test'],
+    ['a following word', 'https://user:pass@host admin@example.test', 'https://[REDACTED]@host admin@example.test'],
+  ])('keeps the host and a later address readable in %s', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+  });
+
+  it('redacts a password with an @ where it is echoed later and when streaming', () => {
+    const text = 'clone https://user:p@55-word@host/repo.git failed';
+
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe('clone https://[REDACTED]@host/repo.git failed');
+    expect(sanitizeSensitiveTextWithKnownValues('echoed p@55-word', { command: text })).toBe('echoed [REDACTED]');
+  });
+
+  // Known limits of reading the password up to the last `@` of the authority. Both err on the
+  // side of hiding the host; the second leaves a value readable that follows that `@`.
+  it.each([
+    ['hides the host when `;` separates a later address',
+      'url=https://u:p@db.internal;owner=ops@example.test', 'url=https://[REDACTED]@example.test'],
+    ['reads an assignment between two @ as the password and what follows as the host',
+      'https://u:p@token=@SECRET/path', 'https://[REDACTED]@SECRET/path'],
+  ])('%s', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+  });
+
+  // Known limit: a scheme is ASCII letters, digits, `+`, `-` and `.` with at least one letter.
+  it.each(['aé://user:name@host', 'é://user:name@host'])('does not treat %s as a URL with credentials', (text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+  });
+
+  it.each([
+    'https://user@host/path',
+    'https://user@host:8080/path@v2',
+    'https://:@host',
+    'https://user:@host',
+    'https://host:8080/path@v2',
+    'https://host/a:b@c',
+    'mailto:user:name@host',
+    '://user:name@host',
+    '1://user:name@host',
+  ])('leaves %s readable', (text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+  });
+
   it.each(['known', 'substring'] as const)('masks the union of overlapping %s matches without hiding surrounding text', (matching) => {
     for (const [value, text] of [['abcab', 'before abcabcab after'], ['aaaa', 'before aaaaaa after']] as const) {
       const masked = matching === 'known'
