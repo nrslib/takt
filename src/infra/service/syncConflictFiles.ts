@@ -86,6 +86,22 @@ function unmergedEntries(cwd: string, env?: NodeJS.ProcessEnv): Map<string, stri
   return entries;
 }
 
+// Compares entries, not index file bytes: `git status` / `git diff` rewrite the file to refresh stat data.
+function indexEntries(cwd: string, env?: NodeJS.ProcessEnv): Buffer {
+  return git(cwd, ['ls-files', '-s', '-v', '-z'], env);
+}
+
+function indexEntriesOf(cwd: string, indexPath: string, content: Buffer, env?: NodeJS.ProcessEnv): Buffer {
+  const directory = mkdtempSync(join(dirname(indexPath), 'takt-conflict-index-'));
+  try {
+    const snapshot = join(directory, 'index');
+    writeFileSync(snapshot, content);
+    return indexEntries(cwd, { ...process.env, ...env, GIT_INDEX_FILE: snapshot });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function readResolvedFile(cwd: string, path: string): WorktreeFile | undefined {
   return readWorktreeFile(cwd, path);
 }
@@ -118,10 +134,10 @@ function resolveConflictMarkerSize(cwd: string, path: string, env?: NodeJS.Proce
 export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): { validateAndStage(): void } {
   const entries = unmergedEntries(cwd, env);
   if (entries.size === 0) throw new Error('No unmerged files were found for AI conflict resolution');
-  const originalIndex = git(cwd, ['ls-files', '-s', '-z'], env);
   const reportedIndexPath = git(cwd, ['rev-parse', '--git-path', 'index'], env).toString('utf8').trim();
   const indexPath = isAbsolute(reportedIndexPath) ? reportedIndexPath : resolve(cwd, reportedIndexPath);
   const originalIndexContent = readFileSync(indexPath);
+  const originalIndex = indexEntriesOf(cwd, indexPath, originalIndexContent, env);
   const conflictPaths = new Set(entries.keys());
   const initialUnstaged = new Map([...paths(git(cwd, ['diff', '--name-only', '-z'], env))]
     .filter((path) => !conflictPaths.has(path))
@@ -141,7 +157,7 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
         JSON.stringify(current.get(path)) !== JSON.stringify(stages))) {
         throw new Error('AI changed the unmerged Git index before runtime validation');
       }
-      if (!git(cwd, ['ls-files', '-s', '-z'], env).equals(originalIndex)) {
+      if (!indexEntries(cwd, env).equals(originalIndex)) {
         throw new Error('AI changed the Git index before runtime validation');
       }
       const changedTracked = new Set([...paths(git(cwd, ['diff', '--name-only', '-z'], env)), ...initialUnstaged.keys()]
@@ -188,7 +204,7 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
         const lockPath = `${indexPath}.lock`;
         const lockFd = openSync(lockPath, 'wx');
         try {
-          if (!readFileSync(indexPath).equals(originalIndexContent)) {
+          if (!indexEntries(cwd, env).equals(originalIndex)) {
             throw new Error('Git index changed during runtime staging');
           }
           writeFileSync(lockFd, readFileSync(temporaryIndex));

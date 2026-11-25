@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync,
-  symlinkSync, writeFileSync } from 'node:fs';
+  symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -177,6 +177,61 @@ describe('PR custom merge drivers and conflict recovery', () => {
       'code.txt', 'notes.txt', 'package-lock.json',
     ]));
     expect(git(['ls-files', '-u'])).toBe('');
+  });
+
+  it.each(['AIの作業前', 'AIの作業中'] as const)(
+    '%sに競合外ファイルの更新時刻だけが変わっても解決をstageする', (timing) => {
+      preparePlainConflict();
+      const rewriteWithSameContent = (): void => {
+        const stale = new Date(Date.now() - 60_000);
+        utimesSync(join(cwd, 'notes.txt'), stale, stale);
+      };
+      if (timing === 'AIの作業前') rewriteWithSameContent();
+      const conflictFiles = captureSyncConflictFiles(cwd);
+      if (timing === 'AIの作業中') rewriteWithSameContent();
+      writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+      conflictFiles.validateAndStage();
+      expect(git(['ls-files', '-u'])).toBe('');
+      expect(git(['show', ':code.txt'])).toBe('resolved');
+      expect(git(['diff', '--cached', '--name-only'])).toBe('code.txt');
+      expect(git(['status', '--porcelain'])).toBe('M  code.txt');
+    });
+
+  it('AIがgit statusで状態を確認しただけなら解決をstageする', () => {
+    preparePlainConflict();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    const stale = new Date(Date.now() - 60_000);
+    utimesSync(join(cwd, 'notes.txt'), stale, stale);
+    git(['status']);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+  });
+
+  it.each([
+    ['別の操作がstageした変更', (blob: string) => `--add --cacheinfo 100644,${blob},concurrent.txt`,
+      ['ls-files', '-s', 'concurrent.txt'], () => /\tconcurrent\.txt$/u],
+    ['別の操作が付けたskip-worktree', () => '--skip-worktree notes.txt',
+      ['ls-files', '-v', 'notes.txt'], () => /^S notes\.txt$/u],
+    ['別の操作が付けたassume-unchanged', () => '--assume-unchanged notes.txt',
+      ['ls-files', '-v', 'notes.txt'], () => /^h notes\.txt$/u],
+    ['別の操作が変えたmode', () => '--chmod=+x notes.txt',
+      ['ls-files', '-s', 'notes.txt'], () => /^100755 /u],
+    ['別の操作が変えたblob', (blob: string) => `--cacheinfo 100644,${blob},notes.txt`,
+      ['ls-files', '-s', 'notes.txt'], (blob: string) => new RegExp(`^100644 ${blob} 0\tnotes\\.txt$`, 'u')],
+  ] as const)('runtime stagingの途中で%sは上書きせずに停止する', (_name, updateIndexArgs, inspect, expected) => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, '.gitattributes'), 'code.txt filter=concurrent\n');
+    const blob = git(['rev-parse', 'HEAD:.gitattributes']);
+    git(['config', 'filter.concurrent.clean', 'if [ -n "$GIT_INDEX_FILE" ]; then '
+      + `env -u GIT_INDEX_FILE git update-index ${updateIndexArgs(blob)}; fi; cat`]);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('Git index changed during runtime staging');
+    expect(git([...inspect])).toMatch(expected(blob));
+    expect(git(['ls-files', '-u'])).not.toBe('');
+    expect(existsSync(join(cwd, '.git', 'index.lock'))).toBe(false);
   });
 
   it('Gitの8文字競合マーカーを残す解決はstageしない', () => {
