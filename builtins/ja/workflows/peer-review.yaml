@@ -29,6 +29,10 @@ subworkflow:
       type: facet_ref[]
       facet_kind: policy
       default: []
+    adjudication_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
     review_knowledge_additions:
       type: facet_ref[]
       facet_kind: knowledge
@@ -237,6 +241,9 @@ steps:
         optional_if_unrun: true
         history: {previous: 2}
     uses: peer-review-adjudication
+    policy:
+      - review-adjudication
+      - $param: adjudication_policy_additions
     rules:
       - condition: タスク全体の再計画は不要で、修正対象があるか、採否を決める事実の調査を現行の範囲内で進められる
         next: remediation
