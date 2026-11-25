@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { daemonEntryPath, ensureDaemon, stopDaemon } from '../features/daemon/lifecycle.js';
 import type { DaemonOwner } from '../infra/daemon/owner.js';
@@ -7,8 +9,12 @@ import { packageVersion } from '../shared/package-info.js';
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), running: vi.fn(), remove: vi.fn(), spawn: vi.fn(),
   open: vi.fn(), close: vi.fn(), delay: vi.fn(), directory: vi.fn(),
-  ready: vi.fn(),
+  ready: vi.fn(), entry: vi.fn<() => string | undefined>(),
 }));
+vi.mock('node:url', async (original) => {
+  const actual = await original<typeof import('node:url')>();
+  return { ...actual, fileURLToPath: (...args: Parameters<typeof actual.fileURLToPath>) => doubles.entry() ?? actual.fileURLToPath(...args) };
+});
 vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
 vi.mock('../features/daemon/conversationReadiness.js', () => ({ connectConversationIpc: doubles.ready }));
 vi.mock('../infra/daemon/owner.js', () => ({
@@ -31,6 +37,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   doubles.read.mockReset().mockReturnValue(undefined);
+  doubles.entry.mockReset();
   doubles.running.mockReset().mockReturnValue(true);
   socket = { destroy: vi.fn() };
   doubles.ready.mockReset().mockResolvedValue(socket);
@@ -159,7 +166,9 @@ it('bounds IPC readiness waiting for the winning daemon after its own child exit
 });
 
 it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old daemon before replacing a differing owner: %j', async (difference) => {
-  const old = { ...owner, ...difference, pid: 1234 };
+  const { entry } = await installations();
+  doubles.entry.mockReturnValue(entry('takt-custom-a'));
+  const old = { ...owner, cliPath: entry('takt-custom-a'), ...difference, pid: 1234 };
   doubles.read.mockReturnValue(old);
   let oldRunning = true;
   doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== old.pid || oldRunning);
@@ -169,6 +178,138 @@ it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old
   expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
   expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old, expect.objectContaining({ timeoutMs: 5000 }));
   expect(doubles.spawn).toHaveBeenCalledOnce();
+});
+
+/**
+ * 版別の配置 `takt-custom-a` / `takt-custom-b` と、切替用リンク `takt-custom`（最初は a を指す）を隔離領域に作る。
+ * Node はモジュールの URL を実パスに解決するため、呼出し側がリンクのパスを持つのは、起動後にその場所がリンクへ置き換わった場合である。
+ */
+async function installations() {
+  const root = join(dirname(process.env.TAKT_CONFIG_DIR!), 'local');
+  const entry = (name: string): string => join(root, name, 'dist/app/daemon/index.js');
+  for (const name of ['takt-custom-a', 'takt-custom-b']) {
+    await mkdir(dirname(entry(name)), { recursive: true });
+    await writeFile(entry(name), '');
+  }
+  const link = join(root, 'takt-custom');
+  await symlink('takt-custom-a', link);
+  return { entry, async switchTo(name: string) { await rm(link); await symlink(name, link); } };
+}
+
+function stoppable(target: DaemonOwner) {
+  let alive = true;
+  doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== target.pid || alive);
+  return vi.spyOn(process, 'kill').mockImplementation(() => { alive = false; return true; });
+}
+
+it('keeps the running daemon when the caller remembers the link path to the same installation', async () => {
+  const { entry } = await installations();
+  const running = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValue(entry('takt-custom'));
+  doubles.read.mockReturnValue(running);
+  const kill = stoppable(running);
+
+  const connection = await ensureDaemon({ retainConnection: true });
+
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, running);
+  expect(connection).toBe(socket);
+  connection.destroy();
+});
+
+it.each(['takt-custom-a', 'takt-custom-b'])('replaces a daemon whose recorded directory was later turned into a link to %s', async (target) => {
+  const { entry, switchTo } = await installations();
+  const old = { ...owner, pid: 1234, cliPath: entry('takt-custom') };
+  const replacement = { ...owner, cliPath: entry(target) };
+  await switchTo(target);
+  doubles.entry.mockReturnValue(entry(target));
+  doubles.read.mockReturnValue(old);
+  const kill = stoppable(old);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => { doubles.read.mockReturnValue(replacement); child.emit('spawn'); });
+    return child;
+  });
+
+  await ensureDaemon();
+
+  expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
+  expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, replacement);
+});
+
+it('leaves the running daemon alone when its own entry cannot be resolved', async () => {
+  const { entry } = await installations();
+  const running = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValue(entry('takt-custom-removed'));
+  doubles.read.mockReturnValue(running);
+  const kill = stoppable(running);
+
+  await expect(ensureDaemon()).rejects.toMatchObject({ code: 'ENOENT' });
+
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+});
+
+it('connects callers that remember the link path and the real path to the same daemon', async () => {
+  const { entry } = await installations();
+  const running = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValueOnce(entry('takt-custom')).mockReturnValueOnce(entry('takt-custom-a'));
+  doubles.read.mockReturnValue(running);
+  const kill = stoppable(running);
+
+  await Promise.all([ensureDaemon(), ensureDaemon()]);
+
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.ready.mock.calls).toEqual([
+    [process.env.TAKT_CONFIG_DIR, running],
+    [process.env.TAKT_CONFIG_DIR, running],
+  ]);
+});
+
+it('replaces a same-version daemon after the link was switched to another installation', async () => {
+  const { entry, switchTo } = await installations();
+  const old = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  const replacement = { ...owner, cliPath: entry('takt-custom-b') };
+  await switchTo('takt-custom-b');
+  doubles.entry.mockReturnValue(entry('takt-custom'));
+  doubles.read.mockReturnValue(old);
+  const kill = stoppable(old);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => { doubles.read.mockReturnValue(replacement); child.emit('spawn'); });
+    return child;
+  });
+
+  await ensureDaemon();
+
+  expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
+  expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, replacement);
+});
+
+it('accepts the startup-race winner recorded under the real path when the caller remembers the link path', async () => {
+  const { entry } = await installations();
+  const winner = { ...owner, pid: owner.pid + 1, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValue(entry('takt-custom'));
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => {
+      doubles.read.mockReturnValue(winner);
+      child.exitCode = 0;
+      child.emit('spawn');
+    });
+    return child;
+  });
+
+  await ensureDaemon();
+
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, winner);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(kill).not.toHaveBeenCalled();
 });
 
 it('waits for process exit before removing the stopped owner record', async () => {
