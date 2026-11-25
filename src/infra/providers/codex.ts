@@ -8,7 +8,6 @@ import {
   type CodexCallOptions,
 } from '../codex/index.js';
 import { emitResult } from '../codex/CodexStreamHandler.js';
-import { classifyRateLimitError } from '../rate-limit/detection.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { assertCodexPermissionControlOptions } from '../../core/models/workflow-provider-options.js';
@@ -190,7 +189,7 @@ export class CodexProvider implements Provider {
       });
       if (assessment.status !== 'done') {
         // The client also reports a transient 429 seen after a tool event as a rate limit; only usage limits switch providers here.
-        const usageLimited = assessment.errorKind === 'rate_limit' && classifyRateLimitError(assessment.error) === 'Exhausted';
+        const usageLimited = assessment.errorKind === 'rate_limit' && assessment.rateLimitInfo?.rateLimitClass === 'Exhausted';
         return {
           decision: 'error',
           error: assessment.error ?? 'Compaction completion assessment failed',

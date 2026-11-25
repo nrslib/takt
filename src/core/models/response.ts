@@ -43,6 +43,8 @@ export interface RateLimitInfo {
   detectedAt: Date;
   resetAtRaw?: string;
   source: 'sdk_error' | 'stream_marker' | 'error_text';
+  /** Classification of the full provider text, made before the error message is truncated. */
+  rateLimitClass?: 'Transient' | 'Exhausted';
 }
 
 /** Response from an agent execution */

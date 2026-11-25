@@ -241,6 +241,9 @@ describe('CodexClient — structuredOutput 抽出', () => {
   });
 
   describe('compaction assessment rate limit classification', () => {
+    const usageLimit = "You've hit your usage limit. Try again at 3:00 PM.";
+    const padding = 'x'.repeat(8192);
+    const failed = (message: string) => ({ type: 'turn.failed', error: { message } });
     const commandEvents = [
       { type: 'item.started', item: { id: 'cmd-1', type: 'command_execution', command: 'ls', status: 'in_progress' } },
       { type: 'item.completed', item: { id: 'cmd-1', type: 'command_execution', command: 'ls', status: 'completed', exit_code: 0, aggregated_output: '' } },
@@ -251,6 +254,14 @@ describe('CodexClient — structuredOutput 抽出', () => {
       { name: 'a usage limit after tool events', events: [...commandEvents, { type: 'turn.failed', error: { message: "You've hit your usage limit. Try again at 3:00 PM." } }], rateLimited: true },
       { name: 'a usage limit notice as the final message', events: [{ type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: "You've hit your usage limit. Try again at 3:00 PM." } }, { type: 'turn.completed' }], rateLimited: true },
       { name: 'a non rate limit failure after tool events', events: [...commandEvents, { type: 'turn.failed', error: { message: 'model returned an invalid response' } }], rateLimited: false },
+      { name: 'a long failure ending with a usage limit', events: [failed(`${padding}\n${usageLimit}`)], rateLimited: true },
+      { name: 'a long failure with a usage limit in the middle', events: [failed(`${padding}\n${usageLimit}\n${padding}`)], rateLimited: true },
+      { name: 'a long failure starting with a usage limit', events: [failed(`${usageLimit}\n${padding}`)], rateLimited: true },
+      { name: 'a long usage limit after tool events', events: [...commandEvents, failed(`${padding}\n${usageLimit}`)], rateLimited: true },
+      { name: 'a long transient 429', events: [failed(`${padding}\nHTTP 429 Too Many Requests`)], rateLimited: false },
+      { name: 'a long transient 429 after tool events', events: [...commandEvents, failed(`${padding}\nHTTP 429 Too Many Requests`)], rateLimited: false },
+      { name: 'a long non rate limit failure', events: [failed(`${padding}\nmodel returned an invalid response`)], rateLimited: false },
+      { name: 'a short usage limit without tool events', events: [failed(usageLimit)], rateLimited: true },
     ];
 
     it.each(cases)('reports $name as rate limited only for usage limits', async ({ events, rateLimited }) => {
