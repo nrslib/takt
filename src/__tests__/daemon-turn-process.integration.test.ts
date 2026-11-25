@@ -34,8 +34,9 @@ it('executes the real IPC entry without a provider and exits after shutdown clea
   try {
     const start = turnStart(); start.state.assignment = { kind: 'daemon' };
     start.turn.conversationId = conversationId(start.state.assignment); start.event.conversationId = start.turn.conversationId;
-    // A non-message is rejected before runtime/provider preparation, exercising the actual business boundary.
-    start.event.event = { kind: 'human_command', command: { kind: 'dismiss_summary', revision: 1, conversationId: start.turn.conversationId }, speaker: { namespace: 'human', id: 'test' } };
+    // A proposal command is rejected before runtime/provider preparation, exercising the actual business boundary.
+    start.event.event = { kind: 'human_command', command: { kind: 'propose_summary', conversationId: start.turn.conversationId,
+      summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } }, speaker: { namespace: 'human', id: 'test' } };
     const ready = wait('ready');
     await send({ ...envelope, kind: 'initialize', conversationId: start.turn.conversationId,
       assignment: start.state.assignment, configDirectory });
