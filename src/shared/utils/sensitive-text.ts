@@ -221,14 +221,18 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
   for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
     const userinfo = match[2]!;
     addSensitiveValue(values, userinfo);
-    addCredentialComponents(values, userinfo);
+    const firstAt = userinfo.indexOf('@');
+    if (firstAt < 0) {
+      addCredentialComponents(values, userinfo);
+      continue;
+    }
     // The userinfo may run past an `@` that ends the password, as in
     // `https://u:secret@db;owner=ops@example.test`, so the part up to the first `@` is kept too.
-    const firstAt = userinfo.indexOf('@');
-    if (firstAt >= 0) {
-      addSensitiveValue(values, userinfo.slice(0, firstAt));
-      addCredentialComponents(values, userinfo.slice(0, firstAt));
-    }
+    // Only that part is split like a cookie: past the first `@`, `owner=ops` is not a credential.
+    const separator = userinfo.indexOf(':');
+    if (separator + 1 < userinfo.length) values.add(userinfo.slice(separator + 1));
+    addSensitiveValue(values, userinfo.slice(0, firstAt));
+    addCredentialComponents(values, userinfo.slice(0, firstAt));
   }
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
