@@ -548,7 +548,7 @@ describe('Builtin PR merge workflow execution', () => {
     const policy = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'policies', 'merge-sync-review.md'), 'utf8').trim();
     const contextDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'context');
     const policyFiles = readdirSync(contextDirectory, { recursive: true, encoding: 'utf8' })
-      .filter((path) => path.includes('/policy/'))
+      .filter((path) => /[\\/]policy[\\/]/.test(path))
       .map((path) => join(contextDirectory, path));
     const consumers = h.agentPrompts.filter(({ workflow, step }) => workflow === 'single-review-suite'
       || workflow === 'peer-review' && (step === 'review-adjudication' || step === 'final-gate'));
