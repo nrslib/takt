@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sanitizeSensitiveText } from '../shared/utils/sensitiveText.js';
+import { createSensitiveTextStreamRedactor, sanitizeSensitiveText } from '../shared/utils/sensitiveText.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -36,6 +36,25 @@ describe('sanitizeSensitiveText performance', () => {
       const input = head + unit.repeat(Math.ceil(bytes / unit.length)) + tail;
       const start = performance.now();
       sanitizeSensitiveText(input);
+      return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
+});
+
+describe('sensitive text stream redactor performance', () => {
+  // The password of this URL runs to its last `@`, so the whole password becomes one long known
+  // value. Trying every prefix of that value against the end of the text is quadratic in its length.
+  it('stays linear on a URL whose password is a long run of @-separated words', () => {
+    const elapsed = (bytes: number): number => {
+      const input = 'https://u:' + 'p@'.repeat(bytes / 2) + 'host\n';
+      const start = performance.now();
+      const redactor = createSensitiveTextStreamRedactor();
+      redactor.write(input, {});
+      redactor.flush({});
       return performance.now() - start;
     };
     elapsed(1024); // warm up regexes and JIT

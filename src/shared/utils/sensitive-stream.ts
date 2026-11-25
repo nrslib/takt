@@ -41,14 +41,30 @@ function pendingSensitiveValueRanges(text: string): SensitiveRange[] {
 function knownValuePrefixSuffixRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
   const ranges: SensitiveRange[] = [];
   for (const value of values) {
-    for (let length = Math.min(value.length - 1, text.length); length > 0; length--) {
-      if (text.endsWith(value.slice(0, length))) {
-        ranges.push({ start: text.length - length, end: text.length });
-        break;
-      }
-    }
+    const length = longestValuePrefixAtEnd(text, value);
+    if (length > 0) ranges.push({ start: text.length - length, end: text.length });
   }
   return ranges;
+}
+
+// text の末尾と一致する、value の真の接頭辞のうち最も長いものの長さ。
+// 接頭辞を長い順に endsWith で試すと、長い値（パスワード全体など）で値の長さの2乗になるので、
+// KMP の失敗関数で value の先頭と text の末尾を1回ずつ読む。
+function longestValuePrefixAtEnd(text: string, value: string): number {
+  const limit = Math.min(value.length - 1, text.length);
+  if (limit <= 0) return 0;
+  const failure = new Int32Array(limit);
+  for (let i = 1, k = 0; i < limit; i++) {
+    while (k > 0 && value[i] !== value[k]) k = failure[k - 1]!;
+    if (value[i] === value[k]) k++;
+    failure[i] = k;
+  }
+  let matched = 0;
+  for (let i = text.length - limit; i < text.length; i++) {
+    while (matched > 0 && text[i] !== value[matched]) matched = failure[matched - 1]!;
+    if (text[i] === value[matched]) matched++;
+  }
+  return matched;
 }
 
 /** Complete value-bearing lines and closed PEM blocks become append-only output. */
