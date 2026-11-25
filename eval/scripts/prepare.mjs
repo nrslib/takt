@@ -52,7 +52,7 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
-  ...['ordinary', 'reconsider'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+  ...['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
     id: `review-proportionality-${caseId}-${language}`,
     workflow: 'peer-review', step: 'review-adjudication',
     fixture: `eval/fixtures/review-proportionality/${caseId}`,

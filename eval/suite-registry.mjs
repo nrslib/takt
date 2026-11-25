@@ -619,7 +619,7 @@ const EXECUTION_OVERRIDES = {
     reason: '説明文の更新と追加の自動検証義務を裁定で区別する実モデル評価',
   },
   'review-proportionality': {
-    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
     reason: '技術的成立と必須修正、人の不採用判断、重大な実欠陥を日英で比較する明示選択の評価',
   },
   'review-proof-boundary': {
@@ -729,7 +729,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
-  'review-proportionality': ['ordinary', 'reconsider'].flatMap((caseId) =>
+  'review-proportionality': ['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) =>
     ['ja', 'en'].map((language) => `review-proportionality-${caseId}-${language}`)),
   'adjudication-scope': ["adjudication-scope-input-local-ja","adjudication-scope-input-local-en","adjudication-scope-input-external-ja","adjudication-scope-input-external-en","adjudication-scope-local-condition-ja","adjudication-scope-local-condition-en","adjudication-scope-long-condition-ja","adjudication-scope-long-condition-en","adjudication-scope-quality-ja","adjudication-scope-quality-en","adjudication-scope-misdirected-evidence-ja","adjudication-scope-misdirected-evidence-en"],
   'review-adjudication': ['review-adjudication', 'repair-strategy'],
