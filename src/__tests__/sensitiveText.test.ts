@@ -97,8 +97,45 @@ describe('sensitiveText', () => {
 
     expect(sanitizeSensitiveText(text)).toBe(expected);
     expect(sanitizeSensitiveText(text)).not.toContain('RIGHT_SECRET');
-    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).not.toContain('RIGHT_SECRET');
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
     expect(sanitizeSensitiveTextWithKnownValues('echoed left@RIGHT_SECRET', { command: text })).toBe('echoed [REDACTED]');
+  });
+
+  it.each([
+    ['semicolon before TOKEN', 'curl https://u:p@host;TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host;TOKEN=[REDACTED]'],
+    ['comma before TOKEN', 'curl https://u:p@host,TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host,TOKEN=[REDACTED]'],
+    ['ampersand before TOKEN', 'curl https://u:p@host&TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host&TOKEN=[REDACTED]'],
+    ['pipe before TOKEN', 'curl https://u:p@host|TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host|TOKEN=[REDACTED]'],
+    ['single-quoted TOKEN after semicolon', "curl https://u:p@host;TOKEN='left@RIGHT_SECRET'", "curl https://[REDACTED]@host;TOKEN='[REDACTED]'"],
+    ['double-quoted URL and TOKEN', 'curl "https://u:p@host;TOKEN=left@RIGHT_SECRET"', 'curl "https://[REDACTED]@host;TOKEN=[REDACTED]"'],
+    ['no delimiter before TOKEN', 'curl https://u:p@hostTOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@hostTOKEN=[REDACTED]'],
+    ['second URL after semicolon before TOKEN', 'curl https://u:p@host;curl https://v:q@host2;TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host;curl https://[REDACTED]@host2;TOKEN=[REDACTED]'],
+    ['leading-@ password alone', 'curl https://u:@pa55@host', 'curl https://[REDACTED]@host'],
+    ['leading-@ password followed by semicolon TOKEN', 'curl https://u:@pa55@host;TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host;TOKEN=[REDACTED]'],
+    ['double-quoted leading-@ password and TOKEN', 'curl "https://u:@pa55@host;TOKEN=left@RIGHT_SECRET"', 'curl "https://[REDACTED]@host;TOKEN=[REDACTED]"'],
+    ['leading-@ password followed by comma TOKEN', 'curl https://u:@pa55@host,TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host,TOKEN=[REDACTED]'],
+  ])('redacts adversarial URL+assignment input (%s) without leaking credentials or hiding host/keys', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+    expect(sanitizeSensitiveText(text)).not.toContain('RIGHT_SECRET');
+    expect(sanitizeSensitiveText(text)).not.toContain('pa55');
+  });
+
+  it.each([
+    ['assignment inside URL password (Codex P1)', 'https://alice:LEFT;token=RIGHT@host', 'https://[REDACTED]@host', ['LEFT', 'RIGHT']],
+    ['uppercase assignment inside URL password (CodeRabbit Major)', 'https://alice:LEFT_SECRET;TOKEN=RIGHT_SECRET@host', 'https://[REDACTED]@host', ['LEFT_SECRET', 'RIGHT_SECRET']],
+    ['assignment inside URL password followed by second assignment', 'https://alice:LEFT;token=RIGHT@host;TOKEN2=a@SECRET', 'https://[REDACTED]@host;TOKEN2=[REDACTED]', ['LEFT', 'RIGHT', 'SECRET']],
+    ['URL followed immediately by @token=@SECRET', 'https://u:p@token=@SECRET/path', 'https://[REDACTED]@token=[REDACTED]', ['SECRET']],
+    ['username matching a sensitive key name', 'https://token:SECRET@host', 'https://[REDACTED]@host', ['SECRET']],
+    ['ambiguous leading-@ with trailing assignment merges union without leaking', 'https://alice:@LEFT;token=RIGHT@host', 'https://[REDACTED]', ['LEFT', 'RIGHT']],
+    ['ambiguous empty-password URL with trailing assignment merges union without leaking', 'https://user:@host;TOKEN=left@RIGHT_SECRET', 'https://[REDACTED]', ['RIGHT_SECRET']],
+  ])('handles overlapping URL and assignment ranges (%s)', (_name, text, expected, secrets) => {
+    const sanitized = sanitizeSensitiveText(text);
+    expect(sanitized).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+    for (const secret of secrets) {
+      expect(sanitized).not.toContain(secret);
+    }
   });
 
   it.each([
@@ -675,5 +712,413 @@ describe('sensitiveText', () => {
       self: '[REDACTED]',
     });
     expect(sanitizeSensitiveTextWithKnownValues('cycle-secret', source)).toBe('[REDACTED]');
+  });
+
+  describe('property test against naive brute-force reference implementation', () => {
+    interface RefRange {
+      readonly start: number;
+      readonly end: number;
+    }
+
+    const REF_KEY_CHAR = String.raw`[A-Za-z0-9_.-]`;
+    const REF_KEY_WORD = String.raw`api[_-]?key|token|password|secret|credentials?|access[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key`;
+    const REF_KEY = String.raw`(?=${REF_KEY_CHAR}*(?:${REF_KEY_WORD}))${REF_KEY_CHAR}+`;
+    const REF_HEADER_KEY = String.raw`(?:proxy[_-]?)?authorization|(?:set[_-]?)?cookies?|session[_-]?id`;
+    const REF_TEXT_KEY = String.raw`(?:${REF_KEY}|${REF_HEADER_KEY})`;
+    const REF_BARE_KEY = String.raw`(?<!${REF_KEY_CHAR})(?:(?=(?:${REF_HEADER_KEY})\b)${REF_KEY_CHAR})*(?!(?:${REF_HEADER_KEY})\b)${REF_KEY}`;
+    const REF_ASSIGN_KEY = String.raw`(?:["'](?:${REF_TEXT_KEY})["']|${REF_BARE_KEY})`;
+    const REF_QUOTED_VAL = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;
+    const REF_JSON_QUOTED_VAL = String.raw`\\"(?:[^"\\]|\\{4}|\\{1,3}[^"\\]|\\{3}")*\\"`;
+    const REF_QUOTED_ASSIGN = new RegExp(
+      String.raw`(${REF_ASSIGN_KEY}\s*[:=]\s*)(${REF_JSON_QUOTED_VAL}|${REF_QUOTED_VAL})`,
+      'gi',
+    );
+    const REF_BARE_ASSIGN = new RegExp(
+      String.raw`(${REF_ASSIGN_KEY}\s*[:=]\s*["']?)(?!\\")([^"'[{,\s}\]]+)(["']?)`,
+      'gi',
+    );
+    const REF_HEADER_BARE = new RegExp(
+      String.raw`((?:${REF_HEADER_KEY})\s*=\s*["']?)([^"';,\s}\]]+)(["']?)`,
+      'gi',
+    );
+    const REF_HEADER_COLON = new RegExp(
+      String.raw`((?:session[_-]?id)\s*:\s*["']?)([^"';,\s}\]]+)(["']?)`,
+      'gi',
+    );
+    const REF_OPTION = new RegExp(
+      String.raw`((?<!-)--(?:${REF_KEY})(?:=|\s+))(${REF_QUOTED_VAL}|[^\s]+)`,
+      'gi',
+    );
+    const REF_HTTP_HEADER_PREFIX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
+    const REF_CURL_VAL = [
+      String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
+      String.raw`"(?!\+)[^":]*:[^"]*"`,
+      String.raw`'(?!\+)[^':]*:[^']*'`,
+      String.raw`(?<!\\")(?![+"']|\\")[^\s:]*:[^\s]*`,
+    ].join('|');
+    const REF_CURL_EQ = new RegExp(
+      String.raw`(\B--(?:proxy-)?user=)(?:\\")?(${REF_CURL_VAL})(?:\\")?`,
+      'gi',
+    );
+    const REF_CURL_SPACE = new RegExp(
+      String.raw`(\B(?:-u|--(?:proxy-)?user)\s+)(?:\\")?(${REF_CURL_VAL})(?:\\")?`,
+      'gi',
+    );
+    const REF_CURL_COMPACT = new RegExp(
+      String.raw`(^|\s)(-u)(?:\\")?(${REF_CURL_VAL})(?:\\")?`,
+      'gi',
+    );
+    const REF_QUERY = /([?&](?:api[_-]?key|token|password|secret)=)([^&\s]+)/gi;
+    const REF_KNOWN_TOKEN = /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
+    const REF_PEM = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
+    const REF_TRAILING_PATTERNS: readonly RegExp[] = [
+      REF_BARE_ASSIGN,
+      REF_HEADER_BARE,
+      REF_HEADER_COLON,
+      REF_OPTION,
+      REF_CURL_EQ,
+      REF_HTTP_HEADER_PREFIX,
+    ];
+
+    function naiveContainingExclusion(index: number, exclusions: readonly RefRange[]): RefRange | undefined {
+      let best: RefRange | undefined;
+      for (const ex of exclusions) {
+        if (ex.start <= index && index < ex.end) {
+          if (best === undefined || ex.end > best.end) best = ex;
+        }
+      }
+      return best;
+    }
+
+    function naiveScanOutside(text: string, pattern: RegExp, exclusions: readonly RefRange[]): RegExpExecArray[] {
+      const re = new RegExp(pattern.source, pattern.flags);
+      const out: RegExpExecArray[] = [];
+      for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+        const hit = naiveContainingExclusion(m.index, exclusions);
+        if (hit !== undefined) {
+          re.lastIndex = hit.end;
+          continue;
+        }
+        out.push(m);
+      }
+      return out;
+    }
+
+    function naiveHttpHeaderEnd(text: string, start: number, shellQuote: "'" | '"' | '\\"' | undefined): number {
+      let valueQuote: string | undefined;
+      let prevNonSpace: string | undefined;
+      let cursor = start;
+      while (cursor < text.length) {
+        const ch = text[cursor]!;
+        if (ch === '\r' || ch === '\n') break;
+        if (shellQuote === '\\"' && ch === '\\') {
+          let slashEnd = cursor + 1;
+          while (text[slashEnd] === '\\') slashEnd += 1;
+          if (text[slashEnd] === '"' && (slashEnd - cursor) % 4 === 1) return slashEnd - 1;
+          cursor = slashEnd;
+          if (text[cursor] === '"') cursor += 1;
+          continue;
+        }
+        if (ch === '\\' && shellQuote !== "'" && text[cursor + 1] !== '\r' && text[cursor + 1] !== '\n') {
+          cursor = Math.min(cursor + 2, text.length);
+          continue;
+        }
+        if (shellQuote !== undefined) {
+          if (ch === shellQuote || (shellQuote === '\\"' && ch === '"')) break;
+        } else if (valueQuote !== undefined) {
+          if (ch === valueQuote) valueQuote = undefined;
+        } else if (ch === '"' || ch === "'") {
+          if (cursor !== start && prevNonSpace !== '=') break;
+          valueQuote = ch;
+        }
+        if (ch !== ' ' && ch !== '\t') prevNonSpace = ch;
+        cursor += 1;
+      }
+      return cursor;
+    }
+
+    function naiveUrlRanges(text: string, quotedExclusions: readonly RefRange[]): { ranges: RefRange[]; exclusions: RefRange[] } {
+      const ranges: RefRange[] = [];
+      const exclusions: RefRange[] = [];
+      let pos = 0;
+      while (pos < text.length) {
+        const sep = text.indexOf('://', pos);
+        if (sep < 0) break;
+        const hit = naiveContainingExclusion(sep, quotedExclusions);
+        if (hit !== undefined) {
+          pos = hit.end;
+          continue;
+        }
+        // Check scheme backwards: run of [0-9+.-] preceded by at least one ASCII letter.
+        let s = sep - 1;
+        while (s >= 0 && /[0-9+.-]/.test(text[s]!)) s -= 1;
+        if (s < 0 || !/[A-Za-z]/.test(text[s]!)) {
+          pos = sep + 3;
+          continue;
+        }
+        const uStart = sep + 3;
+        // Scan user up to first `:` before any of /?#\s@
+        let colon = uStart;
+        while (colon < text.length && !/[/?#\s@:]/.test(text[colon]!)) colon += 1;
+        if (text[colon] !== ':') {
+          pos = sep + 3;
+          continue;
+        }
+        // Scan password and find all `@` positions in the authority
+        let cursor = colon + 1;
+        const atPositions: number[] = [];
+        if (text[cursor] === '@') {
+          atPositions.push(cursor);
+          cursor += 1;
+          while (cursor < text.length && !/[/?#\s"'`,<>()[\]{}]/.test(text[cursor]!)) {
+            if (text[cursor] === '@') atPositions.push(cursor);
+            cursor += 1;
+          }
+        } else {
+          while (cursor < text.length && !/[/?#\s@]/.test(text[cursor]!)) cursor += 1;
+          if (cursor > colon + 1 && text[cursor] === '@') {
+            atPositions.push(cursor);
+            cursor += 1;
+            while (cursor < text.length && !/[/?#\s"'`,<>()[\]{}]/.test(text[cursor]!)) {
+              if (text[cursor] === '@') atPositions.push(cursor);
+              cursor += 1;
+            }
+          }
+        }
+        const validAts = atPositions.filter((at) => at >= colon + 2);
+        if (validAts.length === 0) {
+          pos = sep + 3;
+          continue;
+        }
+        const firstValidAt = validAts[0]!;
+        const rawEnd = validAts[validAts.length - 1]!;
+        let uEnd = rawEnd;
+        if (firstValidAt < rawEnd) {
+          // Brute-force: scan the authority tail up to the trailing delimiter and find the earliest
+          // trailing sensitive assignment starting in (firstValidAt, rawEnd).
+          let segEnd = rawEnd + 1;
+          while (segEnd < text.length && !/[/?#\s"'`,<>()[\]{}]/.test(text[segEnd]!)) segEnd += 1;
+          const segment = text.slice(firstValidAt + 1, segEnd);
+          let earliest = -1;
+          for (const pat of REF_TRAILING_PATTERNS) {
+            const re = new RegExp(pat.source, pat.flags);
+            const m = re.exec(segment);
+            if (m !== null && (earliest < 0 || m.index < earliest)) earliest = m.index;
+          }
+          if (earliest >= 0 && firstValidAt + 1 + earliest < rawEnd) {
+            const boundary = firstValidAt + 1 + earliest;
+            let trimmed = firstValidAt;
+            for (const at of validAts) {
+              if (at < boundary) trimmed = at;
+            }
+            uEnd = trimmed;
+          }
+        }
+        ranges.push({ start: uStart, end: uEnd });
+        exclusions.push(text[colon + 1] === '@' ? { start: uStart, end: colon + 1 } : { start: uStart, end: uEnd + 1 });
+        pos = rawEnd + 1;
+      }
+      return { ranges, exclusions };
+    }
+
+    function naiveReferenceSanitize(text: string): string {
+      if (!text) return text;
+      const ranges: RefRange[] = [];
+      const quotedExclusions: RefRange[] = [];
+      for (const m of text.matchAll(REF_QUOTED_ASSIGN)) {
+        const quoteWidth = m[2]!.startsWith('\\"') ? 2 : 1;
+        ranges.push({ start: m.index + m[1]!.length + quoteWidth, end: m.index + m[0].length - quoteWidth });
+        quotedExclusions.push({ start: m.index, end: m.index + m[0].length });
+      }
+      const urls = naiveUrlRanges(text, quotedExclusions);
+      for (const r of urls.ranges) ranges.push(r);
+      const exclusions = [...quotedExclusions, ...urls.exclusions];
+
+      for (const pat of [REF_BARE_ASSIGN, REF_HEADER_BARE, REF_HEADER_COLON, REF_OPTION, REF_QUERY]) {
+        for (const m of naiveScanOutside(text, pat, exclusions)) {
+          const start = m.index + m[1]!.length;
+          ranges.push({ start, end: start + m[2]!.length });
+        }
+      }
+      // HTTP headers
+      const headers = new RegExp(REF_HTTP_HEADER_PREFIX.source, REF_HTTP_HEADER_PREFIX.flags);
+      const authScheme = /([A-Za-z]+)[ \t]+/y;
+      for (let m = headers.exec(text); m !== null; m = headers.exec(text)) {
+        const hit = naiveContainingExclusion(m.index, exclusions);
+        if (hit !== undefined) {
+          headers.lastIndex = hit.end;
+          continue;
+        }
+        const start = headers.lastIndex;
+        authScheme.lastIndex = start;
+        const scheme = m[1]!.toLowerCase() === 'authorization' ? authScheme.exec(text) : null;
+        const credentialStart = scheme === null ? start : authScheme.lastIndex;
+        const enclosingQuote = text[m.index - 1];
+        const shellQuote = enclosingQuote === '"' && text[m.index - 2] === '\\'
+          ? '\\"'
+          : enclosingQuote === '"' || enclosingQuote === "'" ? enclosingQuote : undefined;
+        const end = naiveHttpHeaderEnd(text, credentialStart, shellQuote);
+        if (end > start) ranges.push({ start: credentialStart, end });
+        headers.lastIndex = end;
+      }
+      for (const pat of [REF_CURL_EQ, REF_CURL_SPACE]) {
+        for (const m of naiveScanOutside(text, pat, exclusions)) {
+          ranges.push({ start: m.index + m[1]!.length, end: m.index + m[0].length });
+        }
+      }
+      for (const m of naiveScanOutside(text, REF_CURL_COMPACT, exclusions)) {
+        ranges.push({ start: m.index + m[1]!.length + m[2]!.length, end: m.index + m[0].length });
+      }
+      for (const pat of [REF_KNOWN_TOKEN, REF_PEM]) {
+        for (const m of text.matchAll(pat)) {
+          ranges.push({ start: m.index, end: m.index + m[0].length });
+        }
+      }
+
+      // Brute-force character-level union merge and single-pass replacement.
+      const masked = new Array<boolean>(text.length).fill(false);
+      for (const { start, end } of ranges) {
+        for (let i = Math.max(0, start); i < Math.min(text.length, end); i += 1) {
+          masked[i] = true;
+        }
+      }
+      let out = '';
+      for (let i = 0; i < text.length;) {
+        if (!masked[i]) {
+          out += text[i]!;
+          i += 1;
+        } else {
+          while (i < text.length && masked[i]) i += 1;
+          out += '[REDACTED]';
+        }
+      }
+      return out;
+    }
+
+    function createPrng(seed: number): () => number {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function minimizeCounterexample(input: string, predicate: (candidate: string) => boolean): string {
+      let current = input;
+      // Coarse chunk removal, then single-character deletion until fixed point.
+      for (let step = Math.max(1, Math.floor(current.length / 2)); step >= 1; step = Math.floor(step / 2)) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (let i = 0; i + step <= current.length; i += 1) {
+            const candidate = current.slice(0, i) + current.slice(i + step);
+            if (predicate(candidate)) {
+              current = candidate;
+              changed = true;
+              break;
+            }
+          }
+        }
+      }
+      return current;
+    }
+
+    it('matches the naive brute-force reference implementation across 1,000 seeded random inputs and all adversarial cases', () => {
+      const rand = createPrng(0x2103c0de);
+      const pick = <T,>(items: readonly T[]): T => items[Math.floor(rand() * items.length)]!;
+
+      const schemes = ['https://', 'http://', 'redis://', 'git+https://', '1-http://', '_http://', 'a://', '://', '1://'];
+      const users = ['', 'u', 'alice', 'token', 'a'];
+      const passwords = [
+        '', 'p', 'LEFT', 'pa55', '@pa55', '@', 'p@ss', 'p@@s', 'a:b',
+        'LEFT;token=RIGHT', 'LEFT&token=RIGHT', 'sk-1234567890',
+      ];
+      const hosts = ['host', 'host2', 'db.internal', 'hostTOKEN', 'example.test', 'admin@example.test', 'token'];
+      const separators = ['', ';', ',', '&', '|', ' ', "'", '"', '\\"', '/', '?', '#', '(', ')', '[', ']'];
+      const fragments = [
+        'curl ',
+        'TOKEN=left@RIGHT_SECRET',
+        'token=RIGHT',
+        "TOKEN='left@RIGHT_SECRET'",
+        'TOKEN="left@RIGHT_SECRET"',
+        'TOKEN=\\"left@RIGHT_SECRET\\"',
+        'password=sec@val',
+        'api_key:val@end',
+        'session_id=sid@end',
+        'session_id:sid@end',
+        'cookie=ck@end',
+        'owner=ops@example.test',
+        '--token=opt@sec',
+        '--user=u:p@c',
+        '-u a:b',
+        'Authorization: Bearer tok@sec',
+        'Cookie: a=b',
+        'sk-1234567890',
+        '@',
+        '@@',
+        '@@@',
+        '@a@b@',
+        'tail',
+      ];
+
+      const makeUrl = (): string => `${pick(schemes)}${pick(users)}:${pick(passwords)}@${pick(hosts)}`;
+      const inputs: string[] = [
+        'curl https://u:p@host;TOKEN=left@RIGHT_SECRET',
+        'curl https://u:p@host,TOKEN=left@RIGHT_SECRET',
+        'curl https://u:p@host&TOKEN=left@RIGHT_SECRET',
+        'curl https://u:p@host|TOKEN=left@RIGHT_SECRET',
+        "curl https://u:p@host;TOKEN='left@RIGHT_SECRET'",
+        'curl "https://u:p@host;TOKEN=left@RIGHT_SECRET"',
+        'curl https://u:p@hostTOKEN=left@RIGHT_SECRET',
+        'curl https://u:p@host;curl https://v:q@host2;TOKEN=left@RIGHT_SECRET',
+        'curl https://u:@pa55@host',
+        'curl https://u:@pa55@host;TOKEN=left@RIGHT_SECRET',
+        'curl "https://u:@pa55@host;TOKEN=left@RIGHT_SECRET"',
+        'curl https://u:@pa55@host,TOKEN=left@RIGHT_SECRET',
+        'https://alice:LEFT;token=RIGHT@host',
+        'https://alice:LEFT_SECRET;TOKEN=RIGHT_SECRET@host',
+        'https://alice:LEFT;token=RIGHT@host;TOKEN2=a@SECRET',
+        'https://u:p@token=@SECRET/path',
+        'https://user:@host;TOKEN=left@RIGHT_SECRET',
+        'https://alice:@LEFT;token=RIGHT@host',
+      ];
+
+      for (let i = 0; i < 1_000; i += 1) {
+        const partCount = 1 + Math.floor(rand() * 6);
+        let built = '';
+        for (let p = 0; p < partCount; p += 1) {
+          if (p > 0) built += pick(separators);
+          built += rand() < 0.45 ? makeUrl() : pick(fragments);
+        }
+        // Randomly wrap or affix quotes / `@` runs to stress boundary interactions.
+        if (rand() < 0.2) built = '"' + built + '"';
+        if (rand() < 0.15) built = "'" + built + "'";
+        if (rand() < 0.2) built += pick(['@', '@@', '@end', ';TOKEN=a@b']);
+        inputs.push(built);
+      }
+
+      for (const input of inputs) {
+        const actual = sanitizeSensitiveText(input);
+        const expected = naiveReferenceSanitize(input);
+        const ranged = maskSensitiveRanges(input, sensitiveTextRanges(input, new Set()));
+        if (actual !== expected || actual !== ranged) {
+          const minimized = minimizeCounterexample(
+            input,
+            (candidate) => sanitizeSensitiveText(candidate) !== naiveReferenceSanitize(candidate)
+              || sanitizeSensitiveText(candidate) !== maskSensitiveRanges(candidate, sensitiveTextRanges(candidate, new Set())),
+          );
+          throw new Error([
+            'Property test mismatch between sanitizeSensitiveText and naive reference implementation.',
+            `Original input   : ${JSON.stringify(input)}`,
+            `Minimized input  : ${JSON.stringify(minimized)}`,
+            `Actual output    : ${JSON.stringify(sanitizeSensitiveText(minimized))}`,
+            `Reference output : ${JSON.stringify(naiveReferenceSanitize(minimized))}`,
+            `Ranges output    : ${JSON.stringify(maskSensitiveRanges(minimized, sensitiveTextRanges(minimized, new Set())))}`,
+          ].join('\n'));
+        }
+      }
+    });
   });
 });

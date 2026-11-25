@@ -34,6 +34,7 @@ describe('sanitizeSensitiveText performance', () => {
     ['colon-separated words without an @', 'https://', 'a:', ''],
     ['colons only without an @', 'https://', ':', ''],
     ['a password of @-separated words', 'https://user:pass', '@a', ''],
+    ['a password of @-separated words followed by a trailing assignment', 'https://user:pass', '@a', '@host;TOKEN=left@right'],
     ['a password of @ only', 'https://user:pass', '@', ''],
     ['a leading-@ password without a closing @', 'https://user:@', 'a', ''],
   ])('stays linear on %s', (_name, head, unit, tail) => {

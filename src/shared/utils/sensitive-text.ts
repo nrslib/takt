@@ -90,6 +90,17 @@ const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|token|password|secret)=
 const KNOWN_TOKEN_REGEX = /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
 const PEM_PRIVATE_KEY_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
 
+const URL_AUTHORITY_TRAILING_DELIMITER_REGEX = /[/?#\s"'`,<>()[\]{}]/;
+const URL_TRAILING_ASSIGNMENT_PATTERNS: readonly RegExp[] = [
+  SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX,
+  SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX,
+  SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX,
+  SENSITIVE_OPTION_VALUE_REGEX,
+  CURL_USER_EQUALS_REGEX,
+  HTTP_HEADER_PREFIX_REGEX,
+];
+const EMPTY_SENSITIVE_VALUES: ReadonlySet<string> = new Set();
+
 interface HttpHeaderValue {
   start: number;
   credentialStart: number;
@@ -102,20 +113,117 @@ export interface SensitiveRange {
   readonly end: number;
 }
 
+interface QuotedAssignmentRanges {
+  readonly valueRanges: SensitiveRange[];
+  readonly exclusions: SensitiveRange[];
+}
+
+interface UrlUserinfoRanges {
+  readonly valueRanges: SensitiveRange[];
+  readonly exclusions: SensitiveRange[];
+}
+
 type ShellHeaderQuote = "'" | '"' | '\\"';
 
-function* httpHeaderValues(text: string): Generator<HttpHeaderValue> {
+function* matchesOutside(
+  text: string,
+  pattern: RegExp,
+  exclusions: readonly SensitiveRange[],
+): Generator<RegExpExecArray> {
+  const matcher = new RegExp(pattern.source, pattern.flags);
+  let exclusionIndex = 0;
+  for (let match = matcher.exec(text); match !== null; match = matcher.exec(text)) {
+    while (exclusionIndex < exclusions.length && exclusions[exclusionIndex]!.end <= match.index) {
+      exclusionIndex += 1;
+    }
+    const exclusion = exclusions[exclusionIndex];
+    if (exclusion !== undefined && exclusion.start <= match.index) {
+      matcher.lastIndex = exclusion.end;
+      continue;
+    }
+    yield match;
+  }
+}
+
+function collectQuotedAssignmentRanges(text: string): QuotedAssignmentRanges {
+  const valueRanges: SensitiveRange[] = [];
+  const exclusions: SensitiveRange[] = [];
+  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
+    const quoteWidth = match[2]!.startsWith('\\"') ? 2 : 1;
+    valueRanges.push({
+      start: match.index + match[1]!.length + quoteWidth,
+      end: match.index + match[0].length - quoteWidth,
+    });
+    exclusions.push({
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  return { valueRanges, exclusions };
+}
+
+function firstTrailingAssignmentIndex(segment: string): number {
+  let earliest = -1;
+  for (const pattern of URL_TRAILING_ASSIGNMENT_PATTERNS) {
+    const matcher = new RegExp(pattern.source, pattern.flags);
+    const match = matcher.exec(segment);
+    if (match !== null && (earliest < 0 || match.index < earliest)) {
+      earliest = match.index;
+    }
+  }
+  return earliest;
+}
+
+// Masks only URL userinfo (`user:password` before `@`), never the whole URL.
+// When a sensitive assignment starts after a valid closing `@` of the same authority run,
+// the URL userinfo stops at the last `@` before that assignment so neither match swallows the other.
+function collectUrlUserinfoRanges(
+  text: string,
+  quotedExclusions: readonly SensitiveRange[],
+): UrlUserinfoRanges {
+  const valueRanges: SensitiveRange[] = [];
+  const exclusions: SensitiveRange[] = [];
+  for (const match of matchesOutside(text, URL_USERINFO_CREDENTIALS_REGEX, quotedExclusions)) {
+    const start = match.index + match[1]!.length;
+    const rawEnd = match.index + match[0].length - 1;
+    const colon = text.indexOf(':', start);
+    const firstValidAt = text.indexOf('@', colon + 2);
+    let end = rawEnd;
+    if (firstValidAt < rawEnd) {
+      let segmentEnd = rawEnd + 1;
+      while (segmentEnd < text.length && !URL_AUTHORITY_TRAILING_DELIMITER_REGEX.test(text[segmentEnd]!)) {
+        segmentEnd += 1;
+      }
+      const trailingIndex = firstTrailingAssignmentIndex(text.slice(firstValidAt + 1, segmentEnd));
+      if (trailingIndex >= 0 && firstValidAt + 1 + trailingIndex < rawEnd) {
+        end = text.lastIndexOf('@', firstValidAt + trailingIndex);
+      }
+    }
+    valueRanges.push({ start, end });
+    // Interior assignments before the closing `@` belong to the URL password; skipping them
+    // prevents bare-assignment matches from eating `@host`. When the password starts with `@`
+    // (`user:@...`), only `user:` is excluded so ambiguous `user:@host;TOKEN=left@secret` keeps
+    // both ranges and merges their union instead of leaking either side.
+    exclusions.push(text[colon + 1] === '@' ? { start, end: colon + 1 } : { start, end: end + 1 });
+  }
+  return { valueRanges, exclusions };
+}
+
+function* httpHeaderValues(
+  text: string,
+  exclusions: readonly SensitiveRange[] = collectQuotedAssignmentRanges(text).exclusions,
+): Generator<HttpHeaderValue> {
   const headers = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
-  const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
-  let quotedAssignment = quotedAssignments.next().value;
+  let exclusionIndex = 0;
   const authScheme = /([A-Za-z]+)[ \t]+/y;
   for (let match = headers.exec(text); match !== null; match = headers.exec(text)) {
-    while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
-      quotedAssignment = quotedAssignments.next().value;
+    while (exclusionIndex < exclusions.length && exclusions[exclusionIndex]!.end <= match.index) {
+      exclusionIndex += 1;
     }
-    if (quotedAssignment !== undefined && quotedAssignment.index <= match.index) {
-      // Quoted assignments use the same boundary as display redaction.
-      headers.lastIndex = quotedAssignment.index + quotedAssignment[0].length;
+    const exclusion = exclusions[exclusionIndex];
+    if (exclusion !== undefined && exclusion.start <= match.index) {
+      // Quoted assignments and URL userinfo use the same boundary as display redaction.
+      headers.lastIndex = exclusion.end;
       continue;
     }
     const start = headers.lastIndex;
@@ -169,39 +277,10 @@ function httpHeaderValueEnd(text: string, start: number, shellQuote: ShellHeader
   return cursor;
 }
 
-function redactHttpHeaders(text: string): string {
-  const parts: string[] = [];
-  let copiedThrough = 0;
-  for (const { start, end, scheme } of httpHeaderValues(text)) {
-    parts.push(text.slice(copiedThrough, start), scheme === undefined ? REDACTED_VALUE : scheme + ' ' + REDACTED_VALUE);
-    copiedThrough = end;
-  }
-  parts.push(text.slice(copiedThrough));
-  return parts.join('');
-}
-
+// Collects all sensitive ranges on the original text, merges overlapping ranges, and replaces once.
 export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
-  const sanitized = text
-    .replace(PEM_PRIVATE_KEY_REGEX, REDACTED_VALUE)
-    .replace(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX, (_match, prefix: string, quotedValue: string) => {
-      const quote = quotedValue.startsWith('\\"') ? '\\"' : quotedValue[0];
-      return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
-    })
-    // Before URLs: a password read to the last `@` can run through `;TOKEN=left` of
-    // `https://u:p@host;TOKEN=left@secret` and leave `@secret` visible. `[` ends the URL match.
-    .replace(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
-  return redactHttpHeaders(sanitized)
-    .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(CURL_USER_SPACE_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(CURL_SHORT_USER_COMPACT_REGEX, `$1$2${REDACTED_VALUE}`)
-    .replace(SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(SENSITIVE_OPTION_VALUE_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(SENSITIVE_QUERY_VALUE_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(KNOWN_TOKEN_REGEX, REDACTED_VALUE);
+  return maskSensitiveRanges(text, sensitiveTextRanges(text, EMPTY_SENSITIVE_VALUES));
 }
 
 export function isSensitiveKeyName(key: string): boolean {
@@ -210,21 +289,26 @@ export function isSensitiveKeyName(key: string): boolean {
 
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
   addMatches(text, PEM_PRIVATE_KEY_REGEX, 0, values);
+  const quoted = collectQuotedAssignmentRanges(text);
   for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
     const quotedValue = match[2]!;
     addSensitiveValue(values, quotedValue);
     // Embedded credentials stay within the assignment's quote boundary.
     collectHttpHeaderSensitiveValues(stripMatchingQuotes(quotedValue), values);
   }
-  for (const match of bareAssignments(text)) addSensitiveValue(values, match[2]!);
-  addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
-  addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, 2, values);
-  addMatches(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values);
-  addMatches(text, SENSITIVE_QUERY_VALUE_REGEX, 2, values);
+  const urlUserinfo = collectUrlUserinfoRanges(text, quoted.exclusions);
+  const interiorExclusions = mergedRanges([...quoted.exclusions, ...urlUserinfo.exclusions]);
+  for (const match of matchesOutside(text, SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, interiorExclusions)) {
+    addSensitiveValue(values, match[2]!);
+  }
+  addMatchesOutside(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, 2, values, interiorExclusions);
+  addMatchesOutside(text, SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, 2, values, interiorExclusions);
+  addMatchesOutside(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values, interiorExclusions);
+  addMatchesOutside(text, SENSITIVE_QUERY_VALUE_REGEX, 2, values, interiorExclusions);
   addMatches(text, KNOWN_TOKEN_REGEX, 0, values);
-  collectHttpHeaderSensitiveValues(text, values);
-  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
-    const userinfo = match[2]!;
+  collectHttpHeaderSensitiveValues(text, values, interiorExclusions);
+  for (const { start, end } of urlUserinfo.valueRanges) {
+    const userinfo = text.slice(start, end);
     const firstAt = userinfo.indexOf('@');
     if (firstAt < 0) {
       addSensitiveValue(values, userinfo);
@@ -248,13 +332,17 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
     const password = userinfo.slice(separator + 1);
     if (password.length > 0 && password.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) values.add(password);
   }
-  addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
-  addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
-  addMatches(text, CURL_SHORT_USER_COMPACT_REGEX, 3, values, true);
+  addMatchesOutside(text, CURL_USER_EQUALS_REGEX, 2, values, interiorExclusions, true);
+  addMatchesOutside(text, CURL_USER_SPACE_REGEX, 2, values, interiorExclusions, true);
+  addMatchesOutside(text, CURL_SHORT_USER_COMPACT_REGEX, 3, values, interiorExclusions, true);
 }
 
-function collectHttpHeaderSensitiveValues(text: string, values: Set<string>): void {
-  for (const { start, end } of httpHeaderValues(text)) {
+function collectHttpHeaderSensitiveValues(
+  text: string,
+  values: Set<string>,
+  exclusions?: readonly SensitiveRange[],
+): void {
+  for (const { start, end } of httpHeaderValues(text, exclusions)) {
     const value = text.slice(start, end);
     addSensitiveValue(values, value);
     addCredentialComponents(values, value);
@@ -278,7 +366,8 @@ export function addSensitiveValue(values: Set<string>, rawValue: string, key?: s
 }
 
 export function sanitizeTextWithValues(text: string, sensitiveValues: ReadonlySet<string>): string {
-  return sanitizeSensitiveText(maskSensitiveRanges(text, knownValueRanges(text, sensitiveValues)));
+  if (!text) return text;
+  return maskSensitiveRanges(text, sensitiveTextRanges(text, sensitiveValues));
 }
 
 function addMatches(
@@ -290,6 +379,25 @@ function addMatches(
 ): void {
   const matcher = new RegExp(pattern.source, pattern.flags);
   for (const match of text.matchAll(matcher)) {
+    const value = match[group];
+    if (value !== undefined) {
+      addSensitiveValue(values, value);
+      if (addCredentialParts) {
+        addCredentialComponents(values, value);
+      }
+    }
+  }
+}
+
+function addMatchesOutside(
+  text: string,
+  pattern: RegExp,
+  group: number,
+  values: Set<string>,
+  exclusions: readonly SensitiveRange[],
+  addCredentialParts = false,
+): void {
+  for (const match of matchesOutside(text, pattern, exclusions)) {
     const value = match[group];
     if (value !== undefined) {
       addSensitiveValue(values, value);
@@ -333,32 +441,24 @@ function stripMatchingQuotes(value: string): string {
     : value;
 }
 
-// Bare matches inside a quoted assignment would extend past its closing `\"`
-// (e.g. `token=\"x-secret==\"` yields `=\`), and masking ranges would then eat the escape.
-function* bareAssignments(text: string): Generator<RegExpExecArray> {
-  const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
-  let quotedAssignment = quotedAssignments.next().value;
-  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX)) {
-    while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
-      quotedAssignment = quotedAssignments.next().value;
-    }
-    if (quotedAssignment === undefined || quotedAssignment.index > match.index) yield match;
-  }
-}
-
-/** Finds the same values as sanitizeSensitiveText, on the original text. */
+/**
+ * Finds all sensitive value ranges on the original text (URL userinfo only, not full URLs;
+ * assignments, headers, options, queries, PEM blocks, known tokens, and known values).
+ * Callers merge overlapping ranges and replace each merged span once via `maskSensitiveRanges`.
+ */
 export function sensitiveTextRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
   const ranges: SensitiveRange[] = [];
-  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
-    const quoteWidth = match[2]!.startsWith('\\"') ? 2 : 1;
-    ranges.push({ start: match.index + match[1]!.length + quoteWidth, end: match.index + match[0].length - quoteWidth });
-  }
+  const quoted = collectQuotedAssignmentRanges(text);
+  for (const range of quoted.valueRanges) ranges.push(range);
+  const urlUserinfo = collectUrlUserinfoRanges(text, quoted.exclusions);
+  for (const range of urlUserinfo.valueRanges) ranges.push(range);
+  const interiorExclusions = mergedRanges([...quoted.exclusions, ...urlUserinfo.exclusions]);
   const valueMatches = [
-    bareAssignments(text),
-    text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX),
-    text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX),
-    text.matchAll(SENSITIVE_OPTION_VALUE_REGEX),
-    text.matchAll(SENSITIVE_QUERY_VALUE_REGEX),
+    matchesOutside(text, SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, interiorExclusions),
+    matchesOutside(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, interiorExclusions),
+    matchesOutside(text, SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, interiorExclusions),
+    matchesOutside(text, SENSITIVE_OPTION_VALUE_REGEX, interiorExclusions),
+    matchesOutside(text, SENSITIVE_QUERY_VALUE_REGEX, interiorExclusions),
   ];
   for (const matches of valueMatches) {
     for (const match of matches) {
@@ -366,14 +466,15 @@ export function sensitiveTextRanges(text: string, values: ReadonlySet<string>): 
       ranges.push({ start, end: start + match[2]!.length });
     }
   }
-  for (const { credentialStart, end } of httpHeaderValues(text)) ranges.push({ start: credentialStart, end });
-  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
-    ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length - 1 });
+  for (const { credentialStart, end } of httpHeaderValues(text, interiorExclusions)) {
+    ranges.push({ start: credentialStart, end });
   }
   for (const pattern of [CURL_USER_EQUALS_REGEX, CURL_USER_SPACE_REGEX]) {
-    for (const match of text.matchAll(pattern)) ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length });
+    for (const match of matchesOutside(text, pattern, interiorExclusions)) {
+      ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length });
+    }
   }
-  for (const match of text.matchAll(CURL_SHORT_USER_COMPACT_REGEX)) {
+  for (const match of matchesOutside(text, CURL_SHORT_USER_COMPACT_REGEX, interiorExclusions)) {
     ranges.push({ start: match.index + match[1]!.length + match[2]!.length, end: match.index + match[0].length });
   }
   for (const pattern of [KNOWN_TOKEN_REGEX, PEM_PRIVATE_KEY_REGEX]) {
