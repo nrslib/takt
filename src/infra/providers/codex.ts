@@ -192,6 +192,8 @@ export class CodexProvider implements Provider {
           decision: 'error',
           error: assessment.error ?? 'Compaction completion assessment failed',
           failureCategory: assessment.failureCategory ?? 'provider_error',
+          errorKind: assessment.errorKind,
+          rateLimitInfo: assessment.rateLimitInfo,
           usage: assessment.providerUsage,
         };
       }

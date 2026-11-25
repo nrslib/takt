@@ -209,6 +209,37 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(assessment).toMatchObject({ decision: 'error' });
   });
 
+  it('keeps the rate limit classification when the compaction assessment is rate limited', async () => {
+    mockEvents = [
+      { type: 'turn.failed', error: { message: "You've hit your usage limit. Try again at 3:00 PM." } },
+    ];
+    const agent = new CodexProvider().setup({ name: 'reviewer', systemPrompt: 'Reviewer' });
+    const candidate = { persona: 'reviewer', status: 'done' as const, content: 'candidate', timestamp: new Date() };
+
+    const assessment = await agent.assessCompactedResponse!('Review', candidate, { cwd: '/tmp' });
+
+    expect(assessment).toMatchObject({
+      decision: 'error',
+      errorKind: 'rate_limit',
+      rateLimitInfo: { provider: 'codex', source: 'sdk_error' },
+    });
+    expect(assessment.error).toContain('usage limit');
+  });
+
+  it('does not report a rate limit for an ordinary compaction assessment failure', async () => {
+    mockEvents = [
+      { type: 'turn.failed', error: { message: 'model returned an invalid response' } },
+    ];
+    const agent = new CodexProvider().setup({ name: 'reviewer', systemPrompt: 'Reviewer' });
+    const candidate = { persona: 'reviewer', status: 'done' as const, content: 'candidate', timestamp: new Date() };
+
+    const assessment = await agent.assessCompactedResponse!('Review', candidate, { cwd: '/tmp' });
+
+    expect(assessment).toMatchObject({ decision: 'error', failureCategory: 'provider_error' });
+    expect(assessment.errorKind).toBeUndefined();
+    expect(assessment.rateLimitInfo).toBeUndefined();
+  });
+
   it('refreshes the step deadline from assessment events without leaking their content', async () => {
     vi.useFakeTimers();
     const agent = new CodexProvider().setup({ name: 'reviewer', systemPrompt: 'Current reviewer persona' });

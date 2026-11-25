@@ -723,6 +723,56 @@ describe('AgentRunner compaction recovery', () => {
     expect(recoverFromCompaction).not.toHaveBeenCalled();
   });
 
+  it('returns a rate-limited response when the compaction assessment is rate limited', async () => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: 'candidate', sessionId: 'current-thread', success: true } });
+      return { ...makeResponse('candidate', 'current-thread'), structuredOutput: { step: 1 }, partialOutput: 'candidate', retryCount: 2 };
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const rateLimitInfo = {
+      provider: 'codex' as const,
+      detectedAt: new Date('2026-11-25T00:00:00.000Z'),
+      resetAtRaw: '3:00 PM',
+      source: 'sdk_error' as const,
+    };
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(async () => ({
+      decision: 'error',
+      error: "You've hit your usage limit. Try again at 3:00 PM.",
+      errorKind: 'rate_limit',
+      rateLimitInfo,
+    }));
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({
+      status: 'rate_limited',
+      content: '',
+      error: "You've hit your usage limit. Try again at 3:00 PM.",
+      errorKind: 'rate_limit',
+      rateLimitInfo,
+      sessionId: 'current-thread',
+    });
+    expect(result.failureCategory).toBeUndefined();
+    expect(result.structuredOutput).toBeUndefined();
+    expect(result.partialOutput).toBeUndefined();
+    expect(result.retryCount).toBe(2);
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      {
+        type: 'result',
+        data: {
+          result: "You've hit your usage limit. Try again at 3:00 PM.",
+          sessionId: 'current-thread',
+          success: false,
+          error: "You've hit your usage limit. Try again at 3:00 PM.",
+        },
+      },
+    ]]);
+  });
+
   it('stops after three recoveries when every turn reports another compaction', async () => {
     const onStream = vi.fn();
     const runCompactedTurn = async (options: ProviderCallOptions) => {

@@ -465,6 +465,25 @@ export class AgentRunner {
         usages.push(assessment.usage);
         if (assessment.decision === 'error') {
           const error = assessment.error ?? 'Compaction completion assessment failed';
+          if (assessment.errorKind === 'rate_limit') {
+            currentOptions.onStream?.({
+              type: 'result',
+              data: { result: error, sessionId: responseSessionId ?? 'unknown', success: false, error },
+            });
+            // The candidate was not accepted, so none of its output fields are carried over.
+            return withCompactionUsage({
+              persona: response.persona,
+              timestamp: response.timestamp,
+              sessionId: response.sessionId,
+              providerUsage: response.providerUsage,
+              retryCount: response.retryCount,
+              status: 'rate_limited',
+              content: '',
+              error,
+              errorKind: assessment.errorKind,
+              rateLimitInfo: assessment.rateLimitInfo,
+            }, usages);
+          }
           const failureCategory = assessment.failureCategory ?? 'provider_error';
           currentOptions.onStream?.({
             type: 'result',
