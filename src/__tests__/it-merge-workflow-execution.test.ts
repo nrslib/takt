@@ -392,7 +392,7 @@ describe('Builtin PR merge workflow execution', () => {
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
-        ...(scenario.externalCiCheck ? { external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }] } : {}),
+        ...(scenario.externalCiCheck ? { external: [{ name: 'third-party', url: 'https://ci.example.test/builds/1' }] } : {}),
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
     const githubProvider = new GitHubProvider();
@@ -1217,7 +1217,7 @@ describe('Builtin PR merge workflow execution', () => {
       }
       const index = evidenceIndex(investigation);
       expect(index.unavailable).toEqual([]);
-      expect(index.external).toEqual([expect.objectContaining({ name: 'Check unresolved comments' })]);
+      expect(index.external).toEqual([expect.objectContaining({ name: 'third-party' })]);
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {

@@ -319,7 +319,7 @@ describe('CI failure system input and rerun effect', () => {
   });
 
   describe('外部の失敗チェックを含む証拠', () => {
-    const external = [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }];
+    const external = [{ name: 'third-party', url: 'https://ci.example.test/builds/1' }];
 
     it('外部の失敗チェックを不足証拠にせず、索引・調査prompt・停止コメント用の情報へ区別して渡す', async () => {
       const h = fixture();
