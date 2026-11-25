@@ -240,6 +240,37 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(assessment.rateLimitInfo).toBeUndefined();
   });
 
+  describe('compaction assessment rate limit classification', () => {
+    const commandEvents = [
+      { type: 'item.started', item: { id: 'cmd-1', type: 'command_execution', command: 'ls', status: 'in_progress' } },
+      { type: 'item.completed', item: { id: 'cmd-1', type: 'command_execution', command: 'ls', status: 'completed', exit_code: 0, aggregated_output: '' } },
+    ];
+    const cases = [
+      { name: 'a transient 429 without tool events', events: [{ type: 'turn.failed', error: { message: 'HTTP 429 Too Many Requests' } }], rateLimited: false },
+      { name: 'a transient 429 after tool events', events: [...commandEvents, { type: 'turn.failed', error: { message: 'HTTP 429 Too Many Requests' } }], rateLimited: false },
+      { name: 'a usage limit after tool events', events: [...commandEvents, { type: 'turn.failed', error: { message: "You've hit your usage limit. Try again at 3:00 PM." } }], rateLimited: true },
+      { name: 'a usage limit notice as the final message', events: [{ type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: "You've hit your usage limit. Try again at 3:00 PM." } }, { type: 'turn.completed' }], rateLimited: true },
+      { name: 'a non rate limit failure after tool events', events: [...commandEvents, { type: 'turn.failed', error: { message: 'model returned an invalid response' } }], rateLimited: false },
+    ];
+
+    it.each(cases)('reports $name as rate limited only for usage limits', async ({ events, rateLimited }) => {
+      mockEvents = events;
+      const agent = new CodexProvider().setup({ name: 'reviewer', systemPrompt: 'Reviewer' });
+      const candidate = { persona: 'reviewer', status: 'done' as const, content: 'candidate', timestamp: new Date() };
+
+      const assessment = await agent.assessCompactedResponse!('Review', candidate, { cwd: '/tmp' });
+
+      expect(assessment.decision).toBe('error');
+      if (rateLimited) {
+        expect(assessment).toMatchObject({ errorKind: 'rate_limit', rateLimitInfo: { provider: 'codex' } });
+      } else {
+        expect(assessment).toMatchObject({ failureCategory: 'provider_error' });
+        expect(assessment.errorKind).toBeUndefined();
+        expect(assessment.rateLimitInfo).toBeUndefined();
+      }
+    });
+  });
+
   it('refreshes the step deadline from assessment events without leaking their content', async () => {
     vi.useFakeTimers();
     const agent = new CodexProvider().setup({ name: 'reviewer', systemPrompt: 'Current reviewer persona' });
