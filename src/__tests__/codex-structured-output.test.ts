@@ -226,6 +226,29 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(assessment.error).toContain('usage limit');
   });
 
+  it('does not report a usage limit when the rate limit info has no classification', async () => {
+    const provider = new CodexProvider();
+    vi.spyOn(provider, 'setupIsolatedStructured').mockReturnValue({
+      call: async () => ({
+        persona: 'compaction-completion-assessor',
+        status: 'rate_limited',
+        content: '',
+        timestamp: new Date(),
+        error: "You've hit your usage limit. Try again at 3:00 PM.",
+        errorKind: 'rate_limit',
+        rateLimitInfo: { provider: 'codex', detectedAt: new Date(), source: 'sdk_error' },
+      }),
+    });
+    const agent = provider.setup({ name: 'reviewer', systemPrompt: 'Reviewer' });
+    const candidate = { persona: 'reviewer', status: 'done' as const, content: 'candidate', timestamp: new Date() };
+
+    const assessment = await agent.assessCompactedResponse!('Review', candidate, { cwd: '/tmp' });
+
+    expect(assessment).toMatchObject({ decision: 'error', failureCategory: 'provider_error' });
+    expect(assessment.errorKind).toBeUndefined();
+    expect(assessment.rateLimitInfo).toBeUndefined();
+  });
+
   it('does not report a rate limit for an ordinary compaction assessment failure', async () => {
     mockEvents = [
       { type: 'turn.failed', error: { message: 'model returned an invalid response' } },
