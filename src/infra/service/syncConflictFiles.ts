@@ -14,8 +14,15 @@ interface WorktreeFile {
   readonly content: Buffer;
 }
 
-function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Buffer {
-  return execFileSync('git', args, { cwd, env, stdio: 'pipe' });
+const INDEX_FINGERPRINT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, maxBuffer?: number): Buffer {
+  return execFileSync('git', args, {
+    cwd,
+    env,
+    stdio: 'pipe',
+    ...(maxBuffer === undefined ? {} : { maxBuffer }),
+  });
 }
 
 function paths(buffer: Buffer): Set<string> {
@@ -89,11 +96,18 @@ function unmergedEntries(cwd: string, env?: NodeJS.ProcessEnv): Map<string, stri
 // Compares entries, not index file bytes: `git status` / `git diff` rewrite the file to refresh stat data.
 // `ls-files` shows an intent-to-add entry like a staged empty file, so the cached diff against HEAD is
 // compared too, in `--raw` form: the same path staged as empty shows `M` and intent-to-add shows `D`.
+// `diff-index` obeys `submodule.<name>.ignore` (.gitmodules / .git/config) and `diff.ignoreSubmodules`, which the
+// resolver can edit without touching the index, so submodule handling is pinned rather than left to those settings.
 function indexEntries(cwd: string, env?: NodeJS.ProcessEnv): Buffer {
   return Buffer.concat([
-    git(cwd, ['ls-files', '-s', '-v', '-z'], env),
+    git(cwd, ['ls-files', '-s', '-v', '-z'], env, INDEX_FINGERPRINT_MAX_BUFFER_BYTES),
     Buffer.from('\0'),
-    git(cwd, ['diff-index', '--cached', '--raw', '-z', '--ita-invisible-in-index', 'HEAD'], env),
+    git(
+      cwd,
+      ['diff-index', '--cached', '--raw', '-z', '--ita-invisible-in-index', '--ignore-submodules=none', 'HEAD', '--'],
+      env,
+      INDEX_FINGERPRINT_MAX_BUFFER_BYTES,
+    ),
   ]);
 }
 
