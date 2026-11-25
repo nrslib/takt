@@ -1341,6 +1341,8 @@ caccia:
 
 ### Caccia システム効果
 
+GitHub では開始時の head を照合してから、`coderabbitai` が開始した未解決スレッドを確認します。対象スレッドがなければレビューを待たず、`skipReason: no_review_threads` の `skipped` を返します。マージ用 workflow は `wait_ci` へ進み、返された head の CI 完了を待ちます。対象スレッドがある場合は既存の指摘対応を実行します。単独の `takt caccia` と PR 公開後の自動 Caccia は初回レビューを待ちます。
+
 この効果は `takt merge` または `enqueue_task mode: from_pr` のタスクが持つ、対象 PR と一致した隔離クローンの実行文脈を必要とします。`pr` は正の整数または完全なテンプレート参照です。通常文字列に埋め込んだ参照は受理しません。既存の `caccia.enabled`、`wait_timeout_ms`、`max_iterations`、`workflow` を読みます。無効・未設定なら CodeRabbit のレビューを待たずにスキップします。単独の `takt caccia <PR>` は `enabled` に関係なく利用できます。
 
 GitHub での実行前には PR head と開始時のクローン HEAD を照合します。不一致なら2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。PR の識別情報変更、認証失敗など他の取得例外、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも同じ照合を行うため、無効・未設定でも GitHub head の反映を待つことがあります。この固定の反映待ちは `wait_timeout_ms` によるレビュー待機とは別です。非 GitHub のスキップ照合と実行終了後の head 検証には、この待機を追加しません。
@@ -1360,7 +1362,7 @@ GitHub での実行前には PR head と開始時のクローン HEAD を照合�
         next: wait_ci
 ```
 
-正常結果は `success: true`、`failed: false` と `outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason`、`reason` を含みます。該当しない理由は `null` です。条件では `effect.<step>.caccia.*`、テンプレートでは `{effect:<step>.caccia.<field>}` から参照します。`skipReason` は `config_disabled`、`github_unavailable`、`initial_review_unavailable`、`review_rate_limited`、`review_skipped` です。失敗は `success: false`、`failed: true`、`error` を返し、head は保証しません。正常結果のフィールドを読む前に失敗を判定してください。
+正常結果は `success: true`、`failed: false` と `outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason`、`reason` を含みます。該当しない理由は `null` です。条件では `effect.<step>.caccia.*`、テンプレートでは `{effect:<step>.caccia.<field>}` から参照します。`skipReason` は `config_disabled`、`github_unavailable`、`no_review_threads`、`initial_review_unavailable`、`review_rate_limited`、`review_skipped` です。失敗は `success: false`、`failed: true`、`error` を返し、head は保証しません。正常結果のフィールドを読む前に失敗を判定してください。
 
 修正の push 後は SHA を照合して同じクローンを fast-forward します。CI 待ちは PR status の head と `effect.caccia.caccia.headSha` を照合し、マージは現在のクローン HEAD を expected SHA として使います。過去の push 効果の結果は履歴として保持します。
 
