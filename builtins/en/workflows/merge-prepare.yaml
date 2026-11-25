@@ -41,6 +41,11 @@ steps:
     description: After AI conflict resolution, review the PR with one reviewer, then adjudicate, fix, and verify findings and check requirement fulfillment.
     kind: workflow_call
     call: review-fix-simple
+    args:
+      gather_instructions: [gather-review, gather-sync-review]
+      review_policy_additions: [merge-sync-review]
+      adjudication_policy_additions: [merge-sync-review]
+      final_gate_policy: [coding, testing, review, architecture, merge-sync-review]
     rules:
       - condition: COMPLETE
         next: push

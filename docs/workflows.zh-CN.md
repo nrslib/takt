@@ -1171,6 +1171,8 @@ Merge 命令在 workflow 开始前检查 fork 威胁，无论是指定 PR 编号
 
 `takt merge` 的默认 workflow 是 `merge-review-fix-simple`，先将 PR 与 base branch 同步。无冲突时跳过完整 review，直接进入 push；初次同步或重新同步中只要 AI 解决了冲突，就调用 `review-fix-simple`。收集上下文后，一个只读 reviewer 使用与变更相符的 facet 审查。其他 step 分别裁定问题、制定修复计划、修复、验证完成情况并再次审查。Review 流程还会进行最终需求检查，然后进入共同流程：push、执行 Caccia、检查其返回 head 的 CI、GitHub review 和可合并状态，再合并。子 workflow 中止时不合并，并在 PR 中评论结果。CI 失败时进入下述恢复处理。需要并行专家审查时，可选择 `merge-review-fix`。
 
+`merge-prepare` 和 `merge-review-fix-simple` 的同步后审查会检查 PR 的完整累积差异和 base branch 新增的变更。只修复冲突解决错误，以及两侧变更组合后产生的缺陷，包括无冲突文件中的缺陷。与同步无关的既有问题会记录原因并留待后续处理，不触发修复计划、修复或最终检查的退回。无冲突同步仍跳过完整审查，常规开发的审查和裁定标准保持不变。
+
 ### 仅审查 CI 已成功的 PR
 
 `merge-review-ci` 只在显式选择时运行。首个 system step 读取现有 `pr_status`，仅当 `ci.finished` 和 `ci.passed` 都为真时，才通过 `workflow_call` 调用 `merge-review`。成功定义与现有逻辑相同，包括 `SUCCESS`、`NEUTRAL` 和 `SKIPPED`。检查未完成、失败或尚未创建时，以 `COMPLETE` 结束，不执行 review、Caccia 或评估评论。初次检查不等待、不重试，也不新增配置项或 CLI 选项。
