@@ -74,7 +74,7 @@ async function saveIndex(
   const indexedFailure = { ...failure, complete, unavailable };
   const manifest = JSON.stringify({
     number: failure.number, headSha: failure.headSha, complete, fixRounds, rerunCount,
-    recoveryError, checks, unavailable,
+    recoveryError, checks, ...(failure.external === undefined ? {} : { external: failure.external }), unavailable,
   }, null, 2);
   const manifestPath = join(directory, `manifest-${digest(manifest)}.json`);
   signal?.throwIfAborted();
@@ -113,7 +113,12 @@ export async function saveCiFailureEvidence(
   const view = resolve(canonicalDirectory) === resolve(viewDirectory)
     ? canonical
     : await saveIndex(canonical.failure, viewDirectory, fixRounds, rerunCount, recoveryError, signal);
+  const external = view.failure.external?.length ?? 0;
   return { failure: view.failure,
-    promptEvidence: `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.\nEvidence index: ${view.manifestPath}`,
+    promptEvidence: [
+      `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; external checks=${external}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.`,
+      ...(external === 0 ? [] : [`${external} failed check(s) are listed under external: they have no Actions log and cannot be diagnosed or rerun here. They remain failed; judge the other checks on their own evidence.`]),
+      `Evidence index: ${view.manifestPath}`,
+    ].join('\n'),
   };
 }

@@ -4,6 +4,8 @@ Treat flaky tests, including timing and scheduling assumptions, as repository te
 
 Missing permissions, unsupported checks, empty logs, and unavailable evidence do not prove an external cause. Report insufficient_evidence and stop without speculative edits, reruns or merge. Do not invent failed test names or assertions if infrastructure failed before tests started.
 
+Checks listed under external have no Actions log: they stay failed, and they are no reason to withhold a verdict on the other checks.
+
 A fix must address the demonstrated cause. Reject changes made solely to turn CI green: disabling or deleting tests, weakening assertions, increasing timeouts, removing test classification, or disabling gates without causal justification. Do not prohibit a justified root fix merely because it touches a test or CI file. Apply the same standard when implementing and reviewing.
 
 Investigation and review are read-only. Only the coder edits the current PR clone. Do not commit, push, rerun, comment or merge using agent tools: system effects own these operations. The workflow permits at most two fix/push/CI rounds and one independent external-cause rerun. After that rerun fails, stop even if the later verdict changes to defect. Recovery success must still pass Caccia, matching-HEAD CI, and the existing merge conditions.

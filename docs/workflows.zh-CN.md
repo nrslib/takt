@@ -1200,7 +1200,7 @@ caccia:
 
 `comment_pr`支持可选的`body_format: plain_text`。整个插值后的正文使用代码块输出，反引号分隔符比正文中的最长连续反引号更长。CI恢复停止及push失败评论使用该格式，使检查名、job名、调查摘要和错误保持为字面文本。未指定时继续按原样传递Markdown正文。
 
-恢复输入`pr_ci_failure`接受`source: current_pr`和完整的HEAD状态引用`head_sha`，返回PR、HEAD、完整性、包含run/attempt/job及日志的`checks`、`unavailable`、`fixRounds`、`rerunCount`及评论用`details`。`rerun_ci` effect接受`pr`和完整证据引用`failure`，仅在证据完整且调查判断为外部原因时对失败run去重并重跑一次。其`rerun`结果保存PR、HEAD及旧attempt；将完整引用传给`pr_status.rerun_from`即可等待新attempt。重跑step执行前，该可选引用保持普通polling。计数属于同一次workflow执行。
+恢复输入`pr_ci_failure`接受`source: current_pr`和完整的HEAD状态引用`head_sha`，返回PR、HEAD、完整性、包含run/attempt/job及日志的`checks`、`unavailable`、`fixRounds`、`rerunCount`及评论用`details`。commit status、第三方check等没有Actions日志的失败列在`external`中；它们仍视为失败，但不会使其他check的证据变为不完整。只有应当存在的证据进入`unavailable`，或没有任何可判断的Actions check时，`complete`才为`false`。`rerun_ci` effect接受`pr`和完整证据引用`failure`，仅在证据完整且调查判断为外部原因时对失败run去重并重跑一次。其`rerun`结果保存PR、HEAD及旧attempt；将完整引用传给`pr_status.rerun_from`即可等待新attempt。重跑step执行前，该可选引用保持普通polling。计数属于同一次workflow执行。
 
 ### Caccia system effect
 

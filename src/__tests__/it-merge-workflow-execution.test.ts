@@ -118,6 +118,8 @@ interface Scenario {
   recoveryPushFails?: boolean;
   ciName?: { field: 'check' | 'job' | 'unavailable'; value: string };
   largeCiLogs?: boolean;
+  /** Adds a failed external status beside the diagnosable check. */
+  externalCiCheck?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -433,6 +435,7 @@ describe('Builtin PR merge workflow execution', () => {
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
+        ...(scenario.externalCiCheck ? { external: [{ name: 'third-party', url: 'https://ci.example.test/builds/1' }] } : {}),
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
     const githubProvider = new GitHubProvider();
@@ -1356,6 +1359,7 @@ describe('Builtin PR merge workflow execution', () => {
       return JSON.parse(readFileSync(path!, 'utf8')) as {
         checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
           jobs: Array<{ id: number; logPath: string | null }> }>;
+        external?: Array<{ name: string }>;
         unavailable: Array<{ reason: string }>;
       };
     }
@@ -1401,6 +1405,22 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.comments[0]).toContain('c'.repeat(40));
       expect(h.rerunPrCi).not.toHaveBeenCalled();
       expect(h.calls.filter((call) => call.startsWith('call:'))).toHaveLength(0);
+    });
+
+    it('外部の失敗チェックが混ざっても診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], externalCiCheck: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual([
+        'agent:investigate_ci', 'agent:fix_ci', 'agent:review_ci_fix',
+      ]);
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      const investigation = h.recoveryPrompts[0]!.prompt;
+      for (const count of ['complete=true', 'unique job logs=1', 'external checks=1', 'unavailable=0']) {
+        expect(investigation).toContain(count);
+      }
+      const index = evidenceIndex(investigation);
+      expect(index.unavailable).toEqual([]);
+      expect(index.external).toEqual([expect.objectContaining({ name: 'third-party' })]);
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {

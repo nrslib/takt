@@ -46,6 +46,16 @@ async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, 
   return run;
 }
 
+/** `undefined`: the check has no Actions log. `'unreadable'`: it points at Actions, but not in a form we can read. */
+function actionsCheckReference(check: { kind: string; url: string | null }) {
+  if (check.kind !== 'CheckRun' || check.url === null) return undefined;
+  try { return { ...actionsReference(check.url), url: check.url }; }
+  catch {
+    try { return new URL(check.url).pathname.includes('/actions/runs/') ? 'unreadable' as const : undefined; }
+    catch { return undefined; }
+  }
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -61,15 +71,23 @@ export async function collectPrCiFailure(
   }
   const runs = new Map<string, Promise<CiRun>>();
   const logs = new Map<string, Promise<string>>();
+  const external: NonNullable<PrCiFailure['external']> = [];
   for (const check of status.ci.checks ?? []) {
     if (!check.finished || check.passed) continue;
+    const reference = actionsCheckReference(check);
+    if (reference === undefined) {
+      external.push({ name: check.name, url: check.url });
+      continue;
+    }
+    if (reference === 'unreadable') {
+      result.unavailable.push({ name: check.name, url: check.url, reason: 'Unsupported Actions check URL' });
+      continue;
+    }
     try {
-      if (check.kind !== 'CheckRun' || check.url === null) throw new Error('Failed check has no supported Actions log reference');
-      const reference = actionsReference(check.url);
       const key = `${reference.repository}/${reference.id}`;
       let pending = runs.get(key);
       if (!pending) {
-        pending = readRun(reference.id, cwd, options, check.url, target);
+        pending = readRun(reference.id, cwd, options, reference.url, target);
         runs.set(key, pending);
       }
       const run = await pending;
@@ -117,8 +135,11 @@ export async function collectPrCiFailure(
       result.unavailable.push({ name: check.name, url: check.url, reason: errorText(error) });
     }
   }
+  if (external.length > 0) result.external = external;
   if (result.checks.length === 0 && result.unavailable.length === 0) {
-    result.unavailable.push({ name: 'CI', reason: 'Failed check details are unavailable' });
+    result.unavailable.push({ name: 'CI', reason: external.length > 0
+      ? 'Only checks without Actions logs failed; there is no Actions evidence to diagnose'
+      : 'Failed check details are unavailable' });
   }
   result.complete = result.checks.length > 0 && result.unavailable.length === 0;
   return result;
