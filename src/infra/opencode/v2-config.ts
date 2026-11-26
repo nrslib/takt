@@ -15,6 +15,7 @@ export function buildV2ServerConfig(
   externalDirectoryAllowlist?: readonly string[],
   contextWindow?: number,
   workspaceAccess?: import('../providers/types.js').OpenCodeWorkspaceAccess,
+  readonlyDirectories?: readonly string[],
 ): V2Config {
   const contextModel = model !== undefined && contextWindow !== undefined
     ? parseProviderModel(model, 'OpenCode model')
@@ -52,7 +53,7 @@ export function buildV2ServerConfig(
   return {
     ...(model === undefined ? {} : { model }),
     plugins: [plugin],
-    permissions: buildOpenCodeV2ExternalDirectoryRules(externalDirectoryAllowlist, workspaceAccess?.directories),
+    permissions: buildOpenCodeV2ExternalDirectoryRules(externalDirectoryAllowlist, workspaceAccess?.directories, readonlyDirectories),
     agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt'), 'takt-read': agent('opencode_read_agent_prompt') },
     ...(Object.keys(providers).length === 0 ? {} : { providers }),
     ...(mcp === undefined ? {} : { mcp: { servers } }),

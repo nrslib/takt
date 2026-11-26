@@ -13,6 +13,12 @@ import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/t
 import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('provider option schema', () => {
+  it('accepts a list of OpenCode read-only external directories', () => {
+    expect(StepProviderOptionsObjectSchema.parse({ opencode: { readonly_directories: ['/refs/api'] } })).toEqual({
+      opencode: { readonly_directories: ['/refs/api'] },
+    });
+  });
+
   it.each([true, false])('accepts an explicit Codex boolean value: %s', (fastMode) => {
     expect(StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: fastMode } })).toEqual({
       codex: { fast_mode: fastMode },
@@ -118,6 +124,11 @@ describe('merge config origin tracking', () => {
 });
 
 describe('denormalizeProviderOptions', () => {
+  it('round-trips OpenCode read-only external directories', () => {
+    const raw = { opencode: { readonly_directories: ['/refs/api'] } };
+    expect(denormalizeProviderOptions(normalizeProviderOptions(raw))).toEqual(raw);
+  });
+
   it('should convert camelCase provider options into persisted snake_case format', () => {
     const result = denormalizeProviderOptions({
       codex: { networkAccess: true },

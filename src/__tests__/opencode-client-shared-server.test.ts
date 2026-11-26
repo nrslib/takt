@@ -179,6 +179,54 @@ describe('OpenCodeClient shared server', () => {
     }
   });
 
+  it('reports an earlier workspace server retirement failure when the owner closes', async () => {
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers, resetSharedServerPool } = await import('../infra/opencode/server-pool.js');
+    const runtime = await import('../infra/opencode/runtime.js');
+    const selection = vi.mocked(runtime.openCodeRuntimeSelection).getMockImplementation()!;
+    const resolution = vi.mocked(runtime.resolveOpenCodeRuntime).getMockImplementation()!;
+    vi.mocked(runtime.openCodeRuntimeSelection).mockReturnValue({ generation: 'v2', command: 'opencode' });
+    vi.mocked(runtime.resolveOpenCodeRuntime).mockResolvedValue({ generation: 'v2', command: 'opencode', version: '2.0.0' });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-close-failure-')));
+    const repositoryB = join(root, 'b'); const repositoryC = join(root, 'c');
+    mkdirSync(repositoryB); mkdirSync(repositoryC);
+    const closeFailure = new Error('retired workspace server close failed');
+    const closeOld = vi.fn(async () => { throw closeFailure; });
+    const closeCurrent = vi.fn(async () => {});
+    createOpencodeMock
+      .mockResolvedValueOnce({ client: {}, server: { close: closeOld } })
+      .mockResolvedValueOnce({ client: {}, server: { close: closeCurrent } });
+
+    try {
+      const original = await acquireOpenCodeClient(
+        'probe/model', undefined, undefined, undefined, undefined, undefined, false, undefined,
+        undefined, undefined, root, { ownerId: 'close-failure-owner', directories: [repositoryB] },
+      );
+      original.release();
+
+      const current = await acquireOpenCodeClient(
+        'probe/model', undefined, undefined, undefined, undefined, undefined, false, undefined,
+        undefined, undefined, root, { ownerId: 'close-failure-owner', directories: [repositoryC] },
+      );
+      current.release();
+      await vi.waitFor(() => expect(closeOld).toHaveBeenCalledOnce());
+
+      let closeError: unknown;
+      try {
+        await closeOpenCodeWorkspaceServers('close-failure-owner');
+      } catch (error) {
+        closeError = error;
+      }
+      expect(closeError).toBeInstanceOf(AggregateError);
+      expect((closeError as AggregateError).errors).toContain(closeFailure);
+      expect(closeCurrent).toHaveBeenCalledOnce();
+    } finally {
+      resetSharedServerPool();
+      rmSync(root, { recursive: true, force: true });
+      vi.mocked(runtime.openCodeRuntimeSelection).mockImplementation(selection);
+      vi.mocked(runtime.resolveOpenCodeRuntime).mockImplementation(resolution);
+    }
+  });
+
   it('retains an initializing retired server until its provisional session is handed off and released', async () => {
     const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await import('../infra/opencode/server-pool.js');
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-init-')));

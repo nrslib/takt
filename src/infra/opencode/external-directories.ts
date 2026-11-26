@@ -26,7 +26,13 @@ export function isOpenCodeExternalDirectoryRequestAllowed(resources: readonly st
     if (!resource.endsWith('/*')) return false;
     const directory = resource.slice(0, -1);
     if (!isAbsolute(directory)) return false;
-    const canonical = resolveRequestedDirectory(directory);
+    let canonical: string;
+    try {
+      canonical = resolveRequestedDirectory(directory);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOTDIR') return false;
+      throw error;
+    }
     return directories.some((root) => {
       if (!isAbsolute(root)) return false;
       const child = relative(root, canonical);
@@ -68,14 +74,16 @@ export function openCodeExternalDirectoryPattern(directory: string): string {
 export function buildOpenCodeV1ExternalDirectoryPermissions(
   directories: readonly string[] | undefined,
   workspaceDirectories?: readonly string[],
+  readonlyDirectories?: readonly string[],
 ): {
   external_directory: 'deny' | 'ask' | Record<string, 'allow' | 'deny'>;
 } {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
+  const readonly = normalizeOpenCodeExternalDirectories(readonlyDirectories);
   if (workspaceDirectories !== undefined) return { external_directory: 'ask' };
-  if (normalized.length === 0) return { external_directory: 'deny' };
+  if (normalized.length === 0 && readonly.length === 0) return { external_directory: 'deny' };
   const externalDirectory: Record<string, 'allow' | 'deny'> = { '*': 'deny' };
-  for (const directory of normalized) {
+  for (const directory of new Set([...normalized, ...readonly])) {
     externalDirectory[openCodeExternalDirectoryPattern(directory)] = 'allow';
   }
   return {
@@ -86,17 +94,20 @@ export function buildOpenCodeV1ExternalDirectoryPermissions(
 export function buildOpenCodeV2ExternalDirectoryRules(
   directories: readonly string[] | undefined,
   workspaceDirectories?: readonly string[],
+  readonlyDirectories?: readonly string[],
 ): Array<{ action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }> {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
+  const readonly = normalizeOpenCodeExternalDirectories(readonlyDirectories);
+  const allowedDirectories = [...new Set([...normalized, ...readonly])];
   // Workspace access must not override the context's edit restriction.
   return [
     { action: 'external_directory', resource: '*', effect: workspaceDirectories === undefined ? 'deny' : 'ask' },
-    ...(workspaceDirectories === undefined ? normalized : []).map((directory) => ({
+    ...(workspaceDirectories === undefined ? allowedDirectories : []).map((directory) => ({
       action: 'external_directory',
       resource: openCodeExternalDirectoryPattern(directory),
       effect: 'allow' as const,
     })),
-    ...normalized.map((directory) => ({
+    ...allowedDirectories.map((directory) => ({
       action: 'edit',
       resource: openCodeExternalDirectoryPattern(directory),
       effect: 'deny' as const,

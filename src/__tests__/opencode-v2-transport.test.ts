@@ -181,6 +181,30 @@ describe('OpenCode v2 transport', () => {
     ]);
   });
 
+  it('keeps configured read-only references denied for edits in a writable workspace session', async () => {
+    const repository = createExternalContextDirectory();
+    const reference = createExternalContextDirectory();
+    const input = {
+      ...prompt,
+      tools: { read: true, write: true, edit: true, bash: false },
+      workspaceAccess: { ownerId: 'workspace-conversation', directories: [repository.contextDirectory] },
+      readonlyDirectories: [reference.contextDirectory],
+    };
+
+    await (await createV2Transport('http://localhost', 'password')).session.promptAsync(input);
+
+    const update = api.session.update.mock.calls[0]![0];
+    expect(update.permissions).toContainEqual({
+      action: 'edit', resource: join(reference.canonicalContextDirectory, '*'), effect: 'deny',
+    });
+    expect(update.metadata.takt.tools.shell).toBe(false);
+    expect(update.permissions).not.toContainEqual({ action: 'shell', resource: '*', effect: 'allow' });
+    expect(update.metadata.takt).toMatchObject({
+      workspaceDirectories: [repository.canonicalContextDirectory],
+      readonlyDirectories: [reference.canonicalContextDirectory],
+    });
+  });
+
   it('replaces workspace exceptions on the same v2 session after registration changes', async () => {
     const repositoryB = createExternalContextDirectory();
     const repositoryC = createExternalContextDirectory();

@@ -160,6 +160,19 @@ describe('OptionsBuilder.buildBaseOptions', () => {
       .toEqual([contextDirectory]);
   });
 
+  it('carries configured OpenCode read-only directories through the ordinary workflow provider options', () => {
+    const step = createStep({ provider: 'opencode', model: 'opencode/model' });
+    const readonlyDirectories = ['/refs/api'];
+    const builder = createBuilder(step, {
+      provider: 'opencode', model: 'opencode/model',
+      providerOptions: { opencode: { readonlyDirectories } },
+    });
+
+    expect(builder.buildBaseOptions(step).providerOptions).toEqual({
+      opencode: { readonlyDirectories },
+    });
+  });
+
   it('passes runtime defaults permission mode to the actual provider call', () => {
     const step = createStep();
     const builder = createBuilder(step, {

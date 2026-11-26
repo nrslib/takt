@@ -93,6 +93,18 @@ import { ProviderRegistry } from '../infra/providers/index.js';
 import { runAgent } from '../agents/runner.js';
 
 describe('OpenCodeProvider tool naming addendum', () => {
+  it('passes configured read-only external directories without treating them as a writable workspace', async () => {
+    const options = {
+      cwd: '/repos/a', model: 'probe/model', permissionMode: 'full' as const,
+      providerOptions: { opencode: { readonlyDirectories: ['/refs/api'] } },
+    };
+
+    await new OpenCodeProvider().setup({ name: 'coder' }).call('inspect reference', options);
+
+    expect(openCodeMocks.callOpenCode.mock.calls[0]![2]).toMatchObject({ readonlyDirectories: ['/refs/api'] });
+    expect(openCodeMocks.callOpenCode.mock.calls[0]![2]).not.toHaveProperty('workspaceAccess');
+  });
+
   it.each([undefined, 'manager persona'])('transfers workspace access separately from run context (system=%s)', async (systemPrompt) => {
     const openCodeWorkspaceAccess = { ownerId: 'workspace-conversation', directories: ['/repos/b', '/repos/c'] };
     const options = {

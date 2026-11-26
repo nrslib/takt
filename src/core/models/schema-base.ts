@@ -124,6 +124,7 @@ const OpenCodeProviderOptionShape = {
   skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   variant: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
+  readonly_directories: z.array(z.string().min(1)).optional(),
   guards: z.object(OpenCodeGuardOptionShape).optional(),
 };
 

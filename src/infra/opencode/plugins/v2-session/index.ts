@@ -13,11 +13,13 @@ const plugin: Plugin.Plugin = {
         || !('workspaceDirectories' in settings)) return;
       const workspace = settings.workspaceDirectories;
       const directories = settings.contextDirectories;
+      const readonly = 'readonlyDirectories' in settings ? settings.readonlyDirectories : [];
       if (!Array.isArray(workspace) || !workspace.every((directory) => typeof directory === 'string')
-        || !Array.isArray(directories) || !directories.every((directory) => typeof directory === 'string')) {
+        || !Array.isArray(directories) || !directories.every((directory) => typeof directory === 'string')
+        || !Array.isArray(readonly) || !readonly.every((directory) => typeof directory === 'string')) {
         throw new Error('TAKT workspace policy is invalid');
       }
-      request.effect = isOpenCodeExternalDirectoryRequestAllowed(request.resources, [...workspace, ...directories]) ? 'allow' : 'deny';
+      request.effect = isOpenCodeExternalDirectoryRequestAllowed(request.resources, [...workspace, ...directories, ...readonly]) ? 'allow' : 'deny';
     });
     const registration = await context.session.hook('context', async (request) => {
       const session = await context.session.get({ sessionID: request.sessionID });

@@ -97,6 +97,7 @@ export interface OpenCodeProviderOptions {
   skills?: { enabled?: boolean };
   variant?: string;
   allowedTools?: string[];
+  readonlyDirectories?: string[];
   guards?: OpenCodeGuardOptions;
 }
 

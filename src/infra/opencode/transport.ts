@@ -38,6 +38,7 @@ export interface OpenCodeTransport {
       allowConfiguredMcpTools?: boolean;
       allowedMcpServers?: readonly string[];
       externalDirectoryAllowlist?: readonly string[];
+      readonlyDirectories?: readonly string[];
       workspaceAccess?: import('../providers/types.js').OpenCodeWorkspaceAccess;
     }, options?: RequestOptions): Promise<unknown>;
     abort(input: SessionRequest, options: RequestOptions): Promise<Result<boolean>>;

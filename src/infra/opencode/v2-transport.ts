@@ -157,12 +157,17 @@ export async function createV2Transport(baseUrl: string, password: string, mcpSe
               ? [...deniedActions].map((action) => ({ action, resource: '*', effect: 'deny' as const }))
               : [{ action: '*', resource: '*', effect: 'deny' as const }]),
             ...[...actions].map((action) => ({ action, resource: '*', effect: 'allow' as const })),
-            ...buildOpenCodeV2ExternalDirectoryRules(input.externalDirectoryAllowlist, input.workspaceAccess?.directories),
+            ...buildOpenCodeV2ExternalDirectoryRules(
+              input.externalDirectoryAllowlist,
+              input.workspaceAccess?.directories,
+              input.readonlyDirectories,
+            ),
           ],
           metadata: { ...session.metadata, [TAKT_V2_METADATA_KEY]: { system: input.system ?? '', tools,
             ...(input.workspaceAccess === undefined ? {} : {
               workspaceDirectories: normalizeOpenCodeWorkspaceDirectories(input.workspaceAccess.directories),
               contextDirectories: normalizeOpenCodeExternalDirectories(input.externalDirectoryAllowlist),
+              readonlyDirectories: normalizeOpenCodeExternalDirectories(input.readonlyDirectories),
             }),
           } },
         }, options);

@@ -2,7 +2,7 @@
  * Tests for OpenCode type definitions and permission mapping
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import * as fileSystem from 'node:fs';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 vi.mock('node:fs', async (load) => {
@@ -440,6 +440,13 @@ describe('OpenCode external directory rules', () => {
     vi.mocked(fileSystem.realpathSync).mockImplementationOnce(() => { throw error; });
     expect(() => isOpenCodeExternalDirectoryRequestAllowed(['/registered/*'], ['/registered'])).toThrow(error);
   });
+  it('rejects external directory requests below a regular file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workspace-not-directory-'));
+    temporaryDirectories.push(root);
+    const file = join(root, 'file.txt');
+    writeFileSync(file, '');
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(file, 'sub', '*')], [root])).toBe(false);
+  });
   it.each(['api*', 'api?'])('authorizes literal workspace roots and new descendants while rejecting lookalikes (%s)', (name) => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-workspace-literal-')));
     temporaryDirectories.push(root);
@@ -495,6 +502,40 @@ describe('OpenCode external directory rules', () => {
     ]);
   });
 
+  it('keeps configured reference directories read-only beside writable workspace directories', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-opencode-readonly-reference-'));
+    temporaryDirectories.push(root);
+    const workspaceDirectory = join(root, 'workspace');
+    const contextDirectory = join(root, 'context');
+    const readonlyDirectory = join(root, 'reference');
+    mkdirSync(workspaceDirectory); mkdirSync(contextDirectory); mkdirSync(readonlyDirectory);
+
+    expect(buildOpenCodeV1ExternalDirectoryPermissions(undefined, [workspaceDirectory], [readonlyDirectory]))
+      .toEqual({ external_directory: 'ask' });
+    expect(buildOpenCodeV1ExternalDirectoryPermissions(undefined, undefined, [readonlyDirectory])).toEqual({
+      external_directory: { '*': 'deny', [join(readonlyDirectory, '*')]: 'allow' },
+    });
+    expect(buildOpenCodeSessionPermission(
+      'full', undefined, undefined, undefined, undefined, undefined, [workspaceDirectory], [readonlyDirectory],
+    )).toEqual(expect.arrayContaining([
+      { permission: 'external_directory', pattern: '*', action: 'ask' },
+      { permission: 'edit', pattern: join(readonlyDirectory, '*'), action: 'deny' },
+      { permission: 'write', pattern: join(readonlyDirectory, '*'), action: 'deny' },
+    ]));
+    expect(buildOpenCodeV2ExternalDirectoryRules(
+      [contextDirectory], [workspaceDirectory], [readonlyDirectory],
+    )).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'ask' },
+      { action: 'edit', resource: join(contextDirectory, '*'), effect: 'deny' },
+      { action: 'edit', resource: join(readonlyDirectory, '*'), effect: 'deny' },
+    ]);
+    expect(buildOpenCodeV2ExternalDirectoryRules(undefined, undefined, [readonlyDirectory])).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(readonlyDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(readonlyDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
   it('deduplicates and sorts directories and rejects broad or relative paths', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-opencode-directory-set-'));
     temporaryDirectories.push(root);
@@ -525,6 +566,14 @@ describe('buildOpenCodePromptTools', () => {
       bash: false,
       task: false,
     });
+  });
+
+  it('disables shell when read-only external directories are configured', () => {
+    const tools = buildOpenCodePromptTools('full', undefined, undefined, undefined, undefined, ['/refs/api']);
+    expect(tools.bash).toBe(false);
+    expect(tools.read).toBe(true);
+    expect(tools.write).toBe(true);
+    expect(tools.edit).toBe(true);
   });
 
   it('disables everything for an empty allowlist', () => {
