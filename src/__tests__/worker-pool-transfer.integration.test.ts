@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, symlinkSync, existsSync, readdirSync, renameSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RemoteExecutionStore, remoteExecutionDirectory, remoteFilePath } from '../infra/task/remoteExecutionStore.js';
@@ -33,9 +33,28 @@ import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
 
+const sourceReadProbe = vi.hoisted(() => ({ paths: new Set<string>(), bytesRead: 0 }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args);
+    if (typeof args[0] === 'string' && sourceReadProbe.paths.has(args[0])) {
+      const originalRead = handle.read.bind(handle);
+      Object.defineProperty(handle, 'read', { value: async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const result = await originalRead(buffer, offset, length, position);
+        sourceReadProbe.bytesRead += result.bytesRead;
+        return result;
+      } });
+    }
+    return handle;
+  } };
+});
+
 const directories: string[] = [];
 afterEach(() => {
   setExecutionSecrets([]);
+  sourceReadProbe.paths.clear();
+  sourceReadProbe.bytesRead = 0;
   for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true });
   invalidateGlobalConfigCache();
   vi.unstubAllEnvs();
@@ -402,6 +421,91 @@ it('continues the same sender after a lost acknowledgement without duplicating t
   resume(); expect(await continuing).toBe(2);
   expect(received).toEqual([1, 2, 2]);
   expect(readFileSync(join(f.destination, 'logs/session.jsonl'), 'utf8')).toBe('first\nsecond\n');
+});
+
+it('reads only new log bytes and replaces a growing report', async () => {
+  const f = fixture();
+  mkdirSync(join(f.source, 'logs'));
+  mkdirSync(join(f.source, 'reports'));
+  const logPath = join(f.source, 'logs/session.jsonl');
+  const reportPath = join(f.source, 'reports/result.md');
+  const firstLog = 'a'.repeat(128 * 1024);
+  const firstReport = 'old report';
+  writeFileSync(logPath, firstLog);
+  writeFileSync(reportPath, firstReport);
+  sourceReadProbe.paths.add(logPath);
+  sourceReadProbe.paths.add(reportPath);
+  const records: RemoteRecord[] = [];
+  const sender = new RemoteRunSender(f.source, 'test-run', { async request(command) {
+    if (command.kind !== 'record') throw new Error('Unexpected request');
+    records.push(command.record);
+    return { kind: 'record', acknowledgedSequence: await f.store.receiveRecord(command.record) };
+  } });
+
+  await sender.flush();
+  expect(sourceReadProbe.bytesRead).toBe(Buffer.byteLength(firstLog + firstReport));
+  await sender.flush();
+  expect(sourceReadProbe.bytesRead).toBe(Buffer.byteLength(firstLog + firstReport));
+
+  const addedLog = 'b'.repeat(128 * 1024);
+  const nextReport = 'new report with more content';
+  appendFileSync(logPath, addedLog);
+  writeFileSync(reportPath, nextReport);
+  const before = sourceReadProbe.bytesRead;
+  await sender.flush();
+  expect(sourceReadProbe.bytesRead - before).toBe(Buffer.byteLength(addedLog + nextReport));
+  expect(records.filter((item) => item.path === 'logs/session.jsonl' && item.sequence > 3)
+    .map((item) => item.mode)).toEqual(['append', 'append']);
+  expect(records.at(-1)).toMatchObject({ path: 'reports/result.md', mode: 'replace' });
+  expect(readFileSync(join(f.destination, 'logs/session.jsonl'), 'utf8')).toBe(firstLog + addedLog);
+  expect(readFileSync(join(f.destination, 'reports/result.md'), 'utf8')).toBe(nextReport);
+});
+
+it('reads only the suffix when a log grows before its transfer is acknowledged', async () => {
+  const f = fixture(); mkdirSync(join(f.source, 'logs'));
+  const logPath = join(f.source, 'logs/session.jsonl');
+  writeFileSync(logPath, 'first\n');
+  sourceReadProbe.paths.add(logPath);
+  const records: RemoteRecord[] = [];
+  const sender = new RemoteRunSender(f.source, 'test-run', { async request(command) {
+    if (command.kind !== 'record') throw new Error('Unexpected request');
+    records.push(command.record);
+    if (command.record.sequence === 1) appendFileSync(logPath, 'next\n');
+    return { kind: 'record', acknowledgedSequence: await f.store.receiveRecord(command.record) };
+  } });
+
+  await sender.flush();
+  await sender.flush();
+
+  expect(sourceReadProbe.bytesRead).toBe(Buffer.byteLength('first\nnext\n'));
+  expect(records.map(({ mode, offset, data }) => ({ mode, offset, data: Buffer.from(data, 'base64').toString('utf8') })))
+    .toEqual([{ mode: 'replace', offset: 0, data: 'first\n' }, { mode: 'append', offset: 6, data: 'next\n' }]);
+  expect(readFileSync(join(f.destination, 'logs/session.jsonl'), 'utf8')).toBe('first\nnext\n');
+});
+
+it('replaces same-size reports after in-place writes and atomic renames', async () => {
+  const f = fixture(); mkdirSync(join(f.source, 'reports'));
+  const source = join(f.source, 'reports/result.md');
+  writeFileSync(source, 'first');
+  utimesSync(source, new Date('2020-01-01'), new Date('2020-01-01'));
+  const modes: string[] = [];
+  const sender = new RemoteRunSender(f.source, 'test-run', { async request(command) {
+    if (command.kind !== 'record') throw new Error('Unexpected request');
+    modes.push(command.record.mode);
+    return { kind: 'record', acknowledgedSequence: await f.store.receiveRecord(command.record) };
+  } });
+
+  await sender.flush();
+  writeFileSync(source, 'other');
+  await sender.flush();
+  expect(readFileSync(join(f.destination, 'reports/result.md'), 'utf8')).toBe('other');
+
+  const temporary = join(f.source, 'reports/next.tmp');
+  writeFileSync(temporary, 'third');
+  renameSync(temporary, source);
+  await sender.flush();
+  expect(modes).toEqual(['replace', 'replace', 'replace']);
+  expect(readFileSync(join(f.destination, 'reports/result.md'), 'utf8')).toBe('third');
 });
 
 it('rejects different bytes at the same sequence and preserves the saved content and acknowledgement', async () => {
