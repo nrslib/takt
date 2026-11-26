@@ -20,6 +20,7 @@ const { resolveWorkflowCallTarget } = await import('../../dist/infra/config/load
 const { loadPersonaPromptFromPath } = await import('../../dist/infra/config/index.js');
 const { InstructionBuilder } = await import('../../dist/core/workflow/instruction/InstructionBuilder.js');
 const { resolveDeclaredReportInputs } = await import('../../dist/core/workflow/instruction/declared-report-inputs.js');
+const { reportInputEntries } = await import('../../dist/core/models/workflow-report-input.js');
 const { createInitialState } = await import('../../dist/core/workflow/engine/state-manager.js');
 const { WorkflowCallInvocationIndex } = await import('../../dist/core/workflow/workflow-call-invocation-index.js');
 const { WorkflowStepParticipationIndex } = await import('../../dist/core/workflow/workflow-step-participation-index.js');
@@ -98,7 +99,7 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
     const current = currentWorkflow(spec.workflow);
     const source = stepOf(current, spec.source);
     const consumer = stepOf(current, spec.consumer);
-    if (!consumer.inputReports || consumer.inputReports.fromStep !== source.name) {
+    if (!reportInputEntries(consumer.inputReports).some((input) => input.fromStep === source.name)) {
       throw new Error(`${id}: missing declared source`);
     }
     const reportDir = join(project, '.takt/runs/eval', id, 'reports');

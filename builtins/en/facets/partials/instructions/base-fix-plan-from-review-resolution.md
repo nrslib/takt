@@ -7,6 +7,8 @@ Do not edit source in this step. Use the current decision supplied below and the
 
 Do not reintroduce an excluded concern as optional work, adjacent cleanup, or an alternative repair mechanism. For each fix unit, preserve the recorded problem, evidence, acceptance criteria, and repair boundary, and select the smallest change that closes the real paths governed by the same invariant.
 
+Do not restore guarantees, input restrictions, or proof methods recorded in Guarantees Not Adopted as unfinished work on the original problem or optional strengthening. Respect the reason and scope of a supplied human decision. If new facts change its premises, identify the requirement decision needed before proceeding with repair.
+
 **Current review decision:**
 {report:review-resolution.md}
 
