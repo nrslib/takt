@@ -556,7 +556,10 @@ function finishRetiredServer(entry: SharedServerEntry): void {
 }
 
 function retireSharedServerEntry(key: string, entry: SharedServerEntry): Promise<void> {
-  if (entry.retirement !== undefined) return entry.retirement.promise;
+  if (entry.retirement !== undefined) {
+    finishRetiredServer(entry);
+    return entry.retirement.promise;
+  }
   if (sharedServers.get(key) === entry) sharedServers.delete(key);
   let resolve!: () => void;
   let reject!: (error: unknown) => void;
@@ -638,7 +641,6 @@ function invalidateSharedServer(server: SharedServer, error: Error): void {
   if (sharedServers.get(server.key)?.server === server) sharedServers.delete(server.key);
   const queueError = new OpenCodeSharedServerInvalidationError(error);
   server.invalidationController.abort(queueError);
-  void server.close().catch(() => undefined);
   for (const queue of server.sessionQueues.values()) {
     for (const queued of queue) {
       if (queued.signal !== undefined && queued.onAbort !== undefined) {
@@ -649,7 +651,7 @@ function invalidateSharedServer(server: SharedServer, error: Error): void {
   }
   server.sessionQueues.clear();
   server.sessionBusy.clear();
-  finishRetiredServer(server.entry);
+  void retireSharedServerEntry(server.key, server.entry);
 }
 
 export function resetSharedServerPool(): void {

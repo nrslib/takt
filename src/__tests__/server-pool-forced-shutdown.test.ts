@@ -239,6 +239,48 @@ describe('OpenCode server pool forced shutdown', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('waits for an invalidated workspace server when its owner closes', async () => {
+    const childExit = deferred<void>();
+    const closeStarted = deferred<void>();
+    const close = vi.fn(() => {
+      closeStarted.resolve();
+      return childExit.promise;
+    });
+    startServerMock.mockResolvedValue(serverStartResult(close));
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await loadServerPool();
+
+    const acquired = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined,
+      undefined, false, undefined, undefined, undefined, '/tmp',
+      { ownerId: 'invalidated-workspace-owner', directories: ['/tmp'] });
+    acquired.invalidate(new Error('server invalidated'));
+    await closeStarted.promise;
+    const closing = closeOpenCodeWorkspaceServers('invalidated-workspace-owner');
+
+    await expectPromisePending(closing);
+    childExit.resolve();
+    await closing;
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('reports an invalidated workspace server stop failure when its owner closes', async () => {
+    const stopFailure = new Error('invalidated workspace server did not stop');
+    const close = vi.fn().mockRejectedValue(stopFailure);
+    startServerMock.mockResolvedValue(serverStartResult(close));
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await loadServerPool();
+
+    const acquired = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined,
+      undefined, false, undefined, undefined, undefined, '/tmp',
+      { ownerId: 'failed-invalidated-workspace-owner', directories: ['/tmp'] });
+    acquired.invalidate(new Error('server invalidated'));
+    const closeError = await closeOpenCodeWorkspaceServers('failed-invalidated-workspace-owner')
+      .catch((error: unknown) => error);
+
+    expect(closeError).toBeInstanceOf(AggregateError);
+    expect((closeError as AggregateError).errors).toContain(stopFailure);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('aggregates a server stop failure so forced shutdown cannot treat it as success', async () => {
     const stopFailure = new Error('child process stop was not confirmed');
     const close = vi.fn().mockRejectedValue(stopFailure);
