@@ -1,5 +1,5 @@
 import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
-import type { ProviderUsageSnapshot } from '../../core/models/response.js';
+import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
 import type {
@@ -114,6 +114,9 @@ export interface ProviderAgent {
     decision: 'complete' | 'needs_recovery' | 'error';
     error?: string;
     failureCategory?: AgentFailureCategory;
+    /** Set with rateLimitInfo when the assessment call itself was rate limited. */
+    errorKind?: AgentErrorKind;
+    rateLimitInfo?: RateLimitInfo;
     usage?: ProviderUsageSnapshot;
   }>;
 }
