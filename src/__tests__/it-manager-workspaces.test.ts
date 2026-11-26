@@ -221,7 +221,7 @@ describe('manager workspace storage and repository boundaries', () => {
       return { client, call, add, fire, list, batch, post, store, routing, accept, request, requests, owner, active, signal, conversations };
     }
 
-    it.each(['supplied', 'quoted-message', 'sentence-period', 'different-git-path', 'human-without-path', 'watcher'] as const)('prepares a valid repository over HTTP only in a human message turn (%s)', async (origin) => {
+    it.each(['supplied', 'quoted-message', 'sentence-period', 'different-git-path', 'human-without-path', 'watcher'] as const)('prepares a valid repository over HTTP during a human message turn (%s)', async (origin) => {
       await seed(repositoryA);
       const existing = managerId(repositoryA);
       const inquiry = await new StandaloneInquiryStore(globalDirectory, single()).create({ body: `${repositoryC} でやって`, recipient: 'human' });
@@ -238,7 +238,7 @@ describe('manager workspace storage and repository boundaries', () => {
       const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
       const acquire = vi.spyOn(assignmentLocks, 'acquireRepositoryAssignmentLocks');
       const result = await f.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryC } });
-      if (origin === 'supplied' || origin === 'quoted-message' || origin === 'sentence-period') {
+      if (origin !== 'watcher') {
         expect(result.isError).not.toBe(true);
         expect(JSON.parse(firstTextContent(result.content))).toEqual({ managerId: managerId(repositoryC) });
         expect(resolve).toHaveBeenCalledWith(repositoryC);
@@ -264,20 +264,16 @@ describe('manager workspace storage and repository boundaries', () => {
       expect((await f.list()).managers.map(({ id }) => id)).toContain(managerId(canonical));
     });
 
-    it.each([false, true])('authorizes each HTTP batch path from the human message (second path supplied: %s)', async (secondSupplied) => {
+    it.each([false, true])('authorizes each HTTP batch path during a human message turn (second path supplied: %s)', async (secondSupplied) => {
       const text = `${repositoryA}${secondSupplied ? ` と ${repositoryB}` : ''} のmanagerを用意して`;
       const f = await director(humanMessage(text));
       const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
       const results = await f.batch([repositoryA, repositoryB]);
       expect(results.find(({ id }) => id === 100)?.result.isError).not.toBe(true);
-      expect(results.find(({ id }) => id === 101)?.result.isError === true).toBe(!secondSupplied);
-      if (!secondSupplied) {
-        expect(resolve).not.toHaveBeenCalledWith(repositoryB);
-        expect(await f.store.read(managerId(repositoryB))).toBeUndefined();
-        expect((await readProjectRegistry(globalDirectory)).projects.some(({ canonicalDirectory }) => canonicalDirectory === repositoryB)).toBe(false);
-      }
+      expect(results.find(({ id }) => id === 101)?.result.isError).not.toBe(true);
+      expect(resolve).toHaveBeenCalledWith(repositoryB);
       expect((await f.list()).managers.map(({ id }) => id).sort()).toEqual(
-        (secondSupplied ? [managerId(repositoryA), managerId(repositoryB)] : [managerId(repositoryA)]).sort());
+        [managerId(repositoryA), managerId(repositoryB)].sort());
     });
 
     it.each(['conversation', 'registration', 'after-registration', 'restore', 'fire'].flatMap((stage) => [false, true].map((cancel) => ({ stage, cancel }))))(
@@ -597,7 +593,7 @@ describe('manager workspace storage and repository boundaries', () => {
       return conversationId({ kind: 'repository', repositoryDirectory });
     }
 
-    it.each(['human', 'human-quoted', 'sentence-period', 'different-git-path', 'human-without-path', 'watcher'] as const)('prepares a new manager through the dispatcher only in a human message turn (%s)', async (origin) => {
+    it.each(['human', 'human-quoted', 'sentence-period', 'different-git-path', 'human-without-path', 'watcher'] as const)('prepares a new manager through the dispatcher during a human message turn (%s)', async (origin) => {
       const f = await director(humanMessage(`${repositoryA} のmanagerを用意して`)); await f.add(repositoryA);
       const text = `${repositoryC} でやって`;
       const inquiry = await new StandaloneInquiryStore(globalDirectory, { kind: 'repository', repositoryDirectory: repositoryA })
@@ -622,7 +618,7 @@ describe('manager workspace storage and repository boundaries', () => {
       reached.mockClear();
       const result = await dispatcher.request(turn.turn, { kind: 'add_director_manager', repositoryDirectory: repositoryC }, f.signal);
       const record = await f.store.read(managerId(repositoryC)); const listed = (await f.list()).managers.map(({ id }) => id);
-      if (origin === 'human' || origin === 'human-quoted' || origin === 'sentence-period') {
+      if (origin !== 'watcher') {
         expect(result).toEqual({ kind: 'director_manager_added', managerId: managerId(repositoryC) });
         expect(reached).toHaveBeenCalledOnce();
         expect(record?.state.assignment).toEqual({ kind: 'repository', repositoryDirectory: repositoryC });
@@ -869,12 +865,14 @@ describe('manager workspace storage and repository boundaries', () => {
       const path = join(globalDirectory, 'conversations', `${id}.json`);
       const before = readFileSync(path, 'utf8');
       await f.fire(id);
-      const withoutPath = await director();
+      const watcher = await director({ kind: 'watch_observation', observation: { kind: 'director_state_changed',
+        managerConversationId: id, repositoryDirectory: repositoryA, goalId: null,
+        targetId: 'manager', generation: '1', observedAt: new Date().toISOString(), state: '{}' } });
       const resolve = vi.spyOn(gitRepositories, 'resolveGitRepositoryDirectory');
-      expect((await withoutPath.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryA } })).isError).toBe(true);
+      expect((await watcher.client.callTool({ name: 'takt_add_manager', arguments: { repositoryDirectory: repositoryA } })).isError).toBe(true);
       expect(resolve).not.toHaveBeenCalled();
       expect(await new DirectorManagerStateStore(globalDirectory).isFired(id)).toBe(true);
-      expect((await withoutPath.list()).managers).toEqual([]);
+      expect((await watcher.list()).managers).toEqual([]);
       expect(readFileSync(path, 'utf8')).toBe(before);
       resolve.mockRestore();
       vi.spyOn(DaemonConversations.prototype, 'ensure').mockRejectedValueOnce(new Error('Preparation failed'));

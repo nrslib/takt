@@ -24,9 +24,9 @@ export async function createTurnBusiness(configDirectory: string, assignment: Co
       if (current === undefined || current.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
       return changeDirectorGoalQuestionRoute(configDirectory, target, route, origin, current.input.event, current.io.signal);
     },
-    authorizeAddManager(repositoryDirectory) {
+    authorizeAddManager() {
       if (current === undefined || current.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
-      assertDirectorManagerHumanMessage(current.input.event.event, repositoryDirectory);
+      assertDirectorManagerHumanMessage(current.input.event.event);
     },
     async addManager(repositoryDirectory, signal) {
       const turn = current;

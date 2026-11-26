@@ -13,7 +13,7 @@ vi.mock('../features/mcp/localConnection.js', () => ({ startLocalMcpConnection: 
 vi.mock('../features/director/turnExecutor.js', () => ({ createDirectorTurnExecutor: doubles.executor }));
 vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.managers }));
 const signal = () => new AbortController().signal;
-const notices = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<(repositoryDirectory: string) => void>(), addManager: vi.fn(async () => ({ managerId: `manager-${'a'.repeat(64)}` })),
+const notices = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<() => void>(), addManager: vi.fn(async () => ({ managerId: `manager-${'a'.repeat(64)}` })),
   fireManager: vi.fn(async (managerId: string) => ({ managerId })),
   tellManager: vi.fn(async () => ({})), notifyHuman: vi.fn(async (message: string) => ({ id: 'notification', message })) };
 beforeEach(() => {
