@@ -301,8 +301,27 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt workflow doctor` | Validate workflow definitions |
 | `takt workflow inspect` | Inspect a workflow's configuration and resolution sources |
 | `takt repertoire add` | Install a repertoire package from GitHub |
+| `takt daemon stop` | Stop the background daemon |
+| `takt caccia` | Handle CodeRabbit review threads for a PR |
+| `takt resume` | Resume the latest failed or aborted direct run |
+| `takt clear` | Clear agent conversation sessions |
+| `takt reset config` | Restore the global configuration template with a backup |
+| `takt reset categories` | Restore builtin workflow categories |
+| `takt prompt` | Preview each step's assembled prompts |
+| `takt export-cc` | Export workflows and agents as a Claude Code skill |
+| `takt export-codex` | Export workflows and agents as a Codex skill |
+| `takt catalog` | List available facets |
+| `takt workflow bundle attach` | Attach a historical workflow bundle to a legacy run |
+| `takt metrics review` | Show review quality metrics |
+| `takt purge` | Remove old analytics event files |
+| `takt telemetry status`, `takt telemetry enable`, `takt telemetry disable` | Inspect or change local routing event recording |
+| `takt repertoire remove`, `takt repertoire list` | Remove or list installed repertoire packages |
 
 Manager conversations run in the daemon, so work continues after you close the TUI. Reopen it for the same repository or workspace to continue the conversation. See [Goal Management](./docs/goal-management.md) for goal registration, conversation recovery, and interruption. Use `takt daemon stop` to stop the daemon.
+
+Manager accepts pasted images and keeps referenced images with the conversation. When manager includes a saved image path in a task's instructions, TAKT copies the image into the task's attachments for the workflow to read. Finished goals stay out of the active goal context; use `Ctrl+G` to find them and choose Delete.
+
+Set `manager.runtime_assignments` in `config.yaml` to list the runtime assignments manager may choose for each task. The names refer to `provider.assignments` in `runtime.yaml`; a task keeps its selected assignment when retried or requeued. `manager.refresh_interval_ms` or `TAKT_MANAGER_REFRESH_INTERVAL_MS` controls the TUI refresh interval. See [Goal Management](./docs/goal-management.md) and the [configuration guide](./docs/configuration.md).
 
 Manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, incurring provider API costs.
 
@@ -429,6 +448,8 @@ or `<project>/.takt/runtime.yaml`; the project settings take precedence. Use
 this to keep execution settings separate from workflow definitions. When
 switching to `runtime.yaml`, do not mix in legacy provider settings. See the
 [Configuration Guide](./docs/configuration.md) for migration steps.
+
+Codex and OpenCode profiles accept `context_window: auto`, a fixed positive integer, or `{ initial: 500000, auto_expand: true }`. Automatic selection and expansion use confirmed model limits; `auto` keeps native defaults when those limits cannot be confirmed. A fixed number keeps the capacity fixed. See [context window selection](./docs/configuration.md).
 
 Companion reviewers are disabled by default. Enable them with the top-level
 `companion.enabled: true` policy in `runtime.yaml`; global and project policies

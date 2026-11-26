@@ -1,5 +1,5 @@
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,9 @@ import type { V2Event } from '@opencode/client';
 import { createV2Transport } from '../infra/opencode/v2-transport.js';
 import { v2EventTranslator } from '../infra/opencode/v2-events.js';
 import { buildV2ServerConfig } from '../infra/opencode/v2-config.js';
+import { createStreamTrackingState, handlePartUpdated, type OpenCodeMessagePartUpdatedEvent } from '../infra/opencode/OpenCodeStreamHandler.js';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
+import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 
 const { api } = vi.hoisted(() => ({ api: {
   session: { create: vi.fn(), get: vi.fn(), update: vi.fn(), switchAgent: vi.fn(), switchModel: vi.fn(), prompt: vi.fn(), interrupt: vi.fn(), wait: vi.fn(), compact: vi.fn() },
@@ -247,6 +250,42 @@ describe('OpenCode v2 transport', () => {
     const events = [];
     for await (const event of stream) events.push(event);
     expect(events).toEqual([{ type: 'session.idle', properties: { sessionID: 's1' } }]);
+  });
+
+  it.each([
+    { name: 'read', tool: 'read', input: { path: '/context/specifications/gherkin.feature' } },
+    { name: 'shell', tool: 'bash', input: { command: 'cat /context/specifications/gherkin.feature' } },
+  ])('$name の実引数と ID を結果より先に provider ログへ記録する', async ({ name, tool, input }) => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-tool-input-'));
+    temporaryDirectories.push(logsDir);
+    const logger = createProviderEventLogger({ logsDir, sessionId: 's1', runId: 'run', enabled: true });
+    const data = { sessionID: 's1', assistantMessageID: 'm1', id: 'tool-1' };
+    const durable = { aggregateID: 's1', seq: 1, version: 1 } as const;
+    const source: V2Event[] = [
+      { type: 'session.tool.input.started', id: 'e1', created: 1, durable, data: { ...data, name } },
+      { type: 'session.tool.input.delta', id: 'e2', created: 2, data: { ...data, delta: JSON.stringify(input).slice(0, 12) } },
+      { type: 'session.tool.input.ended', id: 'e3', created: 3, durable: { ...durable, seq: 2 }, data: { ...data, text: JSON.stringify(input) } },
+      { type: 'session.tool.called', id: 'e4', created: 4, durable: { ...durable, seq: 3 }, data: { ...data, input, executed: false } },
+      { type: 'session.tool.progress', id: 'e5', created: 5, data: { ...data, metadata: { title: '仕様読み取り' } } },
+      { type: 'session.tool.success', id: 'e6', created: 6, durable: { ...durable, seq: 4, version: 2 },
+        data: { ...data, content: [{ type: 'text', text: '仕様本文' }], executed: false } },
+    ];
+    api.event.subscribe.mockReturnValue((async function* () {
+      yield { type: 'server.connected' };
+      yield* source;
+    })());
+    const state = createStreamTrackingState();
+    const { stream } = await (await createV2Transport('http://localhost', '')).event.subscribe({ directory: '/work', sessionID: 's1' }, {});
+    for await (const event of stream) {
+      const updated = event as OpenCodeMessagePartUpdatedEvent;
+      expect(updated.type).toBe('message.part.updated');
+      handlePartUpdated(updated.properties.part, updated.properties.delta,
+        (output) => logger.logEvent({ provider: 'opencode', providerModel: 'test', step: 'inspect' }, output), state);
+    }
+    const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(records.map((record) => record.event_type)).toEqual(['tool_use', 'tool_result']);
+    expect(records[0]?.data).toEqual({ tool, id: data.id, input: name === 'read' ? { ...input, filePath: input.path } : input });
+    expect(records[1]?.data).toEqual({ id: data.id, content: '仕様本文', isError: false });
   });
 
   it('waits for interruption before completing abort', async () => {

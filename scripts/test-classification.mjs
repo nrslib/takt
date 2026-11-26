@@ -254,6 +254,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/conversationSession.test.ts',
   'src/__tests__/copilot-client.test.ts',
   'src/__tests__/cursor-mcp-settings.test.ts',
+  'src/__tests__/daemon-lifecycle.test.ts',
   'src/__tests__/daemon-notifications.test.ts',
   'src/__tests__/deepseek-harness-credential-binding.test.ts',
   'src/__tests__/deepseek-harness-credential-patch.test.ts',

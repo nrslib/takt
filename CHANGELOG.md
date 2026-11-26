@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-11-24
+
+### Added
+
+- Codex and OpenCode runtime profiles accept `context_window: auto`, a fixed positive integer, or `{ initial: 500000, auto_expand: true }` (#2091, #2092). Automatic selection and expansion use confirmed model limits; when limits are unknown, `auto` keeps the provider's native defaults. A fixed number disables automatic expansion.
+- Standalone MCP clients can create, list, inspect, approve, and reject goal proposals with the `takt_*_goal_proposal` tools (#2060, #2083). Approval checks the proposal owner and revision before registering the goal. `takt_update_goal_branches` updates a goal's saved branch references after a branch change; changing a hosted PR's base remains a separate operation (#2065).
+- Experimental manager improvements: paste and retain images across daemon restarts, and copy referenced saved-image paths into task attachments (#2082); select and retain a per-task runtime assignment from `manager.runtime_assignments` (#2084); configure TUI polling with `manager.refresh_interval_ms` or `TAKT_MANAGER_REFRESH_INTERVAL_MS` (#2074).
+- `provider_options.codex.readonly_permission_base` lets Codex report-output and strictly read-only phases extend an existing permission profile, retaining its deny rules while disabling writes and network access (#2095, #2096). It requires `permission_control: codex`.
+
+### Changed
+
+- Goal tasks receive saved Gherkin, Quint, and Alloy specifications as files in the run context so workflow steps can read the original specification (#2076).
+- Finished goals stay out of manager's active goal context and can be found with `Ctrl+G` and deleted, with Epic references checked before deletion (#2072). Goal responses now include linked PR state (#2066).
+- Builtin review adjudication focuses on accepting or rejecting findings; repair choices and impact investigation belong to fix planning (#2089).
+
+### Fixed
+
+- OpenCode tool events retain the finalized input instead of recording an empty pending input. Tool results can therefore be matched to the files and commands actually requested, including saved goal specifications.
+- Codex keeps a completed response even if the turn also compacted its context, avoiding unnecessary recovery loops (#2080). Adjudication instructions and input references survive compaction as well (#2094).
+- Report generation retries with a new session when context compaction interrupts report output (#2087).
+- Workflow resume matches saved inherited records and reports by workflow name and call position, allowing them to survive workflow-body changes (#2097).
+- Worktree clone fallback detects shallow-reference errors even under a non-English Git locale (#2086). Synchronization merges explicitly use `--ff --no-edit`, allowing divergent branches to merge when local `merge.ff=only` is set (#2079).
+- Identical policy and knowledge bodies are injected only once into an agent's instructions (#2077).
+
+### Internal
+
+- Indexed daemon turns and director notifications to avoid rereading unrelated conversation history (#2067, #2081).
+- Added an explicit opt-in guard for full local Heavy IT runs; pull requests continue to run the full gate in CI (#2075).
+- Added a lint rule requiring caught errors in catch-block logs, refreshed daemon diagnostic probes and evaluation dependencies, and removed obsolete tests and design documents (#2078, #2093, #2085, #2088, #2090).
+- Refreshed the dependency lockfile and synchronized the Nix dependency hash for this release.
+
 ## [0.76.1] - 2026-11-17
 
 ### Fixed

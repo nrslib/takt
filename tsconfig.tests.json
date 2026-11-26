@@ -604,6 +604,7 @@
     "src/__tests__/opencode-skills-options.test.ts",
     "src/__tests__/opencode-stream-handler.test.ts",
     "src/__tests__/opencode-tool-guard.test.ts",
+    "src/__tests__/opencode-tool-stream.test.ts",
     "src/__tests__/opencode-types.test.ts",
     "src/__tests__/opencode-v1-transport.test.ts",
     "src/__tests__/opencode-v2-plugin.test.ts",

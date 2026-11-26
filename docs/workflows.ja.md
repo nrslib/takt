@@ -1308,6 +1308,8 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 
 `takt merge` の既定である `merge-review-fix-simple` は、PR とベースブランチを同期します。競合のない同期ではフルレビューを呼ばずpushへ進み、AIで競合を解消した場合は初回・再同期とも `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。レビュー経路では要件の最終確認まで行い、その後は共通経路で変更を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗ではマージせず、結果を PR にコメントします。CI失敗では後述の回復処理へ進みます。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
 
+`merge-prepare` と `merge-review-fix-simple` の同期後レビューはPRの累積差分全体とベースブランチの追加変更を確認します。修正するのは衝突解消の誤りと、両側の変更の組み合わせで生じた不具合だけです。非競合ファイルの不具合も対象に含みます。同期と無関係な既存問題は理由を記録して持ち越し、修正計画・修正・最終確認での差し戻しにはつなげません。競合のない同期でのレビュー省略と通常開発のレビュー・裁定基準は維持します。
+
 ### CI成功済みPRのレビュー
 
 `merge-review-ci` は明示指定時だけ動くworkflowです。先頭のsystem stepで既存 `pr_status` を読み、`ci.finished` と `ci.passed` が両方真の場合だけ `workflow_call` で既存 `merge-review` を呼びます。成功の定義は既存処理と同じで、`SUCCESS`・`NEUTRAL`・`SKIPPED` を含みます。未完了・失敗・チェック未作成なら、レビュー・Caccia・評価コメントを実行せず `COMPLETE` になります。事前判定では待機・再試行せず、新しい設定項目やCLIオプションも追加しません。
@@ -1339,6 +1341,8 @@ caccia:
 
 ### Caccia システム効果
 
+GitHub では開始時の head を照合してから、`coderabbitai` が開始した未解決スレッドを確認します。対象スレッドがなければレビューを待たず、`skipReason: no_review_threads` の `skipped` を返します。マージ用 workflow は `wait_ci` へ進み、返された head の CI 完了を待ちます。対象スレッドがある場合は既存の指摘対応を実行します。単独の `takt caccia` と PR 公開後の自動 Caccia は初回レビューを待ちます。
+
 この効果は `takt merge` または `enqueue_task mode: from_pr` のタスクが持つ、対象 PR と一致した隔離クローンの実行文脈を必要とします。`pr` は正の整数または完全なテンプレート参照です。通常文字列に埋め込んだ参照は受理しません。既存の `caccia.enabled`、`wait_timeout_ms`、`max_iterations`、`workflow` を読みます。無効・未設定なら CodeRabbit のレビューを待たずにスキップします。単独の `takt caccia <PR>` は `enabled` に関係なく利用できます。
 
 GitHub での実行前には PR head と開始時のクローン HEAD を照合します。不一致なら2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。PR の識別情報変更、認証失敗など他の取得例外、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも同じ照合を行うため、無効・未設定でも GitHub head の反映を待つことがあります。この固定の反映待ちは `wait_timeout_ms` によるレビュー待機とは別です。非 GitHub のスキップ照合と実行終了後の head 検証には、この待機を追加しません。
@@ -1358,7 +1362,7 @@ GitHub での実行前には PR head と開始時のクローン HEAD を照合�
         next: wait_ci
 ```
 
-正常結果は `success: true`、`failed: false` と `outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason`、`reason` を含みます。該当しない理由は `null` です。条件では `effect.<step>.caccia.*`、テンプレートでは `{effect:<step>.caccia.<field>}` から参照します。`skipReason` は `config_disabled`、`github_unavailable`、`initial_review_unavailable`、`review_rate_limited`、`review_skipped` です。失敗は `success: false`、`failed: true`、`error` を返し、head は保証しません。正常結果のフィールドを読む前に失敗を判定してください。
+正常結果は `success: true`、`failed: false` と `outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason`、`reason` を含みます。該当しない理由は `null` です。条件では `effect.<step>.caccia.*`、テンプレートでは `{effect:<step>.caccia.<field>}` から参照します。`skipReason` は `config_disabled`、`github_unavailable`、`no_review_threads`、`initial_review_unavailable`、`review_rate_limited`、`review_skipped` です。失敗は `success: false`、`failed: true`、`error` を返し、head は保証しません。正常結果のフィールドを読む前に失敗を判定してください。
 
 修正の push 後は SHA を照合して同じクローンを fast-forward します。CI 待ちは PR status の head と `effect.caccia.caccia.headSha` を照合し、マージは現在のクローン HEAD を expected SHA として使います。過去の push 効果の結果は履歴として保持します。
 

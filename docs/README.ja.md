@@ -305,8 +305,27 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt workflow doctor` | カスタム workflow の定義を静的検証します |
 | `takt workflow inspect` | workflow の設定と、その設定を読み込んだ場所を検査します |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
+| `takt daemon stop` | バックグラウンドの daemon を停止します |
+| `takt caccia` | PR の CodeRabbit レビュースレッドに対応します |
+| `takt resume` | 最後に失敗・中止した直接実行の run を再開します |
+| `takt clear` | エージェントの会話セッションを消去します |
+| `takt reset config` | バックアップを作り、グローバル設定をテンプレートに戻します |
+| `takt reset categories` | ワークフローカテゴリを組み込みの状態に戻します |
+| `takt prompt` | 各 step に渡すプロンプトをプレビューします |
+| `takt export-cc` | workflow と agent を Claude Code のスキルとして出力します |
+| `takt export-codex` | workflow と agent を Codex のスキルとして出力します |
+| `takt catalog` | 利用できる facet を一覧表示します |
+| `takt workflow bundle attach` | 過去のソースから作った workflow bundle を旧形式の run に関連付けます |
+| `takt metrics review` | レビューの品質指標を表示します |
+| `takt purge` | 古い分析イベントファイルを削除します |
+| `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` | ローカルのルーティング記録を確認・変更します |
+| `takt repertoire remove`、`takt repertoire list` | 導入済みの repertoire パッケージを削除・一覧表示します |
 
 manager との会話は daemon で処理されるため、TUI を閉じても作業は続きます。同じリポジトリや workspace で開き直せば、同じ会話を続けられます。ゴールの登録、会話の再開、処理の中断については[ゴール管理](./goal-management.ja.md)を参照してください。daemon を止めるには `takt daemon stop` を使います。
+
+manager に画像を貼り付けると、参照した画像は会話とともに保存されます。manager が保存済み画像のパスをタスクの指示に含めた場合、TAKT は画像をタスクの添付ファイルへコピーし、workflow から読めるようにします。終了したゴールは manager の実行中ゴールの文脈から外れますが、`Ctrl+G` で見つけて削除できます。
+
+`config.yaml` の `manager.runtime_assignments` で、manager がタスクごとに選べる runtime assignment の候補を指定できます。名前は `runtime.yaml` の `provider.assignments` を参照し、リトライ・リキューでも選択を引き継ぎます。TUI の更新間隔は `manager.refresh_interval_ms` または `TAKT_MANAGER_REFRESH_INTERVAL_MS` で変更できます。詳しくは[ゴール管理](./goal-management.ja.md)と[設定ガイド](./configuration.ja.md)を参照してください。
 
 manager は実験的機能で、動作・設定・保存データの形式は予告なく変わることがあります。タスクを自動で投入・実行するため、provider の API 費用がかかります。
 
@@ -411,6 +430,8 @@ hooks や MCP サーバーなど、sandbox の外で動くプロセスは止ま�
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 
 プロバイダ、モデル、ルーティングは `~/.takt/runtime.yaml` または `<project>/.takt/runtime.yaml` にまとめて設定できます。プロジェクト側の設定が優先されます。ワークフローの定義と実行環境の設定を分けたい場合に使ってください。`runtime.yaml` を使う場合は旧来のプロバイダ設定と混在させず、移行方法を[設定ガイド](./configuration.ja.md)で確認してください。
+
+Codex と OpenCode のプロファイルでは、`context_window: auto`、固定の正の整数、`{ initial: 500000, auto_expand: true }` を指定できます。自動選定と拡張には確認済みのモデル上限を使い、`auto` で上限を確認できないときは provider の既定値を維持します。数値を指定すると容量を固定できます。詳しくは[設定ガイド](./configuration.ja.md)を参照してください。
 
 companion reviewer は既定で無効です。有効にするには `runtime.yaml` のトップレベルに `companion.enabled: true` を設定します。グローバルとプロジェクトの両方に設定した場合は、両方が `true` のときだけ有効になります。グローバルで `false` に設定されている場合、プロジェクト側で `true` にしても有効になりません。
 

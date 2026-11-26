@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { open } from 'node:fs/promises';
+import { open, realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { isDaemonOwnerRunning, readDaemonOwner, removeDaemonOwner } from '../../infra/daemon/owner.js';
+import { isDaemonOwnerRunning, readDaemonOwner, removeDaemonOwner, type DaemonOwner } from '../../infra/daemon/owner.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { createLogger } from '../../shared/utils/debug.js';
@@ -21,6 +21,15 @@ const PROCESS_POLL_MS = 50;
 const log = createLogger('daemon');
 const io = () => ({ signal: new AbortController().signal, timeoutMs: PROCESS_WAIT_MS });
 export const daemonEntryPath = (): string => fileURLToPath(new URL('../../app/daemon/index.js', import.meta.url));
+
+/**
+ * daemon が起動時に記録した実パスと、呼出し側のパスが今指している実体を比べる。
+ * 記録側は解決し直さない。起動後にその場所が別の配置へのリンクに置き換わると、古い daemon を新しい配置と取り違えるため。
+ */
+async function isCurrentInstallation(owner: DaemonOwner, cliPath: string): Promise<boolean> {
+  if (owner.version !== packageVersion) return false;
+  return owner.cliPath === cliPath || owner.cliPath === await realpath(cliPath);
+}
 
 export async function stopDaemon(): Promise<void> {
   const directory = resolve(getGlobalConfigDir());
@@ -53,7 +62,7 @@ export async function ensureDaemon(options?: { retainConnection: true }): Promis
   const args = [cliPath];
   const owner = await readDaemonOwner(directory);
   if (owner !== undefined && await isDaemonOwnerRunning(owner, io())) {
-    if (owner.version === packageVersion && owner.cliPath === cliPath) {
+    if (await isCurrentInstallation(owner, cliPath)) {
       const deadline = Date.now() + PROCESS_WAIT_MS;
       while (Date.now() < deadline) {
         if (!await isDaemonOwnerRunning(owner, io())) {
@@ -94,7 +103,7 @@ export async function ensureDaemon(options?: { retainConnection: true }): Promis
     const started = await readDaemonOwner(directory);
     // A concurrent caller may have started the same daemon first; the child then exits as the loser.
     if (started !== undefined && await isDaemonOwnerRunning(started, io())
-      && (started.pid === child.pid || (started.version === packageVersion && started.cliPath === cliPath))) {
+      && (started.pid === child.pid || await isCurrentInstallation(started, cliPath))) {
       const socket = await connectConversationIpc(directory, started);
       if (socket !== undefined) {
         log.info('Daemon startup confirmed', { pid: started.pid });
