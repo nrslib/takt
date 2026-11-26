@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   caccia: vi.fn<(input: CacciaInput) => Promise<CacciaResult>>(),
   details: vi.fn(), status: vi.fn(), comment: vi.fn(), merge: vi.fn(), review: vi.fn(),
   threat: vi.fn(), execution: vi.fn(), metadataAvailable: true,
-  reviewStatus: vi.fn(), threads: vi.fn(), resolveThread: vi.fn(),
+  reviewStatus: vi.fn(), hasThreads: vi.fn(), threads: vi.fn(), resolveThread: vi.fn(),
   gitlab: false, glab: vi.fn(), gitlabUrl: 'https://gitlab.example/org/repo.git', localRemote: '',
 }));
 vi.mock('node:child_process', async (original) => {
@@ -56,6 +56,7 @@ vi.mock('../infra/github/pr.js', async (original) => ({
   fetchCacciaPullRequestDetails: mocks.details,
   fetchCacciaPullRequestHeadSha: async () => (await mocks.details()).headSha,
   fetchCodeRabbitReviewStatus: mocks.reviewStatus,
+  hasCodeRabbitReviewThreads: mocks.hasThreads,
   fetchCodeRabbitReviewThreads: mocks.threads, resolveReviewThread: mocks.resolveThread,
 }));
 vi.mock('../features/merge/threat-check.js', async (original) => ({
@@ -133,7 +134,7 @@ describe('Caccia effect through PR workflow execution', () => {
 
   function writeWorkflow() {
     const outcome = effectOutcome;
-    const reasonCondition = skipReason === 'config_disabled'
+    const reasonCondition = skipReason === 'config_disabled' || skipReason === 'no_review_threads'
       ? 'effect.external_review.caccia.reason != null'
       : `effect.external_review.caccia.reason == ${effectReason === null ? 'null' : JSON.stringify(effectReason)}`;
     const skip = skipReason === null ? 'null' : JSON.stringify(skipReason);
@@ -221,6 +222,9 @@ describe('Caccia effect through PR workflow execution', () => {
       headSha: git(root, '--git-dir', remote, 'rev-parse', 'refs/heads/feature/pr'),
       headRepositoryUrl: remote, headRepositoryPushUrls: [remote], sameRepository });
     mocks.details.mockImplementation(async () => details());
+    mocks.hasThreads.mockResolvedValue(true);
+    mocks.threads.mockResolvedValue([{ id: 'finding', author: 'coderabbitai', body: 'Fix the changed code', replies: [],
+      path: 'code.txt', url: 'https://github.com/org/repo/pull/123#discussion_r1', isOutdated: false }]);
     mocks.status.mockImplementation(async () => ({ number: 123, headSha: details().headSha,
       ci: { finished: true, passed: true }, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
       reviewDecision: 'APPROVED', merged }));
@@ -319,6 +323,8 @@ describe('Caccia effect through PR workflow execution', () => {
       const headSha = (await mocks.details()).headSha;
       return { headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] };
     });
+    mocks.hasThreads.mockImplementation(async () => !git(root, '--git-dir', remote, 'ls-tree', '--name-only', 'refs/heads/feature/pr')
+      .includes('coderabbit-fix.txt'));
     mocks.threads.mockImplementation(async () => git(root, '--git-dir', remote, 'ls-tree', '--name-only', 'refs/heads/feature/pr')
       .includes('coderabbit-fix.txt') ? []
       : [{ id: 'finding', author: 'coderabbitai', body: 'Fix the changed code', replies: [] }]);
@@ -348,6 +354,59 @@ describe('Caccia effect through PR workflow execution', () => {
       }
     });
   }
+
+  it('空スレッドならレビューを待たずskippedを返し同じworkflowのwait_ciでCI完了を待つ', async () => {
+    const actual = await vi.importActual<typeof import('../features/caccia/index.js')>('../features/caccia/index.js');
+    mocks.caccia.mockImplementation(actual.runCaccia);
+    mocks.hasThreads.mockResolvedValue(false);
+    mocks.threads.mockResolvedValue([]);
+    mocks.reviewStatus.mockResolvedValue({ headSha: initialHead, hasCodeRabbitPost: false,
+      reviewedHeadShas: [], reviewSkipped: true });
+    const record = vi.spyOn(TaskRunner.prototype, 'recordPrMergePushedHead');
+    let ciCompleted = false;
+    let pendingPollsAfterSkip = 0;
+    mocks.status.mockImplementation(async () => {
+      if (record.mock.calls.length > 0 && !ciCompleted) pendingPollsAfterSkip += 1;
+      return { number: 123, headSha: initialHead, ci: { finished: ciCompleted, passed: ciCompleted },
+        mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: false };
+    });
+    writeFileSync(workflowFile, stringify({ name: 'no-review-threads', initial_step: 'caccia', steps: [
+      { name: 'caccia', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+        rules: [{ condition: 'when(effect.caccia.caccia.success == true && effect.caccia.caccia.outcome == "skipped")', next: 'wait_ci' },
+          { condition: 'when(true)', next: 'ABORT' }] },
+      { name: 'wait_ci', kind: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+        wait: { until: 'when(context.wait_ci.pr.headSha == effect.caccia.caccia.headSha && context.wait_ci.pr.ci.finished == true)',
+          interval_ms: 5, max_retries: 200, on_timeout: 'ABORT' },
+        rules: [{ condition: 'when(context.wait_ci.pr.ci.passed == true)', next: 'after_ci' },
+          { condition: 'when(true)', next: 'ABORT' }] },
+      { name: 'after_ci', kind: 'system', effects: [{ type: 'comment_pr', pr: 123,
+        body: 'CI passed; skip={effect:caccia.caccia.skipReason}; head={effect:caccia.caccia.headSha}' }],
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+    ] }));
+    const completed = vi.fn();
+    const running = executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: workflowFile,
+      settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } });
+    void running.then(completed, completed);
+
+    try {
+      await vi.waitFor(() => expect(pendingPollsAfterSkip).toBeGreaterThanOrEqual(2), { timeout: 60_000 });
+      expect(completed).not.toHaveBeenCalled();
+      expect(mocks.comment).not.toHaveBeenCalled();
+      expect(record).toHaveBeenCalledExactlyOnceWith(expect.any(String), initialHead, initialHead, 'caccia');
+      expect.soft(mocks.caccia).not.toHaveBeenCalled();
+      expect.soft(mocks.reviewStatus).not.toHaveBeenCalled();
+      expect.soft(mocks.threads).not.toHaveBeenCalled();
+      expect(runAgent).not.toHaveBeenCalled();
+    } finally {
+      ciCompleted = true;
+      await running;
+    }
+
+    expect(await mocks.execution.mock.calls[0]![0]).toMatchObject({ success: true });
+    expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123,
+      `CI passed; skip=no_review_threads; head=${initialHead}`, project);
+    expect(mocks.merge).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['merge', false, false], ['merge', false, true], ['merge', true, false], ['merge', true, true],
@@ -400,6 +459,10 @@ describe('Caccia effect through PR workflow execution', () => {
         git(author, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
       }
       const retryHead = git(root, '--git-dir', remote, 'rev-parse', 'refs/heads/feature/pr');
+      effectHead = retryHead;
+      effectOutcome = 'skipped';
+      skipReason = 'no_review_threads';
+      writeWorkflow();
       mocks.caccia.mockClear(); mocks.status.mockClear(); mocks.execution.mockClear();
       vi.mocked(runAgent).mockClear();
       if (entry === 'merge') {
@@ -420,7 +483,8 @@ describe('Caccia effect through PR workflow execution', () => {
         expect(mocks.status).not.toHaveBeenCalled();
         expect(mocks.merge).not.toHaveBeenCalled();
       } else {
-        expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ expectedInitialHeadSha: retryHead }));
+        expect(mocks.caccia).not.toHaveBeenCalled();
+        expect(mocks.comment).toHaveBeenCalledWith(123, `outcome=skipped; head=${retryHead}; unresolved=0`, project);
         expect(mocks.status).toHaveBeenCalled();
         expect(mocks.merge).toHaveBeenCalledWith(123, project, entry === 'merge' ? 'squash' : undefined, retryHead);
       }
@@ -484,8 +548,11 @@ describe('Caccia effect through PR workflow execution', () => {
     unresolvedCount = result === 'limit' ? 1 : 0;
     skipReason = result === 'config_disabled' || result === 'review_skipped' ? result : null;
     effectReason = result === 'review_skipped' ? 'Review is unavailable' : null;
+    mocks.hasThreads.mockResolvedValue(true);
+    mocks.threads.mockResolvedValue([{ id: 'next-finding', author: 'coderabbitai', body: 'Review the current change', replies: [],
+      path: 'code.txt', url: 'https://github.com/org/repo/pull/123#discussion_r2', isOutdated: false }]);
     if (result === 'config_disabled') configure({ enabled: false });
-    else if (result !== 'success') {
+    else {
       mocks.caccia.mockImplementation(async (input) => {
         if (input.entry !== 'linked' || !input.expectedInitialHeadSha) throw new Error('Expected current PR head');
         effectHead = input.expectedInitialHeadSha;

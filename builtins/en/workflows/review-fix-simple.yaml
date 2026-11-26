@@ -2,6 +2,23 @@ name: review-fix-simple
 subworkflow:
   callable: true
   visibility: internal
+  params:
+    gather_instructions:
+      type: facet_ref[]
+      facet_kind: instruction
+      default: [gather-review]
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    adjudication_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    final_gate_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review, architecture]
 description: One read-only reviewer followed by adjudicated repair, follow-up review, and final requirement check.
 all_steps:
   rules:
@@ -15,6 +32,8 @@ initial_step: gather
 steps:
   - name: gather
     uses: review-gather-with-clarification-to-reviewers
+    instruction:
+      $param: gather_instructions
     rules:
       - condition: Review target information gathered
         next: reviewers
@@ -26,12 +45,18 @@ steps:
           - {Question 2}
 
   - name: reviewers
+    input_reports:
+      from_step: gather
+      reports: [review-target.md]
     description: Proceed from a single reviewer through finding adjudication, fixes, and follow-up review, then confirm requirement fulfillment.
     kind: workflow_call
     call: peer-review
     args:
       reviewer_suite: single-review-suite
-      review_policy_additions: []
+      review_policy_additions:
+        $param: review_policy_additions
+      adjudication_policy_additions:
+        $param: adjudication_policy_additions
       review_knowledge_additions:
         - architecture
         - unit-testing
@@ -68,10 +93,7 @@ steps:
         - review
         - architecture
       final_gate_policy:
-        - coding
-        - testing
-        - review
-        - architecture
+        $param: final_gate_policy
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
       fix_replan_instruction: scenario-based-fix-replan
       fix_verification_replan_instruction: scenario-based-verification-replan
