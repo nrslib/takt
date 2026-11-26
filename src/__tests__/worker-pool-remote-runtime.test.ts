@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { deferred } from './helpers/controlledDaemon.js';
 import { RemoteWorkerRuntime } from '../features/workerPool/remoteWorkerRuntime.js';
 import type { RemoteCredentialsConfig } from '../core/models/daemon-config-schema.js';
-import { RemoteAssignmentSchema, WorkerRejectedError, executionIdentity, sameExecution, type RemoteTaskRecord, type WorkerRegistration,
+import { RemoteAssignmentSchema, WorkerRejectedError, WorkerRequestSchema, executionIdentity, sameExecution, type RemoteTaskRecord, type WorkerRegistration,
   type RemoteProjectRequest, type RemoteProjectReply, type WorkerRequest, type WorkerResponse } from '../core/worker-pool/remoteProtocol.js';
 
 const doubles = vi.hoisted(() => ({
@@ -64,18 +64,22 @@ function fixture() {
     if (record === undefined || 'now' in request && record.assignment.leaseExpiresAt <= request.now) {
       return { kind: 'updated', record: null };
     }
+    if (request.kind === 'execution') {
+      if (request.command.kind !== 'record') throw new Error('Unexpected execution command in scheduler fixture');
+      return { kind: 'execution', response: { kind: 'record', acknowledgedSequence: request.command.record.sequence } };
+    }
     if (request.kind === 'renew') record.assignment.leaseExpiresAt = request.leaseExpiresAt;
     else if (request.kind === 'fail') { record.status = 'failed'; record.failureReason = request.reason; }
     else if (request.kind === 'finish') record.status = request.success ? 'completed' : 'failed';
-    else throw new Error('Unexpected execution request in scheduler fixture');
+    else throw new Error('Unexpected project request in scheduler fixture');
     return { kind: 'updated', record: structuredClone(record) };
   });
   const pool = {
     setRemoteWorkers: vi.fn(), dispatch: vi.fn(async () => {}), remoteRecords: () => snapshotAvailable ? structuredClone(records) : [],
     hasProjectSnapshot: () => snapshotAvailable,
     hasCompleteSnapshot: () => snapshotAvailable, restore: vi.fn(async () => {}),
-    project: () => ({ inspect: async () => ({ concurrency: 2, available: true, tasks: [] }),
-      remote, start: async () => ({ kind: 'declined' as const }), setWaitingReasons: async () => ({ kind: 'updated' as const }), close: async () => {} }),
+    project: vi.fn((projectId: string) => projectId === '/project' ? ({ inspect: async () => ({ concurrency: 2, available: true, tasks: [] }),
+      remote, start: async () => ({ kind: 'declined' as const }), setWaitingReasons: async () => ({ kind: 'updated' as const }), close: async () => {} }) : undefined),
     pull: vi.fn((workerName: string) => pending[0] === undefined ? undefined : { projectId: '/project', taskName: pending[0], workerName }),
     decline: vi.fn(), release: vi.fn(), close: async () => {},
     get activeTaskCount() { return records.filter((record) => record.status === 'running').length; },
@@ -183,6 +187,35 @@ it.each([
       expect(f.messages.filter((message) => message.kind === 'execution')).toEqual([]);
       expect(JSON.stringify(f.messages).includes('fake-runtime-distributed-key')).toBe(false);
     }
+  } finally { await runtime.close(); }
+});
+
+it('routes repeated log records to their project without redispatching all workers', async () => {
+  const f = fixture(); const runtime = f.makeRuntime();
+  try {
+    await runtime.restore(); await f.connect(runtime);
+    await f.send(runtime, f.message({ kind: 'pull' as const }));
+    const assignment = executionIdentity(f.records[0]!.assignment);
+    f.pool.dispatch.mockClear();
+    f.pool.project.mockClear();
+    f.operations.length = 0;
+    f.messages.length = 0;
+
+    const requests = [1, 2, 3].map((sequence) => {
+      const data = Buffer.from(`entry-${sequence}\n`);
+      return WorkerRequestSchema.parse(f.message({ kind: 'execution' as const, assignment,
+        command: { kind: 'record' as const, record: { sequence, runSlug: 'test-run', path: 'logs/session.jsonl',
+          offset: (sequence - 1) * data.length, mode: 'append' as const, final: true,
+          data: data.toString('base64'), sha256: createHash('sha256').update(data).digest('hex') } } }));
+    });
+    for (const request of requests) await f.send(runtime, request);
+
+    expect(f.pool.dispatch).not.toHaveBeenCalled();
+    expect(f.pool.project.mock.calls).toEqual([['/project'], ['/project'], ['/project']]);
+    expect(f.operations.map((operation) => operation.kind)).toEqual(['execution', 'execution', 'execution']);
+    expect(f.messages).toEqual(requests.map((request, index) => expect.objectContaining({
+      kind: 'execution', requestId: request.requestId, response: { kind: 'record', acknowledgedSequence: index + 1 },
+    })));
   } finally { await runtime.close(); }
 });
 

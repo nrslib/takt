@@ -162,7 +162,7 @@ export class RemoteWorkerRuntime {
   receive(token: string, request: WorkerRequest, sink: WorkerConnectionSink): Promise<void> {
     return this.serialize(async () => {
       if (this.closed) throw new WorkerRejectedError('Daemon worker listener is stopping');
-      await this.refresh();
+      if (request.kind !== 'execution' || request.command.kind === 'credentials') await this.refresh();
       await this.registry.authorize(token, async (registration) => {
         if (registration.name !== request.workerId || registration.registrationGeneration !== request.registrationGeneration) {
           throw new WorkerRejectedError('Worker registration does not match the connection');
