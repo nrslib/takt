@@ -72,6 +72,12 @@ describe('OpenCodeClient permissions', () => {
       expect(result.status).toBe('done');
       expect(promptAsync.mock.calls[0]![0].tools.bash).toBe(false);
       expect(promptAsync.mock.calls[0]![0].tools.read).toBe(true);
+      expect(promptAsync.mock.calls[0]![0].tools.edit).toBe(true);
+      expect(promptAsync.mock.calls[0]![0].tools.write).toBe(true);
+      const serverConfig = createOpencodeMock.mock.calls[0]![0].config as { plugin: unknown[] };
+      expect(serverConfig.plugin).toEqual(expect.arrayContaining([
+        [expect.stringMatching(/readonly-directory-guard\.js$/), { readonlyDirectories: [referenceDirectory] }],
+      ]));
       expect(sessionCreate.mock.calls[0]![0].permission).toContainEqual({
         permission: 'edit', pattern: join(referenceDirectory, '*'), action: 'deny',
       });

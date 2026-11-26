@@ -694,6 +694,26 @@ describe('buildRawTaktProvidersOrThrow', () => {
     });
   });
 
+  it('should round-trip OpenCode readonlyDirectories through the strict normalized selector schema', () => {
+    const directories = ['/refs/api'];
+
+    expect(buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'opencode',
+        providerOptions: { opencode: { readonlyDirectories: directories } },
+      },
+    })).toEqual({
+      selector: {
+        provider: 'opencode',
+        provider_options: { opencode: { readonly_directories: directories } },
+      },
+    });
+    expect(() => NormalizedTaktSelectorProviderEntrySchema.parse({
+      provider: 'opencode',
+      providerOptions: { opencode: { readonlyDirectories: [''] } },
+    })).toThrow();
+  });
+
   it.each([true, false])('should preserve Codex fastMode=%s through the strict normalized selector schema', (fastMode) => {
     const providerOptions: StepProviderOptions = {
       codex: { fastMode },

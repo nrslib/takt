@@ -305,6 +305,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/observability-compose.test.ts',
   'src/__tests__/opencode-coerce-tool-args.test.ts',
   'src/__tests__/opencode-list-tool-shim.test.ts',
+  'src/__tests__/opencode-readonly-directory-guard.test.ts',
   'src/__tests__/opencode-types.test.ts',
   'src/__tests__/opencode-v2-transport.test.ts',
   'src/__tests__/orderReader.test.ts',

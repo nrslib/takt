@@ -41,6 +41,20 @@ export function isOpenCodeExternalDirectoryRequestAllowed(resources: readonly st
   });
 }
 
+export function isOpenCodePathWithinReadonlyDirectories(
+  pathname: string,
+  directories: readonly string[],
+): boolean {
+  if (!isAbsolute(pathname)) {
+    throw new Error(`OpenCode write path must be absolute: ${pathname}`);
+  }
+  const canonicalPath = resolveRequestedDirectory(pathname);
+  return normalizeOpenCodeExternalDirectories(directories).some((root) => {
+    const child = relative(root, canonicalPath);
+    return child === '' || child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+  });
+}
+
 export function normalizeOpenCodeExternalDirectories(
   directories: readonly string[] | undefined,
 ): string[] {

@@ -194,6 +194,17 @@ function buildV1ServerConfig(
   workspaceDirectories?: readonly string[],
   readonlyDirectories?: readonly string[],
 ): Record<string, unknown> {
+  const readonlyDirectoryList = readonlyDirectories ?? [];
+  const plugins: Array<string | [string, Record<string, unknown>]> = [
+    pluginPath('coerce-tool-args.js'),
+    ...(versionAllowsListToolShim(runtime.version) ? [pluginPath('list-tool.js')] : []),
+  ];
+  if (readonlyDirectoryList.length > 0) {
+    plugins.push([
+      pluginPath('readonly-directory-guard.js'),
+      { readonlyDirectories: [...readonlyDirectoryList] },
+    ]);
+  }
   const v1ProviderConfig: Record<string, unknown> = {
     ...(apiKey === undefined ? {} : { opencode: { options: { apiKey } } }),
   };
@@ -208,10 +219,7 @@ function buildV1ServerConfig(
   }
   return {
     ...(model === undefined ? {} : { model, small_model: model }),
-    plugin: [
-      pluginPath('coerce-tool-args.js'),
-      ...(versionAllowsListToolShim(runtime.version) ? [pluginPath('list-tool.js')] : []),
-    ],
+    plugin: plugins,
     permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist, workspaceDirectories, readonlyDirectories),
     ...(Object.keys(v1ProviderConfig).length === 0 ? {} : { provider: v1ProviderConfig }),
     agent: {
