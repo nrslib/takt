@@ -7,6 +7,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { z } from 'zod';
 import { resolveProviderAlias } from '../../../shared/types/provider.js';
 import { CODEX_SESSION_CONTRACT } from '../../../shared/codex-session-contract.js';
 import { writeFileAtomic } from '../../../shared/utils/atomic-file.js';
@@ -85,27 +86,39 @@ import type { PersonaSessionData } from '../types.js';
 
 export type { PersonaSessionData };
 
+const StoredSessionDataSchema = z.object({
+  personaSessions: z.record(z.string(), z.string()),
+  provider: z.string().optional(),
+  codexSessionContract: z.string().optional(),
+});
+
+function readStoredSessionData(sessionPath: string): z.infer<typeof StoredSessionDataSchema> | undefined {
+  let content: string;
+  try {
+    content = readFileSync(sessionPath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  return StoredSessionDataSchema.parse(JSON.parse(content));
+}
+
 /**
  * Read session data from a file path.
- * Returns empty record if file doesn't exist, is malformed, or provider has changed.
+ * Returns empty record if file doesn't exist or its provider contract has changed.
  */
 function readSessionData(sessionPath: string, currentProvider?: string): Record<string, string> {
-  if (!existsSync(sessionPath)) return {};
-  try {
-    const content = readFileSync(sessionPath, 'utf-8');
-    const data = JSON.parse(content) as PersonaSessionData;
-    // Historical "claude" metadata belongs to headless. Canonicalize only the current
-    // selection so the SDK alias cannot accidentally resume those sessions.
-    if (currentProvider && data.provider !== resolveProviderAlias(currentProvider)) {
-      return {};
-    }
-    if (resolveProviderAlias(currentProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT) {
-      return {};
-    }
-    return data.personaSessions || {};
-  } catch {
+  const data = readStoredSessionData(sessionPath);
+  if (data === undefined) return {};
+  // Historical "claude" metadata belongs to headless. Canonicalize only the current
+  // selection so the SDK alias cannot accidentally resume those sessions.
+  if (currentProvider && data.provider !== resolveProviderAlias(currentProvider)) {
     return {};
   }
+  if (resolveProviderAlias(currentProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT) {
+    return {};
+  }
+  return data.personaSessions;
 }
 
 /**
@@ -128,21 +141,14 @@ function updateSessionData(
   ensureSessionDir();
 
   let sessions: Record<string, string> = {};
-  let existingProvider: string | undefined;
-  if (existsSync(sessionPath)) {
-    try {
-      const content = readFileSync(sessionPath, 'utf-8');
-      const data = JSON.parse(content) as PersonaSessionData;
-      existingProvider = data.provider;
-      // If provider changed, discard old sessions
-      if ((provider && existingProvider && existingProvider !== provider)
-        || ((provider ?? existingProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT)) {
-        sessions = {};
-      } else {
-        sessions = data.personaSessions || {};
-      }
-    } catch {
-      sessions = {};
+  const stored = readStoredSessionData(sessionPath);
+  const existingProvider = stored?.provider;
+  if (stored !== undefined) {
+    const providerChanged = provider && existingProvider && existingProvider !== provider;
+    const codexContractChanged = (provider ?? existingProvider) === 'codex'
+      && stored.codexSessionContract !== CODEX_SESSION_CONTRACT;
+    if (!providerChanged && !codexContractChanged) {
+      sessions = stored.personaSessions;
     }
   }
 
