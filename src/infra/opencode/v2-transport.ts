@@ -6,7 +6,7 @@ import type { OpenCodeStreamEvent } from './OpenCodeStreamHandler.js';
 import { TAKT_V2_METADATA_KEY, TAKT_V2_PLUGIN_ID, toV2Tools } from './v2-contract.js';
 import { v2EventTranslator } from './v2-events.js';
 import { OPEN_CODE_MANAGED_TOOL_IDS } from './types.js';
-import { buildOpenCodeV2ExternalDirectoryRules } from './external-directories.js';
+import { buildOpenCodeV2ExternalDirectoryRules, normalizeOpenCodeExternalDirectories, normalizeOpenCodeWorkspaceDirectories } from './external-directories.js';
 
 const managedTools = new Set(OPEN_CODE_MANAGED_TOOL_IDS);
 // v2 records session state changes as messages. They carry no model-facing
@@ -157,9 +157,14 @@ export async function createV2Transport(baseUrl: string, password: string, mcpSe
               ? [...deniedActions].map((action) => ({ action, resource: '*', effect: 'deny' as const }))
               : [{ action: '*', resource: '*', effect: 'deny' as const }]),
             ...[...actions].map((action) => ({ action, resource: '*', effect: 'allow' as const })),
-            ...buildOpenCodeV2ExternalDirectoryRules(input.externalDirectoryAllowlist),
+            ...buildOpenCodeV2ExternalDirectoryRules(input.externalDirectoryAllowlist, input.workspaceAccess?.directories),
           ],
-          metadata: { ...session.metadata, [TAKT_V2_METADATA_KEY]: { system: input.system ?? '', tools } },
+          metadata: { ...session.metadata, [TAKT_V2_METADATA_KEY]: { system: input.system ?? '', tools,
+            ...(input.workspaceAccess === undefined ? {} : {
+              workspaceDirectories: normalizeOpenCodeWorkspaceDirectories(input.workspaceAccess.directories),
+              contextDirectories: normalizeOpenCodeExternalDirectories(input.externalDirectoryAllowlist),
+            }),
+          } },
         }, options);
         await client.session.switchAgent({ sessionID: input.sessionID, agent: input.agent }, options);
         await client.session.switchModel({ sessionID: input.sessionID, model: {

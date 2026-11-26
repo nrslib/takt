@@ -86,6 +86,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 
   return {
     cwd: options.cwd,
+    ...(options.openCodeWorkspaceAccess === undefined ? {} : { workspaceAccess: options.openCodeWorkspaceAccess }),
     ...(options.openCodeExternalDirectories === undefined
       ? {}
       : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),

@@ -3,7 +3,12 @@
  */
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
-import { afterEach, describe, it, expect } from 'vitest';
+import * as fileSystem from 'node:fs';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+vi.mock('node:fs', async (load) => {
+  const actual = await load<typeof import('node:fs')>();
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import {
@@ -20,6 +25,8 @@ import {
   buildOpenCodeV1ExternalDirectoryPermissions,
   buildOpenCodeV2ExternalDirectoryRules,
   normalizeOpenCodeExternalDirectories,
+  normalizeOpenCodeWorkspaceDirectories,
+  isOpenCodeExternalDirectoryRequestAllowed,
 } from '../infra/opencode/external-directories.js';
 
 const temporaryDirectories: string[] = [];
@@ -404,6 +411,71 @@ describe('buildOpenCodeSessionPermission', () => {
 });
 
 describe('OpenCode external directory rules', () => {
+  it('retains filesystem roots for workspace access while rejecting them for context access', () => {
+    const root = realpathSync(parse(tmpdir()).root);
+    expect(normalizeOpenCodeWorkspaceDirectories([root, root])).toEqual([root]);
+    expect(() => normalizeOpenCodeExternalDirectories([root])).toThrow();
+  });
+
+  it('authorizes descendants of a registered filesystem root while rejecting them outside other roots', () => {
+    const { canonicalContextDirectory } = createExternalContextDirectories();
+    const root = parse(canonicalContextDirectory).root;
+    const resources = [join(canonicalContextDirectory, '*'), join(canonicalContextDirectory, 'new', 'nested', '*')];
+    const other = join(canonicalContextDirectory, 'other');
+    mkdirSync(other);
+    expect(isOpenCodeExternalDirectoryRequestAllowed(resources, [root])).toBe(true);
+    expect(isOpenCodeExternalDirectoryRequestAllowed(resources, [other])).toBe(false);
+  });
+
+  it('interprets a root directory request without losing its path separator', () => {
+    const { canonicalContextDirectory } = createExternalContextDirectories();
+    const root = parse(canonicalContextDirectory).root;
+    const resources = [join(root, '*')];
+    expect(isOpenCodeExternalDirectoryRequestAllowed(resources, [root])).toBe(true);
+    expect(isOpenCodeExternalDirectoryRequestAllowed(resources, [canonicalContextDirectory])).toBe(false);
+  });
+
+  it('propagates unexpected filesystem errors during request authorization', () => {
+    const error = Object.assign(new Error('I/O failed'), { code: 'EIO' });
+    vi.mocked(fileSystem.realpathSync).mockImplementationOnce(() => { throw error; });
+    expect(() => isOpenCodeExternalDirectoryRequestAllowed(['/registered/*'], ['/registered'])).toThrow(error);
+  });
+  it.each(['api*', 'api?'])('authorizes literal workspace roots and new descendants while rejecting lookalikes (%s)', (name) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-workspace-literal-')));
+    temporaryDirectories.push(root);
+    const registered = join(root, name);
+    const outside = join(root, name === 'api*' ? 'api?' : 'apix');
+    mkdirSync(registered); mkdirSync(outside);
+    const alias = join(root, 'alias'); symlinkSync(registered, alias, 'dir');
+    const roots = normalizeOpenCodeWorkspaceDirectories([registered, alias, registered]);
+    expect(roots).toEqual([registered]);
+    expect(() => normalizeOpenCodeExternalDirectories([registered])).toThrow();
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(registered, '*')], roots)).toBe(true);
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(registered, 'new', 'nested', '*')], roots)).toBe(true);
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(outside, '*')], roots)).toBe(false);
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(registered, '*'), join(outside, '*')], roots)).toBe(false);
+    symlinkSync(outside, join(registered, 'escape'), 'dir');
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(registered, 'escape', '*')], roots)).toBe(false);
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(registered, 'escape', 'new', '*')], roots)).toBe(false);
+    expect(isOpenCodeExternalDirectoryRequestAllowed([], roots)).toBe(false);
+    expect(isOpenCodeExternalDirectoryRequestAllowed(['**'], roots)).toBe(false);
+    expect(isOpenCodeExternalDirectoryRequestAllowed([join(registered, '*')], [])).toBe(false);
+  });
+
+  it('routes even empty workspace policies to request evaluation while retaining context edits', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    expect(buildOpenCodeV1ExternalDirectoryPermissions([contextDirectory], [])).toEqual({ external_directory: 'ask' });
+    expect(buildOpenCodeV2ExternalDirectoryRules([contextDirectory], [])).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'ask' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+    expect(buildOpenCodeSessionPermission('full', undefined, undefined, undefined, undefined, [contextDirectory], [])
+      .filter((rule) => rule.permission === 'external_directory')).toEqual([
+      { permission: 'external_directory', pattern: '*', action: 'ask' },
+    ]);
+    expect(() => normalizeOpenCodeWorkspaceDirectories(['relative'])).toThrow();
+  });
+
   it('builds v1 external permissions without an edit deny rule', () => {
     const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
     expect(buildOpenCodeV1ExternalDirectoryPermissions([contextDirectory])).toEqual({

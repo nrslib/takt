@@ -2,6 +2,9 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildFormalSpecGenerationPrompt } from '../features/interactive/formalSpecPrompts.js';
 import {
   MockEventStream,
@@ -41,6 +44,31 @@ vi.mock('../infra/opencode/server-process.js', () => ({
 }));
 
 describe('OpenCodeClient permissions', () => {
+  it.each(['full', 'readonly'] as const)('checks every external request against literal workspace roots without persistent approval (%s)', async (permissionMode) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-permission-workspace-')));
+    const repository = join(root, 'api*'); const outside = join(root, 'api?');
+    mkdirSync(repository); mkdirSync(outside);
+    const requests = [[join(repository, '*')], [join(outside, '*')], [join(repository, '*'), join(outside, '*')], []];
+    const stream = new MockEventStream([
+      ...requests.map((patterns, index) => ({ type: 'permission.asked', properties: {
+        id: `external-${index}`, sessionID: 'workspace-session', permission: 'external_directory', patterns, always: patterns,
+      } })), sessionIdle('workspace-session'),
+    ], 'workspace-session');
+    const reply = vi.fn().mockResolvedValue({ data: {} });
+    createOpencodeMock.mockResolvedValue({ client: {
+      session: { create: vi.fn(async () => ({ data: { id: 'workspace-session' } })), promptAsync: vi.fn(async () => {}), abort: successfulSessionAbort() },
+      event: { subscribe: vi.fn(async () => ({ stream })) }, permission: { reply },
+    }, server: { close: vi.fn() } });
+    try {
+      const result = await new OpenCodeClient().call('manager', 'inspect', {
+        cwd: root, model: 'probe/model', permissionMode, workspaceAccess: { ownerId: 'manager', directories: [repository] },
+      });
+      expect(result.status).toBe('done');
+      expect(reply.mock.calls.map(([input]) => input.reply)).toEqual(['once', 'reject', 'reject', 'reject']);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('enforces strict tools and permission replies across the SDK boundary', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const permissions = ['read', 'takt_takt_get_run', 'write', 'takt_takt_create_goal'];

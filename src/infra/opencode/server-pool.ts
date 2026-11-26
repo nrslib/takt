@@ -11,10 +11,11 @@ import { cleanupPendingModelSelectionSessions } from './model-selection-session-
 import { startOpenCodeServer } from './server-process.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime, type OpenCodeRuntime } from './runtime.js';
 import { buildV2ServerConfig } from './v2-config.js';
-import { buildOpenCodeV1ExternalDirectoryPermissions, normalizeOpenCodeExternalDirectories } from './external-directories.js';
+import { buildOpenCodeV1ExternalDirectoryPermissions, normalizeOpenCodeExternalDirectories, normalizeOpenCodeWorkspaceDirectories } from './external-directories.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import type { ManagedOpenCodeTransport, OpenCodeTransport } from './transport.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
+import type { OpenCodeWorkspaceAccess } from '../providers/types.js';
 
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
@@ -28,6 +29,7 @@ const log = createLogger('opencode-sdk');
 export type OpencodeClient = OpenCodeTransport;
 
 interface SharedServer {
+  entry: SharedServerEntry;
   key: string;
   externalDirectoryAllowlist: readonly string[];
   client: ManagedOpenCodeTransport;
@@ -48,6 +50,9 @@ interface SharedServerQueueEntry {
 
 interface SharedServerEntry {
   externalDirectoryAllowlist: readonly string[];
+  workspaceAccess?: OpenCodeWorkspaceAccess;
+  pendingAcquisitions: number;
+  retirement?: { promise: Promise<void>; resolve(): void; reject(error: unknown): void };
   server?: SharedServer;
   initPromise?: Promise<SharedServer>;
 }
@@ -71,6 +76,9 @@ export interface AcquiredOpenCodeClient {
 }
 
 const sharedServers = new Map<string, SharedServerEntry>();
+const retiringWorkspaceEntries = new Set<SharedServerEntry>();
+const workspaceGenerations = new Map<string, { identity: string }>();
+const pendingWorkspaceAcquisitions = new Map<string, Set<Promise<void>>>();
 const ownedSharedServers = new Set<SharedServer>();
 const pendingServerInitializations = new Set<Promise<SharedServer>>();
 const pendingV1ModelProbes = new Set<Promise<number>>();
@@ -96,18 +104,20 @@ function buildSharedServerKey(
   contextWindow: number | undefined,
   directory: string | undefined,
   outputLimit: number | undefined,
+  workspaceAccess: OpenCodeWorkspaceAccess | undefined,
 ): string {
   const runtime = openCodeRuntimeSelection();
   return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
     ...(runtime.generation === 'v2' ? [skillsEnabled] : []), externalDirectoryAllowlist, contextWindow,
     ...(runtime.generation === 'v1' && contextWindow !== undefined ? [directory, outputLimit] : []),
+    ...(workspaceAccess === undefined ? [] : [workspaceAccess]),
   ]);
 }
 
-function getSharedServerEntry(key: string, externalDirectoryAllowlist: readonly string[]): SharedServerEntry {
+function getSharedServerEntry(key: string, externalDirectoryAllowlist: readonly string[], workspaceAccess: OpenCodeWorkspaceAccess | undefined): SharedServerEntry {
   const existing = sharedServers.get(key);
   if (existing !== undefined) return existing;
-  const entry: SharedServerEntry = { externalDirectoryAllowlist };
+  const entry: SharedServerEntry = { externalDirectoryAllowlist, workspaceAccess, pendingAcquisitions: 0 };
   sharedServers.set(key, entry);
   return entry;
 }
@@ -165,6 +175,7 @@ function buildV1ServerConfig(
   externalDirectoryAllowlist: readonly string[],
   contextWindow?: number,
   outputLimit?: number,
+  workspaceDirectories?: readonly string[],
 ): Record<string, unknown> {
   const v1ProviderConfig: Record<string, unknown> = {
     ...(apiKey === undefined ? {} : { opencode: { options: { apiKey } } }),
@@ -184,7 +195,7 @@ function buildV1ServerConfig(
       pluginPath('coerce-tool-args.js'),
       ...(versionAllowsListToolShim(runtime.version) ? [pluginPath('list-tool.js')] : []),
     ],
-    permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
+    permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist, workspaceDirectories),
     ...(Object.keys(v1ProviderConfig).length === 0 ? {} : { provider: v1ProviderConfig }),
     agent: {
       [TAKT_AGENT]: {
@@ -284,6 +295,7 @@ async function createSharedServer(
   externalDirectoryAllowlist: readonly string[],
   contextWindow: number | undefined,
   outputLimit: number | undefined,
+  entry: SharedServerEntry,
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
@@ -294,8 +306,8 @@ async function createSharedServer(
     timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
     ...(childProcessEnv === undefined ? {} : { childProcessEnv }),
     config: runtime.generation === 'v2' ? buildV2ServerConfig(
-      model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist, contextWindow,
-    ) : buildV1ServerConfig(runtime, model, apiKey, serverConfig, externalDirectoryAllowlist, contextWindow, outputLimit),
+      model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist, contextWindow, entry.workspaceAccess,
+    ) : buildV1ServerConfig(runtime, model, apiKey, serverConfig, externalDirectoryAllowlist, contextWindow, outputLimit, entry.workspaceAccess?.directories),
   });
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -321,6 +333,7 @@ async function createSharedServer(
   };
   log.debug('OpenCode server started', { model, port });
   const sharedServer: SharedServer = {
+    entry,
     key,
     externalDirectoryAllowlist,
     client: openCodeServer.client,
@@ -347,72 +360,104 @@ export async function acquireOpenCodeClient(
   externalDirectoryAllowlist?: readonly string[],
   contextWindow?: number,
   directory?: string,
+  workspaceAccess?: OpenCodeWorkspaceAccess,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
   const normalizedExternalDirectories = normalizeOpenCodeExternalDirectories(externalDirectoryAllowlist);
-  let outputLimit: number | undefined;
-  if (openCodeRuntimeSelection().generation === 'v1' && contextWindow !== undefined) {
-    if (model === undefined || directory === undefined) {
-      throw new Error('OpenCode v1 numeric context window requires a model and project directory');
-    }
-    const runtime = await resolveOpenCodeRuntime(abortSignal);
-    throwIfForcedShutdownRequested();
-    const probePromise = probeV1ModelOutputLimit(
-      runtime, model, directory, apiKey, childProcessEnv,
-      preparedMcp?.serverConfig, normalizedExternalDirectories, abortSignal,
-    ).catch((error: unknown) => {
-      recordServerStopFailures(error);
-      throw error;
-    });
-    pendingV1ModelProbes.add(probePromise);
-    try {
-      outputLimit = await probePromise;
-    } finally {
-      pendingV1ModelProbes.delete(probePromise);
-    }
+  const normalizedWorkspace = workspaceAccess === undefined ? undefined : {
+    ownerId: workspaceAccess.ownerId, directories: normalizeOpenCodeWorkspaceDirectories(workspaceAccess.directories),
+  };
+  const generation = normalizedWorkspace === undefined ? undefined : selectWorkspaceGeneration(normalizedWorkspace);
+  let completeAcquisition!: () => void;
+  const acquisition = new Promise<void>((done) => { completeAcquisition = done; });
+  const pending = normalizedWorkspace === undefined ? undefined
+    : pendingWorkspaceAcquisitions.get(normalizedWorkspace.ownerId) ?? new Set<Promise<void>>();
+  if (normalizedWorkspace !== undefined && pending !== undefined) {
+    pending.add(acquisition);
+    pendingWorkspaceAcquisitions.set(normalizedWorkspace.ownerId, pending);
   }
-  throwIfAborted(abortSignal);
-  throwIfForcedShutdownRequested();
-  const key = buildSharedServerKey(
-    model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled,
-    normalizedExternalDirectories, contextWindow, directory, outputLimit,
-  );
-  const entry = getSharedServerEntry(key, normalizedExternalDirectories);
-  const sessionKey = sessionId ?? '';
-  const acquireSelectedServer = (server: SharedServer): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> => {
-    executionContext?.selectSdk(server.client.sdkState);
+  try {
+    let outputLimit: number | undefined;
+    if (openCodeRuntimeSelection().generation === 'v1' && contextWindow !== undefined) {
+      if (model === undefined || directory === undefined) {
+        throw new Error('OpenCode v1 numeric context window requires a model and project directory');
+      }
+      const runtime = await resolveOpenCodeRuntime(abortSignal);
+      throwIfForcedShutdownRequested();
+      const probePromise = probeV1ModelOutputLimit(
+        runtime, model, directory, apiKey, childProcessEnv,
+        preparedMcp?.serverConfig, normalizedExternalDirectories, abortSignal,
+      ).catch((error: unknown) => {
+        recordServerStopFailures(error);
+        throw error;
+      });
+      pendingV1ModelProbes.add(probePromise);
+      try {
+        outputLimit = await probePromise;
+      } finally {
+        pendingV1ModelProbes.delete(probePromise);
+      }
+    }
     throwIfAborted(abortSignal);
     throwIfForcedShutdownRequested();
-    return acquireSharedServer(server, sessionKey, abortSignal);
-  };
-  if (entry.initPromise !== undefined) {
-    const server = await entry.initPromise;
-    return acquireSelectedServer(server);
-  }
-  if (entry.server !== undefined) return acquireSelectedServer(entry.server);
+    const key = buildSharedServerKey(
+      model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled,
+      normalizedExternalDirectories, contextWindow, directory, outputLimit,
+      normalizedWorkspace,
+    );
+    const currentGeneration = normalizedWorkspace === undefined || workspaceGenerations.get(normalizedWorkspace.ownerId) === generation;
+    const entry: SharedServerEntry = currentGeneration ? getSharedServerEntry(key, normalizedExternalDirectories, normalizedWorkspace)
+      : { externalDirectoryAllowlist: normalizedExternalDirectories, workspaceAccess: normalizedWorkspace, pendingAcquisitions: 0 } satisfies SharedServerEntry;
+    entry.pendingAcquisitions++;
+    if (!currentGeneration) void retireSharedServerEntry(key, entry);
+    const sessionKey = sessionId ?? '';
+    const acquireSelectedServer = (server: SharedServer): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> => {
+      executionContext?.selectSdk(server.client.sdkState);
+      throwIfAborted(abortSignal);
+      throwIfForcedShutdownRequested();
+      return acquireSharedServer(server, sessionKey, abortSignal);
+    };
+    try {
+      if (entry.initPromise !== undefined) {
+        const server = await entry.initPromise;
+        return await acquireSelectedServer(server);
+      }
+      if (entry.server !== undefined) return await acquireSelectedServer(entry.server);
 
-  const initPromise = createSharedServer(
-    key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled,
-    normalizedExternalDirectories, contextWindow, outputLimit,
-  )
-    .then((server) => {
-      entry.server = server;
-      server.onError((error) => invalidateSharedServer(server, error));
-      return server;
-    })
-    .catch((error: unknown) => {
-      recordServerStopFailures(error);
-      throw error;
-    })
-    .finally(() => {
-      if (entry.initPromise === initPromise) entry.initPromise = undefined;
-      pendingServerInitializations.delete(initPromise);
-    });
-  entry.initPromise = initPromise;
-  pendingServerInitializations.add(initPromise);
-  const server = await initPromise;
-  return acquireSelectedServer(server);
+      const initPromise = createSharedServer(
+        key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled,
+        normalizedExternalDirectories, contextWindow, outputLimit, entry,
+      )
+        .then((server) => {
+          entry.server = server;
+          server.onError((error) => invalidateSharedServer(server, error));
+          return server;
+        })
+        .catch((error: unknown) => {
+          recordServerStopFailures(error);
+          throw error;
+        })
+        .finally(() => {
+          if (entry.initPromise === initPromise) entry.initPromise = undefined;
+          pendingServerInitializations.delete(initPromise);
+        });
+      entry.initPromise = initPromise;
+      pendingServerInitializations.add(initPromise);
+      const server = await initPromise;
+      return await acquireSelectedServer(server);
+    } finally {
+      entry.pendingAcquisitions--;
+      finishRetiredServer(entry);
+    }
+  } finally {
+    completeAcquisition();
+    pending?.delete(acquisition);
+    if (normalizedWorkspace !== undefined && pending?.size === 0
+      && pendingWorkspaceAcquisitions.get(normalizedWorkspace.ownerId) === pending) {
+      pendingWorkspaceAcquisitions.delete(normalizedWorkspace.ownerId);
+    }
+  }
 }
 
 function acquireSharedServer(
@@ -454,6 +499,7 @@ function releaseClient(server: SharedServer, sessionKey: string): void {
   }
   if (queue !== undefined) server.sessionQueues.delete(sessionKey);
   server.sessionBusy.delete(sessionKey);
+  finishRetiredServer(server.entry);
 }
 
 function removeQueuedClient(server: SharedServer, sessionKey: string, entry: SharedServerQueueEntry): void {
@@ -466,6 +512,55 @@ function removeQueuedClient(server: SharedServer, sessionKey: string, entry: Sha
   if (entry.signal !== undefined && entry.onAbort !== undefined) {
     entry.signal.removeEventListener('abort', entry.onAbort);
   }
+  finishRetiredServer(server.entry);
+}
+
+function finishRetiredServer(entry: SharedServerEntry): void {
+  if (entry.retirement === undefined || entry.pendingAcquisitions > 0 || entry.initPromise !== undefined) return;
+  const server = entry.server;
+  if (server !== undefined && (server.sessionBusy.size > 0 || server.sessionQueues.size > 0)) return;
+  if (server === undefined) entry.retirement.resolve();
+  else void server.close().then(entry.retirement.resolve, entry.retirement.reject);
+}
+
+function retireSharedServerEntry(key: string, entry: SharedServerEntry): Promise<void> {
+  if (entry.retirement !== undefined) return entry.retirement.promise;
+  if (sharedServers.get(key) === entry) sharedServers.delete(key);
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+  entry.retirement = { promise, resolve, reject };
+  retiringWorkspaceEntries.add(entry);
+  void promise.then(() => retiringWorkspaceEntries.delete(entry), () => retiringWorkspaceEntries.delete(entry));
+  finishRetiredServer(entry);
+  return promise;
+}
+
+function selectWorkspaceGeneration(access: OpenCodeWorkspaceAccess): { identity: string } {
+  const identity = JSON.stringify(access.directories);
+  const previous = workspaceGenerations.get(access.ownerId);
+  if (previous?.identity === identity) return previous;
+  const current = { identity };
+  workspaceGenerations.set(access.ownerId, current);
+  for (const [key, entry] of sharedServers) {
+    if (entry.workspaceAccess?.ownerId === access.ownerId) void retireSharedServerEntry(key, entry);
+  }
+  return current;
+}
+
+export async function closeOpenCodeWorkspaceServers(ownerId: string): Promise<void> {
+  workspaceGenerations.delete(ownerId);
+  await Promise.all(pendingWorkspaceAcquisitions.get(ownerId) ?? []);
+  const closing = new Set<Promise<void>>();
+  for (const [key, entry] of sharedServers) {
+    if (entry.workspaceAccess?.ownerId === ownerId) closing.add(retireSharedServerEntry(key, entry));
+  }
+  for (const entry of retiringWorkspaceEntries) {
+    if (entry.workspaceAccess?.ownerId === ownerId && entry.retirement !== undefined) closing.add(entry.retirement.promise);
+  }
+  const results = await Promise.allSettled(closing);
+  const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+  if (failures.length > 0) throw new AggregateError(failures, 'Failed to close OpenCode workspace servers');
 }
 
 function createReleaseHandle(server: SharedServer, sessionKey: string): () => void {
@@ -514,6 +609,7 @@ function invalidateSharedServer(server: SharedServer, error: Error): void {
   }
   server.sessionQueues.clear();
   server.sessionBusy.clear();
+  finishRetiredServer(server.entry);
 }
 
 export function resetSharedServerPool(): void {
@@ -521,6 +617,7 @@ export function resetSharedServerPool(): void {
     if (entry.server !== undefined) void entry.server.close().catch(() => undefined);
   }
   sharedServers.clear();
+  workspaceGenerations.clear();
 }
 
 export async function closeOpenCodeServersForExternalDirectories(

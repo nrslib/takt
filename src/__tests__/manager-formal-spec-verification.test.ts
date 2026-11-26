@@ -25,6 +25,25 @@ function fixture(mode = true) {
 }
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(runFormalSpecVerification).mockResolvedValue(verification); });
 afterEach(() => { vi.restoreAllMocks(); });
+it('carries workspace access through both OpenCode verification calls while retaining read-only tools', async () => {
+  const call = vi.fn<ProviderAgent['call']>()
+    .mockResolvedValueOnce({ ...success, content: 'generated specification', sessionId: 'generated' })
+    .mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: 'verified', summary: null } });
+  const executor = createManagerTurnExecutor('/repo', {
+    ctx: { provider: makeProvider({ setup: () => ({ call }) }), providerType: 'opencode', model: 'probe/model', lang: 'ja' },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const openCodeWorkspaceAccess = { ownerId: 'workspace-conversation', directories: ['/repo', '/repo-b', '/repo-c'] };
+  const input = { ...fixture().input, openCodeWorkspaceAccess };
+
+  expect(await executor.execute(input)).toMatchObject({ message: 'verified' });
+
+  expect(call).toHaveBeenCalledTimes(2);
+  for (const [, options] of call.mock.calls) expect(options).toMatchObject({
+    openCodeWorkspaceAccess, permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+  });
+  expect(call.mock.calls[1]![1]).toMatchObject({ allowedTools: ['Read'], allowReadonlyFileRead: true });
+});
 it('forwards generation and interpretation tools with distinct call identities while retaining readonly permissions', async () => {
   const f = fixture();
   const onToolEvent = vi.fn();

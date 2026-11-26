@@ -21,12 +21,18 @@ export interface ProviderImageAttachment {
   path: string;
 }
 
+export interface OpenCodeWorkspaceAccess {
+  readonly ownerId: string;
+  readonly directories: readonly string[];
+}
+
 export interface ProviderCallOptions {
   cwd: string;
   /** Effective native override selected for this call. */
   contextWindow?: number;
   /** TAKT-owned external context directories OpenCode may read for this run. */
   openCodeExternalDirectories?: readonly string[];
+  openCodeWorkspaceAccess?: OpenCodeWorkspaceAccess;
   /** The caller owns session recovery; provider retries must not replay a turn. */
   callerManagedSession?: true;
   /** Keep supplied prepared MCP alive until the caller finishes all attempts. */

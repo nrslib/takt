@@ -129,6 +129,75 @@ describe('OpenCode v2 transport', () => {
     ]);
   });
 
+  it.each([true, false])('allows workspace directories without changing the prompt edit capability (editable=%s)', async (editable) => {
+    const context = createExternalContextDirectory();
+    const repositoryB = createExternalContextDirectory();
+    const repositoryC = createExternalContextDirectory();
+    const transport = await createV2Transport('http://localhost', 'password');
+    const input = {
+      ...prompt, tools: { read: true, write: editable, edit: editable, bash: false },
+      externalDirectoryAllowlist: [context.contextDirectory],
+      workspaceAccess: { ownerId: 'workspace-conversation', directories: [repositoryB.contextDirectory, repositoryC.contextDirectory] },
+    };
+
+    await transport.session.promptAsync(input);
+
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{
+      action: string; resource: string; effect: string;
+    }>;
+    expect(permissions.filter((rule) => rule.action === 'external_directory')).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'ask' },
+    ]);
+    expect(api.session.update.mock.calls[0]![0].metadata.takt).toMatchObject({
+      workspaceDirectories: [repositoryB.canonicalContextDirectory, repositoryC.canonicalContextDirectory].sort(),
+      contextDirectories: [context.canonicalContextDirectory],
+    });
+    const editRules = permissions.filter((rule) => rule.action === 'edit');
+    expect(editRules).toEqual([
+      ...(editable ? [{ action: 'edit', resource: '*', effect: 'allow' }] : []),
+      { action: 'edit', resource: join(context.canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+    expect(api.session.prompt).toHaveBeenCalledOnce();
+  });
+
+  it('keeps context edits denied when the context is inside a writable workspace repository', async () => {
+    const context = createExternalContextDirectory();
+    const repository = realpathSync(join(context.canonicalContextDirectory, '..'));
+    const input = {
+      ...prompt, tools: { read: true, write: true },
+      externalDirectoryAllowlist: [context.contextDirectory],
+      workspaceAccess: { ownerId: 'workspace-conversation', directories: [repository] },
+    };
+
+    await (await createV2Transport('http://localhost', 'password')).session.promptAsync(input);
+
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{
+      action: string; resource: string; effect: string;
+    }>;
+    expect(permissions).toContainEqual({ action: 'external_directory', resource: '*', effect: 'ask' });
+    expect(permissions.filter((rule) => rule.action === 'edit')).toEqual([
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: join(context.canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
+  it('replaces workspace exceptions on the same v2 session after registration changes', async () => {
+    const repositoryB = createExternalContextDirectory();
+    const repositoryC = createExternalContextDirectory();
+    const transport = await createV2Transport('http://localhost', 'password');
+    for (const directories of [[repositoryB.contextDirectory], [repositoryC.contextDirectory]]) {
+      const input = { ...prompt, tools: { read: true, write: true }, workspaceAccess: { ownerId: 'workspace-conversation', directories } };
+      await transport.session.promptAsync(input);
+    }
+
+    expect(api.session.update.mock.calls.map(([input]) => ({ sessionID: input.sessionID,
+      external: input.permissions.filter((rule: { action: string }) => rule.action === 'external_directory'),
+      directories: input.metadata.takt.workspaceDirectories })))
+      .toEqual([repositoryB, repositoryC].map((repository) => ({ sessionID: 's1', external: [
+        { action: 'external_directory', resource: '*', effect: 'ask' },
+      ], directories: [repository.canonicalContextDirectory] })));
+  });
+
   it('switches to the neutral read agent while carrying interpretation instructions and read-only tools', async () => {
     await (await createV2Transport('http://localhost', '')).session.promptAsync({
       ...prompt, agent: 'takt-read', system: 'Interpret verification results.',

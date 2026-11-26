@@ -69,6 +69,32 @@ describe('OpenCode server pool forced shutdown', () => {
     startServerMock.mockReset();
   });
 
+  it('waits for a workspace acquisition probing model metadata before completing owner cleanup', async () => {
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await loadServerPool();
+    const outputLimit = deferred<number>();
+    const probing = deferred<void>();
+    const probeClose = vi.fn(async () => undefined);
+    const workspaceClose = vi.fn(async () => undefined);
+    startServerMock.mockResolvedValueOnce({ ...serverStartResult(probeClose), client: {
+      sdkState: { directory: '/test/managed/opencode', stale: false },
+      getModelOutputLimit: async () => { probing.resolve(); return outputLimit.promise; },
+    } }).mockResolvedValueOnce(serverStartResult(workspaceClose));
+    const acquisition = acquireOpenCodeClient('probe/model', undefined, undefined, undefined,
+      'workspace-session', undefined, false, undefined, undefined, 32000, '/tmp',
+      { ownerId: 'probing-manager', directories: ['/tmp'] });
+    await probing.promise;
+    const closing = closeOpenCodeWorkspaceServers('probing-manager');
+    await expectPromisePending(closing);
+    outputLimit.resolve(4096);
+    const acquired = await acquisition;
+    expect(probeClose).toHaveBeenCalledOnce();
+    expect(workspaceClose).not.toHaveBeenCalled();
+    await expectPromisePending(closing);
+    acquired.release();
+    await closing;
+    expect(workspaceClose).toHaveBeenCalledOnce();
+  });
+
   it('waits for temporary-session cleanup and child exit and shares overlapping shutdown requests', async () => {
     const cleanup = deferred<void>();
     const childExit = deferred<void>();

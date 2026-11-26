@@ -8,6 +8,7 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
 import { openCodeRuntimeSelection } from './runtime.js';
+import { isOpenCodeExternalDirectoryRequestAllowed, normalizeOpenCodeExternalDirectories, normalizeOpenCodeWorkspaceDirectories } from './external-directories.js';
 import { mapsToOpenCodeEditPermission, toOpenCodeMcpServerPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
@@ -839,6 +840,7 @@ export class OpenCodeAttemptRunner {
               options.skillsEnabled,
               executionContext,
               options.externalDirectoryAllowlist,
+              undefined, options.cwd, options.workspaceAccess,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -1194,6 +1196,7 @@ export class OpenCodeAttemptRunner {
       options.externalDirectoryAllowlist,
       options.contextWindow,
       options.cwd,
+      options.workspaceAccess,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1245,6 +1248,7 @@ export class OpenCodeAttemptRunner {
       allowedMcpPermissions,
       options.strictToolAllowlist,
       options.externalDirectoryAllowlist,
+      options.workspaceAccess?.directories,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
@@ -1344,6 +1348,7 @@ export class OpenCodeAttemptRunner {
         ? buildToolGuardRetryPrompt(basePromptText, callState.toolGuardRecovery.freshReason)
         : basePromptText;
     const promptPayload: Record<string, unknown> = {
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.workspaceAccess !== undefined ? { workspaceAccess: options.workspaceAccess } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools && options.externalDirectoryAllowlist !== undefined
@@ -1634,6 +1639,12 @@ export class OpenCodeAttemptRunner {
               permProps.permission,
               options.allowedTools !== undefined ? permissionRuleset : undefined,
             );
+            if (permProps.permission === 'external_directory' && options.workspaceAccess !== undefined) {
+              reply = isOpenCodeExternalDirectoryRequestAllowed(permProps.patterns ?? [], [
+                ...normalizeOpenCodeWorkspaceDirectories(options.workspaceAccess.directories),
+                ...normalizeOpenCodeExternalDirectories(options.externalDirectoryAllowlist),
+              ]) ? 'once' : 'reject';
+            }
             if (openCodeRuntimeSelection().generation === 'v2' && permProps.permission === 'skill') {
               reply = 'reject';
               if (promptTools.skill === true

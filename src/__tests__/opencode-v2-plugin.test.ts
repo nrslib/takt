@@ -1,7 +1,36 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import plugin from '../infra/opencode/plugins/v2-session/index.js';
+import { isOpenCodeExternalDirectoryRequestAllowed } from '../infra/opencode/external-directories.js';
+
+vi.mock('../infra/opencode/external-directories.js', () => ({ isOpenCodeExternalDirectoryRequestAllowed: vi.fn() }));
+beforeEach(() => { vi.mocked(isOpenCodeExternalDirectoryRequestAllowed).mockReset(); });
 
 describe('OpenCode v2 session policy plugin', () => {
+  it('evaluates the current session workspace policy even after a saved allow and preserves other actions', async () => {
+    const policy = { takt: { workspaceDirectories: ['/api*'], contextDirectories: ['/context'] } };
+    const { hooks } = await setup({ a: policy, other: {} });
+    const request = { sessionID: 'a', action: 'external_directory', resources: ['/api*/*'], effect: 'allow' };
+    vi.mocked(isOpenCodeExternalDirectoryRequestAllowed).mockReturnValueOnce(true).mockReturnValueOnce(false).mockReturnValueOnce(false);
+    await hooks.get('evaluate')!(request);
+    expect(request.effect).toBe('allow');
+    expect(isOpenCodeExternalDirectoryRequestAllowed).toHaveBeenLastCalledWith(['/api*/*'], ['/api*', '/context']);
+    request.resources = ['/api?/*'];
+    await hooks.get('evaluate')!(request);
+    expect(request.effect).toBe('deny');
+    policy.takt.workspaceDirectories = [];
+    request.resources = ['/api*/*']; request.effect = 'allow';
+    await hooks.get('evaluate')!(request);
+    expect(request.effect).toBe('deny');
+    expect(isOpenCodeExternalDirectoryRequestAllowed).toHaveBeenLastCalledWith(['/api*/*'], ['/context']);
+    const edit = { ...request, action: 'edit', effect: 'deny' };
+    await hooks.get('evaluate')!(edit);
+    expect(edit.effect).toBe('deny');
+    const other = { ...request, sessionID: 'other', effect: 'ask' };
+    await hooks.get('evaluate')!(other);
+    expect(other.effect).toBe('ask');
+    expect(isOpenCodeExternalDirectoryRequestAllowed).toHaveBeenCalledTimes(3);
+  });
+
   async function setup(policies: Record<string, unknown>) {
     const hooks = new Map<string, (input: Record<string, unknown>) => Promise<void> | void>();
     const dispose = vi.fn(async () => {});
@@ -9,7 +38,7 @@ describe('OpenCode v2 session policy plugin', () => {
       hooks.set(name, callback);
       return { dispose };
     });
-    const context = { session: { hook, get: vi.fn(async ({ sessionID }: { sessionID: string }) => ({ metadata: policies[sessionID] })) }, tool: { hook }, rpc: { register: vi.fn(async () => ({ dispose })) } };
+    const context = { permission: { hook }, session: { hook, get: vi.fn(async ({ sessionID }: { sessionID: string }) => ({ metadata: policies[sessionID] })) }, tool: { hook }, rpc: { register: vi.fn(async () => ({ dispose })) } };
     const cleanup = await plugin.setup(context as unknown as Parameters<typeof plugin.setup>[0]);
     return { hooks, cleanup, dispose };
   }
@@ -74,7 +103,7 @@ describe('OpenCode v2 session policy plugin', () => {
     expect(invalid.input).toEqual({ offset: 'bad', limit: '999999999999999999999' });
     if (typeof cleanup !== 'function') throw new Error('Plugin cleanup must be callable');
     await cleanup();
-    expect(dispose).toHaveBeenCalledTimes(3);
+    expect(dispose).toHaveBeenCalledTimes(4);
   });
 
   it('preserves native system instructions and instruction updates when Skill is enabled', async () => {
