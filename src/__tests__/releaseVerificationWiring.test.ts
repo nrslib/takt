@@ -15,6 +15,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import { loadProjectConfig } from '../infra/config/project/projectConfig.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { JsonTestResults } from 'vitest/reporters';
 import {
@@ -95,6 +96,90 @@ function hasIntegrationFileName(filePath: string): boolean {
     || fileName.endsWith('-integration.test.ts')
     || fileName.endsWith('.regression.test.ts')
     || fileName.endsWith('.performance.test.ts');
+}
+
+const wiringTestPath = 'src/__tests__/releaseVerificationWiring.test.ts';
+
+function withChangedInputFixture(
+  files: Record<string, string>,
+  exercise: (fixture: {
+    cwd: string;
+    git: (...args: string[]) => void;
+    write: (file: string, content: string) => void;
+    run: (script: string, args?: string[], npmBehavior?: 'pass' | 'empty' | 'fail' | 'partial' | 'windows-skips') => {
+      status: number | null;
+      stdout: string;
+      stderr: string;
+    };
+  }) => void,
+): void {
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-changed-input-gates-'));
+  const npmExecPath = join(cwd, 'npm-cli.js');
+  const git = (...args: string[]): void => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  const write = (file: string, content: string): void => {
+    const path = join(cwd, file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  };
+  try {
+    git('init', '-q');
+    for (const [file, content] of Object.entries(files)) write(file, content);
+    git('add', '.');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'baseline');
+    write('npm-cli.js', String.raw`
+const args = process.argv.slice(2);
+process.stdout.write(JSON.stringify(args) + '\n');
+const mode = process.env.TAKT_FIXTURE_NPM_BEHAVIOR;
+if (mode === 'fail') process.exitCode = 23;
+const reportArg = args.find((arg) => arg.startsWith('--outputFile.json='));
+if (reportArg !== undefined && !['empty', 'fail'].includes(mode)) {
+  const skippedTitles = mode === 'partial' ? ['an ordinary skipped case']
+    : mode === 'windows-skips' ? [
+        'should prefer lowercase npm config when both spellings exist',
+        'should prepare Heavy IT when the npm CLI re-enables lifecycle scripts',
+      ] : [];
+  import('node:fs').then(({ writeFileSync }) => {
+    writeFileSync(reportArg.slice('--outputFile.json='.length), JSON.stringify({
+      success: true,
+      testResults: [{
+        name: process.cwd() + '/' + args[2],
+        status: 'passed',
+        assertionResults: [
+          { status: 'passed', title: 'a completed case' },
+          ...skippedTitles.map((title) => ({ status: 'skipped', title })),
+        ],
+      }],
+    }));
+  });
+}
+    `);
+    exercise({
+      cwd, git, write,
+      run(script, args = [], npmBehavior = 'pass') {
+        const result = spawnSync(process.execPath, [join(process.cwd(), 'scripts', script), ...args], {
+          cwd, encoding: 'utf8', timeout: 10_000,
+          env: { ...process.env, npm_execpath: npmExecPath, TAKT_FIXTURE_NPM_BEHAVIOR: npmBehavior },
+        });
+        if (result.error !== undefined) throw result.error;
+        return result;
+      },
+    });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+function readChangedInputRun(stdout: string) {
+  const [record, invocation, ...remaining] = stdout.trim().split('\n');
+  expect(remaining).toEqual([]);
+  expect(invocation, stdout).toBeDefined();
+  return {
+    record: JSON.parse(record!.slice(record!.indexOf('{'))) as unknown,
+    invocation: JSON.parse(invocation!) as string[],
+  };
 }
 
 const localHeavyItEnv = {
@@ -476,44 +561,27 @@ describe('release verification wiring', () => {
   ])(
     'runs the classification contract when %s changes',
     (classificationInput) => {
-      const cwd = mkdtempSync(join(tmpdir(), 'takt-removed-it-classification-'));
       const testFile = 'src/__tests__/retired-classification-fixture.test.ts';
       const removesTest = classificationInput === 'scripts/test-classification.mjs';
-      const program = join(process.cwd(), 'scripts/check-changed-it-wiring.mjs');
-      const npmExecPath = join(cwd, 'npm-cli.js');
-      const git = (...args: string[]): void => {
-        const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-        expect(result.status, result.stderr).toBe(0);
-      };
-      try {
-        git('init', '-q');
-        mkdirSync(join(cwd, 'src/__tests__'), { recursive: true });
-        mkdirSync(join(cwd, 'scripts'));
-        writeFileSync(join(cwd, testFile), "import { describe } from 'vitest';\nvoid describe;");
-        const vitestConfigBody = classificationInput === 'vitest.config.shared.ts'
-          ? (exclude: string) => `export const unitTestExcludes = ${exclude};`
-          : (exclude: string) => `export default { test: { exclude: ${exclude} } };`;
-        writeFileSync(join(cwd, classificationInput), removesTest
+      const vitestConfigBody = classificationInput === 'vitest.config.shared.ts'
+        ? (exclude: string) => `export const unitTestExcludes = ${exclude};`
+        : (exclude: string) => `export default { test: { exclude: ${exclude} } };`;
+      withChangedInputFixture({
+        [testFile]: "import { describe } from 'vitest';\nvoid describe;",
+        [classificationInput]: removesTest
           ? `export const integrationTests = [${JSON.stringify(testFile)}];`
-          : vitestConfigBody('["integration.test.ts"]'));
-        writeFileSync(join(cwd, 'tsconfig.tests.json'), JSON.stringify({ files: [testFile] }));
-        git('add', '.');
-        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'baseline');
+          : vitestConfigBody('["integration.test.ts"]'),
+        'tsconfig.tests.json': JSON.stringify({ files: [testFile] }),
+      }, ({ cwd, write, run }) => {
         if (removesTest) rmSync(join(cwd, testFile));
         const updatedInput = removesTest ? 'export const integrationTests = [];' : vitestConfigBody('[]');
-        writeFileSync(join(cwd, classificationInput), updatedInput);
-        writeFileSync(npmExecPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");');
+        write(classificationInput, updatedInput);
 
-        const execution = spawnSync(process.execPath, [program], {
-          cwd, encoding: 'utf8', env: { ...process.env, npm_execpath: npmExecPath },
-        });
-
+        const execution = run('check-changed-it-wiring.mjs');
         expect(execution.status, execution.stderr).toBe(0);
-        const [record, invocation, ...remaining] = execution.stdout.trim().split('\n');
-        expect(remaining).toEqual([]);
-        expect(invocation, execution.stdout).toBeDefined();
-        expect(JSON.parse(invocation!)).toEqual(['test', '--', 'src/__tests__/releaseVerificationWiring.test.ts']);
-        expect(JSON.parse(record!.slice(record!.indexOf('{')))).toMatchObject({
+        const { record, invocation } = readChangedInputRun(execution.stdout);
+        expect(invocation.slice(0, 3)).toEqual(['test', '--', wiringTestPath]);
+        expect(record).toMatchObject({
           changedClassificationInputs: [classificationInput],
           integrationTests: [],
           fileHashes: expect.arrayContaining([
@@ -521,11 +589,196 @@ describe('release verification wiring', () => {
             ...(removesTest ? [{ file: testFile, sha256: null }] : []),
           ]),
         });
-      } finally {
-        rmSync(cwd, { recursive: true, force: true });
-      }
+      });
     },
   );
+
+  it.each([
+    { script: 'test:types', before: 'tsc -p tsconfig.tests.json', after: 'node --version' },
+    { script: 'posttest:it:heavy:parallel', before: undefined, after: 'node summarize-testing.mjs' },
+    { script: 'test:it:heavy:serial:workflow', before: 'vitest run', after: undefined },
+  ])('checks classification when only the $script npm script changes', ({ script, before, after }) => {
+    withChangedInputFixture({
+      'package.json': JSON.stringify({ scripts: { [script]: before } }),
+    }, ({ write, run, git }) => {
+      const updated = JSON.stringify({ scripts: { [script]: after } });
+      write('package.json', updated);
+      if (script.startsWith('posttest')) git('add', 'package.json');
+
+      const execution = run('check-changed-it-wiring.mjs');
+      expect(execution.status, execution.stderr).toBe(0);
+      const { record, invocation } = readChangedInputRun(execution.stdout);
+      expect(invocation.slice(0, 3)).toEqual(['test', '--', wiringTestPath]);
+      expect(record).toMatchObject({
+        changedClassificationInputs: ['package.json'],
+        changedScripts: [script],
+        fileHashes: expect.arrayContaining([
+          { file: 'package.json', sha256: createHash('sha256').update(updated).digest('hex') },
+        ]),
+      });
+    });
+  });
+
+  it('skips classification when only unrelated manifest metadata and scripts change', () => {
+    withChangedInputFixture({
+      'package.json': JSON.stringify({ version: '1.0.0', scripts: { lint: 'eslint src/' } }),
+    }, ({ write, run }) => {
+      write('package.json', JSON.stringify({ version: '1.0.1', scripts: { lint: 'node lint.mjs' } }));
+
+      const execution = run('check-changed-it-wiring.mjs');
+      expect(execution.status, execution.stderr).toBe(0);
+      expect(execution.stdout.trim().split('\n')).toEqual([expect.stringContaining('skipped')]);
+    });
+  });
+
+  it.each([
+    { npmBehavior: 'empty', status: 1, message: 'without a test report' },
+    { npmBehavior: 'fail', status: 23, message: '' },
+  ] as const)('propagates a classification failure when npm returns $npmBehavior', ({ npmBehavior, status, message }) => {
+    withChangedInputFixture({
+      'package.json': JSON.stringify({ scripts: { test: 'node scripts/run-npm-test.mjs' } }),
+    }, ({ write, run }) => {
+      write('package.json', JSON.stringify({ scripts: { test: 'node --version' } }));
+
+      const execution = run('check-changed-it-wiring.mjs', [], npmBehavior);
+      expect(execution.status, execution.stderr).toBe(status);
+      expect(readChangedInputRun(execution.stdout).invocation.slice(0, 3)).toEqual(['test', '--', wiringTestPath]);
+      if (message.length > 0) expect(execution.stderr).toContain(message);
+    });
+  });
+
+  it.each([
+    { npmBehavior: 'partial', exitCode: 1 },
+    { npmBehavior: 'windows-skips', exitCode: process.platform === 'win32' ? 0 : 1 },
+  ] as const)('validates classification coverage for $npmBehavior', ({ npmBehavior, exitCode }) => {
+    withChangedInputFixture({
+      'package.json': JSON.stringify({ scripts: { 'test:types': 'tsc -p tsconfig.tests.json' } }),
+    }, ({ write, run }) => {
+      write('package.json', JSON.stringify({ scripts: { 'test:types': 'node --version' } }));
+
+      const execution = run('check-changed-it-wiring.mjs', [], npmBehavior);
+      expect(execution.status, execution.stderr).toBe(exitCode);
+      expect(readChangedInputRun(execution.stdout).invocation.slice(0, 3)).toEqual(['test', '--', wiringTestPath]);
+    });
+  });
+
+  it.each(['build', 'lint'] as const)('skips %s when just documentation changes', (check) => {
+    withChangedInputFixture({ 'docs/README.md': 'Original' }, ({ write, run }) => {
+      write('docs/README.md', 'Updated');
+      write('src/shared/README.md', 'Development notes');
+      write('vendor/faceted-prompting/README.md', 'Vendored library notes');
+
+      const execution = run('check-changed-project.mjs', [check]);
+      expect(execution.status, execution.stderr).toBe(0);
+      expect(execution.stdout.trim().split('\n')).toEqual([expect.stringContaining('skipped')]);
+    });
+  });
+
+  it.each([
+    { check: 'build', input: 'src/added file.ts', withBaseline: false },
+    { check: 'lint', input: 'scripts/daemon-lint-rules.mjs', withBaseline: true },
+    { check: 'build', input: 'src/shared/prompts/ja/perform_phase1_message.md', withBaseline: true },
+    { check: 'lint', input: 'package-lock.json', withBaseline: false },
+  ])('runs $check for the changed input $input', ({ check, input, withBaseline }) => {
+    withChangedInputFixture({
+      'docs/README.md': 'Baseline',
+      ...(withBaseline ? { [input]: 'Original' } : {}),
+    }, ({ write, run }) => {
+      write(input, 'Updated');
+
+      const execution = run('check-changed-project.mjs', [check]);
+      expect(execution.status, execution.stderr).toBe(0);
+      expect(readChangedInputRun(execution.stdout)).toEqual({
+        record: expect.objectContaining({ changedPaths: [input] }),
+        invocation: ['run', check],
+      });
+    });
+  });
+
+  it.each([
+    {
+      input: 'vendor/faceted-prompting/dist/cli/facet-includes.d.ts',
+      original: 'export declare const value: string;',
+      updated: 'export declare const value: number;',
+    },
+    {
+      input: 'vendor/faceted-prompting/package.json',
+      original: '{"type":"module"}',
+      updated: '{"type":"commonjs"}',
+    },
+  ])('builds without running lint when only $input changes', ({ input, original, updated }) => {
+    withChangedInputFixture({ [input]: original }, ({ write, run }) => {
+      write(input, updated);
+
+      const build = run('check-changed-project.mjs', ['build']);
+      expect(build.status, build.stderr).toBe(0);
+      expect(readChangedInputRun(build.stdout)).toEqual({
+        record: expect.objectContaining({ changedPaths: [input] }),
+        invocation: ['run', 'build'],
+      });
+      const lint = run('check-changed-project.mjs', ['lint']);
+      expect(lint.status, lint.stderr).toBe(0);
+      expect(lint.stdout.trim().split('\n')).toEqual([expect.stringContaining('skipped')]);
+    });
+  });
+
+  it('detects a staged source rename out of the build scope and preserves the build exit code', () => {
+    withChangedInputFixture({
+      'docs/README.md': 'Baseline',
+      'src/retired.ts': 'export const retired = true;',
+    }, ({ git, run }) => {
+      git('mv', 'src/retired.ts', 'docs/retired.txt');
+
+      const execution = run('check-changed-project.mjs', ['build'], 'fail');
+      expect(execution.status, execution.stderr).toBe(23);
+      expect(readChangedInputRun(execution.stdout)).toEqual({
+        record: expect.objectContaining({ changedPaths: ['src/retired.ts'] }),
+        invocation: ['run', 'build'],
+      });
+    });
+  });
+
+  it('runs only the affected build and lint commands when manifest inputs change', () => {
+    withChangedInputFixture({
+      'package.json': JSON.stringify({ scripts: { prebuild: 'npm run patch:dependencies' } }),
+    }, ({ write, run }) => {
+      write('package.json', JSON.stringify({ scripts: { prebuild: 'node prepare-build.mjs' } }));
+      const build = run('check-changed-project.mjs', ['build']);
+      expect(build.status, build.stderr).toBe(0);
+      expect(readChangedInputRun(build.stdout)).toEqual({
+        record: expect.objectContaining({ packageChanges: ['scripts.prebuild'] }),
+        invocation: ['run', 'build'],
+      });
+
+      const skippedLint = run('check-changed-project.mjs', ['lint']);
+      expect(skippedLint.status, skippedLint.stderr).toBe(0);
+      expect(skippedLint.stdout.trim().split('\n')).toEqual([expect.stringContaining('skipped')]);
+
+      write('package.json', JSON.stringify({ devDependencies: { eslint: '9.0.0' } }));
+      const lint = run('check-changed-project.mjs', ['lint']);
+      expect(lint.status, lint.stderr).toBe(0);
+      expect(readChangedInputRun(lint.stdout)).toEqual({
+        record: expect.objectContaining({ packageChanges: ['devDependencies'] }),
+        invocation: ['run', 'lint'],
+      });
+    });
+  });
+
+  it('loads the project completion gates for every editing step that requires build and lint', () => {
+    const overrides = loadProjectConfig(process.cwd()).workflowOverrides?.steps;
+    for (const step of ['implement', 'reimplement', 'fix', 'fix-retry', 'ai-antipattern-fix']) {
+      const gates = overrides?.[step]?.qualityGates;
+      for (const check of ['build', 'lint']) {
+        expect(gates).toContainEqual(expect.objectContaining({
+          type: 'command',
+          runAt: 'before_report',
+          covers: [`npm run ${check}`],
+        }));
+        const instructions = gates?.filter((gate): gate is string => typeof gate === 'string') ?? [];
+        expect(instructions.some((instruction) => instruction.includes(`npm run ${check}`))).toBe(false);
+      }
+    }
+  });
 
   it('should keep fast unit and integration classifications disjoint', () => {
     const parallelIntegration = new Set(parallelIntegrationTestFiles);
