@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ConversationActivitySchema, MAX_CONVERSATION_TEXT_BYTES, MAX_TOOL_DESCRIPTION_LENGTH, type ConversationActivity } from '../../shared/types/conversation-activity.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
@@ -5,6 +6,24 @@ import type { ManagerTurnInput } from './turnExecutor.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { toSingleLineText } from '../tui/displayText.js';
+
+export function createToolEventIdentifier(): (event: ToolActivityEvent) => ToolActivityEvent {
+  const callId = randomUUID();
+  const unidentified = new Map<string, string[]>();
+  return (event) => {
+    const context = event.toolActivity ?? { callId };
+    const pending = unidentified.get(context.callId) ?? [];
+    unidentified.set(context.callId, pending);
+    const id = event.data.id || (event.type === 'tool_use' ? randomUUID()
+      : event.type === 'tool_result' ? event.data.completedToolIds?.[0] ?? pending[0] ?? randomUUID() : pending[0] ?? randomUUID());
+    if ((event.type === 'tool_use' || event.type === 'tool_output') && !pending.includes(id)) pending.push(id);
+    if (event.type === 'tool_result') {
+      const completed = [id, ...(event.data.completedToolIds ?? [])];
+      for (const value of completed) { const index = pending.indexOf(value); if (index >= 0) pending.splice(index, 1); }
+    }
+    return { ...event, data: { ...event.data, id }, toolActivity: context } as ToolActivityEvent;
+  };
+}
 
 export function createTurnActivityReporter(report: (activity: ConversationActivity) => void, reportText: (message: string) => void) {
   let current: ConversationActivity | undefined;
@@ -70,7 +89,7 @@ export function createTurnActivityReporter(report: (activity: ConversationActivi
 }
 
 /** ツールの開始より前の本文、ツールのイベント、activity の順に知らせる。daemon がその activity を、同じツールの入力の値で伏せられるようにする。 */
-export function reportManagerStream(raw: StreamEvent, identify: (event: ToolActivityEvent) => ToolActivityEvent,
+export function reportTurnStream(raw: StreamEvent, identify: (event: ToolActivityEvent) => ToolActivityEvent,
   reporter: ReturnType<typeof createTurnActivityReporter>, input: Pick<ManagerTurnInput, 'abortSignal' | 'onProviderOutput' | 'onToolEvent'>): StreamEvent {
   const event = raw.type === 'tool_use' || raw.type === 'tool_result' || raw.type === 'tool_output' ? identify(raw) : raw;
   input.onProviderOutput?.();

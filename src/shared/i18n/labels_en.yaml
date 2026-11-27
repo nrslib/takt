@@ -502,8 +502,6 @@ manager:
   assignmentHeadingMultiple: "Assignment: {name} + {count} more"
   counts: "Ongoing {goals} / Awaiting merge {awaiting} / Pending {questions}"
   inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^T Epics  ^C Exit"
-  toolHistoryCompact: "Tools: Ctrl+O to expand · PageUp/PageDown to scroll"
-  toolHistoryExpanded: "Tools: Ctrl+O to collapse · PageUp/PageDown to scroll"
   epics:
     listTitle: "Epics"
     detailTitle: "Epic details"

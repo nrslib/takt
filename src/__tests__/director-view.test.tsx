@@ -9,6 +9,7 @@ import { stripAnsi } from '../shared/utils/text.js';
 import { randomUUID } from 'node:crypto';
 import type { SnapshotValue } from '../features/manager/conversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
+import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
 
 afterEach(cleanup);
 
@@ -75,7 +76,7 @@ it('answers a human inquiry from the initial director snapshot without sending a
   const item = humanInquiry();
   const client = new ManagerClientDouble({ items: [item] });
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.pendingQuestions', 'en', { count: '1' })));
   app.stdin.write('\x12');
   await vi.waitFor(() => expect(app.lastFrame()).toContain('Export goal'));
   app.stdin.write('\r');
@@ -92,7 +93,7 @@ it('closes a displayed inquiry after delegation and shows the same inquiry again
   const item = humanInquiry();
   const client = new ManagerClientDouble();
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.placeholder', 'en')));
   client.change({ items: [item] });
   await vi.waitFor(() => expect(app.lastFrame()).toContain('Pending questions: 1'));
   app.stdin.write('\x12');
@@ -119,7 +120,7 @@ it('closes a displayed inquiry after delegation and shows the same inquiry again
 it('keeps a CR-only bracketed paste as an unsent multi-line draft until Enter', async () => {
   const client = new ManagerClientDouble();
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.placeholder', 'en')));
 
   app.stdin.write('\x1b[200~first\rsecond\x1b[201~');
   await vi.waitFor(() => expect(app.lastFrame()).toContain('second'));
@@ -134,7 +135,7 @@ it.each(['ja', 'en'] as const)('shows queue capacity rejection in the submitting
   const message = getLabel('manager.conversation.queue_full', lang);
   client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message });
   const app = render(createElement(DirectorView, { client, lang, onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', lang)));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.placeholder', lang)));
   app.stdin.write('capacity request');
   await vi.waitFor(() => expect(app.lastFrame()).toContain('capacity request'));
   app.stdin.write('\r');
@@ -147,7 +148,10 @@ it('accepts speech during a running director turn and shows its waiting count', 
   client.change({ state: { ...client.getSnapshot().state!, running: { operationId: randomUUID(), kind: 'message' }, queuedMessageCount: 1 } });
   client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 2 });
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.conversation.waiting', 'en', { count: '1' })));
+  await vi.waitFor(() => {
+    expect(app.lastFrame()).toContain(getLabel('tui.ui.thinking', 'en'));
+    expect(app.lastFrame()).toContain(getLabel('tui.ui.queuedCount', 'en', { count: '1' }));
+  });
   app.stdin.write('new request');
   await vi.waitFor(() => expect(app.lastFrame()).toContain('new request'));
   app.stdin.write('\r');
@@ -158,7 +162,7 @@ it('accepts speech during a running director turn and shows its waiting count', 
 it('shows a remote message once and avoids repeating its own accepted message', async () => {
   const client = new ManagerClientDouble();
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.placeholder', 'en')));
   const remote = { kind: 'user_message' as const, operationId: randomUUID(), message: 'Remote request' };
   client.output(remote); client.output(remote);
   await vi.waitFor(() => expect(app.lastFrame()!.split(remote.message)).toHaveLength(2));
@@ -173,15 +177,20 @@ it('shows a remote message once and avoids repeating its own accepted message', 
     expect(app.lastFrame()!.split(remote.message)).toHaveLength(2);
   });
 });
-it.each(['ja', 'en'] as const)('shows startup notices at 80 columns and detaches without cancelling in %s', async (lang) => {
+it.each(['ja', 'en'] as const)('shows a compact idle screen at 80 columns and detaches without cancelling in %s', async (lang) => {
   const client = new ManagerClientDouble();
+  client.change({ state: { ...client.getSnapshot().state!, queuedMessageCount: 0 } });
   const exit = vi.fn();
   const app = render(createElement(DirectorView, { client, lang, onExit: exit }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', lang)));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.placeholder', lang)));
   Object.defineProperty(app.stdout, 'columns', { configurable: true, get: () => 80 });
   app.stdout.emit('resize');
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', lang)));
-  expect(app.lastFrame()!.replace(/\s+/gu, ' ')).toContain(getLabel('director.experimentalNotice', lang));
+  expect(app.frames.join('\n').replace(/\s+/gu, ' ')).toContain(getLabel('director.experimentalNotice', lang));
+  expect(app.frames.join('\n')).not.toMatch(/provider\s*API/iu);
+  expect(app.lastFrame()).toContain(getLabel('director.inputHint', lang));
+  expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.waiting', lang, { count: '0' }));
+  expect(app.lastFrame()).not.toContain(getLabel('tui.ui.queuedCount', lang, { count: '0' }));
+  expect(app.lastFrame()).not.toContain(getLabel('director.pendingQuestions', lang, { count: '0' }));
   await vi.waitFor(() => {
     for (const line of stripAnsi(app.lastFrame()!).split('\n')) expect(measureWidth(line)).toBeLessThanOrEqual(80);
   });
@@ -197,6 +206,94 @@ it.each(['ja', 'en'] as const)('shows startup notices at 80 columns and detaches
   expect(client.commands()).toEqual([{ kind: 'message', text: 'status' }]);
   app.unmount();
   expect(client.close).toHaveBeenCalled();
+});
+
+it('shows director turn status, a running tool, and completed tool details after the reply', async () => {
+  const client = new ManagerClientDouble();
+  const app = render(createElement(DirectorView, { client, lang: 'ja', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.placeholder', 'ja')));
+  const operationId = randomUUID();
+  const generation = 1;
+  const context = { operationId, generation, callId: 'call' };
+  const tool = 'mcp__takt_director__takt_tell_manager';
+  const entry: ToolActivityEntry = {
+    key: 'tell', toolId: 'tell', tool, input: { message: 'check queue' }, output: '', context, status: 'running', association: 'matched',
+  };
+  const state = { ...client.getSnapshot().state!, running: { operationId, generation, kind: 'turn' }, queuedMessageCount: 0 };
+  client.output({ kind: 'running', state });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.thinking', 'ja')));
+  client.output({ kind: 'activity', operationId, generation, activity: { kind: 'thinking' } });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.extendedThinking', 'ja')));
+  client.output({ kind: 'tool_started', entry });
+  client.output({ kind: 'activity', operationId, generation, activity: { kind: 'tool', tool } });
+  await vi.waitFor(() => expect(app.lastFrame()).toMatch(/◆ .*takt_tell_manager.*…/u));
+
+  const completed = { ...entry, status: 'failure' as const, result: 'request rejected\nreason one\nreason two\nvalidation detail' };
+  client.output({ kind: 'tool_completed', entry: completed });
+  client.output({ kind: 'activity', operationId, generation, activity: { kind: 'responding' } });
+  await vi.waitFor(() => {
+    expect(app.lastFrame()).toContain(getLabel('tui.ui.responding', 'ja'));
+    expect(app.frames.join('\n')).toMatch(/◆ .*takt_tell_manager.*✗/u);
+  });
+  client.output({ kind: 'pending', state: { ...state, running: null } });
+  client.output({ kind: 'result', operationId, result: { kind: 'reply', message: 'The handoff failed.' } });
+  client.change({ items: [{ kind: 'tool_history', history: { operationId, generation, finished: true, history: { entries: [completed] } } }] });
+  await vi.waitFor(() => {
+    expect(app.frames.join('\n')).toContain('The handoff failed.');
+    expect(app.lastFrame()).not.toContain(getLabel('tui.ui.responding', 'ja'));
+    expect(app.lastFrame()).toContain('Ctrl+O');
+  });
+  expect(app.lastFrame()).not.toContain('validation detail');
+  app.stdin.write('\x0f');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('validation detail'));
+  expect(client.commands()).toEqual([]);
+});
+
+it('restores completed tool details from the snapshot on reconnect', async () => {
+  const client = new ManagerClientDouble({ connection: 'disconnected', readStatus: 'incomplete' });
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.conversation.disconnected', 'en')));
+  const operationId = randomUUID();
+  const turn = { operationId, generation: 1 };
+  const tool = 'mcp__takt_director__takt_list_managers';
+  const entry: ToolActivityEntry = { key: 'saved', tool, toolId: 'saved', context: { ...turn, callId: 'call' },
+    input: {}, output: '', result: 'A saved tool result', status: 'success', association: 'matched' };
+  client.change({ connection: 'connected', readStatus: 'complete', items: [
+    { kind: 'tool_history', history: { ...turn, finished: true, history: { entries: [entry] } } },
+    { kind: 'turn_result', operationId, acceptedSequence: 1, result: { kind: 'reply', message: 'Previous reply' } },
+  ] });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Ctrl+O'));
+  expect(app.frames.join('\n')).not.toContain('Previous reply');
+  app.stdin.write('\x0f');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(entry.result));
+});
+
+it('lets the operator page through tool details when a proposal fills the screen', async () => {
+  const { client, pending } = proposalClient();
+  const operationId = randomUUID();
+  const turn = { operationId, generation: 1 };
+  const resultLines = Array.from({ length: 30 }, (_, index) => `Result line ${index + 1}.`);
+  const entry: ToolActivityEntry = { key: 'many', tool: 'takt_list_managers', toolId: 'many', context: { ...turn, callId: 'call' },
+    input: {}, output: '', result: resultLines.join('\n'), status: 'success', association: 'matched' };
+  client.change({ items: [{ kind: 'tool_history', history: { ...turn, finished: true, history: { entries: [entry] } } }] });
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  Object.defineProperties(app.stdout, { columns: { configurable: true, value: 80 }, rows: { configurable: true, value: 24 } });
+  app.stdout.emit('resize');
+  await vi.waitFor(() => {
+    expect(app.lastFrame()).toContain(pending.summary.objective);
+    expect(app.lastFrame()).toContain(getLabel('tui.ui.toolHistoryCompact', 'en'));
+  });
+  app.stdin.write('\x0f');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.toolHistoryExpanded', 'en')));
+  expect(app.lastFrame()).not.toContain(pending.summary.objective);
+  app.stdin.write('\r');
+  app.stdin.write('\x1b[6~');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(resultLines.at(-1)));
+  app.stdin.write('\x1b[5~');
+  await vi.waitFor(() => expect(app.lastFrame()).not.toContain(resultLines.at(-1)));
+  app.stdin.write('\x0f');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(pending.summary.objective));
+  expect(client.commands()).toEqual([]);
 });
 
 it('keeps the acceptance visible and appends a later manager result once in the same director screen', async () => {

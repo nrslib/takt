@@ -7,7 +7,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { Client } from './helpers/conversation-ipc-client.js';
 import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
 import { conversationDaemon } from './helpers/conversation-daemon.js';
-import { humanTurnText } from './helpers/daemon-turn.js';
+import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../features/daemon/conversationFrames.js';
@@ -20,6 +20,7 @@ import { ConversationRecordSchema } from '../infra/conversations/schema.js';
 import type { ConversationOpen, PortOutput } from '../features/manager/conversationPort.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import type { PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -28,6 +29,10 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as goalService from '../infra/goals/service.js';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import type { ConversationDelivery } from '../features/manager/conversationPort.js';
+import { createDirectorTurnExecutor } from '../features/director/turnExecutor.js';
+import { DIRECTOR_MCP_SERVER_NAME } from '../features/director/mcp.js';
+import { jsonResult } from '../features/mcp/response.js';
+import { makeProvider } from './test-helpers.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn() }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
@@ -46,7 +51,7 @@ let fixture: Awaited<ReturnType<typeof conversationDaemon>>;
 let service: Awaited<ReturnType<typeof conversationDaemon>>['input'];
 let server: Awaited<ReturnType<typeof createConversationIpcServer>>;
 let clients: Client[];
-const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: 'reply', summary: null,
+const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async (input) => ({ message: 'reply', summary: null,
   sessionId: 'session', assignment: input.assignment }));
 let release: (() => void) | undefined;
 
@@ -817,6 +822,77 @@ function receivedOutputs(value: Client): Array<Exclude<PortOutput, { kind: 'snap
   }
   return outputs;
 }
+
+it('streams director tool activity to TUI and restores completed tool results after detach', async () => {
+  const director = directorConversationRecord();
+  writeLegacyConversation(directory, director);
+  selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const gate = deferred<void>();
+  release = () => gate.resolve();
+  const tool = `mcp__${DIRECTOR_MCP_SERVER_NAME}__takt_tell_manager`;
+  const args = { managerId: `manager-${'a'.repeat(64)}`, text: 'Check the queue.', origin: 'director' };
+  const failure = 'Manager is unavailable';
+  const acceptedHandoff = JSON.stringify(jsonResult({ kind: 'accepted', operationId: '61111111-1111-4111-8111-111111111111',
+    eventId: 'manager-message', acceptedSequence: 1, managerId: args.managerId }));
+  const reply = 'The second handoff was accepted.';
+  const provider = makeProvider({ setup: () => ({ async call(_prompt, { onStream }) {
+    onStream?.({ type: 'thinking', data: { thinking: 'Thinking through the handoff' } });
+    onStream?.({ type: 'tool_use', data: { id: 'first', tool, input: args } });
+    await gate.promise;
+    onStream?.({ type: 'tool_result', data: { content: failure, isError: true } });
+    onStream?.({ type: 'tool_use', data: { id: 'second', tool, input: args } });
+    onStream?.({ type: 'tool_result', data: { id: 'second', content: acceptedHandoff, isError: false } });
+    onStream?.({ type: 'text', data: { text: reply } });
+    return { persona: 'director', status: 'done', content: reply, timestamp: new Date() };
+  } }) });
+  const executor = createDirectorTurnExecutor({ cwd: directory, systemPrompt: 'director',
+    ctx: { provider, providerType: 'mock', lang: 'en', model: undefined } }, { type: 'http', url: 'http://127.0.0.1/' });
+  execute.mockImplementationOnce(executor.execute);
+
+  const first = await authenticated();
+  const initial = await opened(first);
+  await first.items(initial.read.transferId);
+  const accepted = (await first.request('submit', { attachmentId: initial.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: 'Tell the manager.' } })).result!;
+  expect(accepted.kind).toBe('accepted');
+  await vi.waitFor(() => {
+    const outputs = receivedOutputs(first);
+    expect(outputs.filter((value) => value.kind === 'activity').map((output) => output.activity))
+      .toEqual([{ kind: 'thinking' }, { kind: 'tool', tool }]);
+    expect(outputs).toContainEqual(expect.objectContaining({ kind: 'tool_started', entry: expect.objectContaining({
+      status: 'running', tool, input: args, context: expect.objectContaining({ operationId: accepted.operationId }),
+    }) }));
+  });
+  await first.request('detach', { attachmentId: initial.attachmentId });
+  first.socket.destroy();
+
+  const second = await authenticated();
+  const reopened = await opened(second);
+  expect(await second.items(reopened.read.transferId)).toContainEqual(expect.objectContaining({ kind: 'tool_history',
+    history: expect.objectContaining({ operationId: accepted.operationId, finished: false,
+      history: { entries: [expect.objectContaining({ toolId: 'first', status: 'running', tool })] } }),
+  }));
+  await vi.waitFor(() => expect(receivedOutputs(second)).toContainEqual(expect.objectContaining({ kind: 'activity',
+    operationId: accepted.operationId, activity: { kind: 'tool', tool } })));
+
+  gate.resolve();
+  await fixture.settled();
+  await vi.waitFor(() => {
+    const outputs = receivedOutputs(second);
+    expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: reply } });
+    expect(outputs.filter((output) => output.kind === 'tool_completed').map(({ entry }) => [entry.toolId, entry.status, entry.result]))
+      .toEqual([['first', 'failure', failure], ['second', 'success', acceptedHandoff]]);
+    expect(outputs.filter((output) => output.kind === 'activity').map(({ activity }) => activity)).toContainEqual({ kind: 'responding' });
+  });
+  const third = await authenticated();
+  const saved = await opened(third);
+  expect(await third.items(saved.read.transferId)).toContainEqual(expect.objectContaining({ kind: 'tool_history',
+    history: expect.objectContaining({ operationId: accepted.operationId, finished: true, history: { entries: [
+      expect.objectContaining({ toolId: 'first', status: 'failure', result: failure }),
+      expect.objectContaining({ toolId: 'second', status: 'success', result: acceptedHandoff }),
+    ] } }),
+  }));
+});
 
 it('delivers a queued message only after the previous tools and reply, including parallel tool completion order', async () => {
   let enter!: () => void;
