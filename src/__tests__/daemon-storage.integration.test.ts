@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import * as spawnModule from '../shared/utils/spawn.js';
 import { AsyncCommand } from '../infra/daemon/command.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,13 +22,13 @@ import { readDaemonOwner, registerDaemonOwner, removeDaemonOwner, writeDaemonOwn
 import { conversationIpcEndpoint, readDaemonIpcState, resolveDaemonConfigDirectory, writeDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { DaemonLogger } from '../infra/daemon/logger.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
-import { DaemonNotifications } from '../infra/daemon/notifications.js';
+import { DaemonNotifications, managerResultNotificationId } from '../infra/daemon/notifications.js';
 import { answerInquiry, createInquiry } from '../infra/goals/inquiry.js';
 import { SlackInquiryBindings } from '../infra/slack/inquiryBindings.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { ConversationRecordSchema } from '../infra/conversations/schema.js';
 import type { AcceptedEvent } from '../core/daemon/events.js';
-import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
+import { MAX_DIRECTOR_MANAGER_REPLIES, MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES, type TurnIdentity, type TurnResult } from '../core/daemon/messages.js';
 import type { IoOptions } from '../core/daemon/io.js';
 import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
@@ -92,6 +92,27 @@ function event(id: string, sequence: number, text = id): AcceptedEvent {
 }
 function result(input: AcceptedEvent): TurnResult {
   return { conversationId: input.conversationId, operationId: input.operationId, generation: 1, event: input, outcome: { kind: 'interrupted' } };
+}
+function directorRequest(name: string, sequence: number): AcceptedEvent {
+  return { ...event(name, sequence), conversationId: conversationId({ kind: 'repository', repositoryDirectory: `/repository-${name}` }),
+    source: 'director', lane: 'other', event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }), text: name } };
+}
+async function settle(store: FileEventStore, input: AcceptedEvent, outcome: TurnResult['outcome']): Promise<void> {
+  const output = { ...result(input), outcome };
+  await store.markStarted(input.eventId, output);
+  await store.saveResult(input.eventId, output);
+  await store.markSettled(input.eventId, output);
+}
+async function setStoredTime(directory: string, folder: 'daemon-events' | 'director-notifications', id: string, seconds: number) {
+  // The native filesystem may assign the same timestamp to consecutive writes.
+  const modified = new Date(Date.UTC(2026, 10, 3, 0, 0, seconds));
+  const key = createHash('sha256').update(id).digest('hex');
+  await utimes(join(directory, folder, `${key}.json`), modified, modified);
+}
+async function publishManagerResult(notices: DaemonNotifications, request: AcceptedEvent, reply: string): Promise<string> {
+  const id = managerResultNotificationId(request.operationId);
+  await notices.save({ id, message: `${request.conversationId} (${request.operationId}): ${reply}` }, signal());
+  return id;
 }
 const assignment = { kind: 'repository' as const, repositoryDirectory: '/repo' };
 const id = conversationId(assignment);
@@ -229,6 +250,101 @@ describe('durable manager patrol timestamps', () => {
 });
 
 describe('durable daemon event storage', () => {
+  it('prioritizes the latest manager notices when request and settlement order differ', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory); const notices = new DaemonNotifications(directory);
+    const requests = Array.from({ length: MAX_DIRECTOR_MANAGER_REPLIES + 1 }, (_, index) => directorRequest(`request-${index}`, index + 1));
+    for (const [index, request] of requests.entries()) {
+      await store.accept(request);
+      await settle(store, request, { kind: 'completed', result: { kind: 'reply', message: 'done' } });
+      await setStoredTime(directory, 'daemon-events', request.eventId, requests.length + index);
+    }
+    expect(await store.readDirectorManagerReplies(notices)).toEqual([]);
+    const delivered = [...requests.slice(1), requests[0]!];
+    for (const [index, request] of delivered.entries()) {
+      const id = await publishManagerResult(notices, request, 'done');
+      await setStoredTime(directory, 'director-notifications', id, index);
+    }
+    const expected = delivered.slice(-MAX_DIRECTOR_MANAGER_REPLIES).reverse().map(({ operationId }) => operationId);
+    expect((await store.readDirectorManagerReplies(notices)).map(({ operationId }) => operationId)).toEqual(expected);
+    expect((await new FileEventStore(directory).readDirectorManagerReplies(new DaemonNotifications(directory))).map(({ operationId }) => operationId)).toEqual(expected);
+  });
+
+  it.each(['event', 'boundary file'])('compares legacy reply timestamps to a clear saved in the %s', async (boundary) => {
+    const directory = await root();
+    const store = new FileEventStore(directory); const notices = new DaemonNotifications(directory);
+    const early = directorRequest('answered before clear', 1);
+    const late = directorRequest('answered after clear', 2);
+    const clear = { ...event('clear', 3, '/clear'), conversationId: conversationId({ kind: 'daemon' }) };
+    for (const request of [early, late]) {
+      await store.accept(request);
+      await settle(store, request, { kind: 'completed', result: { kind: 'reply', message: 'done' } });
+    }
+    await store.accept(clear);
+    await settle(store, clear, { kind: 'completed', result: { kind: 'notice', message: 'cleared' } });
+    await setStoredTime(directory, 'daemon-events', clear.eventId, 2);
+    if (boundary === 'boundary file') {
+      await notices.recordDirectorContextClear(clear.operationId);
+      const modified = new Date(Date.UTC(2026, 10, 3, 0, 0, 2));
+      await utimes(join(directory, 'director-notifications', 'director-clear-boundary'), modified, modified);
+    }
+    for (const [request, seconds] of [[early, 1], [late, 3]] as const) {
+      const id = managerResultNotificationId(request.operationId);
+      const key = createHash('sha256').update(id).digest('hex');
+      const saved = { id, message: `${request.conversationId} (${request.operationId}): done` };
+      await writePrivateFile(join(directory, 'director-notifications', `${key}.json`), JSON.stringify(saved));
+      await setStoredTime(directory, 'director-notifications', id, seconds);
+    }
+    expect((await store.readDirectorManagerReplies(notices)).map(({ operationId }) => operationId)).toEqual([late.operationId]);
+  });
+
+  it('distinguishes replies before and after clear at the same stored time, including after replay and restart', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory); const notices = new DaemonNotifications(directory);
+    const early = directorRequest('before clear', 1);
+    const late = directorRequest('after clear', 2);
+    for (const request of [early, late]) {
+      await store.accept(request);
+      await settle(store, request, { kind: 'completed', result: { kind: 'reply', message: 'done' } });
+    }
+    const earlyId = await publishManagerResult(notices, early, 'done');
+    const clearId = 'clear-operation';
+    await notices.recordDirectorContextClear(clearId);
+    const lateId = await publishManagerResult(notices, late, 'done');
+    const sameTime = new Date(Date.UTC(2026, 10, 3));
+    await utimes(join(directory, 'director-notifications', 'director-clear-boundary'), sameTime, sameTime);
+    for (const id of [earlyId, lateId]) await setStoredTime(directory, 'director-notifications', id, 0);
+    await publishManagerResult(notices, early, 'done');
+    await notices.recordDirectorContextClear(clearId);
+
+    const earlyKey = createHash('sha256').update(earlyId).digest('hex');
+    expect((await stat(join(directory, 'director-notifications', `${earlyKey}.json`))).mtimeMs).toBe(sameTime.getTime());
+    expect((await store.readDirectorManagerReplies(notices)).map(({ operationId }) => operationId)).toEqual([late.operationId]);
+    expect((await new FileEventStore(directory).readDirectorManagerReplies(new DaemonNotifications(directory)))
+      .map(({ operationId }) => operationId)).toEqual([late.operationId]);
+  });
+
+  it('uses the available serialized bytes for a long multiline Unicode reply', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory); const notices = new DaemonNotifications(directory);
+    const request = directorRequest('investigate open issues', 1);
+    const message = '確認済み 📝 "#2043"\n'.repeat(600);
+    await store.accept(request);
+    await settle(store, request, { kind: 'completed', result: { kind: 'reply', message } });
+    await publishManagerResult(notices, request, message);
+
+    const replies = await store.readDirectorManagerReplies(notices);
+    expect(replies).toHaveLength(1);
+    const bytes = Buffer.byteLength(JSON.stringify(replies));
+    expect(bytes).toBeLessThanOrEqual(MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES);
+    expect(bytes).toBeGreaterThan(MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES - 16);
+    const { reply } = replies[0]!;
+    expect(reply).toMatch(/\[TRUNCATED\]$/);
+    const excerpt = reply.slice(0, reply.lastIndexOf('\n'));
+    expect(message.startsWith(excerpt)).toBe(true);
+    expect(Buffer.from(excerpt).toString()).toBe(excerpt);
+  });
+
   it('recovers visible messages in acceptance order even after settlement, excluding hidden messages and failed admissions', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);

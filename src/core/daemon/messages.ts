@@ -43,11 +43,23 @@ export interface ConversationChange {
   interruptedImageAttachmentIds?: string[];
 }
 
+export interface DirectorManagerReply {
+  managerId: string;
+  operationId: string;
+  requestedAt: string;
+  request: string;
+  reply: string;
+}
+
+export const MAX_DIRECTOR_MANAGER_REPLIES = 5;
+export const MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES = 12 * 1024;
+
 export interface TurnStart {
   // C は event.event の発言ごとの agentOverrides を準備・設定解決へ渡す。
   event: AcceptedEvent;
   turn: TurnIdentity;
   state: ConversationTurnState;
+  directorManagerReplies?: readonly DirectorManagerReply[];
 }
 
 export type TurnOutcome =

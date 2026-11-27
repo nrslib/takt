@@ -1,19 +1,53 @@
 import { createHash } from 'node:crypto';
-import { opendir, unlink } from 'node:fs/promises';
+import { lstat, opendir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
-import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
+import { MAX_DIRECTOR_MANAGER_REPLIES, MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES,
+  type DirectorManagerReply, type TurnIdentity, type TurnResult } from '../../core/daemon/messages.js';
 import type { ConversationTurns, EventStore, StoredEvent } from '../../core/daemon/ports.js';
+import { CLEAR_COMMAND } from '../../features/manager/conversationCommands.js';
+import { truncateUtf8WithMarker } from '../../shared/utils/text.js';
+import { conversationId as idForAssignment } from '../conversations/identity.js';
 import type { ConversationAssignment } from '../conversations/schema.js';
 import { AcceptedEventSchema, EventRecordSchema, EventRecordWriteSchema, isRetiredWatchEvent, storedStandaloneInboxAnswer, TurnResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
 import { ensurePrivateDirectory, hasCode, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
 import { ConversationStateStore } from './conversationStateStore.js';
 import { DaemonPersistedFiles } from './persistedFiles.js';
+import type { DaemonNotifications } from './notifications.js';
 
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
+const directorId = idForAssignment({ kind: 'daemon' });
+const MAX_REQUEST_EXCERPT_BYTES = 384;
+const omittedBytesMarker = (bytes: number): string => `\n[TRUNCATED: ${bytes} bytes omitted]`;
+const REPLY_TRUNCATION_MARKER = '\n[TRUNCATED]';
+const jsonStringContentBytes = (value: string): number => Buffer.byteLength(JSON.stringify(value)) - 2;
+
+function excerptForJson(text: string, budget: number): string | undefined {
+  const markerBytes = jsonStringContentBytes(REPLY_TRUNCATION_MARKER);
+  let bytes = 0;
+  let offset = 0;
+  let excerptEnd = 0;
+  for (const character of text) {
+    bytes += jsonStringContentBytes(character);
+    if (bytes > budget) return budget < markerBytes ? undefined : text.slice(0, excerptEnd) + REPLY_TRUNCATION_MARKER;
+    offset += character.length;
+    if (bytes + markerBytes <= budget) excerptEnd = offset;
+  }
+  return text;
+}
+
+function isDirectorClear(event: AcceptedEvent): boolean {
+  return event.conversationId === directorId && event.event.kind === 'human_command'
+    && event.event.command.kind === 'message' && event.event.command.text.trim() === CLEAR_COMMAND;
+}
+
+function isDirectorDelegation(event: AcceptedEvent): event is AcceptedEvent & { event: Extract<AcceptedEvent['event'], { kind: 'director_message' }> } {
+  return event.source === 'director' && event.event.kind === 'director_message'
+    && event.event.inquiryAnswer === undefined && event.event.directorConversationId === directorId && event.conversationId !== directorId;
+}
 
 export class FileEventStore implements EventStore, ConversationTurns {
   private readonly directory: string;
@@ -21,6 +55,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private readonly requests = new Map<string, string>();
   private readonly sequences = new Map<number, string>();
   private readonly byConversation = new Map<string, Map<string, string>>();
+  private readonly directorContext = new Map<number, { path: string; kind: 'delegation'; operationId: string } | { path: string; kind: 'clear' }>();
   private readonly knownFiles = new Set<string>();
   private readonly lock = new FileAsyncLock();
   private readonly conversations: ConversationStateStore;
@@ -100,6 +135,8 @@ export class FileEventStore implements EventStore, ConversationTurns {
       this.byConversation.set(event.conversationId, conversation);
     }
     conversation.set(event.eventId, path);
+    if (isDirectorDelegation(event)) this.directorContext.set(event.acceptedSequence, { path, kind: 'delegation', operationId: event.operationId });
+    else if (isDirectorClear(event)) this.directorContext.set(event.acceptedSequence, { path, kind: 'clear' });
     this.lastSequence = Math.max(this.lastSequence, event.acceptedSequence);
     this.knownFiles.add(path);
   }
@@ -129,6 +166,58 @@ export class FileEventStore implements EventStore, ConversationTurns {
       }
       return turns.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
     });
+  }
+
+  readDirectorManagerReplies(notifications: DaemonNotifications): Promise<readonly DirectorManagerReply[]> {
+    return this.exclusive(async () => {
+      await this.refresh();
+      const replies: DirectorManagerReply[] = [];
+      for (const path of await this.directorReplyPaths(notifications)) {
+        const record = await this.readStored(path);
+        if (record === undefined) {
+          this.forget(path);
+          continue;
+        }
+        // A reply can be visible from apply() before its event is marked settled.
+        if (record.state !== 'settling' && record.state !== 'settled') continue;
+        const { event, result: { outcome } } = record;
+        if (outcome.kind !== 'completed' || outcome.result.kind !== 'reply' || !isDirectorDelegation(event)) continue;
+        const reply = { managerId: event.conversationId, operationId: event.operationId, requestedAt: event.occurredAt,
+          request: truncateUtf8WithMarker(event.event.text, MAX_REQUEST_EXCERPT_BYTES, omittedBytesMarker),
+          reply: '' };
+        const remaining = MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES - Buffer.byteLength(JSON.stringify([...replies, reply]));
+        if (remaining <= 0) break;
+        const excerpt = excerptForJson(outcome.result.message, remaining);
+        if (excerpt === undefined) break;
+        replies.push({ ...reply, reply: excerpt });
+        if (replies.length === MAX_DIRECTOR_MANAGER_REPLIES) break;
+      }
+      return replies;
+    });
+  }
+
+  private async directorReplyPaths(notifications: DaemonNotifications): Promise<string[]> {
+    const candidates: Array<{ path: string; sequence: number; publishedAt: bigint }> = [];
+    const clear = await notifications.directorContextClear();
+    let legacyClearedAt: bigint | undefined;
+    for (const [sequence, candidate] of [...this.directorContext].sort(([left], [right]) => right - left)) {
+      const { path } = candidate;
+      if (candidate.kind === 'clear') {
+        if (clear !== undefined || legacyClearedAt !== undefined) continue;
+        // Older clears have only the durable event timestamp.
+        const record = await this.readStored(path);
+        if (record === undefined) this.forget(path);
+        else if (record.state === 'settled' && record.result.outcome.kind === 'completed' && record.result.outcome.result.kind === 'notice') {
+          legacyClearedAt = (await lstat(path, { bigint: true })).mtimeNs;
+        }
+        continue;
+      }
+      // The reply can become visible in a different order from request admission or event settlement.
+      const publishedAt = await notifications.managerResultPublishedAt(candidate.operationId, clear);
+      if (publishedAt !== undefined) candidates.push({ path, sequence, publishedAt });
+    }
+    return candidates.filter(({ publishedAt }) => legacyClearedAt === undefined || publishedAt > legacyClearedAt)
+      .sort((left, right) => Number(right.publishedAt - left.publishedAt) || right.sequence - left.sequence).map(({ path }) => path);
   }
 
   private async refresh(): Promise<void> {
@@ -169,7 +258,9 @@ export class FileEventStore implements EventStore, ConversationTurns {
     }
     if (removedIds.size === 0) return;
     for (const [sequence, eventId] of this.sequences) {
-      if (removedIds.has(eventId)) this.sequences.delete(sequence);
+      if (!removedIds.has(eventId)) continue;
+      this.sequences.delete(sequence);
+      this.directorContext.delete(sequence);
     }
     for (const [conversationId, conversation] of this.byConversation) {
       for (const eventId of removedIds) conversation.delete(eventId);
@@ -207,11 +298,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
       if (writing) {
         // 保存後の応答・ロック解放の失敗でも、拒否した発言を復元させない。
         await unlink(this.path(event.eventId)).catch((cleanup: unknown) => { if (!hasCode(cleanup, 'ENOENT')) throw cleanup; });
-        this.ids.delete(event.eventId);
-        this.requests.delete(requestKey(event));
-        this.sequences.delete(event.acceptedSequence);
-        this.byConversation.get(event.conversationId)?.delete(event.eventId);
-        this.knownFiles.delete(this.path(event.eventId));
+        this.forget(this.path(event.eventId));
       }
       throw error;
     }

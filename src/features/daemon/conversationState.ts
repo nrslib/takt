@@ -9,7 +9,7 @@ import type { ConversationTurns, ConversationOwner } from '../../core/daemon/por
 import type { ConversationSnapshot, TurnIdentity, TurnOutcome, TurnResult, TurnStart } from '../../core/daemon/messages.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { DaemonDisplayFiles } from '../../infra/daemon/displayFiles.js';
-import { DaemonNotifications } from '../../infra/daemon/notifications.js';
+import { DaemonNotifications, managerResultNotificationId } from '../../infra/daemon/notifications.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { ConversationState, OperationResult, OutputVersion, PortOutput, SnapshotItem } from '../manager/conversationPort.js';
@@ -144,6 +144,10 @@ export class DaemonConversations implements ConversationOwner {
       if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
       else this.interrupted.delete(result.conversationId);
       const outcome = result.outcome;
+      if (current.state.assignment.kind === 'daemon' && outcome.kind === 'completed' && outcome.result.kind === 'notice'
+        && event.kind === 'human_command' && event.command.kind === 'message' && event.command.text.trim() === CLEAR_COMMAND) {
+        await this.notifications.recordDirectorContextClear(result.operationId);
+      }
       this.send(result.conversationId, { kind: 'pending', state: { conversationId: result.conversationId, assignment: current.state.assignment,
         revision: current.state.revision, pending: current.state.pending, approval: current.state.approval, running: null,
         interrupted: outcome.kind === 'interrupted' } }, this.version(result.conversationId, current.state.revision, result.operationId));
@@ -173,7 +177,7 @@ export class DaemonConversations implements ConversationOwner {
     const outcome = result.outcome;
     const message = outcome.kind === 'completed' && 'message' in outcome.result ? outcome.result.message
       : outcome.kind === 'failed' ? outcome.message : outcome.kind === 'interrupted' ? 'Manager turn interrupted' : 'Manager operation completed';
-    const id = `result-${result.operationId}`;
+    const id = managerResultNotificationId(result.operationId);
     await this.notification(conversationId({ kind: 'daemon' }), { id,
       message: `${result.conversationId} (${result.operationId}): ${message}` }, new AbortController().signal);
   }

@@ -6,7 +6,7 @@ import type { ChildProcess } from 'node:child_process';
 import * as spawnModule from '../shared/utils/spawn.js';
 import { createTurnProcessHost } from '../features/daemon/turnProcessHost.js';
 import type { DaemonProcessMessage } from '../core/daemon/processProtocol.js';
-import type { ConversationChange, InquiryNotice, RuntimeMessage, TurnStart } from '../core/daemon/messages.js';
+import type { ConversationChange, InquiryNotice, RuntimeMessage, TurnResult, TurnStart } from '../core/daemon/messages.js';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -50,6 +50,10 @@ import { inquiryAnswerEvent } from '../features/daemon/inquiryAnswerEvent.js';
 import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
 import * as watchLoop from '../features/daemon/watchers/loop.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
+import { createTurnBusiness } from '../features/daemonTurn/turnBusiness.js';
+import * as providers from '../infra/providers/index.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import { makeProvider } from './test-helpers.js';
 
 const turnData = (prompt: string) => JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
@@ -1492,6 +1496,135 @@ it.each<TurnOutcome>([
   const repeated = [];
   for await (const notice of f.conversations.notifications.iterate()) repeated.push(notice);
   expect(repeated).toEqual(saved);
+});
+
+it('passes a manager reply to the director provider as soon as it is notified and after restart', async () => {
+  const f = await fixture(async (directory) => { await writeFile(join(directory, 'config.yaml'), 'provider: mock\nlanguage: ja\n'); });
+  const assignment = { kind: 'daemon' as const };
+  const director = conversationId(assignment);
+  const speaker = { namespace: 'local', id: 'operator' };
+  async function observeDirector(daemon: typeof f): Promise<PortOutput[]> {
+    const outputs: PortOutput[] = [];
+    const connection = await daemon.input.open({ conversationId: director, assignment, speaker,
+      binding: { port: 'tui', key: 'director-replies', counterpart: speaker } }, {
+      async deliver(_id, output) { outputs.push(output); return { kind: 'delivered' }; },
+    });
+    connection.read.cancel();
+    return outputs;
+  }
+  const outputs = await observeDirector(f);
+
+  const callProvider = vi.fn<ProviderAgent['call']>(async () => ({
+    persona: 'director', status: 'done', content: '確認しました', sessionId: 'director-session', timestamp: new Date(),
+  }));
+  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
+    supportedMcpTransports: new Set(['http']), setup: () => ({ call: callProvider }) }));
+  async function executeHumanTurn(daemon: typeof f, call: Awaited<ReturnType<typeof f.runner.started>>) {
+    const business = await createTurnBusiness(f.directory, assignment);
+    try {
+      const start = parseDaemonProcessMessage({ protocolVersion: 1, launchId: 'director-replies', kind: 'start_turn', input: call.input }, 'director-replies');
+      if (start.kind !== 'start_turn') throw new Error('Expected director turn start');
+      const outcome = await business.execute(start.input, { signal: call.signal, progress() {},
+        request: (request, signal) => daemon.dispatcher.request(call.turn, request, signal ?? call.signal) });
+      expect(outcome).toMatchObject({ kind: 'completed', result: { kind: expect.stringMatching(/reply|notice/) } });
+      await daemon.runner.finish(call, outcome);
+    } finally { await business.close(); }
+  }
+
+  accepted(await f.dispatcher.accept(input('新しい Issue を調べて', director)));
+  const first = await f.runner.started(1);
+  const request = '最近の Issue を調べて、対応するべき候補を教えてください。';
+  const requestedAt = '2026-11-03T00:00:00Z';
+  for (const [id, text] of [['investigate', request], ['pending', '別の依頼を調査してください。']] as const) {
+    expect(await f.dispatcher.request(first.turn, { kind: 'accept_director_message', conversationId: f.id, eventId: id,
+      requestId: id, text, origin: 'human', occurredAt: requestedAt }, first.signal)).toMatchObject({
+      kind: 'event_accepted', admission: { kind: 'accepted' },
+    });
+  }
+  const announcement = '別の作業のアナウンス';
+  await f.dispatcher.request(first.turn, { kind: 'notify_director', notificationId: randomUUID(), message: announcement }, first.signal);
+  await f.runner.finish(first);
+  const manager = await f.runner.started(2);
+  const reply = `#2043 の調査結果\n${'調査記録'.repeat(85)}\n#2053 の調査結果\n${'確認した受け入れ条件'.repeat(68)}\n以上が2件です。`;
+  const operationId = manager.turn.operationId;
+  const publishing = deferred<void>(); const publish = deferred<void>();
+  const notifyResult = f.conversations.notifyResult.bind(f.conversations);
+  vi.spyOn(f.conversations, 'notifyResult').mockImplementation(async (result) => {
+    if (result.operationId === operationId) { publishing.resolve(); await publish.promise; }
+    await notifyResult(result);
+  });
+  const release = deferred<void>();
+  const markSettled = FileEventStore.prototype.markSettled;
+  vi.spyOn(FileEventStore.prototype, 'markSettled').mockImplementation(async function (this: FileEventStore, eventId, result) {
+    if (result.operationId === operationId) await release.promise;
+    await markSettled.call(this, eventId, result);
+  });
+  const completing = f.runner.finish(manager, { kind: 'completed', result: { kind: 'reply', message: reply } });
+  const followUp = 'ではその２つ直すようにして';
+  const expected = { text: followUp, directorManagerReplies: [{ managerId: f.id, operationId, requestedAt, request, reply }] };
+  try {
+    await publishing.promise;
+    accepted(await f.dispatcher.accept(input('何か結果は届いた？', director)));
+    await executeHumanTurn(f, await f.runner.started(3));
+    expect(turnData(callProvider.mock.calls[0]![0])).not.toHaveProperty('directorManagerReplies');
+    publish.resolve();
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'notice', id: `result-${operationId}`,
+      message: `${f.id} (${operationId}): ${reply}` }));
+    expect(outputs).toContainEqual(expect.objectContaining({ kind: 'notice', message: announcement }));
+    expect(f.runner.calls).toHaveLength(3);
+    accepted(await f.dispatcher.accept(input(followUp, director)));
+    await executeHumanTurn(f, await f.runner.started(4));
+    expect(turnData(callProvider.mock.calls[1]![0])).toMatchObject(expected);
+  } finally {
+    publish.resolve();
+    release.resolve();
+    await completing;
+  }
+
+  const pending = await f.runner.started(5);
+  await f.runner.finish(pending, { kind: 'failed', message: '調査が失敗しました' });
+  await f.close();
+  const restarted = await fixture();
+  const afterRestartOutputs = await observeDirector(restarted);
+  accepted(await restarted.dispatcher.accept({ ...input(followUp, director), eventId: 'after-restart', requestId: 'after-restart' }));
+  const afterRestart = await restarted.runner.started(1);
+  const lateRequest = '別件の結果を確認してください。';
+  expect(await restarted.dispatcher.request(afterRestart.turn, { kind: 'accept_director_message', conversationId: f.id,
+    eventId: 'late-request', requestId: 'late-request', text: lateRequest, origin: 'human', occurredAt: requestedAt }, afterRestart.signal))
+    .toMatchObject({ kind: 'event_accepted', admission: { kind: 'accepted' } });
+  await executeHumanTurn(restarted, afterRestart);
+  expect(turnData(callProvider.mock.calls[2]![0])).toMatchObject(expected);
+  expect(callProvider.mock.calls[2]![1]?.sessionId).toBe('director-session');
+
+  const lateManager = await restarted.runner.started(2);
+  accepted(await restarted.dispatcher.accept(input('/clear', director)));
+  const clear = await restarted.runner.started(3);
+  const clearApplied = deferred<TurnResult>(); const settleClear = deferred<void>();
+  vi.spyOn(FileEventStore.prototype, 'markSettled').mockImplementation(async function (this: FileEventStore, eventId, result) {
+    if (result.operationId === clear.turn.operationId) { clearApplied.resolve(result); await settleClear.promise; }
+    await markSettled.call(this, eventId, result);
+  });
+  const clearing = executeHumanTurn(restarted, clear);
+  const lateReply = '別件の結果は #2054 です。';
+  const lateOperationId = lateManager.turn.operationId;
+  try {
+    const replay = await clearApplied.promise;
+    await vi.waitFor(() => expect(afterRestartOutputs).toContainEqual(expect.objectContaining({ kind: 'result',
+      operationId: clear.turn.operationId, result: expect.objectContaining({ kind: 'notice' }) })));
+    await restarted.runner.finish(lateManager, { kind: 'completed', result: { kind: 'reply', message: lateReply } });
+    await vi.waitFor(() => expect(afterRestartOutputs).toContainEqual({ kind: 'notice', id: `result-${lateOperationId}`,
+      message: `${f.id} (${lateOperationId}): ${lateReply}` }));
+    await restarted.conversations.apply(replay);
+  } finally {
+    settleClear.resolve();
+    await clearing;
+  }
+
+  accepted(await restarted.dispatcher.accept(input('新しい話題', director)));
+  await executeHumanTurn(restarted, await restarted.runner.started(4));
+  expect(turnData(callProvider.mock.calls[3]![0])).toMatchObject({ directorManagerReplies: [{
+    managerId: f.id, operationId: lateOperationId, requestedAt, request: lateRequest, reply: lateReply,
+  }] });
 });
 
 it('retires an unread legacy patrol without starting a turn and only deletes other inbox files after acceptance', async () => {

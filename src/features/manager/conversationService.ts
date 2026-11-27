@@ -281,6 +281,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
                 imageAttachmentIds: [...new Set([...state.current.session.imageAttachmentIds, ...imageIds])] } });
             }
             const prompt = buildManagerTurnPrompt({ ...(imageAttachments.length === 0 ? {} : { imageAttachments }), lang: language, event: promptEvent, question,
+              directorManagerReplies: assignment.kind === 'daemon' ? input.directorManagerReplies : undefined,
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,

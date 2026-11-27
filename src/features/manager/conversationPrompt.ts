@@ -1,6 +1,7 @@
 import type { ManagerImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { ManagerRuntimeAssignment } from './runtimeAssignmentSelection.js';
 import type { TurnEvent } from '../../core/daemon/events.js';
+import type { DirectorManagerReply } from '../../core/daemon/messages.js';
 import { loadTemplate, renderTemplate } from '../../shared/prompts/index.js';
 import { buildManagerEventPrompt } from '../daemon/inboxEvent.js';
 
@@ -41,6 +42,7 @@ export function buildManagerTurnPrompt(input: {
   event: TurnEvent & { unreadableGoalIds?: readonly string[] };
   question?: string;
   interruptedMessage?: string | null;
+  directorManagerReplies?: readonly DirectorManagerReply[];
   imageAttachments?: readonly ManagerImageAttachmentReference[];
 }): string {
   const { lang, event } = input;
@@ -50,7 +52,8 @@ export function buildManagerTurnPrompt(input: {
     case 'human_command':
       if (event.command.kind !== 'message') throw new Error('Only message commands start model turns');
       body = JSON.stringify({ speaker: event.speaker, text: event.command.text,
-        ...(event.command.requestProposal === true ? { requestProposal: true } : {}) });
+        ...(event.command.requestProposal === true ? { requestProposal: true } : {}),
+        ...(input.directorManagerReplies?.length ? { directorManagerReplies: input.directorManagerReplies } : {}) });
       break;
     case 'director_message':
       kind = event.inquiryAnswer === undefined ? `director_message_${event.origin ?? 'unknown'}` : 'inquiry_answered';
@@ -69,7 +72,7 @@ export function buildManagerTurnPrompt(input: {
   }
   return [
     ...(input.interruptedMessage == null ? [] : [renderTemplate(loadTemplate('manager_turn_interrupted', lang).trim(), { body: input.interruptedMessage })]),
-    loadTemplate('manager_turn', lang, { [kind]: true, body }).trim(),
+    loadTemplate('manager_turn', lang, { [kind]: true, director_manager_replies: Boolean(input.directorManagerReplies?.length), body }).trim(),
     ...(input.imageAttachments?.length ? [`Image attachments: ${JSON.stringify(input.imageAttachments)}`] : []),
   ].join('\n\n');
 }
