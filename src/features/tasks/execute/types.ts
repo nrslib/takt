@@ -228,6 +228,9 @@ export interface InteractiveMetadata {
 
 /** Options for workflow execution */
 export interface WorkflowExecutionOptions extends PrMergeOptions {
+  /** Verified input supplied by an execution owner instead of live workflow discovery. */
+  preparedWorkflowBundle?: import('./workflowExecutionBundle.js').PreparedWorkflowExecutionBundle;
+  onLiveInterventionDelivery?: (instructionIds: readonly number[], context: import('../../../core/workflow/live-intervention/types.js').LiveInterventionDelivery) => void;
   toolDisplayMode?: ToolActivityDisplayMode;
   /** System command permission resolved for this run, including the configuration source. */
   workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
@@ -346,7 +349,6 @@ export interface TaskExecutionContextOverride {
 
 export interface RunAllTasksOptions extends TaskExecutionOptions {
   ignoreExceed?: boolean;
-  goalTasksOnly?: boolean;
 }
 
 export interface TaskExecutionParallelOptions {

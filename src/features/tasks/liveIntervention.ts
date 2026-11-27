@@ -18,6 +18,7 @@ export interface TellableRunningTaskInspection {
 }
 
 function isWorktreeTask(task: TaskState): boolean {
+  if (task.remoteAssignment !== undefined) return true;
   return task.worktreePath !== undefined && task.worktree !== false;
 }
 
@@ -45,6 +46,16 @@ function resolveTellableTaskFromTask(
   }
   if (!isWorktreeTask(task)) {
     throw new Error(`Tell target run is not a worktree clone: ${runSlug}`);
+  }
+  if (task.remoteAssignment !== undefined) {
+    if (task.remoteAssignment.executionId !== task.executionId || task.remoteAssignment.leaseExpiresAt <= Date.now()) {
+      throw new Error(`Tell target remote assignment has expired: ${runSlug}`);
+    }
+    const meta = readRunMetaBySlug(projectCwd, runSlug);
+    if (meta === null || meta.runSlug !== runSlug || meta.status !== 'running') {
+      throw new Error(`Tell target remote run is not running: ${runSlug}`);
+    }
+    return { task, runSlug, worktreePath: projectCwd, meta };
   }
   const worktreePath = task.worktreePath!;
   const isMergeTask = task.mergeTask === true;

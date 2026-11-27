@@ -1291,7 +1291,7 @@ describe('Merge PR persistent clone ownership', () => {
           if (scenario === 'both_aborted') return { success: false, reason: 'CI stopped after workflow rejection' };
           return { success: true };
         });
-        const result = await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true);
+        const result = await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run');
         const success = scenario === 'prepared' || scenario === 'merged' || scenario === 'deleted_head' || scenario === 'unmerged';
         expect(result).toMatchObject({ success: success ? 1 : 0, fail: success ? 0 : 1 });
         const saved = runner.listTaskStateItems()[0]!;
@@ -1334,7 +1334,7 @@ describe('Merge PR persistent clone ownership', () => {
       const { goal, runner } = await queuedGoal('prepare');
       await new GoalStore(project).update(goal.id, (current) => ({ ...current, status: 'completed',
         completion: { ...current.completion!, targetSha: baseHead } }));
-      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run'))
         .toMatchObject({ success: 0, fail: 1 });
       expect(mocks.workflow).not.toHaveBeenCalled();
       expect(runner.listTaskStateItems()[0]?.completion?.success).toBe(false);
@@ -1354,7 +1354,7 @@ describe('Merge PR persistent clone ownership', () => {
         }
         return { success: true };
       });
-      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run'))
         .toMatchObject({ success: 1, fail: 0 });
       expect(readFileSync(join(clone, 'unpublished.txt'), 'utf8')).toBe('retain this result\n');
       expect(runner.listAllTaskItems()[0]?.worktreePath).toBe(clone);
@@ -1384,7 +1384,7 @@ describe('Merge PR persistent clone ownership', () => {
         git(request.cwd, 'add', 'published.txt'); git(request.cwd, 'commit', '-m', 'prepared work');
         return { success: true };
       });
-      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run'))
         .toMatchObject({ success: 1, fail: 0 });
       const clone = runner.listAllTaskItems()[0]!.worktreePath!;
       expect(existsSync(clone)).toBe(true);

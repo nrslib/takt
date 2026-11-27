@@ -75,6 +75,9 @@ export async function ensureDaemon(options?: { retainConnection: true }): Promis
       }
       if (await isDaemonOwnerRunning(owner, io())) throw new Error('Daemon IPC readiness was not confirmed');
     } else {
+      if (owner.resident === true) {
+        throw new Error(`Resident daemon version/CLI path mismatch (daemon: ${owner.version} at ${owner.cliPath}; manager: ${packageVersion} at ${cliPath}). Run "takt daemon stop", then restart it with the new version using "takt daemon --resident".`);
+      }
       await stopDaemon();
     }
   }
@@ -115,8 +118,8 @@ export async function ensureDaemon(options?: { retainConnection: true }): Promis
 }
 
 /** 手動起動も daemon 専用入口に入り、端末・シグナル・終了状態を引き継ぐ。 */
-export async function runDaemonForeground(): Promise<void> {
-  const child = spawn(process.execPath, [daemonEntryPath()], { stdio: 'inherit', shell: false, env: buildChildProcessEnv() });
+export async function runDaemonForeground(resident: boolean): Promise<void> {
+  const child = spawn(process.execPath, [daemonEntryPath(), ...(resident ? ['--resident'] : [])], { stdio: 'inherit', shell: false, env: buildChildProcessEnv() });
   const forward = (signal: NodeJS.Signals): void => { child.kill(signal); };
   const interrupt = (): void => forward('SIGINT');
   const terminate = (): void => forward('SIGTERM');

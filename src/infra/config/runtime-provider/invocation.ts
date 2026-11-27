@@ -16,6 +16,12 @@ interface RuntimeProviderInvocation {
 }
 
 let invocation: RuntimeProviderInvocation | undefined;
+let suppliedRuntime: ResolvedRuntimeProviderFileWithOrigins | undefined;
+
+/** Only used in the isolated task process; all runtime lookups use this fixed input. */
+export function setExecutionRuntimeProviderConfiguration(configuration: ResolvedRuntimeProviderFileWithOrigins): void {
+  suppliedRuntime = structuredClone(configuration);
+}
 
 const taskRuntimeAssignments = new AsyncLocalStorage<string | undefined>();
 
@@ -92,6 +98,7 @@ export function getInvocationRuntimeFilePath(): string | undefined {
 export function resolveInvocationRuntimeProviderFileWithOrigins(
   paths: RuntimeProviderPaths,
 ): ResolvedRuntimeProviderFileWithOrigins {
+  if (suppliedRuntime !== undefined) return structuredClone(suppliedRuntime);
   const taskRuntimeAssignment = invocation?.runtimeAssignment === undefined
     ? taskRuntimeAssignments.getStore()
     : undefined;

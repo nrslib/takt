@@ -18,9 +18,10 @@ async function sourceFiles(directory) {
   return groups.flat();
 }
 
-/** C が実装する唯一のターン子入口。値 import の除外には使わない。 */
+/** daemon が管理する子プロセス入口。値 import の除外には使わない。 */
 export const daemonProcessBoundaries = Object.freeze([
   Object.freeze({ entry: 'src/app/daemon-turn/index.ts', owner: 'C', protocol: 'src/core/daemon/processProtocol.ts' }),
+  Object.freeze({ entry: 'src/app/worker-pool-project/index.ts', owner: 'worker-pool', protocol: 'src/core/worker-pool/projectProtocol.ts' }),
 ]);
 
 /** 起動・利用側の lifecycle/readiness/client は、値依存から到達した場合だけ含む。 */

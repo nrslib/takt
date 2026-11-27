@@ -112,6 +112,6 @@ program.hook('preSubcommand', async (_command, subcommand) => {
 
 // Common initialization for all commands
 program.hook('preAction', async (_command, actionCommand) => {
-  if (actionCommand.name() === 'daemon' || actionCommand.parent?.name() === 'daemon') return;
+  if (['daemon', 'worker'].includes(actionCommand.name()) || ['daemon', 'worker'].includes(actionCommand.parent?.name() ?? '')) return;
   await runPreActionHook(['manager', 'director'].includes(actionCommand.name()));
 });
