@@ -125,11 +125,10 @@ it.each(['goalId', 'completion', 'runSlug'] as const)('does not publish a recove
 
 describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s acquisition failures', (source) => {
   it.each([
-    { goalTasksOnly: false, goalId: undefined, status: 'pending', retry: true },
-    { goalTasksOnly: true, goalId: undefined, status: 'pending', retry: false },
-    { goalTasksOnly: true, goalId: goalRecord().id, status: 'pending', retry: true },
-    { goalTasksOnly: false, goalId: goalRecord().id, status: 'failed', retry: false },
-  ])('wraps claim ENOSPC only for eligible pending tasks: %j', ({ goalTasksOnly, goalId, status, retry }) => {
+    { goalId: undefined, status: 'pending', retry: true },
+    { goalId: goalRecord().id, status: 'pending', retry: true },
+    { goalId: goalRecord().id, status: 'failed', retry: false },
+  ])('wraps claim ENOSPC only for eligible pending tasks: %j', ({ goalId, status, retry }) => {
     const failure = source === 'private'
       ? new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {})
       : new TaskClaimLockAcquisitionError('disk full', { cause: new Error('disk full') });
@@ -137,7 +136,7 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
       listTaskStateItems: () => [{ name: 'task-a', goalId, status }],
       claimNextTasks: () => { throw failure; },
     } as unknown as TaskRunner;
-    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
+    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal);
     if (retry) {
       expect(claim).toThrow(TaskClaimLockUnavailableError);
       expect(claim).toThrow(expect.objectContaining({ cause: failure }));

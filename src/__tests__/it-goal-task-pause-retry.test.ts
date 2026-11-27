@@ -351,7 +351,11 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
           const args = ['sandbox', '-c', 'sandbox_mode="read-only"', '--', process.execPath, '-e'];
           const processOptions = {
             cwd: options.cwd,
-            env: { PATH: [...runtime.pathDirs, process.env.PATH ?? ''].join(delimiter), HOME: sandboxHome, CODEX_HOME: sandboxHome },
+            // TMPDIR: Codex checks CODEX_HOME against its own temporary directory, so pass the one asserted below.
+            env: {
+              PATH: [...runtime.pathDirs, process.env.PATH ?? ''].join(delimiter),
+              HOME: sandboxHome, CODEX_HOME: sandboxHome, TMPDIR: tmpdir(),
+            },
             encoding: 'utf8' as const, stdio: 'pipe' as const, timeout: 15000,
           };
           expect(processOptions.env.CODEX_HOME).toBe(sandboxHome);

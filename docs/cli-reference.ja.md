@@ -101,9 +101,44 @@ manager の TUI では `Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴ
 
 manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の発言、完了したツールの履歴、返事も、ターンごとにこの順で会話ログに再表示されます（Thinking とツールの合間に出た本文は除きます）。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
-`takt daemon stop` で manager 用のバックグラウンド daemon を明示的に停止できます。自動終了するのは、対象プロジェクトに未完了のゴール、処理待ちのイベント、待機中・実行中のタスクがなく、プロジェクトの確認処理もなく、TUI の接続と会話の操作（初期化・実行・後片付け）がすべてなくなったときだけです。保存された承認待ちの要約だけでは daemon は起動し続けません。
+Slack の受信が動いている間と `--resident` で起動した場合は daemon が自動終了しません。Slack を使わずに常駐させるには次のように起動します。
+
+```bash
+takt daemon --resident
+```
+
+daemon がすでに動いている場合、このコマンドは既存 daemon を維持し、常駐起動できなかったことと再起動手順を表示して非ゼロで終了します。常駐起動するには `takt daemon stop` で既存 daemon を停止してから `takt daemon --resident` を実行してください。
+
+このコマンドは起動した端末で動作を続けます。別の端末で `takt daemon stop` を実行するか、SIGTERM などのシグナルで明示的に停止できます。オプションなしの `takt daemon` と manager が自動起動する daemon は従来どおりです。Slack の受信が動いていない場合は、次のものがすべてなくなると自動終了します。
+
+- TUI の接続と会話接続の初期化処理
+- リモート worker の接続と worker pool で実行中のタスク
+- 処理待ち・実行中のイベント、未完了の待機要求とその結果の配送
+- 対象プロジェクトの未完了のゴール（`status` が `completed` ではなく、`executionStatus` が `aborted` でもないもの）
+- inbox の JSON イベント、`pending`・`running` のタスク、未配送の問い合わせ回答
+
+プロジェクトの確認処理が終わってから条件を再確認します。ゴールを読み取れず終了を確認できない場合も動き続けます。Slack の設定やトークンがあるだけでは常駐せず、受信が実際に動いている必要があります。保存された承認待ちの要約だけでは daemon は起動し続けません。
+
+常駐 daemon とバージョンまたは CLI パスが異なる `takt manager` は daemon を入れ替えません。相違内容と更新手順を表示して終了します。更新するには `takt daemon stop` で常駐 daemon を停止し、利用する新しい版の `takt daemon --resident` で起動し直してから manager を開いてください。同じ版・CLI パスの manager は動いている daemon を再利用します。
 
 `takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。
+
+## worker
+
+`takt worker` は daemon のゴールタスクを別マシンで実行します。仕組みとクラウドでの手順は [worker pool 導入ガイド](./worker-pool.ja.md)を参照してください。
+
+| コマンド | 動作 |
+|----------|------|
+| `takt worker --url <url> --token <token>` | daemon に接続し、割り当てられたタスクを実行し続ける。両オプションが必須 |
+| `takt worker add <name> --concurrency <number>` | worker を登録し、接続トークンを一度だけ標準出力へ表示する |
+| `takt worker list` | 登録名と concurrency をタブ区切りで表示する |
+| `takt worker remove <name>` | 登録を削除し、接続を切る |
+
+add/list/remove は daemon と同じユーザー・グローバル設定ディレクトリで実行します。ディレクトリは `TAKT_CONFIG_DIR` で変更できます。`add` の `--concurrency` は必須で、0以上の安全な整数を受け付けます。0ではその worker にタスクを割り当てません。`builtin` は予約名です。トークンは `list` では表示されず、接続状態も表示しません。concurrency を変えるには登録を削除して登録し直し、新しいトークンを worker に渡します。
+
+接続起動の URL は localhost 以外では HTTPS が必須です。URL 内の認証情報、query、fragment は使えません。worker と daemon の TAKT バージョンをそろえてください。worker 名と上限は登録から決まるため、起動時の `--name` や `--concurrency` はありません。SIGINT または SIGTERM で停止できます。
+
+登録削除で接続トークンは無効になりますが、配布済みの Git トークンは失効しません。必要な失効は GitHub 側でも行ってください。組み込み上限と配布する認証情報は [daemon 設定](./configuration.ja.md#daemon-worker-pool)を参照してください。
 
 ## director（実験的）
 

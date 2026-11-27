@@ -107,6 +107,7 @@ export async function resolvePrCiFailure(
       checks: failure.checks.map(({ name, run, jobs }) => ({
         name, run, jobs: jobs.map(({ id, name: jobName, url }) => ({ id, name: jobName, url })),
       })),
+      ...(failure.external === undefined ? {} : { external: failure.external }),
       unavailable: failure.unavailable,
       recoveryError,
     }) };

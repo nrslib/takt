@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { listDirectorManagers } from '../features/director/managers.js';
-import type { resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
+import type { resolveGitRepositoryDirectory } from '../infra/task/repositoryDirectory.js';
 import type { readProjectRegistry, RegisteredProject } from '../infra/config/global/projectRegistry.js';
 import type { readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
 
 const doubles = vi.hoisted(() => ({
   projects: vi.fn<typeof readProjectRegistry>(),
   workspaces: vi.fn<typeof readWorkspaceRegistry>(),
-  resolve: vi.fn<typeof resolveCurrentManagerAssignment>(),
+  resolve: vi.fn<typeof resolveGitRepositoryDirectory>(),
   realpath: vi.fn<(directory: string) => Promise<string>>(),
   isFired: vi.fn(),
   stat: vi.fn(), access: vi.fn(), warn: vi.fn(),
@@ -16,7 +16,7 @@ const doubles = vi.hoisted(() => ({
 vi.mock('../infra/config/global/projectRegistry.js', () => ({ readProjectRegistry: doubles.projects }));
 vi.mock('../infra/director/managerState.js', () => ({ DirectorManagerStateStore: class { isFired = doubles.isFired; } }));
 vi.mock('../infra/config/global/workspaceRegistry.js', () => ({ readWorkspaceRegistry: doubles.workspaces }));
-vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssignment: doubles.resolve }));
+vi.mock('../infra/task/repositoryDirectory.js', () => ({ resolveGitRepositoryDirectory: doubles.resolve }));
 vi.mock('node:fs/promises', () => ({ realpath: doubles.realpath, stat: doubles.stat, access: doubles.access }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ warn: doubles.warn }) }));
 
@@ -40,18 +40,14 @@ beforeEach(() => {
   doubles.realpath.mockImplementation(async (directory) => directory);
   doubles.stat.mockResolvedValue({ isDirectory: () => true });
   doubles.access.mockResolvedValue(undefined);
-  doubles.resolve.mockImplementation(async (identity) => {
-    if (identity.kind !== 'repository') throw new Error('Repository identity required');
-    return repository(identity.repositoryDirectory);
-  });
+  doubles.resolve.mockImplementation(async (directory) => directory);
 });
 
 it('continues after a project assignment fails and preserves its reason with sensitive values redacted', async () => {
   doubles.projects.mockResolvedValue({ projects: ['/a-good', '/b-broken', '/c-good'].map((directory) => project(directory)), warnings: [] });
-  doubles.resolve.mockImplementation(async (identity) => {
-    if (identity.kind !== 'repository') throw new Error('Repository identity required');
-    if (identity.repositoryDirectory === '/b-broken') throw new Error('EACCES: permission denied; API_KEY=private-test-value');
-    return repository(identity.repositoryDirectory);
+  doubles.resolve.mockImplementation(async (directory) => {
+    if (directory === '/b-broken') throw new Error('EACCES: permission denied; API_KEY=private-test-value');
+    return directory;
   });
 
   const result = await listDirectorManagers('/config');
@@ -59,7 +55,7 @@ it('continues after a project assignment fails and preserves its reason with sen
   expect(result).toEqual({ managers: [repository('/a-good'), repository('/c-good')],
     errors: [{ repositoryDirectory: '/b-broken', reason: expect.stringContaining('EACCES: permission denied') }] });
   expect(result.errors[0]!.reason).not.toContain('private-test-value');
-  expect(doubles.resolve).toHaveBeenLastCalledWith({ kind: 'repository', repositoryDirectory: '/c-good' }, '/config');
+  expect(doubles.resolve).toHaveBeenLastCalledWith('/c-good');
 });
 
 it('lists marked and workspace projects once while preserving empty workspaces and excluding unmarked projects', async () => {
@@ -68,13 +64,9 @@ it('lists marked and workspace projects once while preserving empty workspaces a
   const assignment = { kind: 'workspace' as const, workspaceId: workspace.id, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
   doubles.projects.mockResolvedValue({ projects: [project('/a-good'), project('/b-member'), project('/ignored', { managerUsed: false })], warnings: [] });
   doubles.workspaces.mockResolvedValue([workspace, empty]);
-  doubles.resolve.mockImplementation(async (identity) => {
-    if (identity.kind !== 'repository') throw new Error('Repository identity required');
-    return identity.repositoryDirectory === '/b-member' ? assignment : repository(identity.repositoryDirectory);
-  });
-
   expect(await listDirectorManagers('/config')).toEqual({ managers: [assignment,
     { kind: 'workspace', workspaceId: empty.id, name: empty.name, repositoryDirectories: [] }, repository('/a-good')], errors: [] });
+  expect(doubles.workspaces).toHaveBeenCalledExactlyOnceWith('/config');
   expect(doubles.resolve).toHaveBeenCalledTimes(2);
   expect(doubles.realpath.mock.calls.map(([directory]) => directory)).toEqual(['/a-good', '/b-member']);
 });
@@ -88,7 +80,7 @@ it('rejects an unavailable original registration even when its replacement has a
 
   expect(result).toMatchObject({ managers: [repository('/a-good')],
     errors: [{ repositoryDirectory: '/b-replaced', reason: expect.stringMatching(/\S/) }] });
-  expect(doubles.resolve).toHaveBeenCalledExactlyOnceWith({ kind: 'repository', repositoryDirectory: '/a-good' }, '/config');
+  expect(doubles.resolve).toHaveBeenCalledExactlyOnceWith('/a-good');
 });
 
 it('keeps every marked manager visible regardless of how long ago it was used', async () => {
@@ -103,8 +95,6 @@ it('applies current fire state to both workspace and repository managers after d
   const assigned = { kind: 'workspace' as const, workspaceId: workspace.id, name: workspace.name, repositoryDirectories: ['/member'] };
   doubles.projects.mockResolvedValue({ projects: [project('/member'), project('/repository')], warnings: [] });
   doubles.workspaces.mockResolvedValue([workspace]);
-  doubles.resolve.mockImplementation(async (identity) => identity.kind === 'repository' && identity.repositoryDirectory === '/member'
-    ? assigned : repository('/repository'));
   expect((await listDirectorManagers('/config')).managers).toEqual([assigned, repository('/repository')]);
   doubles.isFired.mockResolvedValue(true);
   expect((await listDirectorManagers('/config')).managers).toEqual([]);

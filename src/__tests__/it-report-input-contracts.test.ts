@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
-import type { WorkflowConfig } from '../core/models/types.js';
+import { getAllParallelSubSteps, type WorkflowConfig } from '../core/models/types.js';
 import { getBuiltinWorkflowsDir } from '../infra/config/paths.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
@@ -23,6 +23,7 @@ import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { reportInputNames } from '../core/workflow/report-input-contract.js';
 import type { WorkflowCallResolver } from '../core/workflow/types.js';
 import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
+import { reportInputEntries } from '../core/models/workflow-report-input.js';
 
 describe('builtin implementation report input contracts', () => {
   let root: string;
@@ -46,6 +47,41 @@ describe('builtin implementation report input contracts', () => {
   });
 
   for (const language of ['ja', 'en'] as const) {
+    it('passes the prior declined guarantee body into the follow-up reviewer (' + language + ')', () => {
+      writeFileSync(join(root, '.takt', 'config.yaml'), `language: ${language}\n`);
+      const workflow = loadWorkflowFromFile(join(getBuiltinWorkflowsDir(language), 'peer-review.yaml'), root);
+      const adjudication = workflow.steps.find((step) => step.name === 'review-adjudication')!;
+      const followUp = workflow.steps.find((step) => step.name === 'reviewers')!;
+      if (followUp.kind !== 'workflow_call') throw new Error('Expected follow-up reviewer call');
+      const suite = resolveWorkflowCallTarget(workflow, followUp, root)!;
+      const reviewer = suite.steps.flatMap((step) => step.parallel ? getAllParallelSubSteps(step.parallel) : [])
+        .find((step) => step.name === 'coding-review')!;
+      expect(reviewer).toBeDefined();
+      const previous = reportInputEntries(followUp.inputReports)
+        .find((entry) => entry.fromStep === adjudication.name && entry.previousOnly);
+      expect(previous).toBeDefined();
+      const store = new ReportExecutionStore(root);
+      const identity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), adjudication.name, []);
+      const body = '# Previous decision\nDeclined guarantee: literal path match\nSource: human review\nReason: two-message usage\nScope: human-turn directory registration';
+      const id = store.begin(identity, adjudication.name, root, ['review-resolution.md']);
+      writeFileSync(join(root, 'review-resolution.md'), body);
+      store.capture(root, 'review-resolution.md', body);
+      store.finish(id, true);
+      const participation = new WorkflowStepParticipationIndex(new Map());
+      participation.record(workflow, adjudication.name, [], ['review-resolution.md']);
+      const inputs = resolveDeclaredReportInputs({ ...followUp, inputReports: [previous!] }, {
+        workflow, state: createInitialState(workflow, { projectCwd: root }),
+        projectCwd: root, lookupCwd: root, reportDir: root, resumeStackPrefix: [],
+        sharedRuntime: { startedAtMs: 0, reportExecutions: store, workflowStepParticipationIndex: participation,
+          workflowCallInvocationEvidence: { kind: 'exact', index: new WorkflowCallInvocationIndex(new Map()) } },
+      })!;
+      const prompt = new InstructionBuilder(reviewer, makeInstructionContext({
+        reportDir: root, language, declaredReportInputs: [inputs],
+      })).prepare().text;
+      expect(prompt).toContain(body);
+      expect(prompt).toContain(`execution=${inputs.reports[0]!.execution!.id}`);
+    });
+
     it('passes the actual parent decision and its history into the builtin fix plan (' + language + ')', () => {
       writeFileSync(join(root, '.takt', 'config.yaml'), `language: ${language}\n`);
       const workflow = loadWorkflowFromFile(join(getBuiltinWorkflowsDir(language), 'peer-review.yaml'), root);

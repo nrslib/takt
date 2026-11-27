@@ -37,6 +37,8 @@ Check code before findings; never speculate.
 
 Compare caveats in the plan report (items carried forward as open questions in a regular plan). Submit only those meeting the existing evidence and scope criteria as findings, explicitly identifying them as known items. Do not raise the remaining items as findings; record them under the report contract's "Non-Finding Concerns" section (or "Unverified Scope" in testing-review) with the classification "plan-caveat-carry-forward", the evidence, and the next stage responsible for them. This record does not count as an issue, does not trigger REJECT, and is not a repair target. Retain existing decisions on previously adjudicated findings unless the reopening conditions are met.
 
+Compare guarantees or methods declined by a supplied adjudication or human decision with its reason and applicable scope. Do not reword the same proposal as a new finding or unfinished repair. Report separately a real defect violating original acceptance criteria or new evidence changing the decision's premises, and identify any requirement decision needed. Do not infer a decision from another run when it was not supplied.
+
 ## Finding Decision Invariants
 
 | Situation | Treatment |

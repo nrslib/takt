@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../core/models/types.js';
+import type { WorkflowConfig, WorkflowEffect, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import type { WorkflowCallResolutionRequest } from '../core/workflow/types.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
@@ -70,7 +70,16 @@ vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => ({
 import { runAgent } from '../agents/runner.js';
 import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
+// モデルの判断結果を固定し、裁定後のレポート伝搬と遷移を検証する。
+interface SyncReviewFinding {
+  id: string;
+  problem: string;
+  evidence: string;
+  shouldFix: boolean;
+}
+
 interface Scenario {
+  syncReviewFindings?: readonly SyncReviewFinding[];
   headChangesDuringCi?: boolean;
   concurrency?: number;
   lateConflicts?: number;
@@ -109,6 +118,8 @@ interface Scenario {
   recoveryPushFails?: boolean;
   ciName?: { field: 'check' | 'job' | 'unavailable'; value: string };
   largeCiLogs?: boolean;
+  /** Adds a failed external status beside the diagnosable check. */
+  externalCiCheck?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -187,6 +198,7 @@ describe('Builtin PR merge workflow execution', () => {
     const observedStatuses: Array<{ headSha: string; finished: boolean; mergeable: string }> = [];
     const childContexts: Array<{ cwd: string; projectCwd: string; prNumber: number | undefined }> = [];
     const simpleReviewPrompts: string[] = [];
+    const agentPrompts: Array<{ workflow: string | undefined; step: string | undefined; prompt: string }> = [];
     const recoveryPrompts: Array<{ step: string; prompt: string; requiredPermissionMode: string | undefined; cwd: string | undefined }> = [];
     const cloneCwd = join(project, 'clone');
     mkdirSync(cloneCwd);
@@ -208,6 +220,29 @@ describe('Builtin PR merge workflow execution', () => {
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };
     let reviewCount = 0;
+    const syncReviewContext = [
+      'PR cumulative diff: src/shared.ts, src/consumer.ts, tests/consumer.test.ts, src/worker.ts.',
+      'Local synchronization merge: local-merge; parents: pr-before-sync, main-after-change; merge base: common-base.',
+      'Remote PR head: pr-before-sync. The local merge has not been pushed.',
+      'Conflicted file: src/shared.ts. Main added a required argument consumed in src/consumer.ts.',
+      'PR added a consumer and tests in files without conflicts. tests/consumer.test.ts fails only in local-merge.',
+      'The worker shutdown issue was present in pr-before-sync and is independent of the main changes.',
+    ].join('\n');
+    const syncReviewResolution = (afterFix: boolean) => {
+      const findings = scenario.syncReviewFindings;
+      if (!findings) throw new Error('Missing synchronization review findings');
+      const accepted = afterFix ? [] : findings.filter((finding) => finding.shouldFix);
+      return [
+        '# レビュー指摘の裁定',
+        `## 結果: ${accepted.length > 0 ? '修正対象あり' : '修正対象なし'}`,
+        ...(accepted.length === 0 ? [] : ['## 修正する問題',
+          ...accepted.map((finding) => `| ${finding.id} | ${finding.problem} | ${finding.evidence} |`)]),
+        '## 指摘ごとの判断',
+        ...findings.map((finding) => `| ${finding.id} | ${finding.shouldFix
+          ? afterFix ? '確認後は問題なし' : '修正する'
+          : '持ち越す'} | ${finding.evidence} |`),
+      ].join('\n');
+    };
     const currentFailure = () => reruns > 0 && scenario.rerunFailure !== undefined
       ? scenario.rerunFailure
       : scenario.ciFailures?.[Math.min(Math.max(pushes - 1, 0), scenario.ciFailures.length - 1)];
@@ -218,6 +253,10 @@ describe('Builtin PR merge workflow execution', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'supervisor', userInstruction: prompt });
       const step = options?.workflowMeta?.currentStep;
+      if (options?.executionPhase === 1) {
+        agentPrompts.push({ workflow: options.workflowMeta?.workflowName, step, prompt });
+        if (scenario.syncReviewFindings) calls.push(`agent:${options.workflowMeta?.workflowName}/${step}`);
+      }
       if (['investigate_ci', 'fix_ci', 'review_ci_fix'].includes(step ?? '')) {
         if (options?.executionPhase === 1) {
           calls.push(`agent:${step}`);
@@ -235,7 +274,8 @@ describe('Builtin PR merge workflow execution', () => {
         };
       }
       if (actualReview && options?.workflowMeta?.currentStep === 'gather') {
-        return { persona: persona ?? 'planner', status: 'done', content: 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
+        return { persona: persona ?? 'planner', status: 'done',
+          content: scenario.syncReviewFindings ? syncReviewContext : 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
       }
       if (scenario.fullInitialReview && options?.workflowMeta?.workflowName === 'development-review') {
         return { persona: persona ?? 'reviewer', status: 'done', timestamp: new Date(),
@@ -243,21 +283,26 @@ describe('Builtin PR merge workflow execution', () => {
       }
       if ((simple && options?.workflowMeta?.workflowName === 'single-review-suite') || (!simple && options?.workflowMeta?.currentStep === 'write_report')) {
         if (simple && options?.executionPhase === 1) simpleReviewPrompts.push(prompt);
-        const reviewResult = simple && scenario.qualityFailed && reviewCount === 0 ? 'REJECT' : 'APPROVE';
+        const reviewResult = simple && (scenario.qualityFailed || scenario.syncReviewFindings) && reviewCount === 0 ? 'REJECT' : 'APPROVE';
         if (simple && options?.executionPhase === 1) reviewCount++;
         const reviewReason = reviewResult === 'REJECT' ? 'Concrete code defect' : 'No unresolved issues';
         return { persona: 'reviewer', status: 'done',
-          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${reviewResult}. ${reviewReason}.`,
+          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${reviewResult}. ${reviewReason}.\n${
+            scenario.syncReviewFindings?.map((finding) => `${finding.id}: ${finding.problem}. ${finding.evidence}`).join('\n') ?? ''}`,
           ...(simple ? { structuredOutput: { result: reviewResult } } : {}),
           timestamp: new Date() };
       }
       if (actualReview && options?.workflowMeta?.workflowName === 'peer-review') {
         return { persona: persona ?? 'review-adjudicator', status: 'done',
-          content: 'Review resolution: one actionable finding.', timestamp: new Date() };
+          content: scenario.syncReviewFindings ? syncReviewResolution(reviewCount > 1)
+            : 'Review resolution: one actionable finding.', timestamp: new Date() };
       }
       if (simple && options?.workflowMeta?.workflowName === 'development-remediation-dynamic') {
         return { persona: persona ?? 'developer', status: 'done',
-          content: 'Fix plan, implementation, and validation evidence.', timestamp: new Date() };
+          content: ['Fix plan, implementation, and validation evidence.',
+            ...(scenario.syncReviewFindings?.filter((finding) => finding.shouldFix)
+              .map((finding) => `${finding.id}: ${finding.problem}. ${finding.evidence}`) ?? [])].join('\n'),
+          timestamp: new Date() };
       }
       expect(prompt).toContain('CHILD_REVIEW_REPORT');
       if (name === 'merge-review') {
@@ -390,6 +435,7 @@ describe('Builtin PR merge workflow execution', () => {
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
+        ...(scenario.externalCiCheck ? { external: [{ name: 'third-party', url: 'https://ci.example.test/builds/1' }] } : {}),
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
     const githubProvider = new GitHubProvider();
@@ -425,7 +471,8 @@ describe('Builtin PR merge workflow execution', () => {
         options.onStructuredPromptResolved?.({ systemPrompt: 'conductor', userInstruction: instruction });
         if (actualReview) {
           const candidateIndex = options.stepName === 'gather' && scenario.gatherFailed ? 1
-            : options.stepName === 'review-adjudication' && scenario.qualityFailed && reviewCount === 1 ? 0
+            : options.stepName === 'review-adjudication' && reviewCount === 1
+              && (scenario.qualityFailed || scenario.syncReviewFindings?.some((finding) => finding.shouldFix)) ? 0
               : options.stepName === 'review-adjudication' ? 1
                 : options.stepName === 'fix-plan' && scenario.cannotRemediate ? 2
                   : 0;
@@ -461,7 +508,7 @@ describe('Builtin PR merge workflow execution', () => {
     const engine = new WorkflowEngine(workflow, cloneCwd, `Review PR ${prNumber}`, engineOptions);
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
     return { engine, workflow, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd,
-      executeEffect, simpleReviewPrompts, recoveryPrompts, reportDirectory, fetchPrCiFailure, rerunPrCi,
+      executeEffect, simpleReviewPrompts, agentPrompts, syncReviewContext, recoveryPrompts, reportDirectory, fetchPrCiFailure, rerunPrCi,
       taskEntryStates,
       runFromTaskEntry: (workflowIdentifier: string) => executeTaskWorkflow({
         cwd: cloneCwd, projectCwd: project, workflowIdentifier, task: 'Review PR', outputMode: 'silent',
@@ -482,6 +529,165 @@ describe('Builtin PR merge workflow execution', () => {
       },
       finishCi: () => { ciFinished = true; } };
   }
+
+  const syncDefects: readonly SyncReviewFinding[] = [
+    { id: 'coding-001', problem: '衝突解消でPR側の変更が消失した', shouldFix: true,
+      evidence: 'src/shared.ts:10: pr-before-syncにある分岐がlocal-mergeで消失し、main側の追加だけが残る。' },
+    { id: 'coding-002', problem: '非競合ファイルのテストがmainとの組み合わせで失敗する', shouldFix: true,
+      evidence: 'tests/consumer.test.ts:20: pr-before-syncとmain-after-changeでは成功するが、local-mergeではmainが追加した必須引数をPRのconsumerが渡さず失敗する。競合はsrc/shared.tsだけ。' },
+  ];
+  const preexistingFinding: SyncReviewFinding = {
+    id: 'coding-003', problem: 'worker停止時の既存の設計問題', shouldFix: false,
+    evidence: 'src/worker.ts:30: pr-before-syncでも再現する。mainの追加変更はこの経路に影響せず、同期と無関係なので持ち越す。',
+  };
+
+  function phase1Prompt(h: ReturnType<typeof harness>, workflow: string, step: string): string {
+    const entries = h.agentPrompts.filter((entry) => entry.workflow === workflow && entry.step === step);
+    expect(entries).toHaveLength(1);
+    return entries[0]!.prompt;
+  }
+
+  function expectSyncPolicyTransfer(h: ReturnType<typeof harness>, language: string) {
+    const policy = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'policies', 'merge-sync-review.md'), 'utf8').trim();
+    const contextDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'context');
+    const policyFiles = readdirSync(contextDirectory, { recursive: true, encoding: 'utf8' })
+      .filter((path) => /[\\/]policy[\\/]/.test(path))
+      .map((path) => join(contextDirectory, path));
+    const consumers = h.agentPrompts.filter(({ workflow, step }) => workflow === 'single-review-suite'
+      || workflow === 'peer-review' && (step === 'review-adjudication' || step === 'final-gate'));
+    expect(consumers.length).toBeGreaterThan(0);
+    for (const consumer of consumers) {
+      const referencedPolicies = policyFiles.filter((path) => consumer.prompt.includes(path));
+      expect(referencedPolicies, `${consumer.workflow}/${consumer.step}`).toHaveLength(1);
+      expect(readFileSync(referencedPolicies[0]!, 'utf8'), `${consumer.workflow}/${consumer.step}`).toContain(policy);
+    }
+  }
+
+  describe.each((['ja', 'en'] as const).flatMap((language) =>
+    ['merge-prepare', 'merge-review-fix-simple'].map((name) => ({ language, name })),
+  ))('$languageの$nameの同期後レビュー範囲', ({ language, name }) => {
+    it.each(syncDefects)('$problemの裁定から修正と再レビューを経てpushする', async (finding) => {
+      const h = harness(name, { syncFailed: true, syncReviewFindings: [finding] }, language);
+      expect((await h.engine.run()).status, h.failures.join('; ')).toBe('completed');
+      expect(h.simpleReviewPrompts).toHaveLength(2);
+      expect(h.judgedSteps.filter((step) => step === 'review-adjudication')).toHaveLength(2);
+      expect(h.calls.indexOf('agent:development-remediation-dynamic/fix-plan')).toBeLessThan(h.calls.indexOf('commit_and_push'));
+      const fixPlan = phase1Prompt(h, 'development-remediation-dynamic', 'fix-plan');
+      expect(fixPlan).toContain(finding.id);
+      expect(fixPlan).toContain(finding.evidence);
+      expectSyncPolicyTransfer(h, language);
+      const gather = phase1Prompt(h, 'review-fix-simple', 'gather');
+      const gatherInstruction = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'instructions', 'gather-sync-review.md'), 'utf8').trim();
+      expect(gather).toContain(gatherInstruction);
+      expect(h.simpleReviewPrompts[0]).toContain(h.syncReviewContext);
+      expect(h.simpleReviewPrompts[1]).toContain(finding.id);
+      expect(h.simpleReviewPrompts[1]).toContain(finding.evidence);
+    });
+
+    it('既存問題だけのREJECTを理由付きで持ち越し、修正せず最終確認からpushへ進む', async () => {
+      const h = harness(name, { syncFailed: true, syncReviewFindings: [preexistingFinding] }, language);
+      expect((await h.engine.run()).status, h.failures.join('; ')).toBe('completed');
+      expect(h.simpleReviewPrompts).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'call:development-remediation-dynamic')).toEqual([]);
+      expect(h.agentPrompts.filter(({ step }) => ['fix-plan', 'fix', 'fix-verifier'].includes(step ?? ''))).toEqual([]);
+      const resolutionPaths = readdirSync(h.reportDirectory, { recursive: true, encoding: 'utf8' })
+        .filter((path) => path.endsWith('review-resolution.md'));
+      const resolutions = resolutionPaths.map((path) => readFileSync(join(h.reportDirectory, path), 'utf8'));
+      expect(resolutions.some((report) => report.includes(`| ${preexistingFinding.id} | 持ち越す | ${preexistingFinding.evidence} |`))).toBe(true);
+      const finalGate = phase1Prompt(h, 'peer-review', 'final-gate');
+      expect(finalGate).toContain(`| ${preexistingFinding.id} | 持ち越す | ${preexistingFinding.evidence} |`);
+      expect(h.judgedSteps.filter((step) => step === 'final-gate')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
+      expect(h.comments[0]).toMatch(name === 'merge-prepare' ? /\bprepared\b/ : /\bmerged\b/);
+    });
+
+    it('同期不具合と既存問題の混在時も採用欄と持ち越し理由を修正計画へ伝える', async () => {
+      const finding = syncDefects[1]!;
+      const h = harness(name, { syncFailed: true, syncReviewFindings: [finding, preexistingFinding] }, language);
+      expect((await h.engine.run()).status, h.failures.join('; ')).toBe('completed');
+      const fixPlan = phase1Prompt(h, 'development-remediation-dynamic', 'fix-plan');
+      const acceptedSection = fixPlan.match(/## 修正する問題\n([\s\S]*?)\n## 指摘ごとの判断/u)?.[1];
+      expect(acceptedSection).toBeDefined();
+      expect(acceptedSection).toContain(finding.id);
+      expect(acceptedSection).not.toContain(preexistingFinding.id);
+      expect(fixPlan).toContain(`| ${preexistingFinding.id} | 持ち越す | ${preexistingFinding.evidence} |`);
+      expect(phase1Prompt(h, 'peer-review', 'final-gate')).toContain(preexistingFinding.evidence);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
+    });
+  });
+
+  it.each((['ja', 'en'] as const).flatMap((language) =>
+    ['takt-default', 'review-fix-simple', 'review-fix'].map((name) => ({ language, name })),
+  ))('$languageの$nameは同期用引数を指定しなければ通常のレビュー・裁定基準を保つ', ({ language, name }) => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
+    const root = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
+    if (!root) throw new Error(`Missing builtin workflow: ${name}`);
+    const resolveCall = (parent: WorkflowConfig, stepName: string): WorkflowConfig => {
+      const step = parent.steps.find((step) => step.name === stepName);
+      if (step?.kind !== 'workflow_call') throw new Error(`Missing workflow call: ${parent.name}/${stepName}`);
+      const child = resolveWorkflowCallTarget(parent, step, project);
+      if (!child) throw new Error(`Missing child workflow: ${step.call}`);
+      return child;
+    };
+    const peerReview = name === 'takt-default'
+      ? resolveCall(resolveCall(root, 'develop'), 'peer-review')
+      : resolveCall(root, 'reviewers');
+    const policySourceStep = root.steps.find((step) => step.name === (name === 'takt-default' ? 'develop' : 'reviewers'));
+    if (policySourceStep?.kind !== 'workflow_call') throw new Error(`Missing policy source: ${name}`);
+    const expectedPolicyRefs = name === 'review-fix-simple'
+      ? root.subworkflow?.params?.final_gate_policy?.default
+      : policySourceStep.args?.[name === 'takt-default' ? 'review_policy' : 'final_gate_policy'];
+    if (!Array.isArray(expectedPolicyRefs)) throw new Error(`Expected policy references: ${name}`);
+    expect(expectedPolicyRefs.length).toBeGreaterThan(0);
+    for (const ref of expectedPolicyRefs) {
+      expect(typeof ref).toBe('string');
+      expect(ref.trim().length).toBeGreaterThan(0);
+    }
+    const finalGate = peerReview.steps.find((step) => step.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    const expectFinalGatePolicies = (policies: WorkflowStep['policyContents']): void => {
+      expect(policies).toEqual(expect.arrayContaining(expectedPolicyRefs.map((ref) => expect.objectContaining({
+        refName: ref,
+        sourcePath: join(process.cwd(), 'builtins', language, 'facets', 'policies', `${ref}.md`),
+        content: expect.any(String),
+      }))));
+      for (const ref of expectedPolicyRefs) {
+        const policy = policies!.find((entry) => entry.refName === ref);
+        expect(policy!.content.trim().length).toBeGreaterThan(0);
+      }
+    };
+    expectFinalGatePolicies(finalGate!.policyContents);
+    const omittedPolicyRef = name === 'takt-default' ? 'takt-testing-review' : 'coding';
+    expect(expectedPolicyRefs).toContain(omittedPolicyRef);
+    expect(() => expectFinalGatePolicies(finalGate!.policyContents!
+      .filter((policy) => policy.refName !== omittedPolicyRef))).toThrow();
+    expect(() => expectFinalGatePolicies([])).toThrow();
+    const adjudication = peerReview.steps.find((step) => step.name === 'review-adjudication');
+    expect(adjudication?.policyContents?.map((policy) => policy.refName)).toContain('review-adjudication');
+    const reviewSteps = ['initial-reviewers', 'reviewers'].flatMap((stepName) =>
+      resolveCall(peerReview, stepName).steps.flatMap((step) => {
+        const parallel = step.parallel;
+        const reviewers = Array.isArray(parallel) ? parallel : [...(parallel?.fixed ?? []), ...(parallel?.pool ?? [])];
+        return [step, ...reviewers];
+      }),
+    );
+    const consumers = [adjudication, finalGate, ...reviewSteps];
+    for (const consumer of consumers) {
+      expect(consumer).toBeDefined();
+      for (const policy of consumer!.policyContents ?? []) {
+        expect(policy.refName).not.toBe('merge-sync-review');
+        expect(policy.sourcePath).not.toMatch(/[/\\]merge-sync-review\.md$/u);
+      }
+    }
+    const ordinaryReviewer = reviewSteps.flatMap((step) => step.policyContents ?? [])
+      .find((policy) => policy.refName === 'review');
+    expect(ordinaryReviewer?.sourcePath).toBe(join(process.cwd(), 'builtins', language, 'facets', 'policies', 'review.md'));
+    if (name !== 'takt-default') {
+      const gather = root.steps.find((step) => step.name === 'gather');
+      expect(gather?.instruction).toContain(readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'instructions', 'gather-review.md'), 'utf8').trim());
+    }
+  });
 
   it.each(['created', 'awaiting_merge'] as const)('同じマージ実行のCI待機中にゴールが %s なら最新状態に従って停止または続行する', async (status) => {
     const controller = new AbortController();
@@ -1153,6 +1359,7 @@ describe('Builtin PR merge workflow execution', () => {
       return JSON.parse(readFileSync(path!, 'utf8')) as {
         checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
           jobs: Array<{ id: number; logPath: string | null }> }>;
+        external?: Array<{ name: string }>;
         unavailable: Array<{ reason: string }>;
       };
     }
@@ -1198,6 +1405,22 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.comments[0]).toContain('c'.repeat(40));
       expect(h.rerunPrCi).not.toHaveBeenCalled();
       expect(h.calls.filter((call) => call.startsWith('call:'))).toHaveLength(0);
+    });
+
+    it('外部の失敗チェックが混ざっても診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], externalCiCheck: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual([
+        'agent:investigate_ci', 'agent:fix_ci', 'agent:review_ci_fix',
+      ]);
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      const investigation = h.recoveryPrompts[0]!.prompt;
+      for (const count of ['complete=true', 'unique job logs=1', 'external checks=1', 'unavailable=0']) {
+        expect(investigation).toContain(count);
+      }
+      const index = evidenceIndex(investigation);
+      expect(index.unavailable).toEqual([]);
+      expect(index.external).toEqual([expect.objectContaining({ name: 'third-party' })]);
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {

@@ -304,11 +304,13 @@ export class CodexClient {
     source: Parameters<typeof buildRateLimitedResponseFields>[1] = 'sdk_error',
   ): AgentResponse {
     const response = buildRateLimitedResponseFields('codex', source, message);
+    const rateLimitClass = classifyRateLimitError(message);
     return {
       persona: agentType,
       timestamp: new Date(),
       sessionId,
       ...response,
+      rateLimitInfo: rateLimitClass === 'NotRateLimit' ? response.rateLimitInfo : { ...response.rateLimitInfo, rateLimitClass },
       error: boundCodexFailureMessage(response.error, options, true),
       ...(retryCount > 0 ? { retryCount } : {}),
     };

@@ -5,6 +5,7 @@ import type { ConfigTrace } from './traced/tracedConfigLoader.js';
 
 interface ConfigSnapshot {
   projectDir: string;
+  additionalProjectDirs?: readonly string[];
   project: ProjectConfig;
   global: GlobalConfig;
   projectTrace: ConfigTrace;
@@ -14,7 +15,8 @@ interface ConfigSnapshot {
 const snapshots = new AsyncLocalStorage<ConfigSnapshot>();
 
 export function withConfigSnapshot<T>(snapshot: ConfigSnapshot, action: () => T): T {
-  return snapshots.run({ ...snapshot, projectDir: resolve(snapshot.projectDir) }, action);
+  return snapshots.run({ ...snapshot, projectDir: resolve(snapshot.projectDir),
+    additionalProjectDirs: snapshot.additionalProjectDirs?.map((directory) => resolve(directory)) }, action);
 }
 
 export function getConfigSnapshot(): ConfigSnapshot | undefined {
@@ -23,5 +25,6 @@ export function getConfigSnapshot(): ConfigSnapshot | undefined {
 
 export function getProjectConfigSnapshot(projectDir: string): ConfigSnapshot | undefined {
   const snapshot = snapshots.getStore();
-  return snapshot?.projectDir === resolve(projectDir) ? snapshot : undefined;
+  const directory = resolve(projectDir);
+  return snapshot !== undefined && (snapshot.projectDir === directory || snapshot.additionalProjectDirs?.includes(directory)) ? snapshot : undefined;
 }

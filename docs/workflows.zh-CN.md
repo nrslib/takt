@@ -1171,6 +1171,8 @@ Merge 命令在 workflow 开始前检查 fork 威胁，无论是指定 PR 编号
 
 `takt merge` 的默认 workflow 是 `merge-review-fix-simple`，先将 PR 与 base branch 同步。无冲突时跳过完整 review，直接进入 push；初次同步或重新同步中只要 AI 解决了冲突，就调用 `review-fix-simple`。收集上下文后，一个只读 reviewer 使用与变更相符的 facet 审查。其他 step 分别裁定问题、制定修复计划、修复、验证完成情况并再次审查。Review 流程还会进行最终需求检查，然后进入共同流程：push、执行 Caccia、检查其返回 head 的 CI、GitHub review 和可合并状态，再合并。子 workflow 中止时不合并，并在 PR 中评论结果。CI 失败时进入下述恢复处理。需要并行专家审查时，可选择 `merge-review-fix`。
 
+`merge-prepare` 和 `merge-review-fix-simple` 的同步后审查会检查 PR 的完整累积差异和 base branch 新增的变更。只修复冲突解决错误，以及两侧变更组合后产生的缺陷，包括无冲突文件中的缺陷。与同步无关的既有问题会记录原因并留待后续处理，不触发修复计划、修复或最终检查的退回。无冲突同步仍跳过完整审查，常规开发的审查和裁定标准保持不变。
+
 ### 仅审查 CI 已成功的 PR
 
 `merge-review-ci` 只在显式选择时运行。首个 system step 读取现有 `pr_status`，仅当 `ci.finished` 和 `ci.passed` 都为真时，才通过 `workflow_call` 调用 `merge-review`。成功定义与现有逻辑相同，包括 `SUCCESS`、`NEUTRAL` 和 `SKIPPED`。检查未完成、失败或尚未创建时，以 `COMPLETE` 结束，不执行 review、Caccia 或评估评论。初次检查不等待、不重试，也不新增配置项或 CLI 选项。
@@ -1198,9 +1200,11 @@ caccia:
 
 `comment_pr`支持可选的`body_format: plain_text`。整个插值后的正文使用代码块输出，反引号分隔符比正文中的最长连续反引号更长。CI恢复停止及push失败评论使用该格式，使检查名、job名、调查摘要和错误保持为字面文本。未指定时继续按原样传递Markdown正文。
 
-恢复输入`pr_ci_failure`接受`source: current_pr`和完整的HEAD状态引用`head_sha`，返回PR、HEAD、完整性、包含run/attempt/job及日志的`checks`、`unavailable`、`fixRounds`、`rerunCount`及评论用`details`。`rerun_ci` effect接受`pr`和完整证据引用`failure`，仅在证据完整且调查判断为外部原因时对失败run去重并重跑一次。其`rerun`结果保存PR、HEAD及旧attempt；将完整引用传给`pr_status.rerun_from`即可等待新attempt。重跑step执行前，该可选引用保持普通polling。计数属于同一次workflow执行。
+恢复输入`pr_ci_failure`接受`source: current_pr`和完整的HEAD状态引用`head_sha`，返回PR、HEAD、完整性、包含run/attempt/job及日志的`checks`、`unavailable`、`fixRounds`、`rerunCount`及评论用`details`。commit status、第三方check等没有Actions日志的失败列在`external`中；它们仍视为失败，但不会使其他check的证据变为不完整。只有应当存在的证据进入`unavailable`，或没有任何可判断的Actions check时，`complete`才为`false`。`rerun_ci` effect接受`pr`和完整证据引用`failure`，仅在证据完整且调查判断为外部原因时对失败run去重并重跑一次。其`rerun`结果保存PR、HEAD及旧attempt；将完整引用传给`pr_status.rerun_from`即可等待新attempt。重跑step执行前，该可选引用保持普通polling。计数属于同一次workflow执行。
 
 ### Caccia system effect
+
+在 GitHub 上，effect 验证开始时的 head 后，检查由 `coderabbitai` 发起且尚未解决的线程。没有符合条件的线程时，不等待审查，直接返回 `skipped`，原因为 `skipReason: no_review_threads`。合并 workflow 继续进入 `wait_ci`，等待返回 head 的 CI 完成。有符合条件的线程时，执行既有的审查处理循环。独立命令 `takt caccia` 和 PR 发布后的自动 Caccia 保留初次审查等待。
 
 此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时跳过 CodeRabbit 审查等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
 
@@ -1221,7 +1225,7 @@ caccia:
         next: wait_ci
 ```
 
-正常结果包含 `success: true`、`failed: false`、`outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason` 和 `reason`；不适用的原因字段为 `null`。条件使用 `effect.<step>.caccia.*`，模板使用 `{effect:<step>.caccia.<field>}`。跳过原因包括 `config_disabled`、`github_unavailable`、`initial_review_unavailable`、`review_rate_limited` 和 `review_skipped`。失败返回 `success: false`、`failed: true` 与 `error`，不保证 head。读取正常字段前先判断失败。
+正常结果包含 `success: true`、`failed: false`、`outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason` 和 `reason`；不适用的原因字段为 `null`。条件使用 `effect.<step>.caccia.*`，模板使用 `{effect:<step>.caccia.<field>}`。跳过原因包括 `config_disabled`、`github_unavailable`、`no_review_threads`、`initial_review_unavailable`、`review_rate_limited` 和 `review_skipped`。失败返回 `success: false`、`failed: true` 与 `error`，不保证 head。读取正常字段前先判断失败。
 
 修复 push 后验证 SHA 并对同一个 clone 进行 fast-forward。CI 将 PR status 的 head 与 `effect.caccia.caccia.headSha` 对照，合并使用 clone 当前 HEAD 作为 expected SHA。此前 push effect 的结果作为历史记录保留。
 

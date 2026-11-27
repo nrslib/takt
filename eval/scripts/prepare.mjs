@@ -26,7 +26,7 @@
  *   node eval/scripts/prepare.mjs [targetId...]   # default: all targets
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MERGE_CI_TARGETS, prepareMergeCiRecovery } from './prepare-merge-ci-recovery.mjs';
@@ -52,6 +52,21 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...['carry', 'update'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `review-adjudication-carry-forward-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/review-adjudication-carry-forward/${caseId}`,
+    projectFromFixture: true, copyFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'], reportFile: 'review-resolution.md',
+    carryForwardDecision: true,
+  }))),
+  ...['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `review-proportionality-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/review-proportionality/${caseId}`,
+    projectFromFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'],
+  }))),
   ...["input-local","input-external","local-condition","long-condition","quality","misdirected-evidence"].flatMap((caseId) => ['ja', 'en'].map((language) => ({
     id: `adjudication-scope-${caseId}-${language}`,
     workflow: 'peer-review', step: 'review-adjudication',
@@ -1258,6 +1273,7 @@ async function main() {
     fixtureConfig,
     language: targetLanguage,
     reportsSeed,
+    carryForwardDecision,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
     process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
@@ -1441,6 +1457,16 @@ async function main() {
       workflowCallVars: effectiveWorkflowCallVars,
       workflowRules,
       language,
+      ...(carryForwardDecision === true ? { declaredReportInputs: [
+        { declaredNames: ['coding-review.md'], reports: [{
+          reference: 'coding-review.md', scope: 'declared-producer', producer: 'reviewers',
+          content: readFileSync(join(reportDir, 'coding-review.md'), 'utf8'),
+        }] },
+        { declaredNames: ['review-resolution.md'], reports: [{
+          reference: 'review-resolution.md', scope: 'declared-producer', producer: 'review-adjudication',
+          content: `Previous completed report: 1 / 1; execution=eval-prior; path=\`${join(runDir, 'previous-decision.md')}\`\n\n${readFileSync(join(runDir, 'previous-decision.md'), 'utf8')}`,
+        }] },
+      ] } : {}),
     };
 
     const instruction = companionSystemPrompt !== undefined

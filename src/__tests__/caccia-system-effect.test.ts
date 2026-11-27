@@ -5,8 +5,12 @@ import type { SystemStepServicesOptions } from '../core/workflow/system/system-s
 import { PrHeadObservationMismatchError, type PrDetails } from '../core/workflow/system/pr-execution-context.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { CacciaWorkflowError } from '../features/caccia/workflow-report.js';
+import type { hasCodeRabbitReviewThreads } from '../infra/github/pr.js';
+import { createCacciaOutput } from '../features/caccia/output.js';
+import { stripAnsi } from '../shared/utils/text.js';
 const mocks = vi.hoisted(() => ({
   run: vi.fn<(input: CacciaInput) => Promise<CacciaResult>>(),
+  hasThreads: vi.fn<typeof hasCodeRabbitReviewThreads>(),
   config: vi.fn(), git: vi.fn(), details: vi.fn(), threat: vi.fn(), detect: vi.fn(), comment: vi.fn(), execFile: vi.fn(),
 }));
 vi.mock('node:child_process', async (original) => ({
@@ -14,6 +18,9 @@ vi.mock('node:child_process', async (original) => ({
 }));
 vi.mock('../features/caccia/index.js', async (original) => ({
   ...await original<typeof import('../features/caccia/index.js')>(), runCaccia: mocks.run,
+}));
+vi.mock('../infra/github/pr.js', async (original) => ({
+  ...await original<typeof import('../infra/github/pr.js')>(), hasCodeRabbitReviewThreads: mocks.hasThreads,
 }));
 vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: mocks.config }));
 vi.mock('../infra/git/detect.js', () => ({ detectVcsProvider: mocks.detect }));
@@ -35,6 +42,16 @@ function options(): Omit<SystemStepServicesOptions, 'gitProvider'> {
 }
 function details(overrides: Partial<PrDetails>): PrDetails {
   return { ...options().prExecutionContext!, number: 123, sameRepository: true, ...overrides };
+}
+function captureScreen() {
+  const chunks: string[] = [];
+  for (const method of ['log', 'error', 'warn'] as const) {
+    vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { chunks.push(args.join(' ') + '\n'); });
+  }
+  for (const stream of [process.stdout, process.stderr]) {
+    vi.spyOn(stream, 'write').mockImplementation((chunk) => { chunks.push(String(chunk)); return true; });
+  }
+  return { text: () => stripAnsi(chunks.join('')), raw: () => chunks.join('') };
 }
 describe('Caccia effect result', () => {
   it('preserves a sanitized report diagnostic even when it contains a generic error keyword', async () => {
@@ -71,8 +88,106 @@ describe('Caccia effect result', () => {
       stdout: args[0] === 'symbolic-ref' ? 'feature' : initial, stderr: '',
     }));
     mocks.details.mockResolvedValue({ ...options().prExecutionContext, number: 123, sameRepository: true });
+    mocks.hasThreads.mockResolvedValue(true);
     mocks.run.mockResolvedValue({ outcome: 'success', headSha: initial, unresolvedCount: 0 });
   });
+  it('対象スレッドがなければレビューを待たずskippedを返してheadを記録する', async () => {
+    const record = vi.fn();
+    const completed = vi.fn();
+    const controller = new AbortController();
+    const input = options();
+    const prUrl = 'https://github.example/org/repo/pull/123';
+    const context = { ...input.prExecutionContext!, prUrl };
+    mocks.git.mockImplementation(async (_cwd, args) => ({
+      stdout: args[0] === 'symbolic-ref' ? 'feature' : updated, stderr: '',
+    }));
+    mocks.details.mockResolvedValue(details({ headSha: updated }));
+    mocks.run.mockResolvedValue({ outcome: 'success', headSha: updated, unresolvedCount: 0 });
+    mocks.hasThreads.mockResolvedValue(false);
+    const running = cacciaEffect({ ...input, prExecutionContext: context,
+      abortSignal: controller.signal, prMergePushRecorder: { record } }, 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(await running).toMatchObject({ success: true, failed: false, outcome: 'skipped',
+      headSha: updated, unresolvedCount: 0, skipReason: 'no_review_threads' });
+    expect(mocks.hasThreads).toHaveBeenCalledExactlyOnceWith(123, '/project', updated, controller.signal,
+      { hostname: 'github.example', owner: 'org', repo: 'repo', number: 123, url: prUrl });
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledExactlyOnceWith(updated, updated, context);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ['terminal', false], [undefined, false], ['silent', false],
+    ['terminal', true], [undefined, true], ['silent', true],
+  ] as const)('空スレッド時の画面出力を表示モード %s と親プレフィックス %s に従わせる', async (outputMode, prefixed) => {
+    const screen = captureScreen();
+    const record = vi.fn(() => expect(screen.raw()).toBe(''));
+    mocks.hasThreads.mockResolvedValue(false);
+    mocks.config.mockImplementation((_cwd, key) => key === 'caccia'
+      ? { enabled: true, waitTimeoutMs: 17, maxIterations: 2, workflow: 'custom' }
+      : key === 'language' ? 'en' : undefined);
+
+    const result = await cacciaEffect({ ...options(), ...(outputMode === undefined ? {} : { outputMode }),
+      ...(prefixed ? { taskPrefix: 'parent', taskColorIndex: 1, taskDisplayLabel: 'parent-label' } : {}),
+      prMergePushRecorder: { record } }, 123);
+
+    expect(result).toMatchObject({ success: true, failed: false, outcome: 'skipped', headSha: initial,
+      unresolvedCount: 0, skipReason: 'no_review_threads', reason: expect.any(String) });
+    expect(record).toHaveBeenCalledExactlyOnceWith(initial, initial, options().prExecutionContext);
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    if (outputMode === 'silent') {
+      expect(screen.raw()).toBe('');
+    } else {
+      const lines = screen.text().split('\n').filter((line) => line.trim() !== '');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/skip/iu);
+      expect(lines[0]).toContain(String(result.reason));
+      if (prefixed) {
+        expect(lines[0]).toMatch(/^\[parent-label\]/u);
+        expect(screen.raw()).toContain('\x1b[33m[parent-label]\x1b[0m');
+      }
+    }
+  });
+
+  it.each(['head', 'identity', 'record'] as const)(
+    '空スレッドでも終了時の検証と記録の失敗を成功にしない: %s', async (failure) => {
+      const screen = captureScreen();
+      const record = vi.fn(() => { if (failure === 'record') throw new Error('Storage failed'); });
+      mocks.hasThreads.mockResolvedValue(false);
+      mocks.details.mockResolvedValueOnce(details({})).mockResolvedValue(details({
+        number: failure === 'identity' ? 456 : 123,
+        headSha: failure === 'head' ? updated : initial,
+      }));
+
+      expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+        .toMatchObject({ success: false, failed: true });
+
+      expect(mocks.run).not.toHaveBeenCalled();
+      expect(record).toHaveBeenCalledTimes(failure === 'record' ? 1 : 0);
+      expect(screen.text().split('\n').filter((line) => line.includes('No unresolved CodeRabbit review threads'))).toHaveLength(0);
+    });
+
+  it.each([
+    new Error('Review threads unavailable'),
+    new DOMException('The operation was aborted', 'AbortError'),
+  ])('スレッド取得の失敗を空スレッドとして扱わない: %s', async (failure) => {
+    const record = vi.fn();
+    mocks.hasThreads.mockRejectedValue(failure);
+
+    expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+      .toMatchObject({ success: false, failed: true });
+
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, { enabled: false }])('does not wait with configuration %j', async (settings) => {
     mocks.config.mockReturnValue(settings);
     expect(await cacciaEffect(options(), 123)).toMatchObject({
@@ -81,10 +196,16 @@ describe('Caccia effect result', () => {
     });
     expect(mocks.run).not.toHaveBeenCalled();
     expect(mocks.details).not.toHaveBeenCalled();
+    expect(mocks.hasThreads).not.toHaveBeenCalled();
   });
   it.each(['success', 'limit', 'skipped'] as const)('returns machine readable %s fields', async (outcome) => {
-    mocks.run.mockResolvedValue({ outcome, headSha: initial, unresolvedCount: 3,
-      ...(outcome === 'skipped' ? { skipReason: 'review_rate_limited', reason: 'rate limit' } : {}) });
+    const screen = captureScreen();
+    mocks.run.mockImplementation(async () => {
+      const result: CacciaResult = { outcome, headSha: initial, unresolvedCount: 3,
+        ...(outcome === 'skipped' ? { skipReason: 'review_rate_limited', reason: 'rate limit' } : {}) };
+      createCacciaOutput({ outputMode: 'terminal' }, undefined).result(result);
+      return result;
+    });
     expect(await cacciaEffect(options(), 123)).toEqual({
       success: true, failed: false, outcome, headSha: initial, unresolvedCount: 3,
       skipReason: outcome === 'skipped' ? 'review_rate_limited' : null,
@@ -94,6 +215,7 @@ describe('Caccia effect result', () => {
       expectedInitialHeadSha: initial,
       settings: { enabled: true, waitTimeoutMs: 17, maxIterations: 2, workflow: 'custom' },
     }));
+    expect(screen.text().split('\n').filter((line) => line.trim() !== '')).toHaveLength(1);
   });
   it('returns a non-GitHub skip without requiring unsupported PR details', async () => {
     mocks.detect.mockReturnValue('gitlab');
@@ -103,6 +225,7 @@ describe('Caccia effect result', () => {
     });
     expect(mocks.details).not.toHaveBeenCalled();
     expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.hasThreads).not.toHaveBeenCalled();
   });
   it('skips a non-GitHub PR task with its existing diff context and no merge metadata API', async () => {
     mocks.detect.mockReturnValue('gitlab');

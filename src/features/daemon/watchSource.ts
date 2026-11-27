@@ -83,7 +83,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for await (const project of this.projects()) {
       try {
         for (const task of await readWatchTasks(project.repositoryDirectory)) {
-          if (task.status !== 'running' || task.goal_id === undefined) continue;
+          if (task.status !== 'running' || task.goal_id === undefined || task.remote_assignment !== undefined) continue;
           targets.push({ targetId: digest([project.repositoryDirectory, task.name]),
             generation: digest([task.run_slug, task.execution_id, task.owner_pid, task.owner_start_time]), conversationId: project.conversationId,
             task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name,
@@ -253,7 +253,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         }
         targets.push({ targetId: projectKey(project.repositoryDirectory), generation: digest(pending.map((task) => [task.name, task.created_at])),
           conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory,
-          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true, runnablePending: true, owner, launching,
+          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true,
+          runnablePending: global.daemon?.builtin_worker?.concurrency !== 0 && pending.some((task) => task.waiting_reason === undefined), owner, launching,
           pendingSince: pending.map((task) => task.created_at).sort()[0]! });
       } catch (error) { this.onError(error); }
     }

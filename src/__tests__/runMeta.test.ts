@@ -10,12 +10,47 @@ vi.mock('../infra/config/index.js', () => ({
 
 import { ensureDir, writeFileAtomic } from '../infra/config/index.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
+import { parseRunMeta } from '../core/workflow/run/run-meta.js';
 
 function createRunPaths(): RunPaths {
   return buildRunPaths('/tmp/project', '20260409-force-fail-test');
 }
 
 describe('RunMetaManager', () => {
+  it.each([
+    ['FAKE_VALUE', 'a9 [REDACTED]'],
+    ['a', '[REDACTED]9 FAKE_VALUE'],
+  ])('preserves run control fields while redacting %s in the same metadata', (secret, reason) => {
+    setExecutionSecrets([secret]);
+    try {
+      const manager = new RunMetaManager(createRunPaths(), 'a9 FAKE_VALUE', 'default');
+      const resumePoint: WorkflowResumePoint = { version: 2,
+        stack: [{ workflow: 'default', workflow_ref: 'project:sha256:default', step: 'analyze', kind: 'agent', occurrence: 1,
+          step_iterations: { analyze: 1 } }],
+        iteration: 2, elapsed_ms: 123, workflow_call_invocations: {}, workflow_step_participations: {} };
+      manager.updateStep('analyze', 2, resumePoint);
+      manager.projectTerminal({ status: 'failed', iterations: 2, reason: 'a9 FAKE_VALUE',
+        failure: { step: 'analyze', error: 'a9 FAKE_VALUE' }, endTime: '2026-11-17T00:00:00.000Z' });
+      const saved = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1]));
+      expect(saved).toMatchObject({ task: reason, status: 'failed', workflow: 'default',
+        runSlug: createRunPaths().slug, currentStep: 'analyze', currentIteration: 2,
+        iterations: 2, reason, failure: { step: 'analyze', error: reason } });
+      expect(parseRunMeta(saved)).toMatchObject({ status: 'failed', runSlug: createRunPaths().slug,
+        currentStep: 'analyze', resumePoint, reason, failure: { step: 'analyze', error: reason } });
+    } finally { setExecutionSecrets([]); }
+  });
+  it('redacts a distributed credential in terminal failure metadata before writing the file', () => {
+    setExecutionSecrets(['fake-distributed-meta-value']);
+    try {
+      const manager = new RunMetaManager(createRunPaths(), 'task', 'default');
+      manager.projectTerminal({ status: 'failed', iterations: 1, reason: 'provider fake-distributed-meta-value',
+        failure: { step: 'work', error: 'fake-distributed-meta-value' }, endTime: new Date().toISOString() });
+      const saved = String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1]);
+      expect(saved).not.toContain('fake-distributed-meta-value');
+      expect(JSON.parse(saved)).toMatchObject({ status: 'failed', reason: 'provider [REDACTED]', failure: { error: '[REDACTED]' } });
+    } finally { setExecutionSecrets([]); }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });

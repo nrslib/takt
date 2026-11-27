@@ -8,6 +8,7 @@ import type {
 } from '../core/logging/usageEventLogger.js';
 import type { StepType } from '../core/logging/usageEvent.js';
 import type { ProviderType } from '../shared/types/provider.js';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
 
 interface UsageEventLoggerModule {
   createUsageEventLogger(config: UsageEventLoggerConfig): UsageEventLogger;
@@ -28,7 +29,18 @@ describe('usageEventLogger', () => {
   });
 
   afterEach(() => {
+    setExecutionSecrets([]);
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('preserves run and session linkage with a short distributed value', async () => {
+    setExecutionSecrets(['a']);
+    const { createUsageEventLogger } = await loadUsageEventLoggerModule();
+    const logger = createUsageEventLogger({ logsDir: tempDir, sessionId: 'session-a', runId: 'run-a', enabled: true });
+    logger.logUsageFor({ provider: 'claude', providerModel: 'model-a', step: 'analyze', stepType: 'normal' },
+      { success: true, usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false } });
+    expect(JSON.parse(readFileSync(logger.filepath, 'utf8'))).toMatchObject({ run_id: 'run-a', session_id: 'session-a',
+      provider: 'claude', provider_model: 'model-a', step: 'analyze', step_type: 'normal', usage: { total_tokens: 3 } });
   });
 
   it('should disable usage events by default', async () => {

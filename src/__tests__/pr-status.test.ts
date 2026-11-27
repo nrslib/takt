@@ -290,13 +290,54 @@ describe('PR status acquisition', () => {
     ], 'b'.repeat(40), 'FOREIGN_HEAD_LOG: expected 2 to equal 3');
     const evidence = await failureEvidence();
     expect(evidence).toMatchObject({ complete: false, checks: [],
-      unavailable: expect.arrayContaining([
-        expect.objectContaining({ name: 'lint', reason: expect.any(String) }),
-        expect.objectContaining({ name: 'unit', reason: expect.any(String) }),
-        expect.objectContaining({ name: 'missing-url', reason: expect.any(String) }),
-      ]) });
+      unavailable: [expect.objectContaining({ name: 'lint', reason: expect.any(String) })],
+      external: [{ name: 'unit', url: 'https://ci.example.test/1' }, { name: 'missing-url', url: null }] });
     expect(JSON.stringify(evidence)).not.toContain('FOREIGN_HEAD_LOG');
     expect(execFile.mock.calls.some(([, args]) => args.includes('--log') || args.includes('--log-failed'))).toBe(false);
+  });
+
+  describe('Actionsのログがない失敗チェック', () => {
+    const actionsFailure = { ...check('COMPLETED', 'FAILURE'), detailsUrl: 'https://github.com/org/repo/actions/runs/10/job/20' };
+    const externalStatus = { __typename: 'StatusContext', context: 'Check unresolved comments', state: 'FAILURE',
+      targetUrl: 'https://github.com/org/repo/actions/runs/99' };
+    const thirdParty = { ...check('COMPLETED', 'FAILURE'), name: 'third-party', detailsUrl: 'https://ci.example.test/builds/1' };
+
+    it('診断できる失敗は、外部の失敗チェックが混ざっても完全な証拠になり、外部の失敗はexternalに残す', async () => {
+      installFailureResponses([actionsFailure, externalStatus, thirdParty]);
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        checks: [{ name: 'unit', jobs: [{ id: 20, log: expect.stringContaining('expected 2 to equal 3') }] }],
+        external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' },
+          { name: 'third-party', url: 'https://ci.example.test/builds/1' }] });
+    });
+
+    it('外部の失敗チェックだけなら、診断できる証拠がないので不完全にする', async () => {
+      installFailureResponses([externalStatus, thirdParty]);
+
+      expect(await failureEvidence()).toEqual({ number: 123, headSha: 'a'.repeat(40), complete: false, checks: [],
+        external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' },
+          { name: 'third-party', url: 'https://ci.example.test/builds/1' }],
+        unavailable: [{ name: 'CI', reason: expect.any(String) }] });
+      expect(execFile.mock.calls.filter(([, args]) => args[0] === 'run')).toEqual([]);
+    });
+
+    it('ActionsのrunのURLなのに読めない形のCheckRunは、外部にせず取得不能にする', async () => {
+      const detailsUrl = 'https://github.com/org/repo/actions/runs/10/unknown/20';
+      installFailureResponses([actionsFailure, { ...check('COMPLETED', 'FAILURE'), name: 'odd', detailsUrl }]);
+
+      const evidence = await failureEvidence();
+      expect(evidence).toMatchObject({ complete: false,
+        unavailable: [{ name: 'odd', url: detailsUrl, reason: 'Unsupported Actions check URL' }] });
+      expect(evidence).not.toHaveProperty('external');
+    });
+
+    it('クエリ文字列にActionsのrunのパスを含むだけの外部URLは、外部の失敗チェックのまま扱う', async () => {
+      const detailsUrl = 'https://ci.example.test/builds/1?from=/actions/runs/10';
+      installFailureResponses([actionsFailure, { ...thirdParty, detailsUrl }]);
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        external: [{ name: 'third-party', url: detailsUrl }] });
+    });
   });
 
   it.each(['', 'HTTP 403: Resource not accessible by integration'])('ログ不足%jを完全な証拠や外部要因へ変換しない', async (log) => {

@@ -10,7 +10,7 @@ import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { writeLegacyConversation, conversationRecord } from './helpers/conversation-fixtures.js';
 import { captureOwnedProcess, terminateOwnedProcess } from './helpers/owned-process.js';
-import { managerDaemonFixture, submitManagerText, waitForManager, type ManagerTuiProcess } from './helpers/manager-daemon-tui.js';
+import { expectDaemonSurvivesIdle, managerDaemonFixture, submitManagerText, waitForManager, type ManagerTuiProcess } from './helpers/manager-daemon-tui.js';
 import { concurrentTuiFixture } from './helpers/concurrent-tui-ipc.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -27,6 +27,49 @@ import { removeManagerRepository } from '../features/manager/workspaceOperations
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
+
+it('reuses the same resident daemon for a conversation after idle startup and keeps it alive after TUI exit', async () => {
+  const fixture = managerDaemonFixture('en', ['Resident conversation completed']);
+  fixture.release();
+  try {
+    const owner = await fixture.startDaemon(true);
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+    await submitManagerText(tui, 'Talk to the waiting resident daemon');
+    await waitForManager(tui, 'Resident conversation completed');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+    expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', agent: 'manager' }));
+
+    await tui.exit();
+
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    expect((await readDaemonIpcState(fixture.directory))?.owner).toEqual(owner);
+  } finally { await fixture.cleanup(); }
+});
+
+it('automatically stops the daemon started by manager after a completed conversation and TUI exit', async () => {
+  const fixture = managerDaemonFixture('en', ['Ordinary conversation completed']);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    expect(owner).toBeDefined();
+    await submitManagerText(tui, 'Complete this ordinary conversation');
+    await waitForManager(tui, 'Ordinary conversation completed');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+
+    await tui.exit();
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 })).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
 
 async function waitForQueuedMessage(tui: ManagerTuiProcess, message: string): Promise<void> {
   const heading = getLabel('tui.ui.queuedCount', 'en', { count: '1' });

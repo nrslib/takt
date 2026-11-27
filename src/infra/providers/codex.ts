@@ -188,10 +188,13 @@ export class CodexProvider implements Provider {
         },
       });
       if (assessment.status !== 'done') {
+        // The client also reports a transient 429 seen after a tool event as a rate limit; only usage limits switch providers here.
+        const usageLimited = assessment.errorKind === 'rate_limit' && assessment.rateLimitInfo?.rateLimitClass === 'Exhausted';
         return {
           decision: 'error',
           error: assessment.error ?? 'Compaction completion assessment failed',
           failureCategory: assessment.failureCategory ?? 'provider_error',
+          ...(usageLimited ? { errorKind: assessment.errorKind, rateLimitInfo: assessment.rateLimitInfo } : {}),
           usage: assessment.providerUsage,
         };
       }

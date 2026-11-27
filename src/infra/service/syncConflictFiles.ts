@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { closeSync, lstatSync, mkdtempSync, mkdirSync, openSync, readFileSync, readlinkSync,
-  renameSync, rmSync, writeFileSync } from 'node:fs';
+  renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -14,8 +14,15 @@ interface WorktreeFile {
   readonly content: Buffer;
 }
 
-function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Buffer {
-  return execFileSync('git', args, { cwd, env, stdio: 'pipe' });
+const INDEX_FINGERPRINT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, maxBuffer?: number): Buffer {
+  return execFileSync('git', args, {
+    cwd,
+    env,
+    stdio: 'pipe',
+    ...(maxBuffer === undefined ? {} : { maxBuffer }),
+  });
 }
 
 function paths(buffer: Buffer): Set<string> {
@@ -86,6 +93,35 @@ function unmergedEntries(cwd: string, env?: NodeJS.ProcessEnv): Map<string, stri
   return entries;
 }
 
+// Compares entries, not index file bytes: `git status` / `git diff` rewrite the file to refresh stat data.
+// `ls-files` shows an intent-to-add entry like a staged empty file, so the cached diff against HEAD is
+// compared too, in `--raw` form: the same path staged as empty shows `M` and intent-to-add shows `D`.
+// `diff-index` obeys `submodule.<name>.ignore` (.gitmodules / .git/config) and `diff.ignoreSubmodules`, which the
+// resolver can edit without touching the index, so submodule handling is pinned rather than left to those settings.
+function indexEntries(cwd: string, env?: NodeJS.ProcessEnv): Buffer {
+  return Buffer.concat([
+    git(cwd, ['ls-files', '-s', '-v', '-z'], env, INDEX_FINGERPRINT_MAX_BUFFER_BYTES),
+    Buffer.from('\0'),
+    git(
+      cwd,
+      ['diff-index', '--cached', '--raw', '-z', '--ita-invisible-in-index', '--ignore-submodules=none', 'HEAD', '--'],
+      env,
+      INDEX_FINGERPRINT_MAX_BUFFER_BYTES,
+    ),
+  ]);
+}
+
+function indexEntriesOf(cwd: string, indexPath: string, content: Buffer, env?: NodeJS.ProcessEnv): Buffer {
+  const directory = mkdtempSync(join(dirname(indexPath), 'takt-conflict-index-'));
+  try {
+    const snapshot = join(directory, 'index');
+    writeFileSync(snapshot, content);
+    return indexEntries(cwd, { ...(env ?? process.env), GIT_INDEX_FILE: snapshot });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function readResolvedFile(cwd: string, path: string): WorktreeFile | undefined {
   return readWorktreeFile(cwd, path);
 }
@@ -118,10 +154,12 @@ function resolveConflictMarkerSize(cwd: string, path: string, env?: NodeJS.Proce
 export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): { validateAndStage(): void } {
   const entries = unmergedEntries(cwd, env);
   if (entries.size === 0) throw new Error('No unmerged files were found for AI conflict resolution');
-  const originalIndex = git(cwd, ['ls-files', '-s', '-z'], env);
   const reportedIndexPath = git(cwd, ['rev-parse', '--git-path', 'index'], env).toString('utf8').trim();
   const indexPath = isAbsolute(reportedIndexPath) ? reportedIndexPath : resolve(cwd, reportedIndexPath);
+  // Stat the index before reading it: Git judges racy-clean entries against the index file's mtime.
+  const originalIndexTimes = statSync(indexPath);
   const originalIndexContent = readFileSync(indexPath);
+  const originalIndex = indexEntriesOf(cwd, indexPath, originalIndexContent, env);
   const conflictPaths = new Set(entries.keys());
   const initialUnstaged = new Map([...paths(git(cwd, ['diff', '--name-only', '-z'], env))]
     .filter((path) => !conflictPaths.has(path))
@@ -141,7 +179,7 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
         JSON.stringify(current.get(path)) !== JSON.stringify(stages))) {
         throw new Error('AI changed the unmerged Git index before runtime validation');
       }
-      if (!git(cwd, ['ls-files', '-s', '-z'], env).equals(originalIndex)) {
+      if (!indexEntries(cwd, env).equals(originalIndex)) {
         throw new Error('AI changed the Git index before runtime validation');
       }
       const changedTracked = new Set([...paths(git(cwd, ['diff', '--name-only', '-z'], env)), ...initialUnstaged.keys()]
@@ -163,7 +201,9 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
       const temporaryIndex = join(indexDirectory, 'index');
       try {
         writeFileSync(temporaryIndex, originalIndexContent);
-        const stageEnv = { ...process.env, ...env, GIT_INDEX_FILE: temporaryIndex };
+        // A fresh mtime would make racy-clean entries look clean and let `git add` skip same-size edits.
+        utimesSync(temporaryIndex, originalIndexTimes.atime, originalIndexTimes.mtime);
+        const stageEnv = { ...(env ?? process.env), GIT_INDEX_FILE: temporaryIndex };
         const directlyStaged = [...files.map((file) => file.path), ...newFiles];
         for (const path of changedTracked) {
           const original = initialUnstaged.get(path);
@@ -188,7 +228,7 @@ export function captureSyncConflictFiles(cwd: string, env?: NodeJS.ProcessEnv): 
         const lockPath = `${indexPath}.lock`;
         const lockFd = openSync(lockPath, 'wx');
         try {
-          if (!readFileSync(indexPath).equals(originalIndexContent)) {
+          if (!indexEntries(cwd, env).equals(originalIndex)) {
             throw new Error('Git index changed during runtime staging');
           }
           writeFileSync(lockFd, readFileSync(temporaryIndex));

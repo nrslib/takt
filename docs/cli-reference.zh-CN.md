@@ -97,9 +97,46 @@ takt update codex     # 仅更新指定提供者
 
 打开 manager 时会按需启动 daemon，并等待准备就绪。TUI 向 daemon 发送对话请求并显示结果。已接受的轮次在 TUI 关闭后仍继续执行。重新打开同一仓库或 workspace，或为同一负责对象打开第二个 TUI，都会连接到同一对话，重新显示待批准的摘要。会话日志也会按每轮的发言、已完成工具记录、回复的顺序恢复显示，不包括 Thinking 和工具调用之间的中间正文。消息接受与等待、保存内容及 daemon 重启后的中断处理参阅[目标管理指南](./goal-management.md)。
 
-`takt daemon stop` 可明确停止 manager 的后台 daemon。只有负责的项目均无未完成目标、待处理事件、pending/running 任务，无项目检查，无 TUI 连接，且所有对话的初始化、运行和清理操作都已结束时，daemon 才自动退出。仅保存了待批准摘要不会让 daemon 一直运行。
-
 `takt manager` 在交互终端中打开目标咨询 TUI。这是实验性功能，行为、配置和保存的数据格式可能随时更改。自动投入和执行任务会产生 provider API 费用。
+
+## daemon 的常驻启动与自动退出
+
+Slack 接收正在运行时，或使用 `takt daemon --resident` 启动时，daemon 不会自动退出。不使用 Slack 时，可通过以下命令常驻运行：
+
+```bash
+takt daemon --resident
+```
+
+如果 daemon 已在运行，该命令会保留现有 daemon，说明无法常驻启动的原因和重启步骤，然后以非零状态退出。要常驻启动，请先运行 `takt daemon stop` 停止现有 daemon，再运行 `takt daemon --resident`。
+
+该命令会在前台持续运行。可在另一终端运行 `takt daemon stop`，或发送 SIGTERM 等信号显式停止。普通 `takt daemon` 和 manager 自动启动的 daemon 保持原有行为：Slack 接收未运行时，只有以下项目全部消失后才会自动退出。
+
+- TUI 连接和正在初始化的会话连接
+- 远程 worker 连接和 worker pool 中正在执行的任务
+- 待处理或执行中的事件、未完成的等待请求及其结果投递
+- 受监测项目中未完成的目标，即 `status` 不是 `completed` 且 `executionStatus` 不是 `aborted` 的目标
+- inbox 中的 JSON 事件、`pending` 或 `running` 的任务、尚未投递的询问回答
+
+daemon 会等待项目检查完成，再次确认上述条件。无法读取目标、不能确认其完成状态时，也会继续运行。仅有 Slack 配置或令牌不足以保持运行，接收必须实际运行。仅保存待批准的摘要不会阻止自动退出。
+
+如果 `takt manager` 的版本或 CLI 路径与常驻 daemon 不同，manager 不会替换 daemon，而是保留其运行，显示差异和重启步骤后退出。更新时，请先运行 `takt daemon stop`，再使用准备采用的新版本执行 `takt daemon --resident`，然后打开 manager。版本和 CLI 路径相同的 manager 会复用正在运行的 daemon。
+
+## worker
+
+`takt worker` 在其他机器上执行 daemon 的目标任务。原理和云端配置见 [worker pool 部署指南](./worker-pool.zh-CN.md)。
+
+| 命令 | 行为 |
+|------|------|
+| `takt worker --url <url> --token <token>` | 连接 daemon 并持续执行分配的任务；两个选项都必填 |
+| `takt worker add <name> --concurrency <number>` | 注册 worker，并向标准输出显示一次连接令牌 |
+| `takt worker list` | 以制表符分隔显示注册名称和 concurrency |
+| `takt worker remove <name>` | 删除注册并断开连接 |
+
+以 daemon 的用户、使用同一全局配置目录运行 add/list/remove。可通过 `TAKT_CONFIG_DIR` 选择目录。`add` 必须指定 `--concurrency`，接受非负安全整数。0表示不向该 worker 分配任务。`builtin` 是保留名称。列表不显示令牌或连接状态。修改 concurrency 时，先删除再重新注册，并将新令牌提供给 worker。
+
+启动 URL 在 localhost 以外必须使用 HTTPS，不能包含认证信息、query 或 fragment。worker 和 daemon 应使用相同的 TAKT 版本。名称和上限由注册决定，启动时没有 `--name` 或 `--concurrency` 选项。可通过 SIGINT 或 SIGTERM 停止 worker。
+
+删除注册会使连接令牌失效，但不会撤销已分发的 Git 令牌。必要时还需在 GitHub 上撤销。内置上限和分发的认证信息见 [daemon 配置](./configuration.zh-CN.md#daemon-worker-pool)。
 
 ## director（实验性）
 

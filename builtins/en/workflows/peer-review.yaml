@@ -29,6 +29,10 @@ subworkflow:
       type: facet_ref[]
       facet_kind: policy
       default: []
+    adjudication_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
     review_knowledge_additions:
       type: facet_ref[]
       facet_kind: knowledge
@@ -193,11 +197,14 @@ steps:
         next: review-adjudication
   - name: reviewers
     input_reports:
-      from_step: remediation
-      reports:
-        - fix-plan.md
-        - fix-report.md
-        - fix-verification.md
+      - from_step: remediation
+        reports:
+          - fix-plan.md
+          - fix-report.md
+          - fix-verification.md
+      - from_step: review-adjudication
+        reports: [review-resolution.md]
+        previous_only: true
     uses: peer-review-suite-call
     vars:
       review_mode: follow_up
@@ -237,6 +244,9 @@ steps:
         optional_if_unrun: true
         history: {previous: 2}
     uses: peer-review-adjudication
+    policy:
+      - review-adjudication
+      - $param: adjudication_policy_additions
     rules:
       - condition: The entire task does not need replanning, and there are problems to repair or factual investigations needed to decide acceptance that can proceed within the current scope
         next: remediation

@@ -145,7 +145,10 @@ describe('daemon transitive reachability', () => {
     const root = await fixture({
       'src/features/daemon/host.ts': "import { fork } from 'node:child_process'; fork(new URL('../../app/daemon-turn/index.js', import.meta.url)); spawnManagedProcess(process.execPath, [fileURLToPath(new URL('../../app/daemon-turn/index.js', import.meta.url))]);",
     });
-    expect(daemonProcessBoundaries).toEqual([{ entry: 'src/app/daemon-turn/index.ts', owner: 'C', protocol: 'src/core/daemon/processProtocol.ts' }]);
+    expect(daemonProcessBoundaries).toEqual([
+      { entry: 'src/app/daemon-turn/index.ts', owner: 'C', protocol: 'src/core/daemon/processProtocol.ts' },
+      { entry: 'src/app/worker-pool-project/index.ts', owner: 'worker-pool', protocol: 'src/core/worker-pool/projectProtocol.ts' },
+    ]);
     const graph = await daemonReachability({ root, entries: await daemonEntries(root) });
     expect(graph.issues).toEqual([]);
     expect(graph.boundaries).toHaveLength(2);

@@ -119,6 +119,15 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+it('refuses a remote result before reading or merging its claimed artifact branch', async () => {
+  const task = doubles.tasks()[0];
+  doubles.tasks.mockReturnValue([{ ...task, remoteAssignment: { executionId: 'remote-execution' } }]);
+  await expect(integrateGoalTask('/project', goal.id, task.name, sourceSha, undefined, policy, 'en', false))
+    .rejects.toThrow('Remote task artifacts have not been received and verified');
+  expect(doubles.sha).not.toHaveBeenCalled();
+  expect(doubles.merge).not.toHaveBeenCalled();
+});
+
 describe('completion from the saved merged PR', () => {
   function prResponse(overrides: Record<string, unknown> = {}) {
     return JSON.stringify({ number: 1950, url: goal.pullRequest!.url,

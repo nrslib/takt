@@ -1,7 +1,31 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
+
+afterEach(() => setExecutionSecrets([]));
 
 describe('Phase1ExecutionLog', () => {
+  it.each(['z', 'xy', 'abc'])('redacts short distributed value %s split across text deltas', (secret) => {
+    setExecutionSecrets([secret]);
+    const log = new Phase1ExecutionLog();
+    const split = Math.max(1, secret.length - 1);
+    log.recordEvent({ type: 'text', data: { text: 'before ' + secret.slice(0, split) } }, 'analyze');
+    log.recordEvent({ type: 'text', data: { text: secret.slice(split) + '123 end' } }, 'analyze');
+    const entries = log.toReportInput().trim().split('\n').map((line) => JSON.parse(line));
+    expect(entries.map((entry) => entry.event.data.text).join('')).toMatch(/^before (?:\[REDACTED\])+123 end$/);
+    for (const entry of entries) expect(entry).toMatchObject({ kind: 'provider_event', source: 'analyze', event: { type: 'text' } });
+  });
+
+  it('preserves provider event and attempt result controls with a one-character distributed value', () => {
+    setExecutionSecrets(['a']);
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'rate_limit', data: { sessionId: 'session-a', status: 'allowed', overageStatus: 'allowed_warning' } }, 'analyze');
+    log.recordResult({ status: 'failed', content: 'a9', structuredOutput: { reason: 'a9', count: 1 } }, 'analyze');
+    expect(log.toReportInput().trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+      { kind: 'provider_event', source: 'analyze', event: { type: 'rate_limit', data: { sessionId: 'session-a', status: 'allowed', overageStatus: 'allowed_warning' } } },
+      { kind: 'attempt_result', source: 'analyze', status: 'failed', content: '[REDACTED]9', structuredOutput: { reason: '[REDACTED]9', count: 1 } },
+    ]);
+  });
   it('masks a secret split across tool output chunks before deduplicating the full result', () => {
     const log = new Phase1ExecutionLog();
     log.recordEvent({ type: 'tool_output', data: { id: 'x', tool: 'Bash', output: 'password=' } });

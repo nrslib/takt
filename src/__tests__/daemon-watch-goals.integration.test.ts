@@ -15,6 +15,7 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { EpicStore } from '../infra/epics/store.js';
@@ -419,6 +420,26 @@ it('retains readable director inquiries and reports an incomplete snapshot when 
   expect(items).toContainEqual(expect.objectContaining({ kind: 'display_event', event: expect.objectContaining({ message: expect.stringContaining(directory) }) }));
 });
 
+it('keeps remote work alive while observing process identity only for local tasks', async () => {
+  const errors = vi.fn(); const { source, files } = await watchSource(errors);
+  const assignment = RemoteAssignmentSchema.parse({ projectId: directory, taskName: 'remote', workerId: 'w1', workerName: 'w1',
+    registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+    originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+  const running = { name: 'local', status: 'running', goal_id: goalRecord().id, owner_pid: 123, owner_start_time: 'local-start',
+    created_at: '2026-11-13T00:00:00Z', started_at: '2026-11-13T00:00:00Z', completed_at: null };
+  await mkdir(join(directory, '.takt'), { recursive: true });
+  const remote = { ...running, name: 'remote', owner_pid: null, owner_start_time: null, remote_assignment: assignment };
+  const path = join(directory, '.takt/tasks.yaml');
+  await writeFile(path, JSON.stringify({ tasks: [running, remote] }));
+  expect(await source.runs()).toEqual([expect.objectContaining({ task: expect.objectContaining({ taskName: 'local' }),
+    owner: { pid: 123, startTime: 'local-start' } })]);
+  await writeFile(path, JSON.stringify({ tasks: [remote] }));
+  expect(await source.runs()).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect(errors).not.toHaveBeenCalled();
+});
+
 it('parses goal histories in a reusable worker and returns only observation data', async () => {
   const goal = { ...goalRecord(), createdAt: '2026-11-01T00:00:00Z', workLog: [...Array.from({ length: 200 }, () => ({
     id: randomUUID(), summary: 'history-content'.repeat(400), recordedAt: '2026-11-02T00:00:00Z',
@@ -567,6 +588,23 @@ it.each([true, false])('observes runnable awaiting-merge work only for merge_tas
   const launches = await source.launches();
   expect(launches).toHaveLength(mergeTask ? 1 : 0);
   if (mergeTask) expect(launches[0]).toMatchObject({ repositoryDirectory: directory, runnablePending: true, autoRun: true });
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it.each([
+  { concurrency: 0, waitingReason: undefined, runnable: false },
+  { concurrency: 1, waitingReason: 'Waiting for an available builtin worker slot', runnable: false },
+  { concurrency: 1, waitingReason: undefined, runnable: true },
+])('does not classify capacity waiting as a stalled launch: %j', async ({ concurrency, waitingReason, runnable }) => {
+  const goal = GoalSchema.parse(goalRecord());
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  await writeFile(join(directory, '.takt', 'tasks.yaml'), `tasks:\n  - name: queued\n    status: pending\n    goal_id: ${goal.id}\n    created_at: 2026-11-06T00:00:00.000Z\n    started_at: null\n    completed_at: null\n${waitingReason === undefined ? '' : `    waiting_reason: ${waitingReason}\n`}`);
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+  await writeFile(join(directory, 'global', 'config.yaml'), `daemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+  expect(await source.launches()).toMatchObject([{ runnablePending: runnable, autoRun: true }]);
   expect(errors).not.toHaveBeenCalled();
 });
 
