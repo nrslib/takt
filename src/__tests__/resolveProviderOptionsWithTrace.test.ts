@@ -392,6 +392,7 @@ describe('resolveProviderOptionsWithTrace', () => {
       kiro: { usePromptTempFile: true },
       claude: { usePromptTempFile: true, skills: defaultClaudeSkills },
       copilot: { usePromptTempFile: true },
+      opencode: { skills: defaultOpenCodeSkills },
     });
     expect(result.originResolver('cursor.usePromptTempFile')).toBe('env');
     expect(result.originResolver('kiro.usePromptTempFile')).toBe('env');
