@@ -236,17 +236,16 @@ async function executeWorkflowInternal(
     ? { prExecutionContext: options.prExecutionContext, prGitOperations: options.prGitOperations }
     : await resolveTaskPrExecutionContext({ ...options, cwd, prContext, gitProvider: runContext?.gitProvider });
   const parentRunPid = process.pid;
-  const liveWorkflowCallResolver = createWorkflowCallResolver(
-    createWorkflowExecutionContext(
-      workflowConfig,
-      options.projectCwd,
-      options.workflowResourceRoot,
-      options.workflowSystemCommandsPolicy,
-    ),
-  );
-  const preparedBundle = prepareWorkflowExecutionBundle({
+  const preparedBundle = options.preparedWorkflowBundle ?? prepareWorkflowExecutionBundle({
     rootWorkflow: workflowConfig,
-    workflowCallResolver: liveWorkflowCallResolver,
+    workflowCallResolver: createWorkflowCallResolver(
+      createWorkflowExecutionContext(
+        workflowConfig,
+        options.projectCwd,
+        options.workflowResourceRoot,
+        options.workflowSystemCommandsPolicy,
+      ),
+    ),
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
     centralExecution: options.runPathsDirectory !== undefined,
@@ -358,10 +357,15 @@ async function executeWorkflowInternal(
   const terminalPayloads = createWorkflowTerminalPayloadFactory(
     terminalPublicationContext,
   );
-  const liveIntervention = cwd === options.projectCwd
+  const liveIntervention: LiveInterventionFileStore | undefined = cwd === options.projectCwd
     ? undefined
     : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug, (instructions) => {
       persistDeliveredLiveInstructions(options.projectCwd, cwd, options.taskSpec, activeRun.runPaths, instructions);
+      if (options.onLiveInterventionDelivery !== undefined) {
+        const context = liveIntervention!.read().lastDelivery;
+        if (context === undefined) throw new Error('Live intervention delivery has no saved context');
+        options.onLiveInterventionDelivery(instructions.map((instruction) => instruction.instructionId), context);
+      }
     });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
@@ -704,6 +708,7 @@ async function executeWorkflowInternal(
       }
     }
   } finally {
+    captureError(terminalizationErrors, () => bootstrap.providerEventLogger.flush());
     let committedPublication: WorkflowTerminalPublicationPayload | undefined;
     if (runExecution !== undefined || primaryError !== undefined) {
       if (liveIntervention !== undefined && !liveInterventionTerminalizationOwned) {

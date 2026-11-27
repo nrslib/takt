@@ -1,5 +1,5 @@
 import {
-  acquireProjectExecutionLock, ProjectExecutionAlreadyRunningError, type ProjectExecutionKind, type ProjectExecutionLock,
+  acquireProjectExecutionLock, type ProjectExecutionKind,
 } from '../../../infra/task/project-execution-lock.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { ShutdownManager } from './shutdownManager.js';
@@ -7,6 +7,7 @@ import type { WorkerPoolShutdownSignals } from './parallelExecution.js';
 import { createLogger } from '../../../shared/utils/debug.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { TaskStore } from '../../../infra/task/store.js';
 
 const log = createLogger('project-execution');
 
@@ -14,14 +15,8 @@ export async function withProjectExecution<Result>(
   cwd: string,
   kind: ProjectExecutionKind,
   execute: (signals: WorkerPoolShutdownSignals) => Promise<Result>,
-  automaticRun?: boolean,
-): Promise<Result | undefined> {
-  let lock: ProjectExecutionLock;
-  try { lock = acquireProjectExecutionLock(cwd, kind); }
-  catch (error) {
-    if (automaticRun === true && kind === 'run' && error instanceof ProjectExecutionAlreadyRunningError) return undefined;
-    throw error;
-  }
+): Promise<Result> {
+  const lock = acquireProjectExecutionLock(cwd, kind);
   const scheduling = new AbortController();
   const task = new AbortController();
   let shutdownManager: ShutdownManager | undefined;
@@ -35,6 +30,9 @@ export async function withProjectExecution<Result>(
     }
   };
   try {
+    const remote = new TaskStore(cwd).read().tasks.find((record) => record.status === 'running'
+      && record.remote_assignment !== undefined && record.remote_assignment.leaseExpiresAt > Date.now());
+    if (remote !== undefined) throw new Error(`Remote worker ${remote.remote_assignment!.workerName} is running in this project`);
     // process.exit bypasses finally, including forced SIGINT shutdown.
     process.on('exit', onExit);
     shutdownManager = new ShutdownManager({

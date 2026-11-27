@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { configureSafeGitEnvironment, createGitEnvironment, FILTER_CONFIG_ARGS, parseFilterConfigNames } from './git-environment-settings.js';
+import { remoteGitCredentialHelper } from './git-credential-helper.js';
 
 interface SafeGitEnvironmentOptions {
   readonly allowGitHooks?: boolean;
@@ -13,7 +14,23 @@ export async function buildSafeGitEnvironment(
 ): Promise<NodeJS.ProcessEnv> {
   const environment = createGitEnvironment(false);
   const filterNames = options.allowGitFilters ? [] : await getFilterConfigNames(cwd, environment, signal);
-  return configureSafeGitEnvironment(environment, { allowGitHooks: options.allowGitHooks, filterNames, review: false });
+  configureSafeGitEnvironment(environment, { allowGitHooks: options.allowGitHooks, filterNames, review: false });
+
+  if (environment.TAKT_REMOTE_GIT_TOKEN !== undefined && environment.TAKT_REMOTE_GIT_ORIGIN !== undefined) {
+    const configCount = Number(environment.GIT_CONFIG_COUNT ?? '0');
+    const credentialConfig: Array<readonly [string, string]> = [
+      ['credential.helper', ''],
+      ['credential.helper', remoteGitCredentialHelper()],
+    ];
+    environment.GIT_TERMINAL_PROMPT = '0';
+    environment.GIT_CONFIG_COUNT = String(configCount + credentialConfig.length);
+    credentialConfig.forEach(([key, value], index) => {
+      const entryIndex = configCount + index;
+      environment[`GIT_CONFIG_KEY_${entryIndex}`] = key;
+      environment[`GIT_CONFIG_VALUE_${entryIndex}`] = value;
+    });
+  }
+  return environment;
 }
 
 async function getFilterConfigNames(

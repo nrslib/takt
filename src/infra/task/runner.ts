@@ -2,7 +2,7 @@ import type { TaskFileData, TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskListItem, TaskState } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
-import { TaskLifecycleService, type PrMergeTaskInput } from './taskLifecycleService.js';
+import { TaskLifecycleService, type PrMergeTaskInput, type TaskClaimResult } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService, type TaskDeletionCleanup } from './taskDeletionService.js';
 import { TaskExceedService, type ExceedTaskOptions, type RequeueExceededTaskOptions } from './taskExceedService.js';
@@ -13,12 +13,14 @@ import {
   type TaskRetryOptions,
 } from './taskRetryService.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
+import type { FileLockAcquisitionErrorHandler } from '../fs/file-lock.js';
 
 export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
 export interface TaskRunnerOptions {
   onWarning?: (warning: string) => void;
   goalTasksOnly?: boolean;
+  onAcquisitionError?: FileLockAcquisitionErrorHandler;
 }
 
 export class TaskRunner {
@@ -34,7 +36,7 @@ export class TaskRunner {
     private readonly projectDir: string,
     options?: TaskRunnerOptions,
   ) {
-    this.store = new TaskStore(projectDir);
+    this.store = new TaskStore(projectDir, options?.onAcquisitionError);
     this.tasksFile = this.store.getTasksFilePath();
     this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning, options?.goalTasksOnly);
     this.query = new TaskQueryService(projectDir, this.tasksFile, this.store);
@@ -45,6 +47,18 @@ export class TaskRunner {
 
   ensureDirs(): void {
     this.store.ensureDirs();
+  }
+
+  claimTask(taskName: string, workerName: string): TaskClaimResult {
+    return this.lifecycle.claimTask(taskName, workerName);
+  }
+
+  failUnreadableGoalTask(taskName: string): TaskState | undefined {
+    return this.lifecycle.failUnreadableGoalTask(taskName);
+  }
+
+  setPendingWaitingReason(taskNames: readonly string[], reason: string | undefined): void {
+    this.lifecycle.setPendingWaitingReason(taskNames, reason);
   }
 
   getTasksFilePath(): string {
@@ -100,8 +114,8 @@ export class TaskRunner {
     return this.query.listTasks();
   }
 
-  listTasksForProviderPreflight(goalTasksOnly = false): TaskInfo[] {
-    return this.query.listTasksForProviderPreflight(goalTasksOnly);
+  listTasksForProviderPreflight(): TaskInfo[] {
+    return this.query.listTasksForProviderPreflight();
   }
 
   claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {

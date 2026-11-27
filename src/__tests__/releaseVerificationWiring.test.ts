@@ -691,6 +691,15 @@ describe('release verification wiring', () => {
     ]);
   });
 
+  it('routes daemon startup with real builtin children through the heavy integration gate', () => {
+    const testFile = 'src/__tests__/daemon-startup.integration.test.ts';
+    expect(lightIntegrationConfig.test?.include).not.toContain(testFile);
+    expect(heavyParallelIntegrationConfig.test?.exclude).not.toContain(testFile);
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', testFile] },
+    ]);
+  });
+
   it('routes tell publication concurrency through the heavy integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
     expect(selectNpmTestRuns([testFile])).toEqual([

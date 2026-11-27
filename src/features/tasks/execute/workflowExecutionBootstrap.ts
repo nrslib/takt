@@ -33,6 +33,11 @@ import {
   updatePersonaSession,
   updateWorktreeSession,
 } from '../../../infra/config/index.js';
+import {
+  assertSessionFileReadable,
+  getPersonaSessionsPath,
+  getWorktreeSessionPath,
+} from '../../../infra/config/project/sessionStore.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
   buildTraceDiscovery,
@@ -403,6 +408,12 @@ export async function createWorkflowExecutionBootstrap(
   );
   const isWorktree = cwd !== projectCwd;
   const shouldLoadSavedSessions = !isWorktree && isRetry && options.restartPoint === undefined;
+  if (!shouldLoadSavedSessions) {
+    const sessionPath = isWorktree
+      ? getWorktreeSessionPath(projectCwd, cwd, options.sessionStorageDirectory)
+      : getPersonaSessionsPath(projectCwd, options.sessionStorageDirectory);
+    assertSessionFileReadable(sessionPath);
+  }
   log.debug('Session mode', { isRetry, isWorktree });
 
   const { runSlug, runPaths } = runBootstrap;

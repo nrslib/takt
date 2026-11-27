@@ -23,7 +23,14 @@ import { readWatchTasks } from '../features/daemon/watchers/state.js';
 
 const doubles = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
-vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawn: doubles.spawn }));
+vi.mock('node:child_process', async (original) => {
+  const actual = await original<typeof import('node:child_process')>();
+  return { ...actual, spawn: (...args: Parameters<typeof actual.spawn>) => {
+    if (args[1]?.[0] === lifecycle.daemonEntryPath()) return doubles.spawn(...args);
+    return actual.spawn(...args);
+  } };
+});
+const startLoop = watchLoop.startWatchLoop;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   try { for (const close of cleanups.splice(0).reverse()) await close(); }
@@ -35,7 +42,6 @@ async function fixture(existing = true) {
   vi.spyOn(Date, 'now').mockImplementation(() => now);
   vi.spyOn(daemonProcess, 'readProcessOwner').mockImplementation(async (pid) => ({ pid, startTime: 'fixture' }));
   vi.spyOn(owners, 'isDaemonOwnerRunning').mockResolvedValue(true);
-  const startLoop = watchLoop.startWatchLoop;
   let checkIdle!: () => Promise<void>;
   vi.spyOn(watchLoop, 'startWatchLoop').mockImplementation((interval, check, onError) => {
     if (interval !== 500) return startLoop(interval, check, onError);

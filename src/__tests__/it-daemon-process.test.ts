@@ -13,6 +13,7 @@ import { readDaemonOwner, isDaemonOwnerRunning, writeDaemonOwner } from '../infr
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { packageVersion } from '../shared/package-info.js';
+import { expectDaemonSurvivesIdle, managerDaemonFixture, submitManagerText, waitForManager } from './helpers/manager-daemon-tui.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { getEpic } from '../infra/epics/index.js';
@@ -21,10 +22,179 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
 import { EpicSchema } from '../infra/epics/schema.js';
 import { completedEpicGoal, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
+import { captureOwnedChild, terminateOwnedProcess } from './helpers/owned-process.js';
+import { UPDATE_NOTIFIER_DISABLED_ARG } from '../shared/utils/updateNotifierProcess.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 const io = () => ({ signal: new AbortController().signal, timeoutMs: 5000 });
 afterEach(async () => { await lifecycle.stopDaemon(); });
+
+async function daemonStartupLog(directory: string, pid: number): Promise<string> {
+  const root = join(directory, 'daemon-logs');
+  const records = await Promise.all((await readdir(root)).filter((name) => name.endsWith('.json'))
+    .map(async (name) => JSON.parse(await readFile(join(root, name), 'utf8')) as { level: string; message: string }));
+  const startup = records.find((record) => record.level === 'info' && record.message.startsWith(`Daemon started (${pid})`));
+  expect(startup).toBeDefined();
+  return startup!.message;
+}
+
+async function connectWorkerFromCli(directory: string, port: number, token: string): Promise<void> {
+  const workerHome = join(directory, `worker-${randomUUID()}`);
+  await mkdir(workerHome);
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), UPDATE_NOTIFIER_DISABLED_ARG,
+    'worker', '--url', `http://127.0.0.1:${port}`, '--token', token], {
+    cwd: workerHome, env: { ...process.env, HOME: workerHome, TAKT_CONFIG_DIR: join(workerHome, '.takt'), NODE_OPTIONS: '' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+  const closed = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('close', () => resolve()); });
+  const owned = await captureOwnedChild(child);
+  try {
+    await vi.waitFor(() => {
+      expect(child.exitCode ?? child.signalCode, output).toBeNull();
+      expect(output).toMatch(/Worker w1 connected/);
+    }, { timeout: 15_000 });
+  } finally {
+    if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
+    await closed;
+  }
+}
+
+it.each(['manual', 'automatic'] as const)('connects a worker using the logged port after %s daemon startup with port 0 and a fixed port', async (mode) => {
+  const fixture = managerDaemonFixture('en');
+  let retained: import('node:net').Socket | undefined;
+  try {
+    const registered = await fixture.runCli(['worker', 'add', 'w1', '--concurrency', '1']);
+    expect(registered.code).toBe(0);
+    const token = registered.output.trim();
+    let selectedPort = 0;
+    for (const fixed of [false, true]) {
+      await writeFile(join(fixture.directory, 'config.yaml'), `provider: mock\nlanguage: en\nmanager:\n  auto_run: false\ndaemon:\n  remote_worker:\n    host: 127.0.0.1\n    port: ${selectedPort}\n`);
+      const owner = mode === 'manual' ? await fixture.startDaemon(true) : await (async () => {
+        retained = await lifecycle.ensureDaemon({ retainConnection: true });
+        return (await readDaemonOwner(fixture.directory))!;
+      })();
+      await vi.waitFor(async () => {
+        const message = await daemonStartupLog(fixture.directory, owner.pid);
+        const match = /worker port: (\d+)/.exec(message);
+        expect(match).not.toBeNull();
+        const port = Number(match![1]);
+        expect(port).toBeGreaterThan(0);
+        expect(port).toBeLessThanOrEqual(65535);
+        if (fixed) expect(port).toBe(selectedPort);
+      }, { timeout: 5000 });
+      const message = await daemonStartupLog(fixture.directory, owner.pid);
+      selectedPort = Number(/worker port: (\d+)/.exec(message)![1]);
+      expect(message.includes(token)).toBe(false);
+      await connectWorkerFromCli(fixture.directory, selectedPort, token);
+      retained?.destroy(); retained = undefined;
+      expect((await fixture.runCli(['daemon', 'stop'])).code).toBe(0);
+    }
+  } finally { retained?.destroy(); await fixture.cleanup(); }
+});
+
+it('prints a description of --resident in the real daemon CLI help', async () => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const result = await fixture.runCli(['daemon', '--help']);
+    expect(result.code).toBe(0);
+    expect(result.output).toMatch(/--resident\s+\S[^\n]*(?:running|alive|idle|常駐|自動終了)/iu);
+  } finally { await fixture.cleanup(); }
+});
+
+it.each(['stop command', 'SIGTERM'] as const)('keeps an idle resident daemon alive and shuts it down with %s', async (instruction) => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(true);
+    expect(owner).toMatchObject({ resident: true });
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    if (instruction === 'stop command') {
+      expect((await fixture.runCli(['daemon', 'stop'])).code).toBe(0);
+    } else process.kill(owner.pid, 'SIGTERM');
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 30000 });
+  } finally { await fixture.cleanup(); }
+});
+
+it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('exits a mismatching manager with update instructions and preserves the resident daemon: %j', async (difference) => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(true);
+    const recorded = { ...owner, ...difference };
+    // 実際の daemon を置き換えず、起動元が読む記録にだけ不一致を作る。
+    await writeDaemonOwner(fixture.directory, recorded);
+
+    const result = await fixture.runCli(['manager']);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toMatch(/resident/iu);
+    expect(result.output).toContain(difference.version ?? difference.cliPath);
+    expect(result.output).toContain('takt daemon stop');
+    expect(result.output).toContain('takt daemon --resident');
+    expect(result.output.indexOf('takt daemon stop')).toBeLessThan(result.output.indexOf('takt daemon --resident'));
+    await expectDaemonSurvivesIdle(fixture.directory, recorded);
+    expect((await readDaemonIpcState(fixture.directory))?.owner).toEqual(owner);
+    expect(await isConversationIpcReady(fixture.directory, owner)).toBe(true);
+  } finally { await fixture.cleanup(); }
+});
+
+it('automatically stops a manually started daemon without --resident when there is no work', async () => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(false);
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
+
+it.each([true, false])('preserves the running daemon and TUI after duplicate startup with resident=%s', async (resident) => {
+  const fixture = managerDaemonFixture('en', ['The existing daemon still responds']);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    expect(owner).toBeDefined();
+    expect(owner.resident).not.toBe(true);
+    const ipc = await readDaemonIpcState(fixture.directory);
+    expect(ipc?.owner).toEqual(owner);
+
+    const result = await fixture.runCli(['daemon', ...(resident ? ['--resident'] : [])]);
+
+    if (resident) {
+      expect(result.code).not.toBeNull();
+      expect(result.code).not.toBe(0);
+      expect(result.output).toMatch(/already running/iu);
+      expect(result.output).toContain('takt daemon stop');
+      expect(result.output).toContain('takt daemon --resident');
+      expect(result.output.indexOf('takt daemon stop')).toBeLessThan(result.output.indexOf('takt daemon --resident'));
+    } else expect(result.code).toBe(0);
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+    expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
+    expect(await readDaemonIpcState(fixture.directory)).toEqual(ipc);
+    await submitManagerText(tui, 'Continue using this daemon after the duplicate startup');
+    await waitForManager(tui, 'The existing daemon still responds');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+
+    await tui.exit();
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
 
 it('starts the dedicated daemon entry, confirms authenticated IPC, reuses the owner and stops it', async () => {
   await lifecycle.ensureDaemon();
@@ -34,6 +204,7 @@ it('starts the dedicated daemon entry, confirms authenticated IPC, reuses the ow
   expect(owner.pid).not.toBe(process.pid);
   expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
   expect(await isConversationIpcReady(directory, owner)).toBe(true);
+  await vi.waitFor(async () => expect(await daemonStartupLog(directory, owner.pid)).not.toMatch(/worker port:/), { timeout: 5000 });
   await lifecycle.ensureDaemon();
   expect(await readDaemonOwner(directory)).toEqual(owner);
   await lifecycle.stopDaemon();

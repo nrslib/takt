@@ -48,6 +48,80 @@ import {
 let isolatedGlobalConfigDir: string;
 let originalTaktConfigDirForFile: string | undefined;
 
+describe('daemon builtin worker configuration', () => {
+  it.each([0, 3])('loads, saves and reloads builtin concurrency %s through both configuration readers', async (concurrency) => {
+    const { loadGlobalConfig, saveGlobalConfig } = await import('../infra/config/global/globalConfig.js');
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    writeFileSync(configPath, `language: en\ndaemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+    invalidateGlobalConfigCache();
+
+    const loaded = loadGlobalConfig();
+    expect(loaded).toHaveProperty('daemon.builtinWorker.concurrency', concurrency);
+    expect(await readDaemonConfiguration(configPath)).toHaveProperty('daemon.builtin_worker.concurrency', concurrency);
+
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig()).toHaveProperty('daemon.builtinWorker.concurrency', concurrency);
+    expect(await readDaemonConfiguration(configPath)).toHaveProperty('daemon.builtin_worker.concurrency', concurrency);
+  });
+
+  it('preserves omitted builtin concurrency through a save and reload', async () => {
+    const { loadGlobalConfig, saveGlobalConfig } = await import('../infra/config/global/globalConfig.js');
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    const loaded = loadGlobalConfig();
+    expect(loaded).not.toHaveProperty('daemon.builtinWorker.concurrency');
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig()).not.toHaveProperty('daemon.builtinWorker.concurrency');
+    expect(await readDaemonConfiguration(configPath)).not.toHaveProperty('daemon.builtin_worker.concurrency');
+  });
+
+  it.each([-1, 0.5])('rejects invalid builtin concurrency %s at the asynchronous daemon reader', async (concurrency) => {
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    writeFileSync(configPath, `daemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+    await expect(readDaemonConfiguration(configPath)).rejects.toThrow();
+  });
+});
+
+describe('daemon remote worker configuration', () => {
+  it('preserves the remote listener and builtin capacity through both configuration readers and a save', async () => {
+    const { loadGlobalConfig, saveGlobalConfig } = await import('../infra/config/global/globalConfig.js');
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    writeFileSync(configPath, 'language: en\ndaemon:\n  builtin_worker:\n    concurrency: 0\n  remote_worker:\n    host: 127.0.0.1\n    port: 43210\n');
+    invalidateGlobalConfigCache();
+
+    const loaded = loadGlobalConfig();
+    expect(loaded).toHaveProperty('daemon.builtinWorker.concurrency', 0);
+    expect(loaded).toHaveProperty('daemon.remoteWorker', { host: '127.0.0.1', port: 43210 });
+    expect(await readDaemonConfiguration(configPath)).toHaveProperty('daemon.remote_worker', {
+      host: '127.0.0.1', port: 43210,
+    });
+
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig()).toHaveProperty('daemon.remoteWorker', { host: '127.0.0.1', port: 43210 });
+    const saved = await readDaemonConfiguration(configPath);
+    expect(saved).toHaveProperty('daemon.remote_worker', { host: '127.0.0.1', port: 43210 });
+    expect(saved).toHaveProperty('daemon.builtin_worker.concurrency', 0);
+  });
+
+  it('keeps the remote listener absent when no remote worker configuration was supplied', async () => {
+    const { loadGlobalConfig, saveGlobalConfig } = await import('../infra/config/global/globalConfig.js');
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    const loaded = loadGlobalConfig();
+    expect(loaded).not.toHaveProperty('daemon.remoteWorker');
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig()).not.toHaveProperty('daemon.remoteWorker');
+    expect(await readDaemonConfiguration(configPath)).not.toHaveProperty('daemon.remote_worker');
+  });
+});
+
 function disableBuiltinWorkflowsForFixtureTests(): void {
   writeFileSync(
     join(isolatedGlobalConfigDir, 'config.yaml'),
@@ -1367,8 +1441,8 @@ describe('loadWorktreeSessions', () => {
     const sessionPath = getWorktreeSessionPath(testDir, worktreePath);
     writeFileSync(sessionPath, 'not valid json');
 
-    expect(() => loadWorktreeSessions(testDir, worktreePath)).toThrow(SyntaxError);
-    expect(() => updateWorktreeSession(testDir, worktreePath, 'coder', 'new-session')).toThrow(SyntaxError);
+    expect(() => loadWorktreeSessions(testDir, worktreePath)).toThrow(`Invalid session file: ${sessionPath}`);
+    expect(() => updateWorktreeSession(testDir, worktreePath, 'coder', 'new-session')).toThrow(`Invalid session file: ${sessionPath}`);
     expect(readFileSync(sessionPath, 'utf-8')).toBe('not valid json');
   });
 });

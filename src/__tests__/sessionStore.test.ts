@@ -86,8 +86,8 @@ describe('updatePersonaSession', () => {
     const content = '{invalid JSON';
     const { testDir, path } = createStoredSession(content);
 
-    expect(() => loadPersonaSessions(testDir)).toThrow(SyntaxError);
-    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow(SyntaxError);
+    expect(() => loadPersonaSessions(testDir)).toThrow(`Invalid session file: ${path}`);
+    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow(`Invalid session file: ${path}`);
     expect(readFileSync(path, 'utf-8')).toBe(content);
   });
 
@@ -113,9 +113,9 @@ describe('updatePersonaSession', () => {
     const failure = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
 
     vi.mocked(readFileSync).mockImplementationOnce(() => { throw failure; });
-    expect(() => loadPersonaSessions(testDir)).toThrow(failure);
+    expect(() => loadPersonaSessions(testDir)).toThrow(expect.objectContaining({ message: `Could not read session file: ${path}`, cause: failure }));
     vi.mocked(readFileSync).mockImplementationOnce(() => { throw failure; });
-    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow(failure);
+    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow(expect.objectContaining({ message: `Could not read session file: ${path}`, cause: failure }));
     expect(readFileSync(path, 'utf-8')).toBe(content);
   });
 

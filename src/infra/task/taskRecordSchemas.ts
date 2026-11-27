@@ -5,6 +5,8 @@ import { TaskExecutionConfigObjectSchema } from './taskExecutionSchemas.js';
 import { buildTaskSchema, serializeTaskConfig } from './taskConfigSerialization.js';
 import { RUN_RESUME_MODES } from '../../core/workflow/run/run-meta.js';
 import { boundPersistedFailureText } from '../../shared/utils/persistedFailureText.js';
+import { RemoteAssignmentSchema } from '../../core/worker-pool/remoteProtocol.js';
+import { RemoteArtifactsSchema } from '../../core/worker-pool/remoteExecutionProtocol.js';
 
 export const TaskStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
@@ -24,6 +26,7 @@ export const TaskRecordSchema = buildTaskSchema(
     name: z.string().min(1),
     status: TaskStatusSchema,
     deletion: z.object({
+      remote_ack: z.boolean().optional(),
       id: z.string().uuid(),
       owner_pid: z.number().int().positive(),
       owner_start_time: z.string().min(1).optional(),
@@ -31,6 +34,11 @@ export const TaskRecordSchema = buildTaskSchema(
     slug: z.string().optional(),
     run_slug: z.string().min(1).optional(),
     execution_id: z.string().min(1).optional(),
+    worker_name: z.string().min(1).optional(),
+    remote_assignment: RemoteAssignmentSchema.optional(),
+    remote_artifacts: RemoteArtifactsSchema.optional(),
+    assignment_generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    waiting_reason: z.string().min(1).optional(),
     stop_request: z.object({
       execution_id: z.string().min(1),
       requested_at: z.iso.datetime(),

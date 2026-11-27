@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod/v4';
+import { DaemonConfigSchema } from './daemon-config-schema.js';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
@@ -257,6 +258,7 @@ const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
+  daemon: DaemonConfigSchema.optional(),
   director: z.object({ slack: SlackConfigSchema.optional(), patrol_interval: z.unknown().optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),

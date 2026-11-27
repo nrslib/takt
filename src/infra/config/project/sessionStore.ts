@@ -98,9 +98,17 @@ function readStoredSessionData(sessionPath: string): z.infer<typeof StoredSessio
     content = readFileSync(sessionPath, 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
+    throw new Error(`Could not read session file: ${sessionPath}`, { cause: error });
   }
-  return StoredSessionDataSchema.parse(JSON.parse(content));
+  try {
+    return StoredSessionDataSchema.parse(JSON.parse(content));
+  } catch (error) {
+    throw new Error(`Invalid session file: ${sessionPath}`, { cause: error });
+  }
+}
+
+export function assertSessionFileReadable(sessionPath: string): void {
+  readStoredSessionData(sessionPath);
 }
 
 /**

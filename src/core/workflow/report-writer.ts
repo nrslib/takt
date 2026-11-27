@@ -17,6 +17,7 @@ import {
 } from '../../shared/utils/private-file.js';
 import { runPrivateFileExclusive } from '../../shared/utils/private-file-lock.js';
 import type { ReportPublicationReceipt } from './report-publication.js';
+import { redactExecutionSecrets } from '../../shared/utils/execution-secrets.js';
 
 const PRIVATE_REPORT_MODE = 0o600;
 const PUBLICATION_ID_PATTERN = /^[a-f0-9]{64}$/;
@@ -26,7 +27,7 @@ export function pinReportContent(reportDir: string, fileName: string, content: s
   if (classification.kind !== 'public') throw new Error(`Invalid report version name: ${fileName}`);
   const path = resolve(reportDir, REPORT_EXECUTIONS_DIRECTORY, 'versions', randomUUID(), basename(fileName));
   ensurePrivateDirectory(dirname(path));
-  writeNewPrivateFileWithMode(path, content, PRIVATE_REPORT_MODE);
+  writeNewPrivateFileWithMode(path, redactExecutionSecrets(content), PRIVATE_REPORT_MODE);
   return path;
 }
 
@@ -88,9 +89,8 @@ function backupExistingReport(
     );
   }
 
-  const historyContent = sanitizeContent === undefined
-    ? currentContent
-    : Buffer.from(sanitizeContent(currentContent.toString('utf8')), 'utf8');
+  const historyContent = Buffer.from(redactExecutionSecrets(sanitizeContent === undefined
+    ? currentContent.toString('utf8') : sanitizeContent(currentContent.toString('utf8'))), 'utf8');
   writeNewPrivateFileWithMode(versionedPath, historyContent, PRIVATE_REPORT_MODE);
 }
 
@@ -201,7 +201,7 @@ export function writeReportFile(
 ): string {
   const { baseDir, targetPath, normalizedFileName } = resolveReportTarget(reportDir, fileName);
   return runReportPublicationExclusive(baseDir, targetPath, () => {
-    const persistedContent = sanitizeContent === undefined ? content : sanitizeContent(content);
+    const persistedContent = redactExecutionSecrets(sanitizeContent === undefined ? content : sanitizeContent(content));
     backupExistingReport(baseDir, normalizedFileName, targetPath, sanitizeContent);
     writePrivateFile(targetPath, persistedContent);
     onPersisted?.(persistedContent);

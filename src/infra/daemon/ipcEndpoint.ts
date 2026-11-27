@@ -3,7 +3,7 @@ import { isAbsolute, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { z } from 'zod/v4';
 import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
-import type { DaemonOwner } from './owner.js';
+import { DaemonOwnerSchema, type DaemonOwner } from './owner.js';
 
 export async function resolveDaemonConfigDirectory(directory: string): Promise<string> {
   await ensurePrivateDirectory(directory);
@@ -21,8 +21,7 @@ export function conversationIpcEndpoint(directory: string, platform: NodeJS.Plat
 
 export const DaemonIpcStateSchema = z.object({
   protocolVersion: z.literal(1), endpoint: z.string().min(1), capability: z.string().regex(/^[a-f0-9]{64}$/),
-  owner: z.object({ pid: z.number().int().positive(), identity: z.object({ startTime: z.string().min(1) }).strict(),
-    version: z.string().min(1), cliPath: z.string().min(1) }).strict(),
+  owner: DaemonOwnerSchema,
 }).strict();
 export type DaemonIpcState = z.infer<typeof DaemonIpcStateSchema>;
 

@@ -96,7 +96,7 @@ async function parse(args: string[]) {
 describe('manager CLI entrypoint', () => {
   it('routes the internal daemon invocation and its public stop command', async () => {
     await parse(['daemon']);
-    expect(daemon.run).toHaveBeenCalledOnce();
+    expect(daemon.run).toHaveBeenCalledExactlyOnceWith(false);
     expect(daemon.stop).not.toHaveBeenCalled();
     await parse(['daemon', 'stop']);
     expect(daemon.stop).toHaveBeenCalledOnce();
@@ -104,6 +104,14 @@ describe('manager CLI entrypoint', () => {
     expect(initialization.initializeCliExecutionContext).not.toHaveBeenCalled();
     expect(doubles.manager).not.toHaveBeenCalled();
     expect(doubles.assistant).not.toHaveBeenCalled();
+  });
+
+  it('passes the resident option to manual daemon startup without common initialization', async () => {
+    await parse(['daemon', '--resident']);
+
+    expect(daemon.run).toHaveBeenCalledExactlyOnceWith(true);
+    expect(daemon.stop).not.toHaveBeenCalled();
+    expect(doubles.initialize).not.toHaveBeenCalled();
   });
 
   it('advertises stop in help without an internal start subcommand', async () => {

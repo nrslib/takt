@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatTaskStatusLabel, formatShortDate } from '../features/tasks/list/taskStatusLabel.js';
 import type { TaskListItem } from '../infra/task/types.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 function makeTask(overrides: Partial<TaskListItem>): TaskListItem {
   return {
@@ -14,6 +15,17 @@ function makeTask(overrides: Partial<TaskListItem>): TaskListItem {
 }
 
 describe('formatTaskStatusLabel', () => {
+  it('shows the reserved worker and follows reservation release on the same task object', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const remoteAssignment = RemoteAssignmentSchema.parse({ projectId: '/project', taskName: 'retry', workerId: 'w1', workerName: 'w1',
+      registrationGeneration: id, executionId: id, assignmentGeneration: 1, requestId: 'request', originalSha: 'a'.repeat(40),
+      origin: 'https://example.test/repo.git', branch: 'task', leaseExpiresAt: 1, lastAcknowledgedLogSequence: 0,
+      controlSequence: 0, workLocation: id, retryReservation: true });
+    const task = makeTask({ kind: 'failed', name: 'retry', remoteAssignment });
+    expect(formatTaskStatusLabel(task)).toBe('[failed] retry (worker w1 reserved)');
+    remoteAssignment.retryReservation = false;
+    expect(formatTaskStatusLabel(task)).toBe('[failed] retry');
+  });
   it.each(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed'] as const)(
     'should sanitize only the name in the %s label without changing the record', (kind) => {
       const name = '\u001b[2Jalpha\r\nforged\u0007\u009b0m';
