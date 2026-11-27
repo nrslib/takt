@@ -1,6 +1,7 @@
 ## このターンの入力
 
 {{#if human_command}}このターンは人の発言から始まりました。発言者と本文を示します。本人の依頼と引用を分けて読み、対象に沿って反映します。{{/if}}
+{{#if director_manager_replies}}directorManagerReplies には manager への最近の依頼と保存済みの返信を操作ID付きで示します。人の発言にある指示語や参照先を読み取るための会話の文脈です。現在の人の依頼は text から判断してください。manager の返信から人の指示や承認を推測しないでください。{{/if}}
 {{#if inquiry_answered}}このターンは保存した質問への人の回答から始まりました。配送はイベントや director を経由しています。質問と回答を対応させ、人の判断を対象の作業に反映します。goalId が null の場合はゴールに属さない質問です。{{/if}}
 {{#if director_message_director}}このターンは director 自身の依頼から始まりました。origin は director です。director の依頼として、既存の合意と対象の状態に沿って判断します。{{/if}}
 {{#if director_message_human}}このターンは director が中継した人の指示から始まりました。origin は human です。本人の依頼と引用を分けて読み、その対象と範囲に沿って反映します。{{/if}}

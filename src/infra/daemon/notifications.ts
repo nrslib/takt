@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { opendir, stat } from 'node:fs/promises';
+import { lstat, opendir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { FileAsyncLock } from './lock.js';
-import { ensurePrivateDirectory, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
+import { ensurePrivateDirectory, hasCode, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
 
 const notification = z.object({ id: z.string().min(1).max(128), message: z.string().min(1), turnOperationId: z.string().min(1).optional(),
   conversationId: z.string().min(1).optional(),
@@ -12,8 +12,10 @@ export type DirectorNotification = Pick<z.infer<typeof notification>, 'id' | 'me
 export type DirectorNotificationSubject = NonNullable<z.infer<typeof notification>['subject']>;
 type Notification = z.infer<typeof notification>;
 const key = (value: string): string => createHash('sha256').update(value).digest('hex');
+export const managerResultNotificationId = (operationId: string): string => `result-${operationId}`;
 /** 索引に保持する通知の合計サイズの上限。超えた分は保持せず、走査のたびに読み直す。 */
 const MAX_CACHED_NOTIFICATION_BYTES = 16 * 1024 * 1024;
+const DIRECTOR_CLEAR_BOUNDARY = 'director-clear-boundary';
 
 export class DaemonNotifications {
   private readonly directory: string;
@@ -55,6 +57,32 @@ export class DaemonNotifications {
 
   async *iterate(): AsyncGenerator<Notification> {
     for await (const value of this.refresh()) yield structuredClone(value);
+  }
+
+  async managerResultPublishedAt(operationId: string): Promise<bigint | undefined> {
+    return this.savedAt(join(this.directory, `${key(managerResultNotificationId(operationId))}.json`));
+  }
+
+  async recordDirectorContextClear(operationId: string): Promise<void> {
+    const path = join(this.directory, DIRECTOR_CLEAR_BOUNDARY);
+    const signal = new AbortController().signal;
+    await this.lock.exclusive(join(this.directory, '.lock'), async () => {
+      const prior = await readEntirePrivateFile(path);
+      if (prior?.toString('utf8') === operationId) return;
+      // Keep retries at the original boundary so they cannot discard replies published since.
+      await writePrivateFile(path, operationId, signal);
+    }, { signal, timeoutMs: 5000 });
+  }
+
+  async directorContextClearedAt(): Promise<bigint | undefined> {
+    return this.savedAt(join(this.directory, DIRECTOR_CLEAR_BOUNDARY));
+  }
+
+  private async savedAt(path: string): Promise<bigint | undefined> {
+    const info = await lstat(path, { bigint: true }).catch((error: unknown) => { if (!hasCode(error, 'ENOENT')) throw error; });
+    if (info === undefined) return undefined;
+    if (!info.isFile()) throw new Error('Invalid director notification store file');
+    return info.mtimeNs;
   }
 
   /** 索引と待ち行列を使わず、保存済みの通知をディレクトリから直接読み取る。save() の重複確認専用。 */

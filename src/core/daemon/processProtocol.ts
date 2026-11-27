@@ -6,7 +6,8 @@ import { ConversationCommandSchema } from '../../features/manager/conversationCo
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
 import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from './events.js';
-import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
+import { MAX_DIRECTOR_MANAGER_REPLIES, MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES,
+  type ConversationChange, type ConversationTurnState, type TurnIdentity, type TurnOutcome, type TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
 export { MAX_PROCESS_PROGRESS_BYTES };
@@ -80,8 +81,14 @@ const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('failed'), message: text, change: change.optional() }).strict(),
   z.object({ kind: z.literal('interrupted'), message: text.optional(), change: change.optional() }).strict(),
 ]) satisfies z.ZodType<TurnOutcome>;
-const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }).strict().refine((value) =>
-  value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
+const directorManagerReply = z.object({ managerId: id, operationId: id, requestedAt: z.iso.datetime(), request: text, reply: text }).strict();
+const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state,
+  directorManagerReplies: z.array(directorManagerReply).max(MAX_DIRECTOR_MANAGER_REPLIES).refine((replies) =>
+    Buffer.byteLength(JSON.stringify(replies)) <= MAX_DIRECTOR_MANAGER_REPLY_CONTEXT_BYTES).readonly().optional(),
+}).strict().refine((value) =>
+  value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId
+  && (value.directorManagerReplies === undefined || value.state.assignment.kind === 'daemon'
+    && value.event.event.kind === 'human_command' && value.event.event.command.kind === 'message')) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add_director_manager'), repositoryDirectory: z.string().min(1) }).strict(),

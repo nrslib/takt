@@ -23,6 +23,7 @@ import { DaemonLogger } from '../../infra/daemon/logger.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ManagerImageAttachments, managerImageDirectory } from '../manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../manager/daemonConversationPort.js';
+import { CLEAR_COMMAND } from '../manager/conversationCommands.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
 import { createDaemonSlackPorts, type SlackRepositoryConfig } from './slackPorts.js';
 import { DaemonDispatcher } from './dispatcher.js';
@@ -123,7 +124,17 @@ export async function startDaemon(options: {
   } };
   const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
     ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
-  runner: { async start(value, signal) { await conversations.started(value); runner.start(value, signal); },
+  runner: { async start(value, signal) {
+    await conversations.started(value);
+    const { event, state } = value;
+    const command = event.event.kind === 'human_command' ? event.event.command : undefined;
+    if (state.assignment.kind === 'daemon' && command?.kind === 'message' && command.text.trim() !== CLEAR_COMMAND) {
+      const replies = await eventStore.readDirectorManagerReplies(notifications);
+      signal.throwIfAborted();
+      if (replies.length > 0) value = { ...value, directorManagerReplies: replies };
+    }
+    runner.start(value, signal);
+  },
     interrupt: (turn) => runner.interrupt(turn), resultCommitted: (turn) => runner.resultCommitted(turn), close: () => closeResource(runner) },
   resources, limits: { maxPendingEvents, maxPendingBytes: 1024 * 1024 },
   onFailure: ({ phase, error }) => {
