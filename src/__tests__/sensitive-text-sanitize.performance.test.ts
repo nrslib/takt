@@ -59,4 +59,29 @@ describe('sanitizeSensitiveText performance', () => {
     expect(elapsed(64 * 1024)).toBeLessThan(500);
     expect(elapsed(256 * 1024)).toBeLessThan(2000);
   });
+
+  // The worst shape for a variable-length lookbehind: each `://` starts a userinfo run that
+  // never reaches an `@`, and the scheme-like run behind it is made of long alphanumeric or
+  // hash words joined by `-` (a `1-http://user:pass@host`-style prefix). Restarting the
+  // scheme match at every letter after a `-` rescans the rest of the run each time, so the
+  // old `(\b[A-Za-z][A-Za-z0-9+.-]*://)` pattern took quadratic time on these inputs
+  // (448ms at 64KiB, 6.9s at 256KiB for the `abcd-` scheme), while the `://`-anchored
+  // pattern stays linear. A run without a `-` is only scanned once even by the old pattern,
+  // so the prefixes keep the `-`.
+  it.each([
+    // A bare `://` userinfo: the old pattern restarts the scheme at every word boundary.
+    ['hyphenated hash words before ://', (bytes: number) => 'deadbeef-'.repeat(Math.ceil(bytes / 9)) + '://'],
+    // A userinfo that has a colon but no `@`: the old pattern also retried every colon.
+    ['hyphenated words with an incomplete userinfo', (bytes: number) => 'abcd-'.repeat(Math.ceil(bytes / 5)) + '://u:p'],
+  ])('stays linear on %s', (_name, build) => {
+    const elapsed = (bytes: number): number => {
+      const start = performance.now();
+      sanitizeSensitiveText(build(bytes));
+      return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
 });
