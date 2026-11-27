@@ -1433,7 +1433,7 @@ describe('loadWorktreeSessions', () => {
     expect(sessions).toEqual({ coder: 'session-123', reviewer: 'session-456' });
   });
 
-  it('should return empty object for corrupted JSON', () => {
+  it('should reject corrupted JSON without changing the stored file', () => {
     const worktreePath = '/project/worktree';
     const sessionsDir = getWorktreeSessionsDir(testDir);
     mkdirSync(sessionsDir, { recursive: true });
@@ -1441,9 +1441,9 @@ describe('loadWorktreeSessions', () => {
     const sessionPath = getWorktreeSessionPath(testDir, worktreePath);
     writeFileSync(sessionPath, 'not valid json');
 
-    const sessions = loadWorktreeSessions(testDir, worktreePath);
-
-    expect(sessions).toEqual({});
+    expect(() => loadWorktreeSessions(testDir, worktreePath)).toThrow(`Invalid session file: ${sessionPath}`);
+    expect(() => updateWorktreeSession(testDir, worktreePath, 'coder', 'new-session')).toThrow(`Invalid session file: ${sessionPath}`);
+    expect(readFileSync(sessionPath, 'utf-8')).toBe('not valid json');
   });
 });
 
