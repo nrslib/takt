@@ -318,12 +318,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   for (const [stepIndex, step] of config.steps.entries()) {
     try {
       const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
-      if ((step.parallel || step.arpeggio)
-        && step.qualityGates?.some((gate) => typeof gate !== 'string' && gate.runAt === 'before_report')) {
-        throw withWorkflowStepErrorPath(new Error(
-          `Step "${step.name}" cannot run a before_report gate on a parallel parent or arpeggio step`,
-        ), [...stepPath, 'quality_gates']);
-      }
       const validateReportInput = (consumer: WorkflowStep, consumerPath: readonly PropertyKey[]) => {
         if (consumer.inputReports === undefined) return;
         for (const input of reportInputEntries(consumer.inputReports)) {

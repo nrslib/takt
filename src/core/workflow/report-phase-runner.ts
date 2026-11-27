@@ -177,7 +177,6 @@ async function executeReportPhase(
       targetFile: fileName,
       lastResponse,
       phase1ExecutionLog: ctx.phase1ExecutionLog,
-      beforeReportGateEvidence: ctx.beforeReportGateEvidence,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
@@ -249,7 +248,6 @@ async function executeReportPhase(
       targetFile: fileName,
       lastResponse,
       phase1ExecutionLog: ctx.phase1ExecutionLog,
-      beforeReportGateEvidence: ctx.beforeReportGateEvidence,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();

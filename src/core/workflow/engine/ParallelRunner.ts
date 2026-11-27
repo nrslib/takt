@@ -45,8 +45,7 @@ import {
 } from '../live-intervention/delivery.js';
 import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
 import { buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
-import type { QualityGateRunResult, RunQualityGatesOptions } from '../quality-gates/types.js';
-import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
+import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { truncateUtf8PreservingMarker } from '../../../shared/utils/text.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
@@ -279,7 +278,6 @@ export interface ParallelRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getAbortSignal?: () => AbortSignal | undefined;
-  readonly runWithoutInactivityTimeout?: RunQualityGatesOptions['runWithoutInactivityTimeout'];
   readonly getCwd: () => string;
   readonly dynamicParallelSelector: DynamicParallelSelectorCoordinator;
   readonly getWorkflowName: () => string;
@@ -371,12 +369,6 @@ export class ParallelRunner {
     const attemptState = captureParallelAttemptState(state);
     // Progress notes identity and the active retry request outlive rolled-back parallel attempts.
     const progressNotesRequests = new Map<string, ParallelProgressNotesRequest>();
-    const lastOutput = state.lastOutput;
-    const previousFailures = state.currentStep === step.name && lastOutput?.persona === step.name
-      ? lastOutput.parallelBeforeReportGateFailures
-      : undefined;
-    // A confirmed failure remains pending across live restarts until its child receives it.
-    const pendingGateFailures = new Map(previousFailures?.map((failure) => [failure.persona, failure]));
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
       restoreParallelAttemptState(state, attemptState);
@@ -411,7 +403,6 @@ export class ParallelRunner {
           updatePersonaSession,
           invalidatedSessions,
           progressNotesRequests,
-          pendingGateFailures,
           runtime,
           activeStepIteration,
           executionDeadlineContext,
@@ -462,7 +453,6 @@ export class ParallelRunner {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     invalidatedSessions: Map<string, string>,
     progressNotesRequests: Map<string, ParallelProgressNotesRequest>,
-    pendingGateFailures: Map<string, AgentResponse>,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
     executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
@@ -636,22 +626,22 @@ export class ParallelRunner {
       return [subStep.name, providerInfo];
     }));
 
-    const runWithSubStepDeadline = async <T>(subStep: WorkflowStep, operation: () => Promise<T>): Promise<T> => {
-      if (executionDeadlineContext === undefined || !isAgentParallelSubStep(subStep)) {
-        return operation();
+    const subStepDeadlineByName = new Map<string, WorkflowStepInactivityDeadline>();
+    const getSubStepDeadline = (subStep: WorkflowStep): WorkflowStepInactivityDeadline | undefined => {
+      if (executionDeadlineContext === undefined) {
+        return undefined;
+      }
+      const existing = subStepDeadlineByName.get(subStep.name);
+      if (existing !== undefined) {
+        return existing;
       }
       const providerInfo = providerInfoByStep.get(subStep.name);
       if (providerInfo === undefined) {
         throw new Error(`Provider preflight result is missing for parallel sub-step "${subStep.name}"`);
       }
-      // Preparation and execution each hold their own semaphore slot. The wait between them has no active provider.
-      const key = `parallel:${subStep.name}`;
-      const deadline = executionDeadlineContext.begin(key, providerInfo);
-      try {
-        return await executionDeadlineContext.runWith(deadline, operation);
-      } finally {
-        executionDeadlineContext.finish(key);
-      }
+      const deadline = executionDeadlineContext.begin(`parallel:${subStep.name}`, providerInfo);
+      subStepDeadlineByName.set(subStep.name, deadline);
+      return deadline;
     };
 
     const subStepStartedAtByName = new Map<string, number>();
@@ -663,8 +653,10 @@ export class ParallelRunner {
           await semaphore.acquire();
         }
         try {
-          return await runWithSubStepDeadline(
-            subStep,
+          const subStepDeadline = getSubStepDeadline(subStep);
+          return await runWithExecutionDeadline(
+            executionDeadlineContext,
+            subStepDeadline,
             async () => {
               const subIteration = incrementStepIteration(
                 state,
@@ -714,8 +706,12 @@ export class ParallelRunner {
           restartIfLiveInterventionPending();
           const startedAt = Date.now();
           subStepStartedAtByName.set(subStep.name, startedAt);
-          const result = await runWithSubStepDeadline(
-            subStep,
+          const subStepDeadline = isAgentParallelSubStep(subStep)
+            ? getSubStepDeadline(subStep)
+            : undefined;
+          const result = await runWithExecutionDeadline(
+            executionDeadlineContext,
+            subStepDeadline,
             async () => {
           if (isWorkflowCallStep(subStep)) {
             if (workflowCallResumeStack === undefined) {
@@ -762,7 +758,6 @@ export class ParallelRunner {
             throw new Error(`Prepared parallel sub-step is missing for "${subStep.name}"`);
           }
           const { executableSubStep, subIteration } = preparedSubStep;
-          const gateFailure = pendingGateFailures.get(subStep.name);
           const subInstruction = this.deps.stepExecutor.prepareInstruction(
             step.inputReports === undefined || executableSubStep.inputReports !== undefined
               ? executableSubStep
@@ -775,8 +770,6 @@ export class ParallelRunner {
               subRuntime,
               reviewerOperationOrigin(subStep.name),
             ),
-            undefined,
-            { gateFailure },
           );
           const phase1Instruction = [subInstruction.text, resolveLiveInterventionPrompt(
             liveIntervention, liveDelivery, this.deps.engineOptions.language,
@@ -861,19 +854,15 @@ export class ParallelRunner {
                 phase1ExecutionLog.markDispatched();
               },
             };
-        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined && gateFailure === undefined
+        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
           ? recordingAgentOptions
           : {
               ...recordingAgentOptions,
               onDispatch: (permissionMode) => {
-                recordingAgentOptions.onDispatch?.(permissionMode);
-                if (gateFailure !== undefined && pendingGateFailures.get(subStep.name) === gateFailure) {
-                  pendingGateFailures.delete(subStep.name);
-                }
-                if (liveDeliveryCommitter !== undefined) {
-                  liveDeliveryCommitter.onDispatch(permissionMode);
-                  reportInputTracker.recordDelivery(liveDelivery);
-                }
+                baseOptions.onDispatch?.(permissionMode);
+                liveDeliveryCommitter.onDispatch(permissionMode);
+                reportInputTracker.recordDelivery(liveDelivery);
+                phase1ExecutionLog?.markDispatched();
               },
             };
         const promptResolvedAttempts = new Set<number>();
@@ -1164,35 +1153,6 @@ export class ParallelRunner {
 
         restartIfLiveInterventionPending();
 
-        const beforeReportGates = await runQualityGates({
-          qualityGates: subStep.qualityGates,
-          runAt: 'before_report',
-          projectRoot: this.deps.getCwd(),
-          step: subStep,
-          childProcessEnv: this.deps.engineOptions.childProcessEnv,
-          signal: this.resolveAbortSignal(),
-          runWithoutInactivityTimeout: this.deps.runWithoutInactivityTimeout,
-          observabilityEnabled: this.deps.observabilityEnabled,
-          runId: this.deps.observabilityRunId,
-          workflowName: this.deps.getWorkflowName(),
-        });
-        if (!beforeReportGates.ok) {
-          pendingGateFailures.set(subStep.name, beforeReportGates.response);
-          state.stepOutputs.set(subStep.name, beforeReportGates.response);
-          return {
-            subStep,
-            response: beforeReportGates.response,
-            instruction: phase1Instruction,
-            providerInfo: subPm,
-            durationMs: Math.max(0, beforeReportGates.response.timestamp.getTime() - startedAt),
-            qualityGateFailure: true,
-          };
-        }
-        if (beforeReportGates.evidence !== undefined) {
-          pendingGateFailures.delete(subStep.name);
-        }
-        restartIfLiveInterventionPending();
-
         let finalResponse = subResponse;
         const basePhaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
             subStep,
@@ -1231,7 +1191,6 @@ export class ParallelRunner {
                 lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
-                beforeReportGateEvidence: beforeReportGates.evidence,
                 phase1ExecutionLog: phase1ExecutionLog === undefined
                   ? undefined
                   : await this.deps.stepExecutor.savePhase1ExecutionLog(
@@ -1402,7 +1361,7 @@ export class ParallelRunner {
         };
             },
           );
-          completed = result.response.status === 'done' && result.response.beforeReportGateFailed !== true;
+          completed = result.response.status === 'done';
           return result;
         } finally {
           if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
@@ -1494,12 +1453,6 @@ export class ParallelRunner {
       throw childExecutionState?.originalError ?? unhandledChildFailure.reason;
     }
 
-    const gateFailures = subResults.flatMap(({ subStep }) => {
-      const failure = pendingGateFailures.get(subStep.name);
-      return failure === undefined ? [] : [failure];
-    });
-    const gateDiagnostics = gateFailures.length > 0 ? { parallelBeforeReportGateFailures: gateFailures } : {};
-    const terminalParentContext = { step, state, stepIteration, subResults, gateDiagnostics };
     const terminalResults = this.collectTerminalResults(subResults);
     const parseFailureResult = terminalResults.find(
       (result) => result.response.failureCategory
@@ -1520,7 +1473,10 @@ export class ParallelRunner {
     }
     if (parseFailureResult) {
       return this.createTerminalParentResult({
-        ...terminalParentContext,
+        step,
+        state,
+        stepIteration,
+        subResults,
         terminalResults,
         status: 'error',
         providerInfo: parseFailureResult.providerInfo ?? parentPm,
@@ -1529,7 +1485,10 @@ export class ParallelRunner {
     }
     if (continuationFailureResult !== undefined) {
       return this.createTerminalParentResult({
-        ...terminalParentContext,
+        step,
+        state,
+        stepIteration,
+        subResults,
         terminalResults,
         status: 'error',
         providerInfo: continuationFailureResult.providerInfo ?? parentPm,
@@ -1538,7 +1497,10 @@ export class ParallelRunner {
     }
     if (rateLimitedResult) {
       return this.createTerminalParentResult({
-        ...terminalParentContext,
+        step,
+        state,
+        stepIteration,
+        subResults,
         terminalResults,
         status: 'rate_limited',
         providerInfo: rateLimitedResult.providerInfo ?? parentPm,
@@ -1557,7 +1519,10 @@ export class ParallelRunner {
         throw new Error(`Parallel step "${step.name}" has no primary error result`);
       }
       return this.createTerminalParentResult({
-        ...terminalParentContext,
+        step,
+        state,
+        stepIteration,
+        subResults,
         terminalResults,
         status: 'error',
         providerInfo: primaryFailure.providerInfo ?? parentPm,
@@ -1573,7 +1538,10 @@ export class ParallelRunner {
         }
         const reason = `Parallel step "${step.name}" exceeded its explicit error retry limit (${MAX_EXPLICIT_PARALLEL_ERROR_RETRIES})`;
         return this.createTerminalParentResult({
-          ...terminalParentContext,
+          step,
+          state,
+          stepIteration,
+          subResults,
           terminalResults: errorResults,
           status: 'error',
           providerInfo: primaryFailure.providerInfo ?? parentPm,
@@ -1598,7 +1566,10 @@ export class ParallelRunner {
         throw new Error(`Parallel step "${step.name}" has no primary blocked result`);
       }
       return this.createTerminalParentResult({
-        ...terminalParentContext,
+        step,
+        state,
+        stepIteration,
+        subResults,
         terminalResults: blockedResults,
         status: 'blocked',
         providerInfo: primaryFailure.providerInfo ?? parentPm,
@@ -1620,8 +1591,6 @@ export class ParallelRunner {
           qualityGateFailure.response.content,
         ].join('\n'),
         timestamp: new Date(),
-        ...(qualityGateFailure.response.beforeReportGateFailed === true ? { beforeReportGateFailed: true } : {}),
-        ...gateDiagnostics,
         ...(retryCount === undefined ? {} : { retryCount }),
       };
       return {
@@ -1686,7 +1655,6 @@ export class ParallelRunner {
       content: aggregatedContent,
       timestamp: new Date(),
       ...(match && { matchedRuleIndex: match.index, matchedRuleMethod: match.method }),
-      ...gateDiagnostics,
       ...(retryCount === undefined ? {} : { retryCount }),
     };
 
@@ -1975,7 +1943,6 @@ export class ParallelRunner {
     state: WorkflowState;
     stepIteration: number;
     subResults: ParallelSubStepResult[];
-    gateDiagnostics: Pick<AgentResponse, 'parallelBeforeReportGateFailures'>;
     terminalResults: ParallelSubStepResult[];
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
@@ -2009,7 +1976,6 @@ export class ParallelRunner {
         : {}),
       ...(failureCategory && { failureCategory }),
       ...(retryCount === undefined ? {} : { retryCount }),
-      ...options.gateDiagnostics,
       ...(options.status === 'rate_limited'
         ? {
             ...(primaryFailure.response.errorKind === undefined

@@ -124,7 +124,7 @@ TAKT classifies unit, light IT (tests run by `npm run test:it`), heavy IT (tests
 |-------|-----------|
 | During implementation | Repeat the unit gate |
 | After implementation | Run the light IT gate after the unit gate |
-| Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself. If Phase 1 explicitly assigns the check to TAKT, TAKT runs it after the work |
+| Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself |
 | Added or changed a heavy IT test | Run the changed file yourself as a target with `npm test -- <test-file>` |
 | PR CI or release verification | Run the complete light IT and heavy IT suites |
 

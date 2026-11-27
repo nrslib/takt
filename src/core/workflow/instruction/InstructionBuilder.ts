@@ -24,21 +24,8 @@ import { renderPullRequestContext } from '../pr-context.js';
 import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
 import { renderWorkflowWideRules } from './workflow-wide-rules.js';
-import { sanitizeCommandGatePromptText } from '../quality-gates/commandGateMessage.js';
 
 const CONTEXT_MAX_CHARS = 2000;
-
-function renderBeforeReportGates(step: WorkflowStep, cwd: string): string {
-  const checks = step.qualityGates?.flatMap((gate) => {
-    if (typeof gate === 'string' || gate.runAt !== 'before_report') return [];
-    return [{
-      name: gate.name === undefined ? undefined : sanitizeCommandGatePromptText(gate.name, cwd),
-      command: sanitizeCommandGatePromptText(gate.command, cwd),
-      guidance: gate.guidance === undefined ? undefined : sanitizeCommandGatePromptText(gate.guidance, cwd),
-    }];
-  });
-  return checks?.length ? JSON.stringify(checks, null, 2) : '';
-}
 
 export function renderGoalSpecificationNotice(paths: readonly string[] | undefined, language: Language): string {
   if (!paths?.length) return '';
@@ -147,17 +134,16 @@ export class InstructionBuilder {
     const userRequest = hasTaskSection ? escapeTemplateChars(this.context.task) : '';
 
     // Previous Response
-    const passPreviousResponse = this.step.passPreviousResponse || this.context.previousOutput?.beforeReportGateFailed;
     const hasPreviousResponse = !!(
-      passPreviousResponse &&
+      this.step.passPreviousResponse &&
       this.context.previousOutput &&
       !hasPreviousResponsePlaceholder
     );
-    const previousResponsePrepared = passPreviousResponse && this.context.previousOutput
+    const previousResponsePrepared = this.step.passPreviousResponse && this.context.previousOutput
       ? preparePreviousResponseContent(
           this.context.previousOutput.content,
           this.context.previousResponseSourcePath,
-          this.step.preserveFullPreviousResponse === true || this.context.previousOutput.beforeReportGateFailed === true,
+          this.step.preserveFullPreviousResponse === true,
           language,
         )
       : '';
@@ -276,7 +262,6 @@ export class InstructionBuilder {
     const qualityGatesContent = hasQualityGates
       ? aiQualityGates.map(gate => `- ${gate}`).join('\n')
       : '';
-    const failedGateGuidance = this.context.previousOutput?.beforeReportGateGuidance;
 
     const text = loadTemplate('perform_phase1_message', language, {
       phaseContext: renderPhaseContext(this.context.workflowAssignment ?? {
@@ -308,9 +293,6 @@ export class InstructionBuilder {
       knowledgeContent,
       hasQualityGates,
       qualityGatesContent,
-      beforeReportGates: renderBeforeReportGates(this.step, this.context.cwd),
-      beforeReportGateFailed: this.context.previousOutput?.beforeReportGateFailed === true,
-      failedGateGuidance: failedGateGuidance === undefined ? '' : JSON.stringify(failedGateGuidance),
       hasWorkflowRulesAfterExecution: workflowRules.hasAfterExecutionRules,
       workflowRulesNoticeAfterExecution: workflowRules.noticeAfterExecutionRules,
       workflowRulesAfterExecution: workflowRules.afterExecutionRules,
