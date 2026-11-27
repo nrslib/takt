@@ -90,7 +90,10 @@ it('hands off the existing resident daemon connection when version and CLI path 
 });
 
 it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('rejects a differing resident owner without stopping or replacing it: %j', async (difference) => {
-  const resident = { ...owner, ...difference, pid: 1234, resident: true };
+  const { entry } = await installations();
+  const cliPath = entry('takt-custom-a');
+  doubles.entry.mockReturnValue(cliPath);
+  const resident = { ...owner, cliPath, ...difference, pid: 1234, resident: true };
   doubles.read.mockReturnValue(resident);
   let running = true;
   doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== resident.pid || running);
@@ -102,7 +105,7 @@ it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('rejects a dif
   const message = (failure as Error).message;
   expect(message).toMatch(/resident/iu);
   expect(message).toContain(difference.version ?? difference.cliPath);
-  expect(message).toContain(difference.version === undefined ? owner.cliPath : packageVersion);
+  expect(message).toContain(difference.version === undefined ? cliPath : packageVersion);
   expect(message).toContain('takt daemon stop');
   expect(message).toContain('takt daemon --resident');
   expect(message.indexOf('takt daemon stop')).toBeLessThan(message.indexOf('takt daemon --resident'));
