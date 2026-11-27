@@ -50,6 +50,7 @@ import { deleteBranch } from '../features/tasks/list/taskBranchLifecycleActions.
 import { encodeWorktreePath } from '../infra/config/project/sessionStore.js';
 import type { TaskListItem } from '../infra/task/types.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 const mockConfirm = vi.mocked(confirm);
 const mockLogError = vi.mocked(logError);
@@ -115,6 +116,19 @@ afterEach(() => {
 });
 
 describe('taskDeleteActions', () => {
+  it('keeps remote tasks out of synchronous local deletion without a worker ACK', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const task = runner.listAllTaskItems().find((task) => task.kind === 'failed')!;
+    const id = '11111111-1111-4111-8111-111111111111';
+    const remoteAssignment = RemoteAssignmentSchema.parse({ projectId: tmpDir, taskName: task.name,
+      workerId: 'w1', workerName: 'w1', registrationGeneration: id, executionId: id, assignmentGeneration: 1,
+      requestId: 'request', originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'task',
+      leaseExpiresAt: 1, lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: id, retryReservation: true });
+    expect(() => deleteTaskResources({ ...task, remoteAssignment })).toThrow('acknowledge workspace cleanup');
+    expect(runner.listAllTaskItems()).toContainEqual(expect.objectContaining({ name: task.name, kind: 'failed' }));
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+  });
   it('rejects a missing selection before cleanup with the existing error', () => {
     setupTasksFile(tmpDir);
     const runner = new TaskRunner(tmpDir);

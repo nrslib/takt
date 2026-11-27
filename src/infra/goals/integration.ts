@@ -26,6 +26,9 @@ import { readGoalPullRequestStatus } from './pull-request-status.js';
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
   if (task === undefined || task.goalId !== goal.id) throw new Error('Task does not belong to this goal');
+  if (task.remoteAssignment !== undefined && (task.remoteArtifacts === undefined
+    || task.remoteArtifacts.branch !== task.completion?.branch || task.remoteArtifacts.sha !== task.completion?.sha
+    || task.status === 'running')) throw new Error('Remote task artifacts have not been received and verified');
   if (task.mergeTask === true) throw new Error('PR merge tasks publish directly to the goal branch and cannot be integrated');
   const branch = task.completion?.branch;
   if (branch === undefined || (task.branch !== undefined && task.branch !== branch)) {

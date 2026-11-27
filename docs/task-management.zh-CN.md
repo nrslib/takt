@@ -163,6 +163,8 @@ MCP 客户端可以加入任务队列、读取 task/run 状态，并向正在运
 
 ### 并行执行（Concurrency）
 
+本节介绍单机并行执行。若要将 daemon 自动执行的 manager 目标任务分配到其他机器，请参阅 [worker pool 部署指南](./worker-pool.zh-CN.md)。`takt run`、`takt watch` 和交互模式不需要注册 worker 或启动常驻 daemon。
+
 `takt run` 和 `takt watch` 使用同一个 worker pool，默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
 
 ```yaml

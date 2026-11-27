@@ -4,6 +4,8 @@ import { PrivateFileLockAcquisitionError } from '../../../shared/utils/private-f
 import { TaskClaimLockAcquisitionError } from '../../../infra/task/taskLifecycleService.js';
 import { runtimeAssignmentUnavailableReason } from './runtimeAssignmentGuard.js';
 
+export const CLAIM_RETRY_INTERVAL_MS = 5_000;
+
 export class TaskClaimLockUnavailableError extends Error {
   constructor(message: string, options: ErrorOptions) {
     super(message, options);

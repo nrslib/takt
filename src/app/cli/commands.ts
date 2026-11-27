@@ -57,12 +57,41 @@ function parseMergeArgument(value: string): number | string {
   return value;
 }
 
+const workerCommand = program.command('worker')
+  .description('Connect a remote worker to a daemon using --url and --token; manage registrations with add, list and remove')
+  .option('--url <url>', 'Daemon URL (HTTPS is required outside localhost)')
+  .option('--token <token>', 'Worker registration token')
+  .action(async (options: { url?: string; token?: string }) => {
+    if (options.url === undefined || options.token === undefined) throw new Error('Worker startup requires --url and --token');
+    const { startWorker } = await import('../../features/workerPool/workerCommands.js');
+    await startWorker(options.url, options.token);
+  });
+workerCommand.command('add').description('Register a worker and print its token once')
+  .argument('<name>', 'Worker name').option('--concurrency <number>', 'Maximum concurrent tasks', (value: string) => {
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new InvalidArgumentError('Worker concurrency must be a nonnegative safe integer');
+    return Number(value);
+  }).action(async (name: string, options: { concurrency?: number }) => {
+    if (options.concurrency === undefined) throw new Error('Worker registration requires --concurrency');
+    const { addWorker } = await import('../../features/workerPool/workerCommands.js');
+    await addWorker(name, options.concurrency);
+  });
+workerCommand.command('list').description('List worker names and concurrency without tokens').action(async () => {
+  const { listWorkers } = await import('../../features/workerPool/workerCommands.js');
+  await listWorkers();
+});
+workerCommand.command('remove').description('Remove a worker registration and disconnect it')
+  .argument('<name>', 'Worker name').action(async (name: string) => {
+    const { removeWorker } = await import('../../features/workerPool/workerCommands.js');
+    await removeWorker(name);
+  });
+
 program
   .command('daemon')
   .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
-  .action(async () => {
+  .option('--resident', 'Keep the daemon running without work or TUI connections', false)
+  .action(async (options: { resident: boolean }) => {
     const { runDaemonForeground } = await import('../../features/daemon/lifecycle.js');
-    await runDaemonForeground();
+    await runDaemonForeground(options.resident);
   })
   .command('stop')
   .description('Stop the manager daemon')
@@ -96,14 +125,10 @@ program
   .action(async (_opts, command) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { runAllTasks } = await import('../../features/tasks/execute/runAllTasks.js');
-    const { MANAGER_GOAL_TASKS_ENV } = await import('../../shared/constants.js');
-    const goalTasksOnly = process.env[MANAGER_GOAL_TASKS_ENV] === '1';
-    delete process.env[MANAGER_GOAL_TASKS_ENV];
     const opts = command.optsWithGlobals();
     await runAllTasks(getCliExecutionContext().cwd, {
       ...resolveAgentOverrides(program),
       ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
-      ...(goalTasksOnly ? { goalTasksOnly: true } : {}),
     });
   });
 

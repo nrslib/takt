@@ -4,13 +4,14 @@ import type {
   TraceReportParams,
 } from './traceReportTypes.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { redactExecutionSecrets } from '../../../shared/utils/execution-secrets.js';
 
 function transformText(text: string, mode: TraceReportMode): string {
   if (!text) {
     return text;
   }
   if (mode === 'full') {
-    return text;
+    return redactExecutionSecrets(text);
   }
   return sanitizeSensitiveText(text);
 }
@@ -50,7 +51,8 @@ export function sanitizeTraceParamsForMode(
   mode: TraceReportMode,
 ): TraceReportParams {
   if (mode === 'full') {
-    return params;
+    return { ...params, task: redactExecutionSecrets(params.task),
+      ...(params.reason === undefined ? {} : { reason: redactExecutionSecrets(params.reason) }) };
   }
   return {
     ...params,
@@ -64,7 +66,7 @@ export function sanitizeTextForStorage(text: string, allowFullText: boolean): st
     return text;
   }
   if (allowFullText) {
-    return text;
+    return redactExecutionSecrets(text);
   }
   return sanitizeSensitiveText(text);
 }
