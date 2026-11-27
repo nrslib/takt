@@ -73,6 +73,36 @@ describe('buildInactivityAbortSignal', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it('resumes the provider timeout after the suspended operation settles', async () => {
+    const deadline = buildInactivityAbortSignal(100, undefined);
+    vi.advanceTimersByTime(90);
+
+    await deadline.runWithoutInactivityTimeout(async () => {
+      deadline.recordActivity();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deadline.signal.aborted).toBe(false);
+    });
+
+    vi.advanceTimersByTime(99);
+    expect(deadline.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(deadline.signal.aborted).toBe(true);
+    deadline.dispose();
+  });
+
+  it('propagates parent cancellation during the suspended operation', async () => {
+    const parent = new AbortController();
+    const deadline = buildInactivityAbortSignal(100, parent.signal);
+    const reason = new Error('workflow cancelled');
+
+    await expect(deadline.runWithoutInactivityTimeout(async () => {
+      parent.abort(reason);
+      deadline.signal.throwIfAborted();
+    })).rejects.toBe(reason);
+    expect(vi.getTimerCount()).toBe(0);
+    deadline.dispose();
+  });
+
   it('活動のたびに無応答期限を更新する', () => {
     const deadline = buildInactivityAbortSignal(100, undefined);
 

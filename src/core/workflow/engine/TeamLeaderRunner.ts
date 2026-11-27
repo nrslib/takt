@@ -58,6 +58,7 @@ import {
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { Phase1ExecutionLog } from '../phase1-execution-log.js';
+import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { getReportFiles } from '../output-contract-files.js';
 import { resolveTeamLeaderInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
 import {
@@ -176,6 +177,16 @@ function classifyTeamLeaderPartFailures(
     timeoutContinuationFailed,
     terminal: allFailed || timeoutContinuationFailed || failClosedPartError,
   };
+}
+
+function selectTeamLeaderOutcomePartResults(
+  partResults: PartResult[],
+  singleCorrectionPartIds: readonly string[] | undefined,
+): PartResult[] {
+  if (singleCorrectionPartIds === undefined) return partResults;
+  return partResults.filter((result) => (
+    result.response.status === 'done' || !singleCorrectionPartIds.includes(result.part.id)
+  ));
 }
 
 export interface TeamLeaderRunnerDeps {
@@ -935,6 +946,36 @@ export class TeamLeaderRunner {
     };
 
     const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
+    let beforeReportGateSucceeded = false;
+    const runBeforeReportGates: TeamLeaderExecutionOptions['runBeforeReportGates'] = executableStep.qualityGates
+      ?.some((gate) => typeof gate !== 'string' && gate.runAt === 'before_report')
+      ? async (terminalPartResults) => {
+          const results = selectTeamLeaderOutcomePartResults(
+            structuredClone(terminalPartResults) as PartResult[],
+            singleCorrectionPartIds,
+          );
+          if (results.some(({ response }) => response.status === 'rate_limited')
+            || classifyTeamLeaderPartFailures(results, teamLeaderConfig.failOnPartError === true).terminal) {
+            return undefined;
+          }
+          const result = await runQualityGates({
+            qualityGates: executableStep.qualityGates,
+            runAt: 'before_report',
+            projectRoot: this.deps.getCwd(),
+            step: executableStep,
+            childProcessEnv: this.deps.engineOptions.childProcessEnv,
+            signal: executionAbortScope.signal,
+            runWithoutInactivityTimeout: leaderDeadline?.signal.aborted === false
+              ? leaderDeadline.runWithoutInactivityTimeout
+              : undefined,
+            observabilityEnabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+          });
+          beforeReportGateSucceeded = result.ok;
+          return result;
+        }
+      : undefined;
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
     try {
       executionResult = await runWithExecutionDeadline(
@@ -973,6 +1014,7 @@ export class TeamLeaderRunner {
           && activeTeamCompanionRuntime !== undefined
           ? requestSingleCompanionCompletionAtExecutionTerminal
           : undefined,
+        runBeforeReportGates,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -1057,9 +1099,15 @@ export class TeamLeaderRunner {
         const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
         const feedbackResults = buildFeedbackResults(currentResultsCopy);
-        const feedbackSignal = leaderDeadline?.signal === undefined
+        // A live instruction can reopen Phase 1 after the gate, even if the original leader call expired.
+        const feedbackKey = 'team-leader:report-gate-feedback';
+        const resumedDeadline = beforeReportGateSucceeded && leaderDeadline?.signal.aborted === true
+          ? executionDeadlineContext?.begin(feedbackKey, leaderProviderInfo)
+          : undefined;
+        const feedbackDeadline = resumedDeadline ?? leaderDeadline;
+        const feedbackSignal = feedbackDeadline === undefined
           ? feedbackAbortSignal
-          : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
+          : AbortSignal.any([feedbackAbortSignal, feedbackDeadline.signal]);
         try {
           if (companionFindings !== undefined && companionFindings.length > 0) {
             if (activeTeamCompanionRuntime === undefined) {
@@ -1071,21 +1119,23 @@ export class TeamLeaderRunner {
             );
             teamCompanionFollowUpRound += 1;
           }
-          const moreParts = await requestLeaderFeedback({
-            instruction,
-            results: feedbackResults,
-            existingIds: scheduledIdsCopy,
-            abortSignal: feedbackSignal,
-            cancellablePartIds: cancellablePartIdsCopy,
-            companionFindings,
+          return await runWithExecutionDeadline(executionDeadlineContext, resumedDeadline, async () => {
+            const moreParts = await requestLeaderFeedback({
+              instruction,
+              results: feedbackResults,
+              existingIds: scheduledIdsCopy,
+              abortSignal: feedbackSignal,
+              cancellablePartIds: cancellablePartIdsCopy,
+              companionFindings,
+            });
+            await this.addPartAutoRouting(
+              routedProviderInfoByPart,
+              executableStep,
+              moreParts.parts,
+              runtime,
+            );
+            return moreParts;
           });
-          await this.addPartAutoRouting(
-            routedProviderInfoByPart,
-            executableStep,
-            moreParts.parts,
-            runtime,
-          );
-          return moreParts;
         } catch (error) {
           if (feedbackSignal.aborted) {
             throw error;
@@ -1120,10 +1170,15 @@ export class TeamLeaderRunner {
               detail: getErrorMessage(error),
               parts: summarizeParts(timeoutFallback.parts),
             });
-            await this.addPartAutoRouting(routedProviderInfoByPart, executableStep, timeoutFallback.parts, runtime);
+            await runWithExecutionDeadline(executionDeadlineContext, resumedDeadline, () =>
+              this.addPartAutoRouting(routedProviderInfoByPart, executableStep, timeoutFallback.parts, runtime));
             return timeoutFallback;
           }
           throw error;
+        } finally {
+          if (resumedDeadline !== undefined) {
+            executionDeadlineContext?.finish(feedbackKey);
+          }
         }
       },
         runPart: async (part, partIndex, publicationFence, partAbortSignal) => {
@@ -1184,14 +1239,12 @@ export class TeamLeaderRunner {
         executionAbortScope.dispose();
       }
     }
-    const { plannedParts, partResults } = executionResult;
+    const { plannedParts, partResults, beforeReportGateResult } = executionResult;
     if (singleCorrectionPartIds !== undefined) {
       parentAbortSignal?.throwIfAborted();
     }
     const failedCorrectionPartIds = settleSingleCompanionCorrection(partResults);
-    const teamOutcomePartResults = failedCorrectionPartIds === undefined
-      ? partResults
-      : partResults.filter((result) => !failedCorrectionPartIds.has(result.part.id));
+    const teamOutcomePartResults = selectTeamLeaderOutcomePartResults(partResults, singleCorrectionPartIds);
     const teamOutcomePlannedParts = failedCorrectionPartIds === undefined
       ? plannedParts
       : plannedParts.filter((part) => !failedCorrectionPartIds.has(part.id));
@@ -1280,6 +1333,14 @@ export class TeamLeaderRunner {
     };
 
     let terminalOperation: StepRunResult['terminalOperation'];
+    if (beforeReportGateResult?.ok === false) {
+      return {
+        response: beforeReportGateResult.response,
+        instruction,
+        providerInfo: leaderProviderInfo,
+        qualityGateFailure: { response: beforeReportGateResult.response, stepIteration },
+      };
+    }
     const writtenReportNames: string[] = [];
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
       executableStep,
@@ -1305,6 +1366,7 @@ export class TeamLeaderRunner {
           executableStep.name,
           stepIteration,
         ),
+      beforeReportGateResult?.evidence,
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);

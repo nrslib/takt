@@ -86,7 +86,10 @@ steps:
       - "Review the implementation before finishing" # AI directive
       - type: command                # Machine-executed command gate
         name: quality-check
+        run_at: before_report        # Run after work and before reporting
         command: "./.takt/quality-gates/check.sh"
+        covers: ["npm test -- fixtures.test.ts"]
+        guidance: "Check generated fixtures if this gate fails"
         cwd: "."
         timeout_ms: 300000
 ```
@@ -197,6 +200,11 @@ The caller overrides fragment fields. Objects are deep-merged; arrays such as `p
 
 String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, and the private output log path back into the same agent step. Sanitized stdout and stderr are available only in that local private log and are not inserted into agent feedback. `system` and `workflow_call` steps do not accept `quality_gates`.
 
+Set `run_at: before_report` to run a command after the work phase (Phase 1) and before reporting and rule judgment. On failure, TAKT skips report generation and provides the exit code or other failure details and any available log reference to the next work attempt of the same step. On success, TAKT saves the execution record and includes it in the report-generation input. For a parallel step, configure the gate on the individual sub-step. Parallel parents and arpeggio steps do not support this setting. Shared `workflow_overrides.quality_gates` entries with `run_at: before_report` apply only to supported agent steps, including parallel children.
+
+Phase 1 tells the agent which completion checks TAKT handles. The gate executes only its `command`. For `run_at: before_report`, use the optional `covers` list to identify commands that the gate already performs, for example through a wrapper. Each entry must be a non-blank string. The agent leaves a check to TAKT only when both its command (`command` or a `covers` entry) and working directory match. The prompt shows `cwd` relative to the worktree root. If omitted, it is `.` (the root). When a wrapper checks a different directory, use a `covers` command that identifies the target from the gate’s `cwd`, such as `npm --prefix packages/api test`. The agent runs any other required verification. Commands mentioned only in `guidance` do not count as covered. The agent can still run targeted tests or reproduce failures while working.
+
+The optional `guidance` must be a non-blank string. TAKT includes it in the initial notice and in the failing check’s diagnostic. Braces in `covers` and `guidance` are literal. Otherwise identical gates run once. For `covers` and `guidance` separately, TAKT uses the first supplied value in merge order: global config, project config, then workflow YAML. Coverage lists are not combined. An explicit empty list declares no additional covered commands.
 
 ## Available Variables
 
@@ -277,7 +285,7 @@ A rule with `interactive_only: true` is only considered during interactive execu
 
 ### Rule Field: `command_gates`
 
-`command_gates` controls command quality gates for the selected rule. `required` runs the step's command gates after rule resolution and before applying the transition; the transition is applied only after the gates succeed. `skip` applies the selected transition without running command gates. Omitting the field is equivalent to `required`.
+`command_gates` controls command gates that omit `run_at`. `required` runs those gates after rule resolution and applies the transition after they succeed. `skip` applies the transition immediately. Omitting the field is equivalent to `required`. Gates with `run_at: before_report` run before the rule is selected.
 
 ## Step Types
 
@@ -362,7 +370,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Add `selection_hint` when a candidate's role alone does not make clear when to select it. This optional field is allowed only on `pool` candidates and must be a non-empty string when specified. The selector uses both `description` and `selection_hint`. Existing YAML without `selection_hint` continues to use only `description` for selection. Setting `selection_hint` on any other step or sub-step causes a load-time error.
 - A `fixed` or `pool` item that declares `uses` owns its `rules` at that call site. The referenced fragment must not define them.
 - `fixed` always runs. The selector can select only expanded `pool` step names, and execution follows YAML order.
-- `replace` (the default) replaces a previous pool selection on a new round. `cumulative` retains every pool item selected in earlier rounds.
+- `replace` (the default) replaces a previous pool selection on a new round. `cumulative` retains every pool item selected in earlier rounds. In `replace` mode, a retry with an unresolved before-report gate keeps the previous selection so that the affected child can run its gate again.
 - A process resume does not restore a saved selection; it invokes the selector again against the current pool.
 - `all()` and `any()` aggregate only the fixed and selected pool items of the current round. Dynamic parallel rejects position-dependent aggregate expressions.
 - Invalid selector output or an unknown selection fails before a fixed or pool agent starts; there is no all-pool fallback.

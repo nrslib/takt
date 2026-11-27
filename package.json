@@ -108,6 +108,7 @@
     "pretest:unit:parallel": "npm run test:deepseek-harness:types",
     "test:unit:parallel": "vitest run --config vitest.config.unit.parallel.ts",
     "test:it": "npm run test:it:light",
+    "test:it:changed-wiring": "node scripts/check-changed-it-wiring.mjs",
     "pretest:it": "npm run patch:dependencies && npm run test:deepseek-harness:types",
     "test:it:light": "vitest run --config vitest.config.it.parallel.ts",
     "test:it:heavy": "node scripts/heavy-it-guard.mjs && npm run test:it:heavy:parallel && npm run test:it:heavy:serial",

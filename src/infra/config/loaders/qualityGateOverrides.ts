@@ -1,12 +1,7 @@
 /**
  * Quality gate override application logic
  *
- * Resolves quality gates from config overrides with 3-layer priority:
- * 1. Project .takt/config.yaml workflow_overrides
- * 2. Global ~/.takt/config.yaml workflow_overrides
- * 3. Workflow YAML quality_gates
- *
- * Merge strategy: Additive (config gates + YAML gates)
+ * Combines global, project, and workflow quality gates in execution order.
  */
 
 import * as path from 'node:path';
@@ -45,6 +40,7 @@ function qualityGateDedupeKey(gate: QualityGate): string {
 
   return `command:${JSON.stringify([
     gate.type,
+    gate.runAt ?? null,
     gate.name ?? null,
     gate.command,
     cwd,
@@ -53,19 +49,23 @@ function qualityGateDedupeKey(gate: QualityGate): string {
 }
 
 function dedupeQualityGates(gates: QualityGate[]): QualityGate[] {
-  const seenKeys = new Set<string>();
-  const uniqueGates: QualityGate[] = [];
-
+  const uniqueGates = new Map<string, QualityGate>();
   for (const gate of gates) {
     const key = qualityGateDedupeKey(gate);
-    if (seenKeys.has(key)) {
-      continue;
+    const previous = uniqueGates.get(key);
+    if (previous === undefined) {
+      uniqueGates.set(key, gate);
+    } else if (typeof previous !== 'string' && typeof gate !== 'string') {
+      const covers = previous.covers ?? gate.covers;
+      const guidance = previous.guidance ?? gate.guidance;
+      uniqueGates.set(key, {
+        ...previous,
+        ...(covers === undefined ? {} : { covers }),
+        ...(guidance === undefined ? {} : { guidance }),
+      });
     }
-    seenKeys.add(key);
-    uniqueGates.push(gate);
   }
-
-  return uniqueGates;
+  return [...uniqueGates.values()];
 }
 
 /**
@@ -88,6 +88,7 @@ function dedupeQualityGates(gates: QualityGate[]): QualityGate[] {
  * @param personaName - Persona name used by the step
  * @param projectOverrides - Project-level workflow_overrides (from .takt/config.yaml)
  * @param globalOverrides - Global-level workflow_overrides (from ~/.takt/config.yaml)
+ * @param inheritBeforeReportGates - Whether the step can inherit report gates from shared lists
  * @returns Merged quality gates array
  */
 export function applyQualityGateOverrides(
@@ -97,6 +98,7 @@ export function applyQualityGateOverrides(
   personaName: string | undefined,
   projectOverrides: WorkflowOverrides | undefined,
   globalOverrides: WorkflowOverrides | undefined,
+  inheritBeforeReportGates = true,
 ): QualityGate[] | undefined {
   if (personaName !== undefined && personaName.trim().length === 0) {
     throw new Error(`Invalid persona name for step "${stepName}": empty value`);
@@ -106,12 +108,15 @@ export function applyQualityGateOverrides(
   // Track whether yamlGates was explicitly defined (even if empty)
   const hasYamlGates = yamlGates !== undefined;
   const gates: QualityGate[] = [];
+  const allowsSharedGate = (gate: QualityGate) => (
+    inheritBeforeReportGates || typeof gate === 'string' || gate.runAt !== 'before_report'
+  );
 
   // Collect global gates from global config
   const globalGlobalGates = globalOverrides?.qualityGates;
   const globalEditOnly = globalOverrides?.qualityGatesEditOnly ?? false;
   if (globalGlobalGates && (!globalEditOnly || editFlag === true)) {
-    gates.push(...globalGlobalGates);
+    gates.push(...globalGlobalGates.filter(allowsSharedGate));
   }
 
   // Collect step-specific gates from global config
@@ -132,7 +137,7 @@ export function applyQualityGateOverrides(
   const projectGlobalGates = projectOverrides?.qualityGates;
   const projectEditOnly = projectOverrides?.qualityGatesEditOnly ?? false;
   if (projectGlobalGates && (!projectEditOnly || editFlag === true)) {
-    gates.push(...projectGlobalGates);
+    gates.push(...projectGlobalGates.filter(allowsSharedGate));
   }
 
   // Collect step-specific gates from project config
@@ -149,7 +154,7 @@ export function applyQualityGateOverrides(
     gates.push(...projectPersonaGates);
   }
 
-  // Add YAML gates (lowest priority)
+  // Append the workflow gates after the configured gates.
   if (yamlGates) {
     gates.push(...yamlGates);
   }

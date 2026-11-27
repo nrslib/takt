@@ -1,7 +1,7 @@
 import type { PreparedStepInstruction } from '../core/workflow/instruction/prepared-instruction.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 vi.mock('../agents/runner.js', () => ({
@@ -22,7 +22,9 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
-import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, DynamicParallelPoolSubStep, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import { isNormalAgentWorkflowStep } from '../core/models/workflow-types.js';
+import { QualityGatesSchema } from '../core/models/schema-base.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
 import type { QualityGateRunResult } from '../core/workflow/quality-gates/types.js';
@@ -39,17 +41,34 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { ProviderActivityCallback } from '../shared/types/provider.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { RuleEvaluator as ActualRuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
-import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { runQualityGates as runActualQualityGates } from '../core/workflow/quality-gates/qualityGateRunner.js';
 import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { normalizeQualityGates } from '../infra/config/configNormalizers.js';
+import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
+import * as sessionCompaction from '../core/workflow/engine/session-compaction.js';
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 
 type CommandGateRunResult = QualityGateRunResult;
 type LoopDeps = Parameters<typeof runWorkflowToCompletion>[0];
 type RunQualityGatesFn = LoopDeps['runQualityGates'];
+
+const emptySelectorGitCommandRunner = {
+  isInsideWorkTree: async () => false,
+  run: async () => ({ output: Buffer.alloc(0), bytes: 0 }),
+};
+
+function asPoolSubStep(step: WorkflowStep, description: string): DynamicParallelPoolSubStep {
+  if (!isNormalAgentWorkflowStep(step)) {
+    throw new Error(`Expected a normal parallel sub-step: ${step.name}`);
+  }
+  return { ...step, description };
+}
 
 function makeConfig(step: WorkflowStep): WorkflowConfig {
   return {
@@ -84,12 +103,12 @@ function createCommandGate(
   exitCode: number,
 ): { command: string; markerPath: string } {
   const markerPath = join(cwd, `${name}-started`);
-  const scriptPath = join(cwd, `${name}.mjs`);
+  const scriptName = `${name}.mjs`;
   writeFileSync(
-    scriptPath,
+    join(cwd, scriptName),
     `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(markerPath)}, 'ran'); process.exit(${exitCode});`,
   );
-  return { command: `node ${scriptPath}`, markerPath };
+  return { command: `node ${scriptName}`, markerPath };
 }
 
 function makeDeps(
@@ -147,6 +166,485 @@ function makeDeps(
 }
 
 describe('WorkflowRunLoop command quality gates', () => {
+  it.each(['required', 'skip'] as const)('retries Phase 1 and supplies the new evidence to Phase 2 with transition gates %s', async (commandGates) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt before report gate-'));
+    const sensitiveValue = 'example-testing-only-token';
+    const gateDirectory = join('..packages', `token=${sensitiveValue}`);
+    const configuredCwd = commandGates === 'required' ? undefined : [cwd, '.', gateDirectory].join(sep);
+    const gateCwd = configuredCwd === undefined ? cwd : join(cwd, gateDirectory);
+    if (configuredCwd !== undefined) mkdirSync(gateCwd, { recursive: true });
+    const checkedFile = join(gateCwd, 'implementation.txt');
+    const attempts = join(gateCwd, 'gate-attempts');
+    const transitionGate = createCommandGate(cwd, 'transition', 0);
+    const manualRequirement = 'Run the fixture verifier by itself as a completion check and run node check.mjs in packages/other.';
+    const guidance = 'Run node check.mjs in packages/other separately. Check {report:fixture.md}, {{workingDirectory}}, and {user_inputs}.';
+    const coveredCommand = 'node verify.mjs --fixture "{report:fixture.md}"';
+    writeFileSync(join(gateCwd, 'check.mjs'), "import './verify.mjs';");
+    writeFileSync(join(gateCwd, 'verify.mjs'), [
+      "import { appendFileSync, readFileSync } from 'node:fs';",
+      "appendFileSync('gate-attempts', '.');",
+      "const passed = readFileSync('implementation.txt', 'utf8') === 'fixed';",
+      "if (!passed) process.stderr.write('implementation requires another edit');",
+      'process.exit(passed ? 0 : 7);',
+    ].join('\n'));
+    const step = makeStep('fix', {
+      passPreviousResponse: false,
+      instruction: `{task}\n{previous_response}\n${manualRequirement}`,
+      outputContracts: [{ name: 'fix-report.md', format: 'Changes and verification' }],
+      rules: [makeRule('complete', 'COMPLETE', { commandGates })],
+      qualityGates: normalizeQualityGates(QualityGatesSchema.parse([
+        'Verify the implementation details.',
+        {
+          type: 'command', run_at: 'before_report', name: 'fixture-check', command: 'node check.mjs',
+          cwd: configuredCwd,
+          covers: [`${coveredCommand} token=${sensitiveValue}`],
+          guidance: `${guidance}\ntoken=${sensitiveValue}`,
+        },
+        { type: 'command', command: transitionGate.command },
+      ])),
+    });
+    const engine = new WorkflowEngine(makeConfig(step), cwd, 'Fix the implementation', {
+      projectCwd: cwd,
+      reportDirName: 'before-report-gate',
+      provider: 'mock',
+    });
+    try {
+      vi.mocked(runReportPhase).mockClear();
+      const runAgentWithEdit = (content: string) => (
+        async (_persona: Parameters<typeof runAgent>[0], instruction: string, options: Parameters<typeof runAgent>[2]) => {
+          options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+          writeFileSync(checkedFile, content);
+          return makeResponse({ persona: 'fix', content: 'complete' });
+        }
+      );
+      const initialEdit = vi.fn(runAgentWithEdit('broken'));
+      vi.mocked(runAgent).mockImplementationOnce(initialEdit);
+      const failed = await engine.runSingleIteration();
+      const initialPrompt = initialEdit.mock.calls[0]![1];
+      const [work, announcement] = initialPrompt.split('## TAKT completion checks before reporting');
+      expect(work).toContain(manualRequirement);
+      expect(work).toContain('- Verify the implementation details.');
+      const announcedChecks = announcement?.match(/\[\n[\s\S]+\n\]/)?.[0];
+      const announcedCwd = configuredCwd === undefined ? '.' : join('..packages', 'token=[REDACTED]');
+      expect(JSON.parse(announcedChecks!)).toEqual([
+        {
+          name: 'fixture-check',
+          command: 'node check.mjs',
+          cwd: announcedCwd,
+          covers: [`${coveredCommand} token=[REDACTED]`],
+          guidance: `${guidance}\ntoken=[REDACTED]`,
+        },
+      ]);
+      expect(initialPrompt).not.toContain(sensitiveValue);
+      expect(failed.nextStep).toBe('fix');
+      expect(failed.response.content).toContain('Exit code: 7');
+      expect(failed.response.content).not.toContain('implementation requires another edit');
+      const logRef = failed.response.content.match(/Output log: (.+)/)?.[1];
+      expect(logRef).toBeDefined();
+      expect(readFileSync(join(cwd, logRef!), 'utf8')).toContain('implementation requires another edit');
+      expect(runReportPhase).not.toHaveBeenCalled();
+      expect(existsSync(transitionGate.markerPath)).toBe(false);
+
+      const edit = vi.fn(runAgentWithEdit('fixed'));
+      vi.mocked(runAgent).mockImplementationOnce(edit);
+      mockRuleEvaluation.mockReturnValueOnce({ index: 0, method: 'auto_select' });
+      vi.mocked(runReportPhase).mockImplementationOnce(async () => {
+        expect(readFileSync(attempts, 'utf8')).toBe('..');
+        expect(existsSync(transitionGate.markerPath)).toBe(false);
+        return undefined;
+      });
+      const finished = await engine.runSingleIteration();
+      const retryPrompt = edit.mock.calls[0]![1];
+      const retry = retryPrompt.split('## Retry after a failed completion check')[1]?.split('\n## ')[0];
+      expect(retry).toContain('TAKT will rerun');
+      expect(retry).toContain(`Guidance for the failed check:\n\n${JSON.stringify(`${guidance}\ntoken=[REDACTED]`)}`);
+      expect(retryPrompt).toContain('Quality gate failed: fixture-check');
+      expect(retryPrompt).toContain('Exit code: 7');
+      expect(retryPrompt).toContain(`Cwd: ${announcedCwd}`);
+      expect(retryPrompt).toContain(logRef);
+      expect(retryPrompt).not.toContain('implementation requires another edit');
+      expect(retryPrompt).not.toContain(sensitiveValue);
+      expect(finished.isComplete).toBe(true);
+      expect(finished.nextStep).toBe('COMPLETE');
+      expect(existsSync(transitionGate.markerPath)).toBe(commandGates === 'required');
+      expect(runReportPhase).toHaveBeenCalledOnce();
+      const evidence = vi.mocked(runReportPhase).mock.calls[0]?.[2].beforeReportGateEvidence;
+      expect(evidence).toEqual([expect.objectContaining({ exitCode: 0, command: 'node check.mjs' })]);
+      const successLog = evidence![0]!.outputLogPath;
+      expect(readFileSync(join(cwd, successLog), 'utf8')).toContain('Exit code: 0');
+      const report = new ReportInstructionBuilder(step, {
+        cwd, reportDir: cwd, stepIteration: 2, beforeReportGateEvidence: evidence,
+      }).build();
+      expect(report).toContain(successLog);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('reports Phase 1 token usage when the before-report gate fails', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-before-report-gate-usage-'));
+    const gate = createCommandGate(cwd, 'verify', 7);
+    const step = makeStep('fix', {
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: gate.command }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine({ ...makeConfig(step), maxSteps: 1 }, cwd, 'Fix the implementation', {
+      projectCwd: cwd,
+      reportDirName: 'before-report-gate-usage',
+      provider: 'mock',
+    });
+    const providerUsage = { usageMissing: false, inputTokens: 41, outputTokens: 9, totalTokens: 50 };
+    const completed = vi.fn();
+    engine.on('step:complete', completed);
+    vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return makeResponse({ persona: 'fix', content: 'complete', providerUsage });
+    });
+
+    try {
+      const state = await engine.run();
+      expect(existsSync(gate.markerPath)).toBe(true);
+      expect(completed).toHaveBeenCalledOnce();
+      expect(completed.mock.calls[0]?.[1]).toMatchObject({
+        beforeReportGateFailed: true,
+        providerUsage,
+      });
+      expect(state.lastOutput?.providerUsage).toEqual(providerUsage);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('passes each silent command failure only to its own parallel sub-step on retry', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-parallel-before-report-gates-'));
+    const subSteps = [7, 8, 0].map((exitCode) => {
+      const name = `edit-${exitCode}`;
+      const gate = createCommandGate(cwd, name, exitCode);
+      return makeStep(name, {
+        passPreviousResponse: false,
+        instruction: `{task}\n{previous_response}\nEdit ${name}`,
+        outputContracts: [{ name: `${name}.md`, format: 'Changes' }],
+        qualityGates: [{ type: 'command', runAt: 'before_report', command: gate.command, guidance: `Repair ${name}` }],
+        rules: [makeRule('complete', 'COMPLETE')],
+      });
+    });
+    const parent = makeStep('edit-in-parallel', {
+      parallel: subSteps,
+      rules: [makeRule('all("complete")', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine(makeConfig(parent), cwd, 'Apply parallel edits', {
+      projectCwd: cwd,
+      reportDirName: 'parallel-before-report-gates',
+      provider: 'mock',
+    });
+    const instructions = new Map<string, string>();
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      const name = typeof persona === 'string' ? basename(persona, '.md') : '';
+      instructions.set(name, instruction);
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return makeResponse({ persona: name, content: 'complete' });
+    });
+    try {
+      vi.mocked(runReportPhase).mockClear();
+      const failed = await engine.runSingleIteration();
+      expect(failed.nextStep).toBe(parent.name);
+      expect(vi.mocked(runReportPhase).mock.calls.map(([step]) => step.name)).toEqual(['edit-0']);
+
+      instructions.clear();
+      await engine.runSingleIteration();
+      for (const exitCode of [7, 8]) {
+        const instruction = instructions.get(`edit-${exitCode}`);
+        expect(instruction?.match(/^Exit code: .*$/gm)).toEqual([`Exit code: ${exitCode}`]);
+        expect(instruction?.match(/^"Repair edit-\d+"$/gm)).toEqual([`"Repair edit-${exitCode}"`]);
+        const logRef = instruction?.match(/^Output log: (.+)$/m)?.[1];
+        expect(logRef).toBeDefined();
+        expect(readFileSync(join(cwd, logRef!), 'utf8')).toContain(`Exit code: ${exitCode}`);
+      }
+      expect(instructions.get('edit-0')?.match(/^Exit code: .*$/gm)).toBeNull();
+    } finally {
+      vi.mocked(runAgent).mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('retries the selected child and gate diagnostic through provider fallback in replace mode', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-parallel-gate-fallback-'));
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { existsSync } from 'node:fs';",
+      'process.exit(existsSync("repaired") ? 0 : 7);',
+    ].join('\n'));
+    const selected = makeStep('selected', {
+      qualityGates: [{
+        type: 'command', runAt: 'before_report', command: 'node check.mjs', guidance: 'Repair the fixture',
+      }],
+      outputContracts: [{ name: 'selected.md', format: 'Changes' }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const parent = makeStep('edit-in-parallel', {
+      parallel: {
+        kind: 'dynamic',
+        fixed: [],
+        pool: [
+          asPoolSubStep(selected, 'Check the relevant edit'),
+          asPoolSubStep(makeStep('other', { rules: [makeRule('complete', 'COMPLETE')] }), 'Check another edit'),
+        ],
+        selection: { mode: 'replace' },
+      },
+      rules: [makeRule('all("complete")', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine(makeConfig(parent), cwd, 'Fix a gate failure', {
+      projectCwd: cwd,
+      reportDirName: 'parallel-gate-fallback',
+      provider: 'codex',
+      model: 'test-model',
+      selectorProvider: { provider: 'mock', model: undefined, providerOptions: {} },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+      rateLimitFallback: { switchChain: [{ provider: 'opencode', model: 'opencode/fallback-model' }] },
+    });
+    const aborted = vi.fn();
+    engine.on('workflow:abort', aborted);
+    let selectorCalls = 0;
+    const retryPrompts: string[] = [];
+    const providers: Array<string | undefined> = [];
+    mockRuleEvaluation.mockReturnValue({ index: 0, method: 'auto_select' });
+    vi.mocked(runReportPhase).mockClear();
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.outputSchema !== undefined) {
+        selectorCalls += 1;
+        return makeResponse({ structuredOutput: {
+          selected_ids: [selectorCalls === 1 ? 'selected' : 'other'], rationale: 'Choose one editor',
+        } });
+      }
+      expect(persona).toBe('../personas/selected.md');
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      options.onDispatch?.(undefined);
+      providers.push(options.resolvedProvider);
+      if (providers.length > 1) retryPrompts.push(instruction);
+      if (providers.length === 2) {
+        return makeResponse({ status: 'rate_limited', content: '', error: 'Rate limit', errorKind: 'rate_limit' });
+      }
+      if (providers.length === 3) writeFileSync(join(cwd, 'repaired'), 'ready');
+      return makeResponse({ content: 'complete' });
+    });
+
+    try {
+      const result = await engine.run();
+      expect(result.status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
+      expect(selectorCalls).toBe(1);
+      expect(providers).toEqual(['codex', 'codex', 'opencode']);
+      expect(retryPrompts).toHaveLength(2);
+      for (const prompt of retryPrompts) {
+        expect(prompt).toMatch(/^Exit code: 7$/m);
+        expect(prompt).toMatch(/^Output log: \.takt\//m);
+        expect(prompt).toContain('Guidance for the failed check');
+        expect(prompt).toContain('Repair the fixture');
+      }
+      expect(runReportPhase).toHaveBeenCalledOnce();
+      expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].beforeReportGateEvidence)
+        .toEqual([expect.objectContaining({ exitCode: 0 })]);
+      expect(engine.getState().lastOutput?.parallelBeforeReportGateFailures).toBeUndefined();
+    } finally {
+      mockRuleEvaluation.mockReset();
+      vi.mocked(runAgent).mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([1, 2])('retains the failed replace selection when live intervention overlaps gate run %d', async (interruptedRun) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-dynamic-parallel-live-gate-failure-'));
+    const reportDirName = 'retry-live-gate';
+    const store = new LiveInterventionFileStore(cwd, reportDirName);
+    const attempts = join(cwd, 'gate-attempts');
+    const release = join(cwd, 'release-gate');
+    const liveInstruction = 'Adjust the selected work';
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
+      'appendFileSync("gate-attempts", ".");',
+      `if (readFileSync("gate-attempts", "utf8").length === ${interruptedRun}) {`,
+      '  while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+      '}',
+      'process.exitCode = existsSync("repaired") ? 0 : 7;',
+    ].join('\n'));
+    const child = makeStep('selected', {
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs' }],
+      passPreviousResponse: false,
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const parent = makeStep('edit-in-parallel', {
+      parallel: {
+        kind: 'dynamic',
+        fixed: [],
+        pool: [
+          asPoolSubStep(child, 'Check the relevant edit'),
+          asPoolSubStep(makeStep('other', { rules: [makeRule('complete', 'COMPLETE')] }), 'Check another edit'),
+        ],
+        selection: { mode: 'replace' },
+      },
+      rules: [makeRule('all("complete")', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine(makeConfig(parent), cwd, 'Fix the selected edit', {
+      projectCwd: cwd, reportDirName, provider: 'mock', liveIntervention: store,
+      selectorProvider: { provider: 'mock', model: undefined, providerOptions: {} },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+    });
+    const aborted = vi.fn();
+    engine.on('workflow:abort', aborted);
+    let selectorCalls = 0;
+    const workerPrompts: string[] = [];
+    vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: 'complete', method: 'phase3_tag' });
+    mockRuleEvaluation.mockImplementation((step, selection, context) =>
+      new ActualRuleEvaluator(step, context).evaluate(selection));
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.outputSchema !== undefined) {
+        selectorCalls += 1;
+        return makeResponse({ structuredOutput: {
+          selected_ids: [selectorCalls === 1 ? 'selected' : 'other'], rationale: 'Choose one editor',
+        } });
+      }
+      expect(persona).toBe('../personas/selected.md');
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      options.onDispatch?.(undefined);
+      workerPrompts.push(instruction);
+      if (workerPrompts.length === 2) writeFileSync(join(cwd, 'repaired'), 'yes');
+      return makeResponse({ persona: 'selected', content: 'complete' });
+    });
+    const execution = engine.run();
+    try {
+      await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('.'.repeat(interruptedRun)), { timeout: 5_000 });
+      await store.issue(liveInstruction);
+      writeFileSync(release, 'ready');
+
+      const result = await execution;
+      expect(result.status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
+      expect(result.stepOutputs.get(parent.name)?.matchedRuleMethod).toBe('aggregate');
+      expect(selectorCalls).toBe(1);
+      expect(workerPrompts).toHaveLength(interruptedRun + 1);
+      expect(workerPrompts[interruptedRun]).toContain(liveInstruction);
+      expect(workerPrompts[interruptedRun]).toContain('Exit code: 7');
+      expect(readFileSync(attempts, 'utf8')).toBe('.'.repeat(interruptedRun + 1));
+      expect(result.stepOutputs.get(parent.name)?.parallelBeforeReportGateFailures).toBeUndefined();
+    } finally {
+      if (!existsSync(release)) writeFileSync(release, 'cleanup');
+      await execution.catch(() => undefined);
+      vi.mocked(runStatusJudgmentPhase).mockReset().mockResolvedValue({ label: '', method: 'auto_select' });
+      mockRuleEvaluation.mockReset();
+      vi.mocked(runAgent).mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a parallel gate failure when session compaction stops the retry before dispatch', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-parallel-gate-compaction-'));
+    const gate = createCommandGate(cwd, 'verify', 7);
+    const child = makeStep('edit', {
+      session: 'compact',
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: gate.command, guidance: 'Check the fixture' }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const parent = makeStep('edit-in-parallel', {
+      parallel: [child],
+      rules: [makeRule('all("complete")', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine(makeConfig(parent), cwd, 'Apply an edit', {
+      projectCwd: cwd,
+      reportDirName: 'gate-compaction',
+      provider: 'mock',
+    });
+    const agent = vi.mocked(runAgent);
+    agent.mockClear();
+    agent.mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return makeResponse({ persona: 'edit', content: 'complete', sessionId: 'edit-session' });
+    });
+    const compact = vi.spyOn(sessionCompaction, 'compactSessionBeforePhase1');
+    try {
+      const failed = await engine.runSingleIteration();
+      expect(failed.nextStep).toBe(parent.name);
+      const diagnostics = failed.response.parallelBeforeReportGateFailures;
+      expect(diagnostics).toEqual([expect.objectContaining({
+        persona: 'edit',
+        content: expect.stringContaining('Exit code: 7'),
+        beforeReportGateGuidance: 'Check the fixture',
+      })]);
+
+      compact.mockRejectedValueOnce(new Error('Cannot compact the session'));
+      const stopped = await engine.runSingleIteration();
+
+      expect(compact.mock.lastCall?.[1].sessionId).toBe('edit-session');
+      expect(agent).toHaveBeenCalledTimes(1);
+      expect(stopped.response.status).toBe('error');
+      expect(stopped.response.parallelBeforeReportGateFailures).toEqual(diagnostics);
+      expect(engine.getState().lastOutput?.parallelBeforeReportGateFailures).toEqual(diagnostics);
+    } finally {
+      compact.mockRestore();
+      agent.mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the gate again after a live correction arrives during its first run', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-before-report-live-edit-'));
+    const reportDirName = 'before-report-live-edit';
+    const releaseGate = join(cwd, 'release-gate');
+    const gateStarted = join(cwd, 'gate-started');
+    const implementation = join(cwd, 'implementation.txt');
+    const store = new LiveInterventionFileStore(cwd, reportDirName);
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
+      'const revision = readFileSync("implementation.txt", "utf8");',
+      'appendFileSync("gate-started", `${revision}\\n`);',
+      'while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+      'process.stdout.write(revision);',
+    ].join('\n'));
+    const step = makeStep('fix', {
+      outputContracts: [{ name: 'fix.md', format: 'Changes' }],
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs', timeoutMs: 5000 }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine(makeConfig(step), cwd, 'Fix implementation', {
+      projectCwd: cwd,
+      reportDirName,
+      provider: 'mock',
+      liveIntervention: store,
+    });
+    const correction = 'Use the corrected implementation';
+    const agent = vi.mocked(runAgent);
+    agent.mockClear();
+    agent.mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      options?.onDispatch?.(undefined);
+      writeFileSync(implementation, instruction.includes(correction) ? 'corrected' : 'initial');
+      return makeResponse({ persona: step.name, content: 'complete', sessionId: 'fix-session' });
+    });
+    vi.mocked(runReportPhase).mockClear();
+    mockRuleEvaluation.mockReturnValueOnce({ index: 0, method: 'auto_select' });
+    const execution = engine.runSingleIteration();
+    try {
+      await vi.waitFor(() => expect(existsSync(gateStarted)).toBe(true));
+      await store.issue(correction);
+      writeFileSync(releaseGate, 'ready');
+      expect((await execution).nextStep).toBe('COMPLETE');
+      expect(agent.mock.calls[1]?.[2]?.sessionId).toBe('fix-session');
+      expect(store.read().deliveredSameSession).toBe(1);
+      expect(readFileSync(gateStarted, 'utf8').trim().split('\n')).toEqual(['initial', 'corrected']);
+      const evidence = vi.mocked(runReportPhase).mock.calls[0]?.[2].beforeReportGateEvidence;
+      expect(evidence).toHaveLength(1);
+      expect(readFileSync(join(cwd, evidence![0]!.outputLogPath), 'utf8')).toContain('corrected');
+    } finally {
+      if (!existsSync(releaseGate)) writeFileSync(releaseGate, 'cleanup');
+      await execution.catch(() => undefined);
+      agent.mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['full workflow', runWorkflowToCompletion],
     ['single iteration', runSingleWorkflowIteration],
@@ -213,16 +711,20 @@ describe('WorkflowRunLoop command quality gates', () => {
       mockRuleEvaluation.mockImplementationOnce((step, selection, context) => (
         new ActualRuleEvaluator(step, context).evaluate(selection)
       ));
-      vi.mocked(runAgent).mockImplementationOnce(async (persona, instruction, options) => {
+      const work = vi.fn<typeof runAgent>(async (persona, instruction, options) => {
         options?.onPromptResolved?.({
           systemPrompt: typeof persona === 'string' ? persona : '',
           userInstruction: instruction,
         });
         return makeResponse({ persona: 'review', content: 'needs_fix' });
       });
+      vi.mocked(runAgent).mockImplementationOnce(work);
 
       const result = await engine.runSingleIteration();
 
+      const prompt = work.mock.calls[0]?.[1];
+      expect(prompt).not.toContain('## TAKT completion checks before reporting');
+      expect(prompt).not.toContain('selected-required-gate');
       expect(result.response.matchedRuleIndex).toBe(1);
       expect(result.nextStep).toBe('fix');
       expect(result.isComplete).toBe(false);
@@ -1505,6 +2007,294 @@ describe('WorkflowRunLoop step deadline', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each(['normal', 'parallel', 'concurrency-limited parallel'] as const)('lets a %s report gate exceed the provider inactivity timeout', async (kind) => {
+    vi.useFakeTimers();
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-report-gate-deadline-'));
+    const gateStarted = join(cwd, 'gate-started');
+    const finishGate = join(cwd, 'finish-gate');
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { existsSync, writeFileSync } from 'node:fs';",
+      'writeFileSync("gate-started", "ready");',
+      'while (!existsSync("finish-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+    ].join('\n'));
+    const work = makeStep('work', {
+      outputContracts: [{ name: 'work.md', format: 'Changes' }],
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs', timeoutMs: 5 * MINUTE }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const queued = makeStep('queued', { rules: [makeRule('complete', 'COMPLETE')] });
+    const step = kind === 'normal'
+      ? work
+      : makeStep('work-in-parallel', {
+          parallel: kind === 'parallel' ? [work] : [work, queued],
+          ...(kind === 'concurrency-limited parallel' ? { concurrency: 1 } : {}),
+          rules: [makeRule('all("complete")', 'COMPLETE')],
+        });
+    const engine = new WorkflowEngine(makeConfig(step), cwd, 'Run a long check', {
+      projectCwd: cwd,
+      reportDirName: 'report-gate-deadline',
+      provider: 'codex',
+      model: 'test-model',
+      providerOptions: { codex: { guards: { callTimeoutMs: MINUTE } } },
+    });
+    const agent = vi.mocked(runAgent);
+    agent.mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return makeResponse({ persona: 'work', content: 'complete' });
+    });
+    let queuedSignalWasAborted: boolean | undefined;
+    if (kind === 'concurrency-limited parallel') {
+      agent.mockImplementationOnce(async (_persona, instruction, options) => {
+        queuedSignalWasAborted = options?.abortSignal?.aborted;
+        options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+        return makeResponse({ persona: 'queued', content: 'complete' });
+      });
+    }
+    mockRuleEvaluation.mockReturnValue({ index: 0, method: 'auto_select' });
+    vi.mocked(runReportPhase).mockClear();
+    const execution = engine.runSingleIteration();
+    const settled = execution.then(
+      (result) => ({ result, error: undefined }),
+      (error: unknown) => ({ result: undefined, error }),
+    );
+    try {
+      await vi.waitFor(() => expect(existsSync(gateStarted)).toBe(true));
+      await vi.advanceTimersByTimeAsync(MINUTE + 1_000);
+      writeFileSync(finishGate, 'ready');
+
+      const { result, error } = await settled;
+      expect(error).toBeUndefined();
+      expect(result?.nextStep).toBe('COMPLETE');
+      expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].beforeReportGateEvidence)
+        .toEqual([expect.objectContaining({ exitCode: 0 })]);
+      if (kind === 'concurrency-limited parallel') {
+        expect(queuedSignalWasAborted).toBe(false);
+      }
+    } finally {
+      if (!existsSync(finishGate)) writeFileSync(finishGate, 'cleanup');
+      await settled;
+      mockRuleEvaluation.mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('starts fresh selector and routing deadlines after a live correction during a long gate', async () => {
+    vi.useFakeTimers();
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-dynamic-selector-gate-'));
+    const reportDirName = 'dynamic-selector-gate';
+    const store = new LiveInterventionFileStore(cwd, reportDirName);
+    const began = join(cwd, 'gate-runs');
+    const release = join(cwd, 'release');
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      'appendFileSync("gate-runs", ".");',
+      'while (!existsSync("release")) await new Promise((resolve) => setTimeout(resolve, 20));',
+    ].join('\n'));
+    const child = makeStep('work', {
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs', timeoutMs: 5 * MINUTE }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const step = makeStep('parallel', {
+      parallel: {
+        kind: 'dynamic', fixed: [], pool: [asPoolSubStep(child, 'Complete the required work')],
+        selection: { mode: 'replace' },
+      },
+      rules: [makeRule('all("complete")', 'COMPLETE')],
+    });
+    const routingSignals: AbortSignal[] = [];
+    const engine = new WorkflowEngine(makeConfig(step), cwd, 'Run the long gate', {
+      projectCwd: cwd, reportDirName, liveIntervention: store,
+      autoRouting: {
+        strategy: 'balanced',
+        router: {
+          provider: 'opencode', model: 'opencode/router-model',
+          providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
+        },
+        candidates: [{ name: 'worker', provider: 'mock', model: 'worker-model', routingTier: 'medium' }],
+        defaultPool: 'default',
+        candidatePools: { default: { candidates: ['worker'], fallback: 'worker' } },
+        poolRules: { steps: { work: 'default' } },
+      },
+      autoRoutingEstimator: {
+        estimate: async (_input, options) => {
+          expect(options?.abortSignal).toBeDefined();
+          expect(options?.abortSignal?.aborted).toBe(false);
+          routingSignals.push(options!.abortSignal!);
+          options?.onActivity?.({ kind: 'attempt_started' });
+          return { requiredTier: 'medium', reasonCodes: ['local-change'] };
+        },
+      },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+      selectorProvider: {
+        provider: 'codex', model: 'test-selector',
+        providerOptions: { codex: { guards: { callTimeoutMs: MINUTE } } },
+      },
+    });
+    const aborted = vi.fn();
+    engine.on('workflow:abort', aborted);
+    const selectorSignals: AbortSignal[] = [];
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      options.onDispatch?.(undefined);
+      if (options.outputSchema !== undefined) {
+        expect(options.abortSignal).toBeDefined();
+        expect(options.abortSignal?.aborted).toBe(false);
+        selectorSignals.push(options.abortSignal!);
+        return makeResponse({ structuredOutput: { selected_ids: ['work'], rationale: 'Check the work' } });
+      }
+      return makeResponse({ content: 'complete' });
+    });
+    mockRuleEvaluation.mockReturnValue({ index: 0, method: 'auto_select' });
+    const execution = engine.run();
+    try {
+      await Promise.race([
+        vi.waitFor(() => expect(existsSync(began)).toBe(true)),
+        execution.then(() => { throw new Error(JSON.stringify(aborted.mock.lastCall?.slice(1))); }),
+      ]);
+      await vi.advanceTimersByTimeAsync(MINUTE + 1_000);
+      await store.issue('Adjust the work');
+      writeFileSync(release, 'ready');
+
+      const result = await execution;
+      expect(result.status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
+      expect(routingSignals).toHaveLength(2);
+      expect(routingSignals[0]).not.toBe(routingSignals[1]);
+      expect(selectorSignals).toHaveLength(2);
+      expect(selectorSignals[0]).not.toBe(selectorSignals[1]);
+      expect(readFileSync(began, 'utf8')).toBe('..');
+    } finally {
+      if (!existsSync(release)) writeFileSync(release, 'cleanup');
+      await execution.catch(() => undefined);
+      mockRuleEvaluation.mockReset();
+      vi.mocked(runAgent).mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])('runs and reports the team gate after the leader becomes idle (live correction: %s)', async (withLiveCorrection) => {
+    vi.useFakeTimers();
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-team-report-gate-deadline-'));
+    const reportDirName = 'team-report-gate-deadline';
+    const store = withLiveCorrection ? new LiveInterventionFileStore(cwd, reportDirName) : undefined;
+    const attempts = join(cwd, 'gate-attempts');
+    const release = join(cwd, 'release-gate');
+    const correction = 'Correct the team output';
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      'const revision = existsSync("corrected") ? "corrected" : "initial";',
+      'appendFileSync("gate-attempts", revision + "\\n");',
+      'while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+      'process.stdout.write(revision);',
+    ].join('\n'));
+    if (!withLiveCorrection) writeFileSync(release, 'ready');
+    const step = makeStep('work', {
+      teamLeader: {
+        persona: '../personas/team-leader.md', maxConcurrency: 1, timeoutMs: 5 * MINUTE,
+        partPersona: '../personas/part.md',
+      },
+      outputContracts: [{ name: 'work.md', format: 'Changes' }],
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs' }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    let leaderSignal: AbortSignal | undefined;
+    let partOptions: Parameters<typeof runAgent>[2] | undefined;
+    const correctionFeedback: Array<{ sessionId?: string; signal?: AbortSignal }> = [];
+    let finishPart!: () => void;
+    const partFinished = new Promise<void>((resolve) => { finishPart = resolve; });
+    const engine = new WorkflowEngine(makeConfig(step), cwd, 'Check the team work', {
+      projectCwd: cwd, reportDirName, provider: 'codex', model: 'test-model', liveIntervention: store,
+      providerOptions: {
+        codex: { guards: { callTimeoutMs: MINUTE } },
+        opencode: { guards: { callTimeoutMs: 5 * MINUTE } },
+      },
+      providerRouting: { steps: { 'work.part': { provider: 'opencode', model: 'opencode/part-model' } } },
+      structuredCaller: {
+        judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
+        evaluateCondition: async () => 0,
+        decomposeTask: async (instruction, _limit, options) => {
+          leaderSignal = options.abortSignal;
+          options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+          options.onDispatch?.(undefined);
+          return {
+            parts: [{ id: 'part', title: 'Part', instruction: 'Complete the work' }],
+            sessionId: 'leader-session',
+          };
+        },
+        requestMoreParts: async (instruction, _results, existingIds, options) => {
+          if (instruction.includes(correction) && !existingIds.includes('correction')) {
+            correctionFeedback.push({ sessionId: options.sessionId, signal: options.abortSignal });
+            options.abortSignal?.throwIfAborted();
+            options.onDispatch?.(undefined);
+            return {
+              done: false, reasoning: 'Apply the correction', cancelPartIds: [],
+              parts: [{ id: 'correction', title: 'Correction', instruction: 'Apply the correction part' }],
+            };
+          }
+          options.abortSignal?.throwIfAborted();
+          return { done: true, reasoning: 'Work complete', cancelPartIds: [], parts: [] };
+        },
+      },
+    });
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      options.onDispatch?.(undefined);
+      if (instruction.includes('Apply the correction part')) {
+        writeFileSync(join(cwd, 'corrected'), 'yes');
+      } else {
+        partOptions = options;
+        await partFinished;
+      }
+      return makeResponse({ content: 'complete' });
+    });
+    mockRuleEvaluation.mockReturnValue({ index: 0, method: 'auto_select' });
+    vi.mocked(runReportPhase).mockClear();
+    vi.mocked(runReportPhase).mockImplementationOnce(async (_step, _iteration, context, onReportWritten) => {
+      context.abortSignal?.throwIfAborted();
+      writePhaseReportFixture(context, 'work.md', 'Gate evidence recorded');
+      onReportWritten?.('work.md');
+    });
+    const aborted = vi.fn();
+    engine.on('workflow:abort', aborted);
+    const execution = engine.run();
+    try {
+      await vi.waitFor(() => expect(partOptions).toBeDefined());
+      await vi.advanceTimersByTimeAsync(MINUTE + 1_000);
+      expect(leaderSignal?.aborted).toBe(true);
+      expect(partOptions?.resolvedProvider).toBe('opencode');
+      expect(partOptions?.abortSignal?.aborted).toBe(false);
+      finishPart();
+      if (store !== undefined) {
+        await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('initial\n'));
+        await store.issue(correction);
+        writeFileSync(release, 'ready');
+      }
+
+      expect((await execution).status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
+      expect(readFileSync(attempts, 'utf8')).toBe(withLiveCorrection ? 'initial\ncorrected\n' : 'initial\n');
+      if (withLiveCorrection) {
+        expect(correctionFeedback).toEqual([{ sessionId: 'leader-session', signal: expect.any(AbortSignal) }]);
+        expect(correctionFeedback[0]?.signal?.aborted).toBe(false);
+        expect(store?.read().deliveredSameSession).toBe(1);
+      }
+      expect(runReportPhase).toHaveBeenCalledOnce();
+      const context = vi.mocked(runReportPhase).mock.calls[0]![2];
+      expect(context.beforeReportGateEvidence).toEqual([expect.objectContaining({ exitCode: 0 })]);
+      const log = readFileSync(join(cwd, context.beforeReportGateEvidence![0]!.outputLogPath), 'utf8');
+      expect(log).toContain(withLiveCorrection ? 'corrected' : 'initial');
+      expect(readFileSync(join(context.reportDir, 'work.md'), 'utf8')).toBe('Gate evidence recorded');
+    } finally {
+      if (!existsSync(release)) writeFileSync(release, 'cleanup');
+      finishPart();
+      await execution.catch(() => undefined);
+      mockRuleEvaluation.mockReset();
+      vi.mocked(runAgent).mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('claude-terminal は新 guard 未指定時に旧 timeoutMs を互換値として使う', () => {

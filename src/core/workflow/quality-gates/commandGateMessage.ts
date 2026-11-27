@@ -1,6 +1,8 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { isRealPathInside } from '../../../shared/utils/pathBoundary.js';
+import { resolveGateCwd } from './commandGateCwd.js';
 import type { CommandQualityGateFailure } from './types.js';
 
 export { sanitizeSensitiveText };
@@ -21,19 +23,12 @@ function maskKnownPaths(text: string, projectRoot: string): string {
     .replaceAll(homeDir, '<home>');
 }
 
-function sanitizeForFeedback(text: string, projectRoot: string): string {
-  return truncateForFeedback(sanitizeSensitiveText(maskKnownPaths(text, projectRoot)));
+export function sanitizeCommandGatePromptText(text: string, projectRoot: string): string {
+  return sanitizeSensitiveText(maskKnownPaths(text, projectRoot));
 }
 
-function formatCwd(failure: CommandQualityGateFailure): string {
-  const relative = path.relative(failure.projectRoot, failure.cwd);
-  if (relative === '') {
-    return '.';
-  }
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    return '<outside-project>';
-  }
-  return relative;
+function sanitizeForFeedback(text: string, projectRoot: string): string {
+  return truncateForFeedback(sanitizeCommandGatePromptText(text, projectRoot));
 }
 
 function formatProjectRelativePath(projectRoot: string, targetPath: string): string {
@@ -41,10 +36,18 @@ function formatProjectRelativePath(projectRoot: string, targetPath: string): str
   if (relative === '') {
     return '.';
   }
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     return '<outside-project>';
   }
   return relative;
+}
+
+export function formatCommandGateCwd(projectRoot: string, configuredCwd: string | undefined): string {
+  const cwd = resolveGateCwd(projectRoot, configuredCwd);
+  const relative = isRealPathInside(projectRoot, cwd)
+    ? formatProjectRelativePath(projectRoot, cwd)
+    : '<outside-project>';
+  return sanitizeCommandGatePromptText(relative, projectRoot);
 }
 
 function formatOutputLog(failure: CommandQualityGateFailure): string {
@@ -62,13 +65,13 @@ export function formatCommandGateFailure(failure: CommandQualityGateFailure): st
     `Quality gate failed: ${sanitizeForFeedback(failure.gateName, failure.projectRoot)}`,
     'Type: command',
     `Command: ${sanitizeForFeedback(failure.command, failure.projectRoot)}`,
-    `Cwd: ${formatCwd(failure)}`,
+    `Cwd: ${formatCommandGateCwd(failure.projectRoot, failure.cwd)}`,
   ];
 
   if (failure.timedOut) {
     lines.push(`Timeout: ${failure.timeoutMs}ms`);
   } else {
-    lines.push(`Exit code: ${failure.exitCode}`);
+    lines.push(`Exit code: ${failure.exitCode ?? 'unavailable'}`);
   }
   if (failure.outputLimitExceeded) {
     lines.push(`Output truncated: exceeded ${failure.outputLimitBytes} bytes`);

@@ -75,6 +75,32 @@ export class DynamicParallelSelectorCoordinator {
     return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
   }
 
+  reuseSelectionForGateRetry(
+    step: WorkflowStep,
+    state: WorkflowState,
+    pendingStepNames: Iterable<string>,
+  ): WorkflowStep[] {
+    this.resolveAbortSignal()?.throwIfAborted();
+    if (!step.parallel || !isDynamicParallelSubSteps(step.parallel)) {
+      throw new Error(`Step "${step.name}" is not a dynamic parallel step`);
+    }
+    const identity = this.resolveIdentity(step.name);
+    const snapshot = this.deps.selectionStore.snapshot().get(identity);
+    if (snapshot === undefined) {
+      throw new Error(`Dynamic parallel step "${step.name}" has no selection to retry`);
+    }
+    const participants = resolveDynamicParallelSelection(step.parallel, snapshot);
+    const selectedNames = new Set(participants.map(({ name }) => name));
+    for (const name of pendingStepNames) {
+      if (!selectedNames.has(name)) {
+        throw new Error(`Dynamic parallel step "${step.name}" cannot retry the quality gate for "${name}" outside its selection`);
+      }
+    }
+    state.dynamicParallelSelections.set(identity, snapshot);
+    state.activeDynamicParallelSelectionIdentity = identity;
+    return participants;
+  }
+
   async selectParticipants(step: WorkflowStep, state: WorkflowState, task: string): Promise<WorkflowStep[]> {
     const signal = this.resolveAbortSignal();
     signal?.throwIfAborted();

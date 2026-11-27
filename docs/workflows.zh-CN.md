@@ -86,7 +86,10 @@ steps:
       - "Review the implementation before finishing" # AI 指令
       - type: command                # 机器执行的命令 gate
         name: quality-check
+        run_at: before_report        # 在工作结束后、生成报告前执行
         command: "./.takt/quality-gates/check.sh"
+        covers: ["npm test -- fixtures.test.ts"]
+        guidance: "检查失败时查看生成的测试夹具"
         cwd: "."
         timeout_ms: 300000
 ```
@@ -183,6 +186,12 @@ steps:
 
 对象字段深合并；`parallel` 等数组整体替换。名称按调用方 `name` → fragment `name` → `uses` 最终名称解析。fragment 可以引用其他 fragment，但循环引用会失败。裸名称按项目、全局、所选语言 builtin 的 `steps/` 查找；`@owner/repo/name` 显式选择 repertoire package。最多展开 64 层、总计 512 个引用；每个 fragment 必须是可读的普通文件且不超过 1 MiB。绝对路径、遍历、符号链接逃逸、不可读文件、循环引用和未知引用都是配置错误。
 
+`type: command` 的质量门禁可设置 `run_at: before_report`，在工作阶段（Phase 1）结束后、生成报告和判定前执行。失败时，TAKT 会将退出码等诊断信息和可用的私有日志路径交给同一步骤的下一次工作。成功时，执行记录会传给报告阶段。并行步骤请在子步骤中设置。并行父步骤和 arpeggio 步骤不支持此设置。共享 `workflow_overrides.quality_gates` 中的报告前门禁只由支持此设置的代理步骤继承，包括并行子步骤。
+
+Phase 1 会告诉代理哪些完成检查由 TAKT 负责。门禁只直接执行 `command`。对于 `run_at: before_report`，可用可选的 `covers` 列出门禁已执行的命令，例如由包装脚本调用的命令。每一项必须是非空白字符串。代理仅在检查命令（`command` 或 `covers` 中的一项）及其工作目录均匹配时，才将该检查交给 TAKT。提示中的 `cwd` 相对于工作树根目录。省略时为 `.`，即根目录。如果包装脚本检查其他目录，请在 `covers` 中使用能从门禁的 `cwd` 明确定位目标的命令，例如 `npm --prefix packages/api test`。代理仍需执行其余必需的验证。仅在 `guidance` 中提及的命令不算已覆盖。工作过程中仍可按需运行有针对性的测试或复现故障。
+
+可选的 `guidance` 必须是非空白字符串。TAKT 会将其放入初始提示，并在该检查失败时随诊断信息一并提供。`covers` 和 `guidance` 中的花括号按原文保留。重复的门禁只运行一次。对于 `covers` 和 `guidance`，分别按全局配置、项目配置、workflow YAML 的顺序采用首个指定的值。`covers` 列表不会合并，显式的空列表表示没有额外覆盖的命令。
+
 ## 可用变量
 
 | 变量 | 说明 |
@@ -254,7 +263,7 @@ rules:
 
 ### `command_gates`
 
-`command_gates` 控制选中规则的 command quality gate。`required` 会在规则和 transition 解析后、应用 transition 前执行该 step 的 command gate，并且只在 gate 成功后应用 transition。`skip` 不执行 command gate，直接应用选中的 transition。省略时等同于 `required`。
+`command_gates` 控制省略 `run_at` 的命令质量门禁。`required` 在规则解析后执行门禁，并仅在通过后应用 transition。`skip` 直接应用选中的 transition。省略时等同于 `required`。设置 `run_at: before_report` 的门禁在选择规则前执行。
 
 ## Step 类型
 
@@ -337,7 +346,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
 
 `pool` 必须非空，且每个候选项都需要非空 `description`，说明该候选项的职责。如果仅凭职责无法确定何时选择候选项，可以用 `selection_hint` 编写选择标准。`selection_hint` 是仅允许用于 `pool` 候选项的可选字段，指定时必须是非空字符串。selector 同时参考 `description` 和 `selection_hint`。没有 `selection_hint` 的现有 YAML 仍按原有方式，仅根据 `description` 选择。在其他 step 或子 step 中设置 `selection_hint` 会导致加载错误。
 
-`fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
+`fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。在 `replace` 模式下，如果重试时仍有未解决的报告前门禁，则保留上一次选择，让相应的子步骤重新运行其门禁。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
 
 `all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
 
