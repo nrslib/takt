@@ -520,16 +520,11 @@ export const OutputContractsFieldSchema = z.object({
 
 const CommandQualityGateInputSchema = z.object({
   type: z.literal('command'),
-  run_at: z.literal('before_report').optional(),
   name: z.string().min(1).optional(),
-  guidance: z.string().trim().min(1).optional(),
   command: z.string({ error: 'command quality gate requires "command"' }).min(1),
   cwd: z.string().min(1).optional(),
   timeout_ms: z.number().int().positive().optional(),
-}).strict().refine((gate) => gate.guidance === undefined || gate.run_at === 'before_report', {
-  path: ['guidance'],
-  message: 'command quality gate guidance requires run_at: before_report',
-});
+}).strict();
 
 const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
   if (typeof gate === 'string') {

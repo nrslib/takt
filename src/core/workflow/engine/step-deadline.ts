@@ -6,16 +6,18 @@ import type {
   StreamEvent,
 } from '../../../shared/types/provider.js';
 import { resolveProviderCallTimeoutMs } from '../../../shared/types/provider-deadline.js';
-import { buildInactivityAbortSignal, type InactivityAbortSignal } from './abort-signal.js';
+import { buildInactivityAbortSignal } from './abort-signal.js';
 
 export interface WorkflowStepAbortSignalContext {
   getAbortSignal(): AbortSignal | undefined;
   recordActivity: ProviderActivityCallback;
-  runWithoutInactivityTimeout<T>(operation: () => Promise<T>): Promise<T>;
   runWith<T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T>;
 }
 
-export interface WorkflowStepInactivityDeadline extends InactivityAbortSignal {
+export interface WorkflowStepInactivityDeadline {
+  readonly signal: AbortSignal;
+  readonly recordActivity: ProviderActivityCallback;
+  readonly dispose: () => void;
   readonly inactivityTimeoutMs: number;
 }
 
@@ -68,10 +70,6 @@ export function createWorkflowStepAbortSignalContext(
   return {
     getAbortSignal: () => deadlineStorage.getStore()?.signal ?? parentSignal,
     recordActivity: (activity) => deadlineStorage.getStore()?.recordActivity(activity),
-    runWithoutInactivityTimeout: (operation) => {
-      const deadline = deadlineStorage.getStore();
-      return deadline === undefined ? operation() : deadline.runWithoutInactivityTimeout(operation);
-    },
     runWith: async <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T> => {
       return deadlineStorage.run(deadline, operation);
     },
@@ -136,7 +134,6 @@ export interface WorkflowStepExecutionDeadlineContext {
     executionUnitKey: string,
     providerInfo: WorkflowStepDeadlineProviderInfo,
   ): WorkflowStepInactivityDeadline;
-  finish(executionUnitKey: string): void;
   runWith<T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T>;
 }
 

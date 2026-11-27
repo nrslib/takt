@@ -137,24 +137,6 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('Previous: processed previous output');
   });
 
-  it.each([true, false])('preserves replacement characters in a failed gate diagnostic (prepared: %s)', (prepared) => {
-    const diagnostic = "Command: echo '$& $$ $` $'";
-    const ctx = makeInstructionContext({
-      previousOutput: {
-        persona: 'coder',
-        status: 'done',
-        content: diagnostic,
-        timestamp: new Date(),
-        beforeReportGateFailed: true,
-      },
-      ...(prepared ? { previousResponseText: diagnostic } : {}),
-    });
-
-    expect(replaceTemplatePlaceholders('Inspect {previous_response} before retrying', makeStep({
-      passPreviousResponse: false,
-    }), ctx)).toBe(`Inspect ${diagnostic} before retrying`);
-  });
-
   it('should replace {previous_response} with empty string when no previous output', () => {
     const step = makeStep({ passPreviousResponse: true });
     const ctx = makeInstructionContext();

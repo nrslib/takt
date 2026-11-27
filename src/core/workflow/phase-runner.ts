@@ -13,7 +13,6 @@ import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.j
 import type { TaskReviewScope } from './review-scope.js';
 import type { InjectedReport, Phase1ReportInputs } from './instruction/prepared-instruction.js';
 import type { Phase1ExecutionLogReference } from './phase1-execution-log.js';
-import type { CommandQualityGateEvidence } from './quality-gates/types.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -111,7 +110,6 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   lastStructuredOutput?: Record<string, unknown>;
   /** Engine-managed reference to evidence from this execution of Phase 1. */
   phase1ExecutionLog?: Phase1ExecutionLogReference;
-  beforeReportGateEvidence?: readonly CommandQualityGateEvidence[];
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, rmSync } from 'node:fs';
 
 const mockExecuteAgent = vi.hoisted(() => vi.fn());
 
@@ -30,7 +29,6 @@ import { runAgent } from '../agents/runner.js';
 import { requestMoreParts, type DecomposeTaskOptions, type MorePartsOptions } from '../agents/decompose-task-usecase.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
 import { WorkflowEngine, type WorkflowEngineOptions } from '../core/workflow/index.js';
-import { runReportPhase } from '../core/workflow/phase-runner.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
@@ -110,97 +108,6 @@ describe('TeamLeaderRunner live intervention integration', () => {
     }
     if (existsSync(projectCwd)) {
       rmSync(projectCwd, { recursive: true, force: true });
-    }
-  });
-
-  it('handles a correction arriving during a report gate before producing evidence', async () => {
-    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
-    const gateStarted = join(projectCwd, 'gate-started');
-    const releaseGate = join(projectCwd, 'release-gate');
-    const implementation = join(projectCwd, 'implementation.txt');
-    const correction = 'Update the team implementation';
-    const correctionPart = { id: 'correction', title: 'correction', instruction: 'apply the correction part' };
-    const guidance = 'Inspect the assembled edits.';
-    const leaderInstructions: string[] = [];
-    const workerInstructions: string[] = [];
-    writeFileSync(join(projectCwd, 'check.mjs'), [
-      "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
-      'const revision = readFileSync("implementation.txt", "utf8");',
-      'appendFileSync("gate-started", `${revision}\\n`);',
-      'while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
-      'process.stdout.write(revision);',
-    ].join('\n'));
-    const requestMoreParts = vi.fn<StructuredCaller['requestMoreParts']>(async (instruction, _results, existingIds, options) => {
-      options.onDispatch?.(undefined);
-      const needsCorrection = instruction.includes(correction) && !existingIds.includes(correctionPart.id);
-      return {
-        done: !needsCorrection,
-        reasoning: 'team feedback',
-        cancelPartIds: [],
-        parts: needsCorrection ? [correctionPart] : [],
-      };
-    });
-    const caller: StructuredCaller = {
-      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
-      evaluateCondition: async () => 0,
-      decomposeTask: async (instruction, _maxInitialParts, options) => {
-        leaderInstructions.push(instruction);
-        dispatchStructuredPrompt(options, instruction);
-        return {
-          parts: [{ id: 'initial', title: 'initial', instruction: 'run the initial part' }],
-          sessionId: 'leader-session',
-        };
-      },
-      requestMoreParts,
-    };
-    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
-      workerInstructions.push(instruction);
-      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
-      options.onDispatch?.(undefined);
-      writeFileSync(implementation, instruction.includes(correctionPart.instruction) ? 'corrected' : 'initial');
-      return makeResponse({ persona: 'coder', content: 'part complete' });
-    });
-    const step = makeStep('implement', {
-      teamLeader: {
-        persona: '../personas/team-leader.md',
-        maxConcurrency: 1,
-        timeoutMs: 10000,
-        partPersona: '../personas/coder.md',
-        partAllowedTools: ['Read', 'Edit', 'Write'],
-        partEdit: true,
-        partPermissionMode: 'edit',
-      },
-      outputContracts: [{ name: 'team.md', format: 'Changes' }],
-      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs', timeoutMs: 10000, guidance }],
-      rules: [makeRule('done', 'COMPLETE')],
-    });
-    engine = new WorkflowEngine({
-      name: 'live-intervention-team-report-gate', maxSteps: 5, initialStep: step.name, steps: [step],
-    }, projectCwd, 'test task', createEngineOptions(projectCwd, store, caller));
-    const execution = engine.run();
-    try {
-      await vi.waitFor(() => expect(existsSync(gateStarted)).toBe(true), { timeout: 5000 });
-      await store.issue(correction);
-      writeFileSync(releaseGate, 'ready');
-
-      expect((await execution).status).toBe('completed');
-      expect(leaderInstructions).toHaveLength(1);
-      expect(workerInstructions).toHaveLength(2);
-      for (const prompt of [...leaderInstructions, ...workerInstructions]) {
-        expect(prompt).toContain(guidance);
-        expect(prompt).toContain('You can leave these completion checks to TAKT');
-      }
-      expect(store.read().deliveredSameSession).toBe(1);
-      const feedback = requestMoreParts.mock.calls.find(([instruction]) => instruction.includes(correction));
-      expect(feedback?.[3].sessionId).toBe('leader-session');
-      expect(readFileSync(gateStarted, 'utf8').trim().split('\n')).toEqual(['initial', 'corrected']);
-      expect(runReportPhase).toHaveBeenCalledOnce();
-      const evidence = vi.mocked(runReportPhase).mock.calls[0]?.[2].beforeReportGateEvidence;
-      expect(evidence).toHaveLength(1);
-      expect(readFileSync(join(projectCwd, evidence![0]!.outputLogPath), 'utf8')).toContain('corrected');
-    } finally {
-      if (!existsSync(releaseGate)) writeFileSync(releaseGate, 'cleanup');
-      await execution.catch(() => undefined);
     }
   });
 

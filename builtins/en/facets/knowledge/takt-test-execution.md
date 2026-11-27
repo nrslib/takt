@@ -13,8 +13,6 @@ During TAKT implementation and fixes, start with tests that directly verify the 
 | heavy IT added or changed, or heavy IT that directly verifies the changed contract | `npm test -- <test-file>` |
 | Classification contract after adding or changing an integration test | `npm test -- src/__tests__/releaseVerificationWiring.test.ts` |
 
-When the Phase 1 instructions explicitly assign the classification check to TAKT, TAKT runs the contract by itself after the work.
-
 Do not verify the same scope with multiple commands. When tests directly related to the change are also included in a gate, use targeted tests for repeated implementation feedback and the gate for completion verification.
 
 Do not run the full heavy IT suite (`npm run test:it:heavy`) locally unless explicitly instructed by the user. Run only heavy IT added or changed, or heavy IT that directly verifies the changed contract, as targets with `npm test -- <test-file>`. CI runs the full suite in the PR gate and release gate, so implementation and fix owners must not automatically add it to their verification.
