@@ -125,11 +125,8 @@ export function resolveExecutableRoutingCandidates(
   const selectionCandidates = pool.candidates.map((candidateName) =>
     resolveCandidate(autoRouting, poolName, candidateName, 'candidate'));
   const fallbackCandidate = resolveCandidate(autoRouting, poolName, pool.fallback, 'fallback');
-  const candidates = selectionCandidates.some((candidate) => candidate.name === fallbackCandidate.name)
-    ? selectionCandidates
-    : [...selectionCandidates, fallbackCandidate];
   return {
-    candidates,
+    candidates: selectionCandidates,
     selectionCandidates,
     fallbackCandidate,
     poolName,

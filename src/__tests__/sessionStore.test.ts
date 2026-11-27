@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   getPersonaSessionsPath,
   getWorktreeSessionPath,
@@ -13,6 +13,11 @@ import {
   updateWorktreeSession,
 } from '../infra/config/project/sessionStore.js';
 import { CODEX_SESSION_CONTRACT } from '../shared/codex-session-contract.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 describe('resolvePersonaSessionId', () => {
   it('scoped keyが存在する場合はscoped keyを優先する', () => {
@@ -45,6 +50,15 @@ describe('resolvePersonaSessionId', () => {
 describe('updatePersonaSession', () => {
   const createdDirs: string[] = [];
 
+  function createStoredSession(content: string): { testDir: string; path: string } {
+    const testDir = join(tmpdir(), `takt-session-store-${randomUUID()}`);
+    createdDirs.push(testDir);
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    const path = getPersonaSessionsPath(testDir);
+    writeFileSync(path, content);
+    return { testDir, path };
+  }
+
   afterEach(() => {
     for (const dir of createdDirs) {
       if (existsSync(dir)) {
@@ -66,6 +80,43 @@ describe('updatePersonaSession', () => {
     };
     expect(data.personaSessions.interactive).toBe('session-1');
     expect(data.personaSessions['interactive:claude-sdk']).toBe('session-1');
+  });
+
+  it('should reject malformed JSON without replacing the stored session file', () => {
+    const content = '{invalid JSON';
+    const { testDir, path } = createStoredSession(content);
+
+    expect(() => loadPersonaSessions(testDir)).toThrow(`Invalid session file: ${path}`);
+    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow(`Invalid session file: ${path}`);
+    expect(readFileSync(path, 'utf-8')).toBe(content);
+  });
+
+  it.each([
+    null,
+    [],
+    {},
+    { personaSessions: { coder: 42 } },
+    { personaSessions: {}, provider: 42 },
+    { personaSessions: {}, codexSessionContract: 42 },
+  ].map((data) => ({ data })))('should reject invalid session data $data without replacing the stored file', ({ data }) => {
+    const content = JSON.stringify(data);
+    const { testDir, path } = createStoredSession(content);
+
+    expect(() => loadPersonaSessions(testDir)).toThrow();
+    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow();
+    expect(readFileSync(path, 'utf-8')).toBe(content);
+  });
+
+  it('should propagate a read failure without replacing the stored session file', () => {
+    const content = JSON.stringify({ personaSessions: { coder: 'existing-session' } });
+    const { testDir, path } = createStoredSession(content);
+    const failure = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+
+    vi.mocked(readFileSync).mockImplementationOnce(() => { throw failure; });
+    expect(() => loadPersonaSessions(testDir)).toThrow(expect.objectContaining({ message: `Could not read session file: ${path}`, cause: failure }));
+    vi.mocked(readFileSync).mockImplementationOnce(() => { throw failure; });
+    expect(() => updatePersonaSession(testDir, 'interactive', 'new-session')).toThrow(expect.objectContaining({ message: `Could not read session file: ${path}`, cause: failure }));
+    expect(readFileSync(path, 'utf-8')).toBe(content);
   });
 
   it('rejects old Codex persona sessions and keeps sessions saved under the current developer contract', () => {

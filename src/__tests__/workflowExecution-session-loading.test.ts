@@ -7,13 +7,14 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig, WorkflowRestartPoint } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { getPersonaSessionsPath, getWorktreeSessionPath } from '../infra/config/project/sessionStore.js';
 import { createGitEnvironment } from '../infra/task/git-environment-settings.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
@@ -480,6 +481,21 @@ describe('executeWorkflow session loading', () => {
     expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
     expect(mockLoadWorktreeSessions).not.toHaveBeenCalled();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
+  });
+
+  it.each(['project', 'worktree'] as const)('rejects a broken %s session file before starting the workflow engine', async (location) => {
+    const executionDirectory = location === 'worktree' ? createTempDir('takt-session-worktree-') : projectCwd;
+    const sessionPath = location === 'worktree'
+      ? getWorktreeSessionPath(projectCwd, executionDirectory)
+      : getPersonaSessionsPath(projectCwd);
+    mkdirSync(dirname(sessionPath), { recursive: true });
+    writeFileSync(sessionPath, '{invalid');
+    const previousEngine = MockWorkflowEngine.lastInstance;
+
+    await expect(executeWorkflow(makeConfig(), 'task', executionDirectory, { projectCwd }))
+      .rejects.toThrow(`Invalid session file: ${sessionPath}`);
+    expect(MockWorkflowEngine.lastInstance).toBe(previousEngine);
+    expect(readFileSync(sessionPath, 'utf8')).toBe('{invalid');
   });
 
   it('should log usage events on step completion when usage logging is enabled', async () => {
