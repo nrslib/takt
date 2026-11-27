@@ -1,7 +1,10 @@
 import { Box, Text, useInput, usePaste, useStdout } from 'ink';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ConversationIpcClient } from '../manager/conversationIpcClient.js';
-import { PromptInput } from '../tui/PromptInput.js';
+import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
+import { layoutPromptRows } from '../tui/promptLayout.js';
+import { StatusLine } from '../tui/StatusLine.js';
+import { ToolActivityView } from '../tui/ToolActivityView.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { createEditorState, applyEditorKey, commitEditorInput } from '../tui/editorState.js';
@@ -17,6 +20,11 @@ import { ManagerSelectionDialog } from '../manager/ManagerSelectionDialog.js';
 import type { PendingQuestion } from '../manager/inquiryAnswer.js';
 import { ManagerSummaryDialog } from '../manager/ManagerSummaryDialog.js';
 import { formatPendingSummary } from '../manager/summaryDisplay.js';
+import { useConversationToolHistory } from '../manager/useConversationToolHistory.js';
+import { conversationActivityLabel } from '../tui/statusText.js';
+import { measureWidth } from '../../shared/utils/grapheme.js';
+import type { PortOutput } from '../manager/conversationPort.js';
+import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
 
 export function DirectorView({ client, lang, onExit }: {
   client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close'>;
@@ -28,15 +36,29 @@ export function DirectorView({ client, lang, onExit }: {
   const editorRef = useRef(editor);
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
+  const [activity, setActivity] = useState<Extract<PortOutput, { kind: 'activity' }> | null>(null);
   const mounted = useRef(true);
   const { stdout } = useStdout();
   const [columns, setColumns] = useState(stdout.columns ?? 80);
+  const [rows, setRows] = useState(stdout.rows ?? 24);
   const width = Math.max(1, columns - 6);
   const questionAnswer = useManagerQuestionAnswer(width);
   const selection = useManagerSelection();
   const savingAnswer = useRef(false);
   const submittingProposal = useRef(false);
   const pending = snapshot.state?.pending;
+  const running = snapshot.connection === 'connected' ? snapshot.state?.running : null;
+  const active = running != null;
+  const tools = useConversationToolHistory(client, running, lang, columns);
+  const shownProposal = tools.state.expanded ? null : pending;
+  const queued = snapshot.connection === 'connected' ? snapshot.state?.queuedMessageCount ?? 0 : 0;
+  const statusLabel = conversationActivityLabel(
+    running?.operationId === activity?.operationId && running?.generation === activity?.generation ? activity?.activity : undefined, lang,
+  ) ?? getLabel('tui.ui.thinking', lang);
+  useEffect(() => {
+    setActivity((current) => active && current?.operationId === running?.operationId && current?.generation === running?.generation
+      ? current : null);
+  }, [active, running?.operationId, running?.generation]);
   const [proposalChoice, setProposalChoice] = useState<{ revision: number; approve: boolean } | null>(null);
   const proposalChoiceRef = useRef(proposalChoice);
   const approve = proposalChoice?.revision === pending?.revision && proposalChoice?.approve === true;
@@ -50,6 +72,10 @@ export function DirectorView({ client, lang, onExit }: {
   const append = (message: string, role: TranscriptEntry['role'] = 'assistant'): void => {
     if (mounted.current) setEntries((prior) => [...prior, { role, content: toDisplayText(sanitizeSensitiveText(message)) }]);
   };
+  const appendTool = (entry: ToolActivityEntry): void => {
+    const content = tools.transcript(entry);
+    if (content !== undefined) append(content, 'tool');
+  };
   const edit = (next: typeof editor): void => { editorRef.current = next; setEditor(next); };
   useEffect(() => {
     selection.refresh({ questions, goals: [] });
@@ -61,7 +87,7 @@ export function DirectorView({ client, lang, onExit }: {
     }
   }, [snapshot.items]);
   useEffect(() => {
-    const resized = (): void => setColumns(stdout.columns ?? 80);
+    const resized = (): void => { setColumns(stdout.columns ?? 80); setRows(stdout.rows ?? 24); };
     stdout.on('resize', resized);
     return () => { stdout.off('resize', resized); };
   }, [stdout]);
@@ -71,14 +97,21 @@ export function DirectorView({ client, lang, onExit }: {
       if (output.kind === 'user_message' && !displayedMessages.current.has(output.operationId)) {
         displayedMessages.current.add(output.operationId);
         append(output.message, 'user');
-      }
-      if (output.kind === 'result') append(output.result.kind === 'goal_registered'
-        ? getLabel('manager.goalRegistered', lang, { name: output.result.goal.objective, id: output.result.goal.id, branch: output.result.goal.branch })
-        : output.result.message);
-      if (output.kind === 'notice') {
+      } else if (output.kind === 'result') {
+        append(output.result.kind === 'goal_registered'
+          ? getLabel('manager.goalRegistered', lang, { name: output.result.goal.objective, id: output.result.goal.id, branch: output.result.goal.branch })
+          : output.result.message);
+      } else if (output.kind === 'activity' || output.kind === 'turn_text') {
+        const current = client.getSnapshot();
+        const turn = current.state?.running;
+        if (current.connection === 'connected' && turn?.operationId === output.operationId && turn.generation === output.generation) {
+          if (output.kind === 'activity') setActivity(output);
+          else append(output.message);
+        }
+      } else if (output.kind === 'tool_completed' && tools.liveReady()) appendTool(output.entry);
+      else if (output.kind === 'notice') {
         if (!displayed.current.has(output.id)) { displayed.current.add(output.id); append(output.message); }
-      }
-      if (output.kind === 'progress' || output.kind === 'reply') append(output.message);
+      } else if (output.kind === 'progress' || output.kind === 'reply') append(output.message);
     });
     const timer = setInterval(() => {
       if (client.getSnapshot().connection === 'connected') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
@@ -89,9 +122,21 @@ export function DirectorView({ client, lang, onExit }: {
     for (const item of snapshot.items) {
       if (item.kind === 'display_event' && !displayed.current.has(item.event.id)) {
         displayed.current.add(item.event.id); append(item.event.message);
+      } else if (item.kind === 'tool_history' && snapshot.connection === 'connected' && snapshot.readStatus === 'complete') {
+        for (const entry of item.history.history.entries) appendTool(entry);
       }
     }
-  }, [snapshot.items]);
+  }, [snapshot.items, snapshot.connection, snapshot.readStatus]);
+
+  const summary = shownProposal == null ? '' : formatPendingSummary(shownProposal, lang);
+  const modal = selection.selection !== null || questionAnswer.answerTarget !== null;
+  const promptRows = Math.min(MAX_VISIBLE_ROWS, layoutPromptRows(editor.text, editor.cursor, width).rows.length);
+  const summaryRows = summary === '' ? 0 : 6 + summary.split('\n').reduce((total, line) =>
+    total + Math.max(1, Math.ceil(measureWidth(line) / Math.max(1, columns))), 0);
+  // Keep the history shortcut visible when the proposal leaves no room for details.
+  const toolHeight = tools.height(modal ? 0 : Math.max(1, rows - promptRows - summaryRows - 6
+    - Number(snapshot.error !== null) - Number(snapshot.readStatus !== 'complete') - Number(snapshot.state?.interrupted === true)
+    - Number(queued > 0)));
   usePaste((text) => edit(applyEditorKey(editorRef.current, { kind: 'paste', text })));
   useInput((input, key) => {
     if (key.ctrl && (input === 'c' || input === 'd')) { onExit(); return; }
@@ -122,20 +167,24 @@ export function DirectorView({ client, lang, onExit }: {
       if (!selection.open('answer', { questions, goals: [] })) append(getLabel('manager.selectionEmpty.answer', lang));
       return;
     }
-    if (pending != null && editorRef.current.text.length === 0 && (key.upArrow || key.downArrow || key.return || key.escape)) {
+    if (key.ctrl && input === 'o' || key.pageUp || key.pageDown) {
+      tools.browse(key.ctrl ? 'toggle' : key.pageUp ? 'previous' : 'next', toolHeight);
+      return;
+    }
+    if (shownProposal != null && editorRef.current.text.length === 0 && (key.upArrow || key.downArrow || key.return || key.escape)) {
       if (key.upArrow || key.downArrow) {
-        proposalChoiceRef.current = { revision: pending.revision, approve: key.upArrow };
+        proposalChoiceRef.current = { revision: shownProposal.revision, approve: key.upArrow };
         setProposalChoice(proposalChoiceRef.current);
         return;
       }
       const current = client.getSnapshot();
       if (submittingProposal.current || current.connection !== 'connected' || current.readStatus !== 'complete'
-        || current.state?.running != null || current.state?.pending?.revision !== pending.revision) return;
+        || current.state?.running != null || current.state?.pending?.revision !== shownProposal.revision) return;
       submittingProposal.current = true;
       const chosen = proposalChoiceRef.current;
-      void client.submit(chosen?.revision === pending.revision && chosen.approve && !key.escape
-        ? { kind: 'approve_summary', revision: pending.revision, conversationId: current.state.conversationId }
-        : { kind: 'dismiss_summary', revision: pending.revision, conversationId: current.state.conversationId }).then((result) => {
+      void client.submit(chosen?.revision === shownProposal.revision && chosen.approve && !key.escape
+        ? { kind: 'approve_summary', revision: shownProposal.revision, conversationId: current.state.conversationId }
+        : { kind: 'dismiss_summary', revision: shownProposal.revision, conversationId: current.state.conversationId }).then((result) => {
         if (result.kind === 'error') append(result.message);
       }).catch((error: unknown) => append(getErrorMessage(error))).finally(() => { submittingProposal.current = false; });
       return;
@@ -163,21 +212,23 @@ export function DirectorView({ client, lang, onExit }: {
     if (editing !== null) edit(applyEditorKey(editorRef.current, editing));
   });
   return <Box flexDirection="column" width={columns}>
-    <Text bold>director</Text>
-    <Text>{getLabel('director.experimentalNotice', lang)}</Text>
-    <Text>{getLabel('director.costNotice', lang)}</Text>
-    <Text>{getLabel('director.pendingQuestions', lang, { count: String(questions.length) })}</Text>
-    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
-    {pending != null && <Text>{formatPendingSummary(pending, lang)}</Text>}
-    {pending != null && selection.selection === null && questionAnswer.answerTarget === null && <ManagerSummaryDialog approve={approve} lang={lang} />}
+    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+      startupNotice={getLabel('director.experimentalNotice', lang)} />
+    {summary !== '' && <Text>{summary}</Text>}
+    {shownProposal != null && !modal && <ManagerSummaryDialog approve={approve} lang={lang} />}
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {questionAnswer.answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={questionAnswer.answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {snapshot.error !== null && <Text>{toDisplayText(snapshot.error)}</Text>}
     {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
     {snapshot.readStatus !== 'complete' && <Text>{getLabel(`manager.conversation.${snapshot.readStatus === 'reading' ? 'reading' : 'incomplete'}`, lang)}</Text>}
     {snapshot.state?.interrupted && <Text>{getLabel('manager.conversation.interrupted', lang)}</Text>}
-    {snapshot.state?.queuedMessageCount !== undefined && <Text>{getLabel('manager.conversation.waiting', lang, { count: String(snapshot.state.queuedMessageCount) })}</Text>}
+    {toolHeight > 0 && <ToolActivityView page={tools.page(toolHeight)} state={tools.state} labels={tools.labels} height={toolHeight} />}
+    <StatusLine busy={active} label={statusLabel} streamed="" />
+    {queued > 0 && <Text dimColor wrap="truncate-end">{getLabel('tui.ui.queuedCount', lang, { count: String(queued) })}</Text>}
     <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={width}
       placeholder={getLabel('director.placeholder', lang)} hint={getLabel('director.inputHint', lang)} completions={[]} completionIndex={0} disabled={selection.selection !== null} />
+    <Text dimColor wrap="truncate-end">
+      {'director'}{questions.length > 0 ? ` | ${getLabel('director.pendingQuestions', lang, { count: String(questions.length) })}` : ''}
+    </Text>
   </Box>;
 }

@@ -11,9 +11,8 @@ import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { verifyManagerConversation } from './formalSpecVerification.js';
 import type { ResolvedFormalSpecConfiguration } from '../interactive/taskInstructionFormat.js';
-import { createTurnActivityReporter, reportManagerStream } from './turnActivity.js';
+import { createToolEventIdentifier, createTurnActivityReporter, reportTurnStream } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
-import { randomUUID } from 'node:crypto';
 import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
@@ -56,21 +55,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
       const run = async () => {
         const signal = input.abortSignal;
         signal.throwIfAborted();
-        const callId = randomUUID();
-        const unidentified = new Map<string, string[]>();
-        const identify = (event: ToolActivityEvent): ToolActivityEvent => {
-          const context = event.toolActivity ?? { callId };
-          const pending = unidentified.get(context.callId) ?? [];
-          unidentified.set(context.callId, pending);
-          const id = event.data.id || (event.type === 'tool_use' ? randomUUID()
-            : event.type === 'tool_result' ? event.data.completedToolIds?.[0] ?? pending[0] ?? randomUUID() : pending[0] ?? randomUUID());
-          if ((event.type === 'tool_use' || event.type === 'tool_output') && !pending.includes(id)) pending.push(id);
-          if (event.type === 'tool_result') {
-            const completed = [id, ...(event.data.completedToolIds ?? [])];
-            for (const value of completed) { const index = pending.indexOf(value); if (index >= 0) pending.splice(index, 1); }
-          }
-          return { ...event, data: { ...event.data, id }, toolActivity: context } as ToolActivityEvent;
-        };
+        const identify = createToolEventIdentifier();
         if (input.verify !== undefined) return verifyManagerConversation(cwd, plan, input, input.verify, identify);
         let assignment = input.assignment;
         const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
@@ -116,7 +101,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             ...(input.recovery === undefined ? {} : { callerManagedSession: true as const }),
             mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
             onStream: (raw) => {
-              const event = reportManagerStream(raw, identify, reporter, input);
+              const event = reportTurnStream(raw, identify, reporter, input);
               if (event.type === 'tool_use') {
                 if (addRepositoryTools.has(event.data.tool)) additions.add(event.data.id);
               }

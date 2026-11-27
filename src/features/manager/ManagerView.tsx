@@ -35,14 +35,11 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
-import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
+import { conversationActivityLabel, formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
 import { ToolActivityView } from '../tui/ToolActivityView.js';
 import { MAX_QUEUE_ROWS, QueueView } from '../tui/QueueView.js';
-import { MARKER_WIDTH } from '../tui/transcriptOutput.js';
-import { ToolActivityDisplayStore, toolTurnKey } from './toolActivityDisplayStore.js';
-import { completedToolTranscript, createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from '../tui/toolActivityViewState.js';
+import { useConversationToolHistory } from './useConversationToolHistory.js';
 import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
-import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
   { command: '/verify', labelKey: 'interactive.commands.verify' }, { command: CLEAR_COMMAND, labelKey: 'manager.clearDescription' }];
@@ -61,8 +58,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   refreshIntervalMs?: number;
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
-  const { display: toolDisplay, ready: toolReady } = useSyncExternalStore(toolDisplays.subscribe, toolDisplays.getSnapshot);
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const editorRef = useRef(createEditorState(''));
@@ -75,8 +70,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
-  const [toolView, setToolView] = useState(createToolActivityViewState);
-  const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
   const messageQueue = useRef(Promise.resolve());
   const [summarizing, setSummarizing] = useState(false);
@@ -102,8 +95,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const { stdout, write } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
   const [rows, setRows] = useState(() => stdout.rows);
-  const toolColumns = useRef(columns);
-  toolColumns.current = columns;
   useEffect(() => {
     const handleResize = (): void => { setColumns(stdout.columns); setRows(stdout.rows); };
     stdout.on('resize', handleResize);
@@ -122,6 +113,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const state = snapshot.state;
   const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   const running = state?.running;
+  const tools = useConversationToolHistory(client, running, lang, columns ?? 80);
   if (running == null) clock.current = null;
   else if (clock.current?.operationId !== running.operationId || clock.current?.generation !== running.generation) {
     clock.current = { operationId: running.operationId, generation: running.generation, startedAt: running.startedAt ?? Date.now() };
@@ -133,10 +125,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [running?.operationId, running?.generation]);
   const currentActivity = snapshot.connection === 'connected' && running?.operationId === activity?.operationId
     && running?.generation === activity?.generation ? activity?.value : undefined;
-  const activityLabel = currentActivity?.kind === 'tool' ? sanitizeSensitiveText(toSingleLineText(currentActivity.description ?? currentActivity.tool))
-    : currentActivity === undefined ? undefined
-    : getLabel(currentActivity.kind === 'thinking' ? 'tui.ui.extendedThinking'
-      : currentActivity.kind === 'responding' ? 'tui.ui.responding' : 'tui.ui.thinking', lang);
+  const activityLabel = conversationActivityLabel(currentActivity, lang);
   useEffect(() => {
     setActivity((current) => snapshot.connection === 'connected' && current?.operationId === running?.operationId
       && current?.generation === running?.generation ? current : null);
@@ -151,16 +140,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     displayedMessages.current.add(message.operationId);
     append(message.message, 'user');
   };
-  const committedTools = useRef(new Set<string>());
   const appendTool = (entry: ToolActivityEntry): void => {
-    const key = JSON.stringify([entry.context?.operationId, entry.context?.generation, entry.key]);
-    if (committedTools.current.has(key) || entry.status === 'running') return;
-    committedTools.current.add(key);
-    const content = completedToolTranscript(entry, toolColumns.current ?? 80, {
-      compact: '', expanded: '', more: getLabel('tui.ui.toolHistoryMore', lang), end: '', completion: getLabel('tui.ui.toolHistoryCompletion', lang),
-      running: getLabel('tui.ui.toolHistoryRunning', lang),
-    });
-    if (mounted.current) setEntries((previous) => [...previous, { role: 'tool', content: toDisplayText(content) }]);
+    const content = tools.transcript(entry);
+    if (mounted.current && content !== undefined) setEntries((previous) => [...previous, { role: 'tool', content: toDisplayText(content) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
     submitting.current++;
@@ -313,7 +295,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (output.kind === 'user_message') {
         appendUserMessage(output);
       } else if (output.kind === 'tool_completed') {
-        if (toolDisplays.getSnapshot().ready) appendTool(output.entry);
+        if (tools.liveReady()) appendTool(output.entry);
       } else if (output.kind === 'result') {
         setActivity((current) => current?.operationId === output.operationId ? null : current);
         showResult(output.result, output.operationId);
@@ -484,21 +466,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     epicsOpen ? layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length : MAX_VISIBLE_ROWS,
     (rows ?? 24) - epicChromeRows - minimumEpicRows));
   const epicPageRows = Math.max(minimumEpicRows, (rows ?? 24) - epicChromeRows - epicPromptRows);
-  const toolContext = toolDisplay.history.entries().at(-1)?.context;
-  const toolTurn = running != null ? toolTurnKey(running) : toolContext?.operationId === undefined ? undefined
-    : toolTurnKey({ operationId: toolContext.operationId, generation: toolContext.generation });
-  const currentToolView = toolViewTurn.current === toolTurn ? toolView : createToolActivityViewState();
-  const allToolGroups = toolReady ? toolDisplay.groups() : [];
-  const toolGroups = currentToolView.expanded ? allToolGroups : allToolGroups.flatMap((group) => {
-    const entries = group.entries.filter((entry) => entry.status === 'running');
-    return entries.length === 0 ? [] : [{ ...group, summary: toolActivityGroupSummary(entries[0]!, entries.length), entries }];
-  });
-  const toolLabels = {
-    compact: getLabel('manager.toolHistoryCompact', lang), expanded: getLabel('manager.toolHistoryExpanded', lang),
-    more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
-    completion: getLabel('tui.ui.toolHistoryCompletion', lang), running: getLabel('tui.ui.toolHistoryRunning', lang),
-  };
-  const toolPageColumns = (columns ?? 80) - MARKER_WIDTH;
   const queuedMessages = snapshot.items.flatMap((item) => item.kind === 'user_message' && item.pending
     && item.operationId !== running?.operationId ? [item.message] : []);
   const queueRows = conversationInput && queuedMessages.length > 0
@@ -522,15 +489,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows - queueRows
       - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
       - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
-  const toolHeight = !toolReady || allToolGroups.length === 0 ? 0
-    : toolGroups.length === 0 ? Math.min(1, toolContentHeight) : toolContentHeight;
-  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, toolPageColumns,
-    Math.max(0, toolHeight - 1), toolLabels);
-  useEffect(() => {
-    if (toolViewTurn.current === toolTurn) return;
-    toolViewTurn.current = toolTurn;
-    setToolView(createToolActivityViewState());
-  }, [toolTurn]);
+  const toolHeight = tools.height(toolContentHeight);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, images, currentHandlers: currentInputHandlers,
@@ -546,12 +505,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     isEpicsOpen: epics.isOpen, openEpics,
     handleEpicInput: (key) => epics.handleInput(key, Math.max(0, epicDetailLines.length - epicPageRows), epicPageRows),
     slashCompletion,
-    browseTools: (direction) => {
-      if (toolHeight <= 0) return;
-      setToolView((current) => direction === 'toggle' ? toggleToolActivityView(current)
-        : moveToolActivityView(current,
-          toolActivityViewPage(toolDisplay, toolGroups, current, toolPageColumns, Math.max(0, toolHeight - 1), toolLabels), direction));
-    },
+    browseTools: (direction) => tools.browse(direction, toolHeight),
     onInputUnavailable: (confirming) => append(getLabel(confirming === 'delete'
       ? 'manager.inputUnavailableDuringDelete' : 'manager.inputUnavailableDuringAbort', lang)),
   });
@@ -577,7 +531,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
-    {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
+    {!epicsOpen && toolHeight > 0 && <ToolActivityView page={tools.page(toolHeight)} state={tools.state} labels={tools.labels} height={toolHeight} />}
     {imageNotice !== null && <Text color="red">{imageNotice}</Text>}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     {queueRows > 0 && <QueueView heading={queueHeading}

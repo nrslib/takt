@@ -9,6 +9,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
 import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import { getDirectorOutputSchema, parseDirectorResponse } from './turnResponse.js';
+import { createToolEventIdentifier, createTurnActivityReporter, reportTurnStream } from '../manager/turnActivity.js';
 
 export function createDirectorTurnExecutor(plan: DirectorConversationPlan, config: McpHttpServerConfig) {
   const agent = plan.ctx.provider.setup({ name: 'director', systemPrompt: withProgressNotesGuidance(plan.systemPrompt, plan.ctx.lang) });
@@ -23,13 +24,18 @@ export function createDirectorTurnExecutor(plan: DirectorConversationPlan, confi
       let usedTools = false;
       const call = async () => {
         input.abortSignal.throwIfAborted();
+        const identify = createToolEventIdentifier();
+        const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
         const response = await agent.call(input.prompt, {
           cwd: plan.cwd, model: plan.ctx.model, language: plan.ctx.lang, sessionId,
           outputSchema: getDirectorOutputSchema(plan.ctx.providerType),
           permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,
           providerOptions: plan.ctx.providerOptions, abortSignal: input.abortSignal,
           callerManagedSession: true, callerManagedMcp: true, mcpServers: servers, preparedMcp: prepared,
-          onStream: (event) => { if (['tool_use', 'tool_result', 'tool_output'].includes(event.type)) usedTools = true; },
+          onStream: (event) => {
+            if (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output') usedTools = true;
+            reportTurnStream(event, identify, reporter, input);
+          },
         });
         if (response.status !== 'done') {
           if (response.failureCategory !== undefined) throw createAgentFailureError(response.failureCategory, response.error ?? 'Director provider failed');

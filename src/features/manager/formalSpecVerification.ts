@@ -14,7 +14,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { createAgentFailureError } from '../../shared/types/agent-failure.js';
 import type { AgentResponse } from '../../core/models/response.js';
-import { createTurnActivityReporter, reportManagerStream } from './turnActivity.js';
+import { createTurnActivityReporter, reportTurnStream } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
 import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
@@ -40,7 +40,7 @@ export async function verifyManagerConversation(
     callerManagedSession: true as const,
     ...(ctx.providerType === 'opencode' && input.openCodeWorkspaceAccess !== undefined
       ? { openCodeWorkspaceAccess: input.openCodeWorkspaceAccess } : {}),
-    onStream: (raw: Parameters<typeof reporter.onStream>[0]) => { reportManagerStream(raw, identify, reporter, input); },
+    onStream: (raw: Parameters<typeof reporter.onStream>[0]) => { reportTurnStream(raw, identify, reporter, input); },
   };
   const generator = ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance([
     buildFormalSpecGenerationSystemPrompt(ctx.lang),
