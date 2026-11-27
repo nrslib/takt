@@ -67,6 +67,30 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
     ...actual,
     createLogger: vi.fn(() => mockLogger),
   };
+
+  it('Given copilot provider option enables prompt temp file, When agent is called, Then passes it to callCopilot', async () => {
+    mockCallCopilot.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CopilotProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        copilot: {
+          usePromptTempFile: true,
+        },
+      },
+    } as Parameters<typeof agent.call>[1]);
+
+    expect(mockCallCopilot).toHaveBeenCalledWith(
+      'coder',
+      'implement',
+      expect.objectContaining({
+        usePromptTempFile: true,
+      }),
+    );
+  });
 });
 
 import { CopilotProvider } from '../infra/providers/copilot.js';

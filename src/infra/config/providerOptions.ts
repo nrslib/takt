@@ -60,6 +60,7 @@ type RawProviderOptions = {
     };
   };
   claude?: {
+    use_prompt_temp_file?: boolean;
     base_url?: string;
     allowed_tools?: string[];
     effort?: ClaudeEffort;
@@ -84,15 +85,18 @@ type RawProviderOptions = {
     transcript_poll_interval_ms?: number;
   };
   copilot?: {
+    use_prompt_temp_file?: boolean;
     effort?: CopilotEffort;
     guards?: RawProviderGuardOptions;
   };
   kiro?: {
+    use_prompt_temp_file?: boolean;
     agent?: string;
     effort?: KiroEffort;
     guards?: RawProviderGuardOptions;
   };
   cursor?: {
+    use_prompt_temp_file?: boolean;
     guards?: RawProviderGuardOptions;
   };
   devin?: {
@@ -385,7 +389,8 @@ export function normalizeProviderOptions(
     };
   }
   if (
-    options.claude?.base_url !== undefined
+    options.claude?.use_prompt_temp_file !== undefined
+    || options.claude?.base_url !== undefined
     || options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
     || options.claude?.guards !== undefined
@@ -394,6 +399,9 @@ export function normalizeProviderOptions(
     || options.claude?.permissions
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
+    if (options.claude.use_prompt_temp_file !== undefined) {
+      claude.usePromptTempFile = options.claude.use_prompt_temp_file;
+    }
     if (options.claude.base_url !== undefined) {
       const claudeBaseUrlPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.claude.base_url`;
       assertAllowedProviderBaseUrl(claudeBaseUrlPath, options.claude.base_url, normalizationOptions);
@@ -441,16 +449,23 @@ export function normalizeProviderOptions(
       result.claude = claude;
     }
   }
-  if (options.copilot?.effort !== undefined || options.copilot?.guards !== undefined) {
+  if (options.copilot?.use_prompt_temp_file !== undefined || options.copilot?.effort !== undefined || options.copilot?.guards !== undefined) {
     result.copilot = {
+      ...(options.copilot.use_prompt_temp_file !== undefined
+        ? { usePromptTempFile: options.copilot.use_prompt_temp_file }
+        : {}),
       ...(options.copilot.effort !== undefined ? { effort: options.copilot.effort } : {}),
       ...(options.copilot.guards?.call_timeout_ms !== undefined
         ? { guards: { callTimeoutMs: options.copilot.guards.call_timeout_ms } }
         : {}),
     };
   }
-  if (options.kiro?.agent !== undefined || options.kiro?.effort !== undefined || options.kiro?.guards !== undefined) {
+  if (options.kiro?.use_prompt_temp_file !== undefined
+    || options.kiro?.agent !== undefined || options.kiro?.effort !== undefined || options.kiro?.guards !== undefined) {
     result.kiro = {
+      ...(options.kiro.use_prompt_temp_file !== undefined
+        ? { usePromptTempFile: options.kiro.use_prompt_temp_file }
+        : {}),
       ...(options.kiro.agent !== undefined ? { agent: options.kiro.agent } : {}),
       ...(options.kiro.effort !== undefined ? { effort: options.kiro.effort } : {}),
       ...(options.kiro.guards?.call_timeout_ms !== undefined
@@ -458,10 +473,13 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  if (options.cursor?.guards !== undefined) {
+  if (options.cursor?.use_prompt_temp_file !== undefined || options.cursor?.guards !== undefined) {
     result.cursor = {
-      ...(options.cursor.guards.call_timeout_ms !== undefined
-        ? { guards: { callTimeoutMs: options.cursor.guards.call_timeout_ms } }
+      ...(options.cursor.use_prompt_temp_file !== undefined
+        ? { usePromptTempFile: options.cursor.use_prompt_temp_file }
+        : {}),
+      ...(options.cursor.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.cursor.guards?.call_timeout_ms } }
         : {}),
     };
   }
@@ -664,6 +682,9 @@ export function mergeProviderOptions(
     if (layer.claude) {
       result.claude = {
         ...result.claude,
+        ...(layer.claude.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.claude.usePromptTempFile }
+          : {}),
         ...(layer.claude.baseUrl !== undefined
           ? { baseUrl: layer.claude.baseUrl }
           : {}),
@@ -690,6 +711,9 @@ export function mergeProviderOptions(
     if (layer.copilot) {
       result.copilot = {
         ...result.copilot,
+        ...(layer.copilot.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.copilot.usePromptTempFile }
+          : {}),
         ...(layer.copilot.effort !== undefined
           ? { effort: layer.copilot.effort }
           : {}),
@@ -701,6 +725,9 @@ export function mergeProviderOptions(
     if (layer.kiro) {
       result.kiro = {
         ...result.kiro,
+        ...(layer.kiro.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.kiro.usePromptTempFile }
+          : {}),
         ...(layer.kiro.agent !== undefined
           ? { agent: layer.kiro.agent }
           : {}),
@@ -715,6 +742,9 @@ export function mergeProviderOptions(
     if (layer.cursor) {
       result.cursor = {
         ...result.cursor,
+        ...(layer.cursor.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.cursor.usePromptTempFile }
+          : {}),
         ...(layer.cursor.guards !== undefined
           ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
           : {}),
@@ -1056,6 +1086,30 @@ export function resolveEffectiveProviderOptions(
     resolvedConfigOptions.claude?.baseUrl,
     personaOptions?.claude?.baseUrl,
     stepOptions?.claude?.baseUrl,
+  );
+  const claudeUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.claude?.usePromptTempFile,
+    personaOptions?.claude?.usePromptTempFile,
+    stepOptions?.claude?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'claude.usePromptTempFile', source),
+  );
+  const copilotUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.copilot?.usePromptTempFile,
+    personaOptions?.copilot?.usePromptTempFile,
+    stepOptions?.copilot?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'copilot.usePromptTempFile', source),
+  );
+  const kiroUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.kiro?.usePromptTempFile,
+    personaOptions?.kiro?.usePromptTempFile,
+    stepOptions?.kiro?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'kiro.usePromptTempFile', source),
+  );
+  const cursorUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.cursor?.usePromptTempFile,
+    personaOptions?.cursor?.usePromptTempFile,
+    stepOptions?.cursor?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'cursor.usePromptTempFile', source),
   );
   const claudeEffort = selectProviderValue(
     resolvedConfigOptions.claude?.effort,
@@ -1452,7 +1506,8 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(claude.sandbox !== undefined
+    ...(claudeUsePromptTempFile !== undefined
+      || claude.sandbox !== undefined
       || claude.permissions !== undefined
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
@@ -1462,6 +1517,7 @@ export function resolveEffectiveProviderOptions(
       ? {
           claude: {
             ...claude,
+            ...(claudeUsePromptTempFile !== undefined ? { usePromptTempFile: claudeUsePromptTempFile } : {}),
             ...(claudeAllowedTools !== undefined ? { allowedTools: claudeAllowedTools } : {}),
             ...(claudeBaseUrl !== undefined ? { baseUrl: claudeBaseUrl } : {}),
             ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
@@ -1472,9 +1528,10 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(copilotEffort !== undefined || copilotCallTimeoutMs !== undefined
+    ...(copilotUsePromptTempFile !== undefined || copilotEffort !== undefined || copilotCallTimeoutMs !== undefined
       ? {
           copilot: {
+            ...(copilotUsePromptTempFile !== undefined ? { usePromptTempFile: copilotUsePromptTempFile } : {}),
             ...(copilotEffort !== undefined ? { effort: copilotEffort } : {}),
             ...(copilotCallTimeoutMs !== undefined
               ? { guards: { callTimeoutMs: copilotCallTimeoutMs } }
@@ -1482,9 +1539,10 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(kiroAgent !== undefined || kiroEffort !== undefined || kiroCallTimeoutMs !== undefined
+    ...(kiroUsePromptTempFile !== undefined || kiroAgent !== undefined || kiroEffort !== undefined || kiroCallTimeoutMs !== undefined
       ? {
           kiro: {
+            ...(kiroUsePromptTempFile !== undefined ? { usePromptTempFile: kiroUsePromptTempFile } : {}),
             ...(kiroAgent !== undefined ? { agent: kiroAgent } : {}),
             ...(kiroEffort !== undefined ? { effort: kiroEffort } : {}),
             ...(kiroCallTimeoutMs !== undefined
@@ -1493,8 +1551,13 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(cursorCallTimeoutMs !== undefined
-      ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
+    ...(cursorUsePromptTempFile !== undefined || cursorCallTimeoutMs !== undefined
+      ? {
+          cursor: {
+            ...(cursorUsePromptTempFile !== undefined ? { usePromptTempFile: cursorUsePromptTempFile } : {}),
+            ...(cursorCallTimeoutMs !== undefined ? { guards: { callTimeoutMs: cursorCallTimeoutMs } } : {}),
+          },
+        }
       : {}),
     ...(devinCallTimeoutMs !== undefined
       ? { devin: { guards: { callTimeoutMs: devinCallTimeoutMs } } }

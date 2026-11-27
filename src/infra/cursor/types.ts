@@ -19,6 +19,7 @@ export interface CursorCallOptions {
   cursorApiKey?: string;
   /** Custom path to cursor-agent executable */
   cursorCliPath?: string;
+  usePromptTempFile?: boolean;
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;

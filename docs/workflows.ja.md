@@ -1273,6 +1273,8 @@ Companion 定義は `.takt/companions/`、`~/.takt/companions/`、`builtins/{lan
 4. workflow は単純な構成から始め、複雑にしながら段階的にテストします。
 5. `takt eject <workflow>` でビルトイン workflow をコピーし、編集してカスタマイズします。
 
+CLIプロンプトの一時ファイル方式は`runtime.yaml`のprofile options（またはlegacy設定）で指定します。設定キーは`cursor.use_prompt_temp_file`、`kiro.use_prompt_temp_file`、`copilot.use_prompt_temp_file`、`claude.use_prompt_temp_file`で、既定では無効です。Claudeでは`claude-headless`だけが使用し、Kiroはstdin送信を維持します。workflowの`capabilities`には指定しません。詳しくは[設定ガイド](./configuration.ja.md)を参照してください。
+
 ## PR 状態取得と system step の待機
 
 修正・マージ実行では、待機対象を push 後の head SHA と照合し、マージにもクローンの最新 head SHA を `--match-head-commit` で渡します。CI 確認後に PR の head が変わった場合も別の commit をマージしません。このオプションの仕様は [GitHub CLI の公式マニュアル](https://cli.github.com/manual/gh_pr_merge)を参照してください。

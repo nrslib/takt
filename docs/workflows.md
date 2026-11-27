@@ -1277,6 +1277,8 @@ Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, t
 4. Test workflows incrementally, starting with a simple structure and adding complexity.
 5. Customize a builtin workflow by copying it with `takt eject <workflow>` and editing it.
 
+CLI prompt temp-file passing is configured through `runtime.yaml` profile options (or legacy configuration), using `cursor.use_prompt_temp_file`, `kiro.use_prompt_temp_file`, `copilot.use_prompt_temp_file`, or `claude.use_prompt_temp_file`. It is disabled by default; the Claude option applies to `claude-headless` only. Kiro retains stdin transport. This machine option is not a workflow `capabilities` field. See [CLI prompt temp files](./configuration.md#cli-prompt-temp-files-use_prompt_temp_file).
+
 ## PR status and system-step waits
 
 During PR fixes and merges, TAKT matches the wait target against the head SHA after a push. It also passes the clone's latest head SHA to merge with `--match-head-commit`, so a different commit is not merged if the PR head changes after CI. See the [GitHub CLI manual](https://cli.github.com/manual/gh_pr_merge) for that option.

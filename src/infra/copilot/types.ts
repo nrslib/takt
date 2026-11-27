@@ -21,6 +21,7 @@ export interface CopilotCallOptions {
   copilotGithubToken?: string;
   /** Custom path to copilot executable */
   copilotCliPath?: string;
+  usePromptTempFile?: boolean;
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;

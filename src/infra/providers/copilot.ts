@@ -33,6 +33,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     onActivity: options.onActivity,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
+    usePromptTempFile: options.providerOptions?.copilot?.usePromptTempFile,
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
   };

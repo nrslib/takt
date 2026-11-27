@@ -47,6 +47,16 @@ describe('workflow capability provider-options references', () => {
     expect(step).not.toHaveProperty('model');
   });
 
+
+  it.each(['cursor', 'kiro', 'copilot', 'claude'])('rejects %s prompt transport options in workflow capabilities', (provider) => {
+    writeCapabilitySet('prompt-transport', `${provider}:\n  use_prompt_temp_file: true\n`);
+
+    expect(() => normalizeWorkflow({}, [{
+      name: 'implement',
+      instruction: '{task}',
+      capabilities: 'provider-options/prompt-transport.yaml',
+    }])).toThrow();
+  });
 });
 
 describe('workflow runtime ownership boundary', () => {

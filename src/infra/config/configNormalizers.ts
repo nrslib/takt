@@ -849,6 +849,9 @@ export function denormalizeProviderOptions(
   }
   if (providerOptions.claude) {
     const claude: Record<string, unknown> = {};
+    if (providerOptions.claude.usePromptTempFile !== undefined) {
+      claude.use_prompt_temp_file = providerOptions.claude.usePromptTempFile;
+    }
     if (providerOptions.claude.baseUrl !== undefined) {
       claude.base_url = providerOptions.claude.baseUrl;
     }
@@ -888,16 +891,23 @@ export function denormalizeProviderOptions(
       raw.claude = claude;
     }
   }
-  if (providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards?.callTimeoutMs !== undefined) {
+  if (providerOptions.copilot?.usePromptTempFile !== undefined || providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards?.callTimeoutMs !== undefined) {
     raw.copilot = {
+      ...(providerOptions.copilot.usePromptTempFile !== undefined
+        ? { use_prompt_temp_file: providerOptions.copilot.usePromptTempFile }
+        : {}),
       ...(providerOptions.copilot.effort !== undefined ? { effort: providerOptions.copilot.effort } : {}),
       ...(providerOptions.copilot.guards?.callTimeoutMs !== undefined
         ? { guards: { call_timeout_ms: providerOptions.copilot.guards.callTimeoutMs } }
         : {}),
     };
   }
-  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.effort !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
+  if (providerOptions.kiro?.usePromptTempFile !== undefined
+    || providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.effort !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
     raw.kiro = {
+      ...(providerOptions.kiro.usePromptTempFile !== undefined
+        ? { use_prompt_temp_file: providerOptions.kiro.usePromptTempFile }
+        : {}),
       ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
       ...(providerOptions.kiro.effort !== undefined ? { effort: providerOptions.kiro.effort } : {}),
       ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
@@ -905,13 +915,14 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.cursor?.guards?.callTimeoutMs !== undefined) {
+  if (providerOptions.cursor?.usePromptTempFile !== undefined || providerOptions.cursor?.guards?.callTimeoutMs !== undefined) {
     raw.cursor = {
-      guards: {
-        ...(providerOptions.cursor.guards.callTimeoutMs !== undefined
-          ? { call_timeout_ms: providerOptions.cursor.guards.callTimeoutMs }
-          : {}),
-      },
+      ...(providerOptions.cursor.usePromptTempFile !== undefined
+        ? { use_prompt_temp_file: providerOptions.cursor.usePromptTempFile }
+        : {}),
+      ...(providerOptions.cursor.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.cursor.guards.callTimeoutMs } }
+        : {}),
     };
   }
   if (providerOptions.devin?.guards?.callTimeoutMs !== undefined) {

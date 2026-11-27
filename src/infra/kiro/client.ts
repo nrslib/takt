@@ -1,3 +1,4 @@
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { createLogger, getErrorMessage, stripAnsi } from '../../shared/utils/index.js';
@@ -500,6 +501,7 @@ function emitResult(
 export class KiroClient {
   async call(agentType: string, prompt: string, options: KiroCallOptions): Promise<AgentResponse> {
     const promptText = buildPrompt(prompt, options.systemPrompt);
+    let promptCleanup: (() => Promise<void>) | undefined;
     const effectiveKiroApiKey = resolveEffectiveKiroApiKey(options.kiroApiKey);
     const effectiveOptions = effectiveKiroApiKey === options.kiroApiKey
       ? options
@@ -508,7 +510,13 @@ export class KiroClient {
     try {
       const args = buildArgs(effectiveOptions);
       options.onActivity?.({ kind: 'attempt_started' });
-      const { stdout } = await execKiro(args, effectiveOptions, promptText);
+      const preparedPrompt = await prepareCliPromptArgument(
+        effectiveOptions.cwd,
+        promptText,
+        effectiveOptions.usePromptTempFile,
+      );
+      promptCleanup = preparedPrompt.cleanup;
+      const { stdout } = await execKiro(args, effectiveOptions, preparedPrompt.promptArgument);
       const parsed = parseKiroOutput(stdout);
       if ('error' in parsed) {
         emitResult(options, '', false, parsed.error, options.sessionId);
@@ -569,9 +577,13 @@ export class KiroClient {
       };
     } finally {
       try {
-        await options.preparedMcp?.dispose?.();
-      } catch (error) {
-        log.debug('Failed to clean up Kiro MCP config', { error: getErrorMessage(error) });
+        await promptCleanup?.();
+      } finally {
+        try {
+          await options.preparedMcp?.dispose?.();
+        } catch (error) {
+          log.debug('Failed to clean up Kiro MCP config', { error: getErrorMessage(error) });
+        }
       }
     }
   }

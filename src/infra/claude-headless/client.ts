@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { prepareCliPromptArgument, type CliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
@@ -266,6 +267,7 @@ export async function callClaudeHeadless(
     : () => options.preparedMcp!.dispose();
   let response: AgentResponse;
   let terminalContent = '';
+  let preparedPrompt: CliPromptArgument | undefined;
 
   try {
     if (options.skillsEnabled === false) {
@@ -276,6 +278,7 @@ export async function callClaudeHeadless(
     }
     const prepared = await buildSpawnArgs(options);
     cleanup = prepared.cleanup;
+    preparedPrompt = await prepareCliPromptArgument(options.cwd, prompt, options.usePromptTempFile);
     let retries = 0;
     while (true) {
       if (options.abortSignal?.aborted) throw new Error(HEADLESS_ABORTED_MESSAGE);
@@ -283,7 +286,7 @@ export async function callClaudeHeadless(
       options.onActivity?.({ kind: 'attempt_started' });
       let toolExecutionObserved = false;
       try {
-        const { stdout, stderr } = await runHeadlessCli([...prepared.args, ...session.args, '--', prompt], options);
+        const { stdout, stderr } = await runHeadlessCli([...prepared.args, ...session.args, '--', preparedPrompt.promptArgument], options);
         toolExecutionObserved = hasToolExecutionEvent(stdout);
         const parsed = aggregateResultFromStdout(stdout);
         response = buildClaudeHeadlessResponse({
@@ -308,6 +311,7 @@ export async function callClaudeHeadless(
     response = buildHeadlessErrorResponse(agentName, raw as ExecError, options);
   }
 
+  await preparedPrompt?.cleanup?.();
   try {
     await cleanup?.();
   } catch (raw) {
