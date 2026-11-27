@@ -86,7 +86,9 @@ steps:
       - "Review the implementation before finishing" # AI directive
       - type: command                # Machine-executed command gate
         name: quality-check
+        run_at: before_report        # Run after work and before reporting
         command: "./.takt/quality-gates/check.sh"
+        guidance: "Check generated fixtures if this gate fails"
         cwd: "."
         timeout_ms: 300000
 ```
@@ -197,6 +199,9 @@ The caller overrides fragment fields. Objects are deep-merged; arrays such as `p
 
 String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, and the private output log path back into the same agent step. Sanitized stdout and stderr are available only in that local private log and are not inserted into agent feedback. `system` and `workflow_call` steps do not accept `quality_gates`.
 
+Set `run_at: before_report` to run a command after the work phase (Phase 1) and before reporting and rule judgment. On failure, TAKT skips report generation and provides the exit code or other failure details and any available log reference to the next work attempt of the same step. On success, TAKT saves the execution record and includes it in the report-generation input. For a parallel step, configure the gate on the individual sub-step. Parallel parents and arpeggio steps do not support this setting.
+
+Phase 1 lists the checks TAKT will run before reporting. Agents can leave completion checks to TAKT and still run targeted tests or reproduce failures while working. An optional non-blank `guidance` string is supported with `run_at: before_report`. TAKT adds it to the check's initial notice and identifies it as guidance for that check on failure. Braces in guidance are literal. Otherwise identical gates run once and use the first supplied guidance in merge order: global config, project config, then workflow YAML.
 
 ## Available Variables
 
@@ -277,7 +282,7 @@ A rule with `interactive_only: true` is only considered during interactive execu
 
 ### Rule Field: `command_gates`
 
-`command_gates` controls command quality gates for the selected rule. `required` runs the step's command gates after rule resolution and before applying the transition; the transition is applied only after the gates succeed. `skip` applies the selected transition without running command gates. Omitting the field is equivalent to `required`.
+`command_gates` controls command gates that omit `run_at`. `required` runs those gates after rule resolution and applies the transition after they succeed. `skip` applies the transition immediately. Omitting the field is equivalent to `required`. Gates with `run_at: before_report` run before the rule is selected.
 
 ## Step Types
 

@@ -14,7 +14,6 @@ import { basename, dirname, join, relative } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import type { JsonTestResults } from 'vitest/reporters';
 import {
@@ -37,6 +36,7 @@ import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import defaultConfig from '../../vitest.config.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
+import { hasIntegrationBoundary } from '../../scripts/test-integration-boundary.mjs';
 import {
   RELEASE_GATE_SCRIPTS,
   RELEASE_LOG_RELATIVE_PATH,
@@ -77,28 +77,6 @@ function runDependencyPostinstall(
   });
 }
 
-const integrationBoundaryNames = new Set([
-  'WorkflowEngine',
-  'TeamLeaderRunner',
-  'captureReviewScopeProofSnapshot',
-  'createWorkflowRunLifecycle',
-  'runAllTasks',
-  'runCommandQualityGate',
-  'spawnManagedProcess',
-  'runProbeProcess',
-  'runSmokeScript',
-  'prepareRuntimeEnvironment',
-  'resolveTask',
-  'initializeGitFixture',
-]);
-
-const integrationBuiltinModules = new Set([
-  'node:child_process',
-  'node:fs',
-  'node:fs/promises',
-  'node:net',
-]);
-
 function listTestFiles(directory: string): string[] {
   return readdirSync(directory).flatMap((entry) => {
     const path = join(directory, entry);
@@ -107,70 +85,6 @@ function listTestFiles(directory: string): string[] {
       ? listTestFiles(path)
       : isTestFile ? [path] : [];
   });
-}
-
-function hasIntegrationBoundary(filePath: string): boolean {
-  const sourceText = readFileSync(filePath, 'utf8');
-  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
-  const importedBoundaryNames = new Set<string>();
-  const importedBuiltinModules = new Set<string>();
-  const mockedModules = new Set<string>();
-  let invokesBoundary = false;
-
-  for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
-      continue;
-    }
-    const importClause = statement.importClause;
-    if (
-      integrationBuiltinModules.has(statement.moduleSpecifier.text)
-      && !importClause?.isTypeOnly
-    ) {
-      importedBuiltinModules.add(statement.moduleSpecifier.text);
-    }
-    const namedBindings = importClause?.namedBindings;
-    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
-      continue;
-    }
-    for (const element of namedBindings.elements) {
-      const importedName = element.propertyName?.text ?? element.name.text;
-      if (!element.isTypeOnly && integrationBoundaryNames.has(importedName)) {
-        importedBoundaryNames.add(element.name.text);
-      }
-    }
-  }
-
-  function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
-      const firstArgument = node.arguments[0];
-      if (
-        ts.isPropertyAccessExpression(node.expression)
-        && ts.isIdentifier(node.expression.expression)
-        && ['vi', 'jest'].includes(node.expression.expression.text)
-        && node.expression.name.text === 'mock'
-        && firstArgument !== undefined
-        && ts.isStringLiteral(firstArgument)
-      ) {
-        mockedModules.add(firstArgument.text);
-      }
-      if (ts.isIdentifier(node.expression) && importedBoundaryNames.has(node.expression.text)) {
-        invokesBoundary = true;
-      }
-    }
-    if (
-      ts.isNewExpression(node)
-      && ts.isIdentifier(node.expression)
-      && importedBoundaryNames.has(node.expression.text)
-    ) {
-      invokesBoundary = true;
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-
-  const importsUnmockedBuiltin = [...importedBuiltinModules]
-    .some((moduleName) => !mockedModules.has(moduleName));
-  return invokesBoundary || importsUnmockedBuiltin;
 }
 
 function hasIntegrationFileName(filePath: string): boolean {
@@ -554,6 +468,46 @@ describe('release verification wiring', () => {
     expect(result.log).not.toContain('stale log entry');
   });
 
+  it('runs the classification contract when a classified test and its classification are removed together', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-removed-it-classification-'));
+    const testFile = 'src/__tests__/retired-classification-fixture.test.ts';
+    const classificationInput = 'scripts/test-classification.mjs';
+    const program = join(process.cwd(), 'scripts/check-changed-it-wiring.mjs');
+    const npmExecPath = join(cwd, 'npm-cli.js');
+    const git = (...args: string[]): void => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+      expect(result.status, result.stderr).toBe(0);
+    };
+    try {
+      git('init', '-q');
+      mkdirSync(join(cwd, 'src/__tests__'), { recursive: true });
+      mkdirSync(join(cwd, 'scripts'));
+      writeFileSync(join(cwd, testFile), "import { describe } from 'vitest';\nvoid describe;");
+      writeFileSync(join(cwd, classificationInput), `export const integrationTests = [${JSON.stringify(testFile)}];`);
+      writeFileSync(join(cwd, 'tsconfig.tests.json'), JSON.stringify({ files: [testFile] }));
+      git('add', '.');
+      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'baseline');
+      rmSync(join(cwd, testFile));
+      writeFileSync(join(cwd, classificationInput), 'export const integrationTests = [];');
+      writeFileSync(npmExecPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");');
+
+      const execution = spawnSync(process.execPath, [program], {
+        cwd, encoding: 'utf8', env: { ...process.env, npm_execpath: npmExecPath },
+      });
+
+      expect(execution.status, execution.stderr).toBe(0);
+      const [record, invocation, ...remaining] = execution.stdout.trim().split('\n');
+      expect(remaining).toEqual([]);
+      expect(JSON.parse(invocation!)).toEqual(['test', '--', 'src/__tests__/releaseVerificationWiring.test.ts']);
+      expect(JSON.parse(record!.slice(record!.indexOf('{')))).toMatchObject({
+        changedClassificationInputs: [classificationInput],
+        fileHashes: expect.arrayContaining([{ file: testFile, sha256: null }]),
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('should keep fast unit and integration classifications disjoint', () => {
     const parallelIntegration = new Set(parallelIntegrationTestFiles);
     const lightIntegration = new Set(lightIntegrationTestFiles);
@@ -749,7 +703,7 @@ describe('release verification wiring', () => {
     ]);
     const testRoot = fileURLToPath(new URL('.', import.meta.url));
     const unclassifiedBoundaryFiles = listTestFiles(testRoot)
-      .filter(hasIntegrationBoundary)
+      .filter((file) => hasIntegrationBoundary(file, readFileSync(file, 'utf8')))
       .map((filePath) => relative(process.cwd(), filePath).replaceAll('\\', '/'))
       .filter((filePath) => !hasIntegrationFileName(filePath) && !explicitlyClassified.has(filePath))
       .sort();

@@ -1,12 +1,7 @@
 /**
  * Quality gate override application logic
  *
- * Resolves quality gates from config overrides with 3-layer priority:
- * 1. Project .takt/config.yaml workflow_overrides
- * 2. Global ~/.takt/config.yaml workflow_overrides
- * 3. Workflow YAML quality_gates
- *
- * Merge strategy: Additive (config gates + YAML gates)
+ * Combines global, project, and workflow quality gates in execution order.
  */
 
 import * as path from 'node:path';
@@ -45,6 +40,7 @@ function qualityGateDedupeKey(gate: QualityGate): string {
 
   return `command:${JSON.stringify([
     gate.type,
+    gate.runAt ?? null,
     gate.name ?? null,
     gate.command,
     cwd,
@@ -53,19 +49,18 @@ function qualityGateDedupeKey(gate: QualityGate): string {
 }
 
 function dedupeQualityGates(gates: QualityGate[]): QualityGate[] {
-  const seenKeys = new Set<string>();
-  const uniqueGates: QualityGate[] = [];
-
+  const uniqueGates = new Map<string, QualityGate>();
   for (const gate of gates) {
     const key = qualityGateDedupeKey(gate);
-    if (seenKeys.has(key)) {
-      continue;
+    const previous = uniqueGates.get(key);
+    if (previous === undefined) {
+      uniqueGates.set(key, gate);
+    } else if (typeof previous !== 'string' && typeof gate !== 'string'
+      && previous.guidance === undefined && gate.guidance !== undefined) {
+      uniqueGates.set(key, { ...previous, guidance: gate.guidance });
     }
-    seenKeys.add(key);
-    uniqueGates.push(gate);
   }
-
-  return uniqueGates;
+  return [...uniqueGates.values()];
 }
 
 /**
@@ -149,7 +144,7 @@ export function applyQualityGateOverrides(
     gates.push(...projectPersonaGates);
   }
 
-  // Add YAML gates (lowest priority)
+  // Append the workflow gates after the configured gates.
   if (yamlGates) {
     gates.push(...yamlGates);
   }

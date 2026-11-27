@@ -183,6 +183,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const leaderDeadline: WorkflowStepInactivityDeadline = {
       signal: leaderAbortController.signal,
       recordActivity: vi.fn(),
+      runWithoutInactivityTimeout: (operation) => operation(),
       dispose: vi.fn(),
       inactivityTimeoutMs: 60_000,
     };
@@ -192,6 +193,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         : {
             signal: new AbortController().signal,
             recordActivity: vi.fn(),
+            runWithoutInactivityTimeout: <T>(operation: () => Promise<T>) => operation(),
             dispose: vi.fn(),
             inactivityTimeoutMs: 60_000,
           }),
@@ -437,6 +439,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const selectorDeadline: WorkflowStepInactivityDeadline = {
       signal: selectorAbortController.signal,
       recordActivity: vi.fn(),
+      runWithoutInactivityTimeout: (operation) => operation(),
       dispose: vi.fn(),
       inactivityTimeoutMs: 1,
     };
@@ -500,6 +503,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const leaderDeadline: WorkflowStepInactivityDeadline = {
       signal: leaderAbortController.signal,
       recordActivity: vi.fn(),
+      runWithoutInactivityTimeout: (operation) => operation(),
       dispose: vi.fn(),
       inactivityTimeoutMs: 60_000,
     };

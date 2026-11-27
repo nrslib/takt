@@ -13,7 +13,7 @@ The term light IT refers to tests run by `npm run test:it`, and heavy IT refers 
 | Confirm completion with light IT | Run the light IT gate when implementation is complete |
 | Self-verify changed heavy IT | The owner runs every added or changed heavy IT test as a target with `npm test -- <test-file>` |
 | Do not run unrelated heavy IT | Do not run heavy IT other than tests added or changed, or tests that directly verify the current change. Run permitted tests as targets with `npm test -- <test-file>` |
-| Verify the classification contract directly | Run the classification contract test by itself after adding or changing an integration test |
+| Verify the classification contract directly | Verify the contract in a standalone run after adding or changing an integration test. Check the Phase 1 instructions for who runs it |
 | Keep full heavy IT in PR / release gates | PR CI and release verification run the complete heavy IT suite, including unchanged coverage |
 | Do not run the full heavy IT suite locally | Local execution of the full heavy IT suite (`npm run test:it:heavy`) is REJECT. Run it only when explicitly instructed by the user |
 | Do not delegate first execution to PR | The PR gate does not replace targeted execution of a changed heavy IT test |
@@ -44,7 +44,7 @@ Repeat the unit gate during implementation and run the light IT gate once the im
 | heavy IT test added or changed | Standalone classification contract test and targeted execution of the changed heavy IT test |
 | Classification or runner changed | Unit, light IT, and heavy IT exclusivity and routing contracts |
 
-After adding or changing an integration test, run the classification contract test by itself without waiting for a full gate.
+After adding or changing an integration test, verify the classification contract in a standalone run. If Phase 1 explicitly assigns this check to TAKT, its gate runs it after the work. Otherwise, run the following command by itself.
 
 ```bash
 npm test -- src/__tests__/releaseVerificationWiring.test.ts

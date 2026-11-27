@@ -13,6 +13,8 @@ TAKTの実装・修正中は、変更した契約を直接確認するテスト�
 | 追加・変更した、または変更契約を直接検証する heavy IT | `npm test -- <test-file>` |
 | IT追加・変更時の分類契約 | `npm test -- src/__tests__/releaseVerificationWiring.test.ts` |
 
+Phase 1 の案内で分類確認を TAKT が担当すると明示されている場合は、作業後に TAKT が分類契約を単体実行する。
+
 同じ範囲を複数のコマンドで重複確認しない。変更に直接関係するtestがgateにも含まれる場合、実装中の反復確認は対象test、完了確認はgateとして役割を分ける。
 
 ユーザーが明示的に指示した場合を除き、heavy IT の全件（`npm run test:it:heavy`）をローカルで実行してはならない。追加・変更した heavy IT、または変更契約を直接検証する heavy IT だけを `npm test -- <test-file>` で対象指定して実行する。全件確認はCIのPR gate、release gateで実行されるため、実装・修正担当者は自動的に追加しない。

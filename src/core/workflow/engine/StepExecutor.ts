@@ -153,6 +153,8 @@ import {
   savePhase1ExecutionLog,
   type Phase1ExecutionLogReference,
 } from '../phase1-execution-log.js';
+import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
+import type { CommandQualityGateEvidence, RunQualityGatesOptions } from '../quality-gates/types.js';
 
 const log = createLogger('step-executor');
 
@@ -236,6 +238,7 @@ export interface StepExecutorDeps {
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   readonly abortSignal?: AbortSignal;
   readonly getAbortSignal?: () => AbortSignal | undefined;
+  readonly runWithoutInactivityTimeout?: RunQualityGatesOptions['runWithoutInactivityTimeout'];
   readonly executionProvider: WorkflowEngineOptions['provider'];
   readonly executionModel: WorkflowEngineOptions['model'];
   readonly internalAgentSeats?: import('../../models/config-types.js').InternalAgentSeats;
@@ -1549,6 +1552,7 @@ export class StepExecutor {
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
     transaction?: InstructionBuildTransaction,
+    parallelRetry?: { readonly gateFailure?: AgentResponse },
   ): PreparedStepInstruction {
     const suppressPreviousResponse = state.pendingFallback !== undefined
       && (state.lastOutput?.status === 'error' || state.lastOutput?.status === 'rate_limited');
@@ -1556,6 +1560,10 @@ export class StepExecutor {
     if (includePreviousResponse) {
       this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
     }
+    const previousOutput = includePreviousResponse ? getPreviousOutput(state) : undefined;
+    const parallelGateFailure = parallelRetry?.gateFailure;
+    const usePreviousOutput = parallelGateFailure === undefined
+      && (parallelRetry === undefined || previousOutput?.beforeReportGateFailed !== true);
     const policySnapshot = this.writeFacetSnapshot(
       'policy',
       step.name,
@@ -1616,7 +1624,7 @@ export class StepExecutor {
       cwd: this.deps.getCwd(),
       projectCwd: this.deps.getProjectCwd(),
       userInputs: state.userInputs,
-      previousOutput: includePreviousResponse ? getPreviousOutput(state) : undefined,
+      previousOutput: usePreviousOutput ? previousOutput : parallelGateFailure,
       reportDir,
       reportsRootDir,
       resumeReportConsumerKey,
@@ -1639,7 +1647,7 @@ export class StepExecutor {
         ? knowledgeSnapshot.content.map((content) => ({ content, sourcePath: knowledgeSnapshot.sourcePath }))
         : step.knowledgeContents,
       knowledgeSourcePath: knowledgeSnapshot?.sourcePath,
-      previousResponseSourcePath: includePreviousResponse
+      previousResponseSourcePath: includePreviousResponse && usePreviousOutput
         ? state.previousResponseSourcePath
         : undefined,
       fallbackContext,
@@ -1704,6 +1712,7 @@ export class StepExecutor {
     reportInputs?: Phase1ReportInputs,
     onReportWritten?: (reportName: string) => void,
     phase1ExecutionLog?: Phase1ExecutionLogReference,
+    beforeReportGateEvidence?: readonly CommandQualityGateEvidence[],
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1751,6 +1760,7 @@ export class StepExecutor {
             injectedReports,
             reportInputs,
             phase1ExecutionLog,
+            beforeReportGateEvidence,
           },
           (reportName) => {
             writtenReports.add(reportName);
@@ -2502,6 +2512,41 @@ export class StepExecutor {
     }
 
     let terminalOperation: StepRunResult['terminalOperation'];
+    const runBeforeReportGates = () => runQualityGates({
+      qualityGates: response.status === 'done' ? step.qualityGates : undefined,
+      runAt: 'before_report',
+      projectRoot: this.deps.getCwd(),
+      step,
+      childProcessEnv: baseAgentOptions.childProcessEnv,
+      signal: this.resolveAbortSignal(),
+      runWithoutInactivityTimeout: this.deps.runWithoutInactivityTimeout,
+      observabilityEnabled: this.deps.observabilityEnabled?.() === true,
+      runId: this.deps.getObservabilityRunId?.(),
+      workflowName: this.deps.getWorkflowName(),
+    });
+    let beforeReportGates = await runBeforeReportGates();
+    while (beforeReportGates.ok && beforeReportGates.evidence !== undefined) {
+      const followUp = await drainLiveIntervention(response);
+      if (followUp.kind !== 'live_intervention') break;
+      response = followUp.response;
+      if (response.status === 'error' || response.status === 'rate_limited' || response.status === 'blocked') {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        if (response.status === 'blocked') {
+          this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
+        }
+        return { response, instruction: phase1Instruction, providerInfo };
+      }
+      beforeReportGates = await runBeforeReportGates();
+    }
+    if (!beforeReportGates.ok) {
+      return {
+        response: beforeReportGates.response,
+        instruction: phase1Instruction,
+        providerInfo,
+        qualityGateFailure: { response: beforeReportGates.response, stepIteration },
+      };
+    }
     const writtenReportNames: string[] = [];
     try {
       response = await this.applyPostExecutionPhases(
@@ -2522,6 +2567,7 @@ export class StepExecutor {
         phase1ExecutionLog === undefined
           ? undefined
           : await this.savePhase1ExecutionLog(phase1ExecutionLog, step.name, stepIteration),
+        beforeReportGates.evidence,
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {

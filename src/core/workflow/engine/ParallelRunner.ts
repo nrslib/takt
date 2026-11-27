@@ -45,7 +45,8 @@ import {
 } from '../live-intervention/delivery.js';
 import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
 import { buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
-import type { QualityGateRunResult } from '../quality-gates/types.js';
+import type { QualityGateRunResult, RunQualityGatesOptions } from '../quality-gates/types.js';
+import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { truncateUtf8PreservingMarker } from '../../../shared/utils/text.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
@@ -278,6 +279,7 @@ export interface ParallelRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getAbortSignal?: () => AbortSignal | undefined;
+  readonly runWithoutInactivityTimeout?: RunQualityGatesOptions['runWithoutInactivityTimeout'];
   readonly getCwd: () => string;
   readonly dynamicParallelSelector: DynamicParallelSelectorCoordinator;
   readonly getWorkflowName: () => string;
@@ -369,6 +371,12 @@ export class ParallelRunner {
     const attemptState = captureParallelAttemptState(state);
     // Progress notes identity and the active retry request outlive rolled-back parallel attempts.
     const progressNotesRequests = new Map<string, ParallelProgressNotesRequest>();
+    const lastOutput = state.lastOutput;
+    const previousFailures = state.currentStep === step.name && lastOutput?.persona === step.name
+      ? lastOutput.parallelBeforeReportGateFailures
+      : undefined;
+    // A confirmed failure remains pending across live restarts until its child receives it.
+    const pendingGateFailures = new Map(previousFailures?.map((failure) => [failure.persona, failure]));
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
       restoreParallelAttemptState(state, attemptState);
@@ -403,6 +411,7 @@ export class ParallelRunner {
           updatePersonaSession,
           invalidatedSessions,
           progressNotesRequests,
+          pendingGateFailures,
           runtime,
           activeStepIteration,
           executionDeadlineContext,
@@ -453,6 +462,7 @@ export class ParallelRunner {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     invalidatedSessions: Map<string, string>,
     progressNotesRequests: Map<string, ParallelProgressNotesRequest>,
+    pendingGateFailures: Map<string, AgentResponse>,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
     executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
@@ -758,6 +768,7 @@ export class ParallelRunner {
             throw new Error(`Prepared parallel sub-step is missing for "${subStep.name}"`);
           }
           const { executableSubStep, subIteration } = preparedSubStep;
+          const gateFailure = pendingGateFailures.get(subStep.name);
           const subInstruction = this.deps.stepExecutor.prepareInstruction(
             step.inputReports === undefined || executableSubStep.inputReports !== undefined
               ? executableSubStep
@@ -770,6 +781,8 @@ export class ParallelRunner {
               subRuntime,
               reviewerOperationOrigin(subStep.name),
             ),
+            undefined,
+            { gateFailure },
           );
           const phase1Instruction = [subInstruction.text, resolveLiveInterventionPrompt(
             liveIntervention, liveDelivery, this.deps.engineOptions.language,
@@ -854,15 +867,19 @@ export class ParallelRunner {
                 phase1ExecutionLog.markDispatched();
               },
             };
-        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
+        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined && gateFailure === undefined
           ? recordingAgentOptions
           : {
               ...recordingAgentOptions,
               onDispatch: (permissionMode) => {
-                baseOptions.onDispatch?.(permissionMode);
-                liveDeliveryCommitter.onDispatch(permissionMode);
-                reportInputTracker.recordDelivery(liveDelivery);
-                phase1ExecutionLog?.markDispatched();
+                recordingAgentOptions.onDispatch?.(permissionMode);
+                if (gateFailure !== undefined && pendingGateFailures.get(subStep.name) === gateFailure) {
+                  pendingGateFailures.delete(subStep.name);
+                }
+                if (liveDeliveryCommitter !== undefined) {
+                  liveDeliveryCommitter.onDispatch(permissionMode);
+                  reportInputTracker.recordDelivery(liveDelivery);
+                }
               },
             };
         const promptResolvedAttempts = new Set<number>();
@@ -1153,6 +1170,35 @@ export class ParallelRunner {
 
         restartIfLiveInterventionPending();
 
+        const beforeReportGates = await runQualityGates({
+          qualityGates: subStep.qualityGates,
+          runAt: 'before_report',
+          projectRoot: this.deps.getCwd(),
+          step: subStep,
+          childProcessEnv: this.deps.engineOptions.childProcessEnv,
+          signal: this.resolveAbortSignal(),
+          runWithoutInactivityTimeout: this.deps.runWithoutInactivityTimeout,
+          observabilityEnabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
+        });
+        if (!beforeReportGates.ok) {
+          pendingGateFailures.set(subStep.name, beforeReportGates.response);
+          state.stepOutputs.set(subStep.name, beforeReportGates.response);
+          return {
+            subStep,
+            response: beforeReportGates.response,
+            instruction: phase1Instruction,
+            providerInfo: subPm,
+            durationMs: Math.max(0, beforeReportGates.response.timestamp.getTime() - startedAt),
+            qualityGateFailure: true,
+          };
+        }
+        if (beforeReportGates.evidence !== undefined) {
+          pendingGateFailures.delete(subStep.name);
+        }
+        restartIfLiveInterventionPending();
+
         let finalResponse = subResponse;
         const basePhaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
             subStep,
@@ -1191,6 +1237,7 @@ export class ParallelRunner {
                 lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
+                beforeReportGateEvidence: beforeReportGates.evidence,
                 phase1ExecutionLog: phase1ExecutionLog === undefined
                   ? undefined
                   : await this.deps.stepExecutor.savePhase1ExecutionLog(
@@ -1361,7 +1408,7 @@ export class ParallelRunner {
         };
             },
           );
-          completed = result.response.status === 'done';
+          completed = result.response.status === 'done' && result.response.beforeReportGateFailed !== true;
           return result;
         } finally {
           if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
@@ -1582,6 +1629,7 @@ export class ParallelRunner {
     ));
     const retryCount = sumRetryCounts(subResults.map((result) => result.response));
     if (qualityGateFailure) {
+      const parallelBeforeReportGateFailures = this.collectBeforeReportGateFailures(subResults);
       const failureResponse: AgentResponse = {
         persona: step.name,
         status: 'done',
@@ -1591,6 +1639,8 @@ export class ParallelRunner {
           qualityGateFailure.response.content,
         ].join('\n'),
         timestamp: new Date(),
+        ...(qualityGateFailure.response.beforeReportGateFailed === true ? { beforeReportGateFailed: true } : {}),
+        ...(parallelBeforeReportGateFailures === undefined ? {} : { parallelBeforeReportGateFailures }),
         ...(retryCount === undefined ? {} : { retryCount }),
       };
       return {
@@ -1938,6 +1988,13 @@ export class ParallelRunner {
     return options;
   }
 
+  private collectBeforeReportGateFailures(subResults: readonly ParallelSubStepResult[]): readonly AgentResponse[] | undefined {
+    const failures = subResults
+      .map(({ response }) => response)
+      .filter((response) => response.beforeReportGateFailed === true);
+    return failures.length > 0 ? failures : undefined;
+  }
+
   private createTerminalParentResult(options: {
     step: WorkflowStep;
     state: WorkflowState;
@@ -1966,6 +2023,7 @@ export class ParallelRunner {
       MAX_AGENT_FAILURE_MESSAGE_BYTES,
     );
     const retryCount = sumRetryCounts(options.subResults.map((result) => result.response));
+    const parallelBeforeReportGateFailures = this.collectBeforeReportGateFailures(options.subResults);
     const response: AgentResponse = {
       persona: options.step.name,
       status: options.status,
@@ -1976,6 +2034,7 @@ export class ParallelRunner {
         : {}),
       ...(failureCategory && { failureCategory }),
       ...(retryCount === undefined ? {} : { retryCount }),
+      ...(parallelBeforeReportGateFailures === undefined ? {} : { parallelBeforeReportGateFailures }),
       ...(options.status === 'rate_limited'
         ? {
             ...(primaryFailure.response.errorKind === undefined

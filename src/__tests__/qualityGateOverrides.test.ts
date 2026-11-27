@@ -378,6 +378,21 @@ describe('applyQualityGateOverrides', () => {
       expect(result).toEqual([globalCommandGate]);
     });
 
+    it('keeps the first available guidance while executing identical checks once', () => {
+      const gate = { type: 'command', runAt: 'before_report', command: 'npm run check' } as const;
+      const projectGate = { ...gate, guidance: 'Inspect the generated fixtures' };
+      const result = applyOverrides(
+        'implement',
+        [{ ...gate, guidance: 'Consult the worktree log' }],
+        true,
+        undefined,
+        { qualityGates: [projectGate] },
+        { qualityGates: [gate] },
+      );
+
+      expect(result).toEqual([projectGate]);
+    });
+
     it('keeps command gates with different command values', () => {
       const lintGate = {
         type: 'command',

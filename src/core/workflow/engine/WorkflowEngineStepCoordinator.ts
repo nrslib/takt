@@ -424,7 +424,9 @@ export class WorkflowEngineStepCoordinator {
           parallelParentStepName,
         );
       }
-      completed = result.response.status === 'done';
+      completed = result.response.status === 'done'
+        && result.response.beforeReportGateFailed !== true
+        && result.response.parallelBeforeReportGateFailures === undefined;
       return result;
     } finally {
       this.deps.persistResults?.();

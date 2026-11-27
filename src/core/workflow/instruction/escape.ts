@@ -75,7 +75,7 @@ export function prepareTemplatePlaceholders(
   result = result.replace(/\{step_iteration\}/g, String(context.stepIteration));
 
   // Replace {previous_response}
-  if (step.passPreviousResponse) {
+  if (step.passPreviousResponse || context.previousOutput?.beforeReportGateFailed) {
     if (context.previousResponseText !== undefined) {
       result = result.replace(
         /\{previous_response\}/g,
