@@ -61,7 +61,6 @@ export function buildAbortSignal(
 export interface InactivityAbortSignal {
   readonly signal: AbortSignal;
   readonly recordActivity: ProviderActivityCallback;
-  readonly runWithoutInactivityTimeout: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly dispose: () => void;
 }
 
@@ -76,8 +75,6 @@ export function buildInactivityAbortSignal(
     readonly startedAt: number;
   }>();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let pauses = 0;
-  let disposed = false;
   const abortForInactivity = (): void => {
     timeoutController.abort(new Error(createPartTimeoutReason(inactivityTimeoutMs)));
   };
@@ -86,7 +83,6 @@ export function buildInactivityAbortSignal(
     timeoutId = setTimeout(abortForInactivity, Math.max(0, deadlineAt - Date.now()));
   };
   const armTimeout = (): void => {
-    if (pauses > 0 || disposed || timeoutController.signal.aborted) return;
     const earliestToolStart = inFlightTools.size === 0
       ? undefined
       : Math.min(...[...inFlightTools.values()].map(({ startedAt }) => startedAt));
@@ -142,22 +138,7 @@ export function buildInactivityAbortSignal(
       applyActivity(activity);
       armTimeout();
     },
-    runWithoutInactivityTimeout: async (operation) => {
-      timeoutController.signal.throwIfAborted();
-      pauses++;
-      clearTimeout(timeoutId);
-      try {
-        return await operation();
-      } finally {
-        pauses--;
-        if (pauses === 0) {
-          inFlightTools.clear();
-          armTimeout();
-        }
-      }
-    },
     dispose: () => {
-      disposed = true;
       if (timeoutId !== undefined) clearTimeout(timeoutId);
       inFlightTools.clear();
       if (parentSignal && abortListener) {

@@ -18,7 +18,6 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type { InjectedReport, Phase1ReportInputs } from './prepared-instruction.js';
 import type { Phase1ExecutionLogReference } from '../phase1-execution-log.js';
-import type { CommandQualityGateEvidence } from '../quality-gates/types.js';
 
 /**
  * Context for building report phase instruction.
@@ -44,7 +43,6 @@ export interface ReportInstructionContext {
   lastResponse?: string;
   /** Engine-managed reference to evidence from the current Phase 1 execution. */
   phase1ExecutionLog?: Phase1ExecutionLogReference;
-  beforeReportGateEvidence?: readonly CommandQualityGateEvidence[];
   /** Advisory diagnostics emitted by the reviewer completion check. */
   completionRetryDiagnostic?: string;
   /** Engine-computed changed file set for `{review_scope}` in output contracts. */
@@ -143,8 +141,6 @@ export class ReportInstructionBuilder {
       hasPhase1ExecutionLog: this.context.phase1ExecutionLog !== undefined,
       phase1ExecutionLogPath: this.context.phase1ExecutionLog?.path ?? '',
       phase1ExecutionLogBytes: String(this.context.phase1ExecutionLog?.byteSize ?? 0),
-      hasBeforeReportGateEvidence: (this.context.beforeReportGateEvidence?.length ?? 0) > 0,
-      beforeReportGateEvidence: JSON.stringify(this.context.beforeReportGateEvidence ?? []),
       hasCompletionRetryDiagnostic:
         this.context.completionRetryDiagnostic !== undefined,
       completionRetryDiagnostic: this.context.completionRetryDiagnostic ?? '',

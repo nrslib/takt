@@ -53,18 +53,10 @@ function storedText(directory: string): string {
   }).join('\n');
 }
 
-function filesContaining(directory: string, value: string, taskQueueLockPath?: string): string[] {
+function filesContaining(directory: string, value: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.name !== '.git').flatMap((entry) => {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) return filesContaining(path, value, taskQueueLockPath);
-    if (!entry.isFile()) return [];
-    try {
-      return readFileSync(path, 'utf8').includes(value) ? [path] : [];
-    } catch (error) {
-      // TaskStore releases this lock by unlinking it; the file only holds process identity.
-      if (path === taskQueueLockPath && privateFile.hasCode(error, 'ENOENT')) return [];
-      throw error;
-    }
+    return entry.isDirectory() ? filesContaining(path, value) : entry.isFile() && readFileSync(path, 'utf8').includes(value) ? [path] : [];
   });
 }
 
@@ -743,7 +735,7 @@ isolatedWorkerTest('delivers daemon credentials only to each concurrent task and
     expect(worker.parent()).toMatchObject({ openai: hash('worker-env-value'), git: null });
     for (const value of ['first-distributed-api-value', 'second-distributed-api-value', 'distributed-git-value', 'distributed-gh-value', f.registered.token]) {
       expect(filesContaining(worker.config, value)).toEqual([]);
-      expect(filesContaining(f.directory, value, `${f.store.getTasksFilePath()}.lock`)).toEqual([]);
+      expect(filesContaining(f.directory, value)).toEqual([]);
       for (const call of worker.calls()) expect(filesContaining(call.cwd as string, value)).toEqual([]);
     }
     for (const call of worker.calls()) {
@@ -815,7 +807,7 @@ isolatedWorkerTest.each(['distributed-provider-error-value', 'z', 'xy', 'abc'])(
       expect(JSON.stringify(task.completion).includes(secret + '123')).toBe(false);
       if (secret.length > 3) {
         expect(filesContaining(worker.config, secret)).toEqual([]);
-        expect(filesContaining(f.directory, secret, `${f.store.getTasksFilePath()}.lock`)).toEqual([]);
+        expect(filesContaining(f.directory, secret)).toEqual([]);
         expect(worker.output().includes(secret)).toBe(false);
       }
     } finally { await f.close(); vi.unstubAllEnvs(); }

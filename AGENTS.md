@@ -17,7 +17,7 @@
 - `npm test`: run the fast unit gate in an adaptive number of concurrent shards during development (based on available parallelism, capped at 8). Integration tests are excluded; targeted source tests are routed to their classified runner.
 - `npm run test:it`: run the light integration gate after implementation. It covers real filesystem, bounded storage, and multi-component contracts.
 - `npm run test:it:heavy`: run all child-process, Git, full-engine, and measured resource-heavy integration tests. GitHub Actions pull requests run this gate with one worker per runner and isolated job-level shards. Test-file arguments are required for local Heavy IT by default. Set `TAKT_ALLOW_FULL_HEAVY_IT=1` only when a person explicitly requests a full Heavy IT run. This also applies to the Heavy IT group commands, `test:it:all`, and `check:release`.
-- `npm test -- <test-file>`: run a classified test through its unit, light-IT, or heavy-IT runner. When adding or changing an IT, the classification contract must also run by itself. If Phase 1 explicitly lists it as a TAKT completion check, TAKT runs it after the work. Otherwise run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. Always run an added or changed heavy IT as a targeted test before handoff. The PR-wide heavy gate is not its first execution.
+- `npm test -- <test-file>`: run a classified test through its unit, light-IT, or heavy-IT runner. When adding or changing an IT, also run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. Always run an added or changed heavy IT before handoff; the PR-wide heavy gate is not its first execution.
 - `npm run test:e2e:smoke`: run the focused mock E2E suite during development.
 - `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run check:release`: run the full release verification path locally after an explicit request. It runs dependency sync (`sync:nix-deps`, which rewrites `package-lock.json` / `flake.nix` and reinstalls), build, packed global install with npm 10, 11, and 12 (`test:global-install`), lint, fast unit (adaptive local shards), light IT, Heavy IT, and all E2E suites. The 8-runner unit matrix is a separate path in the main pull-request CI workflow.
 
@@ -27,7 +27,7 @@ This project uses TypeScript ESM on Node `>=22.22.0`. Use 2-space indentation an
 
 ## Testing Guidelines
 
-Use Vitest for unit, integration, and E2E coverage. Add or update tests for behavior changes. Keep test names explicit, for example `should reject removed legacy workflow alias`. Run `npm test` during development and `npm run test:it` when implementation is complete. Follow the standalone classification check and targeted heavy IT requirements above. Use `npm run test:e2e:smoke` for E2E verification during development.
+Use Vitest for unit, integration, and E2E coverage. Add or update tests for behavior changes. Keep test names explicit, for example `should reject removed legacy workflow alias`. Run `npm test` during development and `npm run test:it` when implementation is complete. Run the classification contract by itself after adding or changing an IT, and run every added or changed heavy IT as a targeted test. Use `npm run test:e2e:smoke` for E2E verification during development.
 
 ## Commit & Pull Request Guidelines
 

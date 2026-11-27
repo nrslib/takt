@@ -21,12 +21,8 @@ function maskKnownPaths(text: string, projectRoot: string): string {
     .replaceAll(homeDir, '<home>');
 }
 
-export function sanitizeCommandGatePromptText(text: string, projectRoot: string): string {
-  return sanitizeSensitiveText(maskKnownPaths(text, projectRoot));
-}
-
 function sanitizeForFeedback(text: string, projectRoot: string): string {
-  return truncateForFeedback(sanitizeCommandGatePromptText(text, projectRoot));
+  return truncateForFeedback(sanitizeSensitiveText(maskKnownPaths(text, projectRoot)));
 }
 
 function formatCwd(failure: CommandQualityGateFailure): string {
@@ -72,7 +68,7 @@ export function formatCommandGateFailure(failure: CommandQualityGateFailure): st
   if (failure.timedOut) {
     lines.push(`Timeout: ${failure.timeoutMs}ms`);
   } else {
-    lines.push(`Exit code: ${failure.exitCode ?? 'unavailable'}`);
+    lines.push(`Exit code: ${failure.exitCode}`);
   }
   if (failure.outputLimitExceeded) {
     lines.push(`Output truncated: exceeded ${failure.outputLimitBytes} bytes`);

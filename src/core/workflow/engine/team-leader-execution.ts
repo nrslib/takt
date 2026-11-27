@@ -10,7 +10,6 @@ import {
   type TeamLeaderExecutionPublicationFence,
 } from './team-leader-execution-terminal.js';
 import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
-import type { QualityGateRunResult } from '../quality-gates/types.js';
 
 type DeepReadonly<T> = T extends object
   ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
@@ -65,9 +64,6 @@ export interface TeamLeaderExecutionOptions {
   onExecutionTerminal?: (
     args: TeamLeaderExecutionTerminalArgs,
   ) => Promise<MorePartsResponse | undefined>;
-  runBeforeReportGates?: (
-    partResults: readonly DeepReadonly<PartResult>[],
-  ) => Promise<QualityGateRunResult | undefined>;
 }
 
 interface RunningPart {
@@ -93,7 +89,6 @@ type PartSettlement = CompletedPartSettlement | CancelledPartSettlement;
 export interface TeamLeaderExecutionResult {
   plannedParts: PartDefinition[];
   partResults: PartResult[];
-  beforeReportGateResult?: QualityGateRunResult;
 }
 
 export async function runTeamLeaderExecution(
@@ -114,7 +109,6 @@ export async function runTeamLeaderExecution(
   let latestBatchStart = 0;
   let executionTerminalRequested = false;
   let pendingTerminalFeedback: MorePartsResponse | undefined;
-  let beforeReportGateResult: QualityGateRunResult | undefined;
   const resumedInstructionIds = new Set<number>();
   const resumeForLiveIntervention = (): boolean => {
     const pendingIds = options.getPendingLiveInterventionIds?.() ?? [];
@@ -394,28 +388,6 @@ export async function runTeamLeaderExecution(
     }
   };
 
-  const reviewAfterPlanningFailure = async (): Promise<void> => {
-    if (!completionReviewAfterPlanningFailure || options.reviewCompletion === undefined) return;
-    completionReviewAfterPlanningFailure = false;
-    const reviewAbortScope = createAbortScope(options.abortSignal);
-    try {
-      const findings = await options.reviewCompletion({
-        partResults: structuredClone(partResults),
-        latestBatchResults: structuredClone(partResults.slice(latestBatchStart)),
-        completedPartResults: structuredClone(partResults.slice(0, latestBatchStart)),
-        plannedParts: structuredClone(plannedParts),
-        scheduledIds: [...scheduledIds],
-        cancellablePartIds: cancellablePartIds(),
-        abortSignal: reviewAbortScope.signal,
-      });
-      if (findings.length > 0) {
-        options.onCompletionPlanningFailure?.(planningFailure);
-      }
-    } finally {
-      reviewAbortScope.dispose();
-    }
-  };
-
   try {
     const initialFeedback = await options.beforeInitialPartExecution?.();
     if (initialFeedback !== undefined) {
@@ -450,7 +422,6 @@ export async function runTeamLeaderExecution(
       || running.size > 0
       || !leaderDone
       || (options.onExecutionTerminal !== undefined && !executionTerminalRequested)
-      || options.runBeforeReportGates !== undefined
     ) {
       while (queue.length > 0 && running.size < options.maxConcurrency) {
         terminalGate.assertRunning('part.dequeue');
@@ -520,30 +491,27 @@ export async function runTeamLeaderExecution(
         if (resumeForLiveIntervention()) {
           continue;
         }
-        if (options.onExecutionTerminal !== undefined && !executionTerminalRequested) {
-          executionTerminalRequested = true;
-          const continuation = await options.onExecutionTerminal({
-            partResults: structuredClone(partResults),
-            plannedParts: structuredClone(plannedParts),
-            scheduledIds: [...scheduledIds],
-          });
-          // A terminal error raised during the callback supersedes its result.
-          options.abortSignal?.throwIfAborted();
-          terminalGate.assertRunning('feedback.execution_terminal');
-          if (continuation !== undefined) {
-            applyTerminalContinuation(continuation);
-          }
-          if (queue.length > 0 || resumeForLiveIntervention()) {
-            continue;
-          }
+        if (options.onExecutionTerminal === undefined || executionTerminalRequested) {
+          break;
         }
-        if (options.runBeforeReportGates !== undefined) {
-          await reviewAfterPlanningFailure();
-          if (resumeForLiveIntervention()) continue;
-          beforeReportGateResult = await options.runBeforeReportGates(structuredClone(partResults));
-          options.abortSignal?.throwIfAborted();
-          terminalGate.assertRunning('before_report');
-          if (beforeReportGateResult?.ok !== false && resumeForLiveIntervention()) continue;
+        executionTerminalRequested = true;
+        const continuation = await options.onExecutionTerminal({
+          partResults: structuredClone(partResults),
+          plannedParts: structuredClone(plannedParts),
+          scheduledIds: [...scheduledIds],
+        });
+        // The callback awaited a provider: an abort or a latched terminal error
+        // raised meanwhile must end the run even when nothing is continued.
+        options.abortSignal?.throwIfAborted();
+        terminalGate.assertRunning('feedback.execution_terminal');
+        if (continuation !== undefined) {
+          applyTerminalContinuation(continuation);
+        }
+        if (queue.length > 0 || running.size > 0 || !leaderDone) {
+          continue;
+        }
+        if (resumeForLiveIntervention()) {
+          continue;
         }
         break;
       }
@@ -559,11 +527,28 @@ export async function runTeamLeaderExecution(
     throw terminalError;
   }
 
-  await reviewAfterPlanningFailure();
+  if (completionReviewAfterPlanningFailure && options.reviewCompletion !== undefined) {
+    const reviewAbortScope = createAbortScope(options.abortSignal);
+    try {
+      const findings = await options.reviewCompletion({
+        partResults: structuredClone(partResults),
+        latestBatchResults: structuredClone(partResults.slice(latestBatchStart)),
+        completedPartResults: structuredClone(partResults.slice(0, latestBatchStart)),
+        plannedParts: structuredClone(plannedParts),
+        scheduledIds: [...scheduledIds],
+        cancellablePartIds: cancellablePartIds(),
+        abortSignal: reviewAbortScope.signal,
+      });
+      if (findings.length > 0) {
+        options.onCompletionPlanningFailure?.(planningFailure);
+      }
+    } finally {
+      reviewAbortScope.dispose();
+    }
+  }
 
   return {
     plannedParts,
     partResults,
-    ...(beforeReportGateResult === undefined ? {} : { beforeReportGateResult }),
   };
 }

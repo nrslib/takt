@@ -86,9 +86,7 @@ steps:
       - "Review the implementation before finishing" # AI 指令
       - type: command                # 机器执行的命令 gate
         name: quality-check
-        run_at: before_report        # 在工作结束后、生成报告前执行
         command: "./.takt/quality-gates/check.sh"
-        guidance: "检查失败时查看生成的测试夹具"
         cwd: "."
         timeout_ms: 300000
 ```
@@ -185,10 +183,6 @@ steps:
 
 对象字段深合并；`parallel` 等数组整体替换。名称按调用方 `name` → fragment `name` → `uses` 最终名称解析。fragment 可以引用其他 fragment，但循环引用会失败。裸名称按项目、全局、所选语言 builtin 的 `steps/` 查找；`@owner/repo/name` 显式选择 repertoire package。最多展开 64 层、总计 512 个引用；每个 fragment 必须是可读的普通文件且不超过 1 MiB。绝对路径、遍历、符号链接逃逸、不可读文件、循环引用和未知引用都是配置错误。
 
-`type: command` 的质量门禁可设置 `run_at: before_report`，在工作阶段（Phase 1）结束后、生成报告和判定前执行。失败时，TAKT 会将退出码等诊断信息和可用的私有日志路径交给同一步骤的下一次工作。成功时，执行记录会传给报告阶段。并行步骤请在子步骤中设置。并行父步骤和 arpeggio 步骤不支持此设置。
-
-Phase 1 会列出由 TAKT 在报告前执行的完成检查。工作过程中仍可按需运行有针对性的测试或复现故障。`run_at: before_report` 支持可选的非空白字符串 `guidance`。这段说明会出现在初始提示中，检查失败时还会与该检查的诊断信息一同提供。花括号按原文保留。重复的门禁只运行一次，并按全局配置、项目配置、workflow YAML 的顺序采用首个提供的说明。
-
 ## 可用变量
 
 | 变量 | 说明 |
@@ -260,7 +254,7 @@ rules:
 
 ### `command_gates`
 
-`command_gates` 控制省略 `run_at` 的命令质量门禁。`required` 在规则解析后执行门禁，并仅在通过后应用 transition。`skip` 直接应用选中的 transition。省略时等同于 `required`。设置 `run_at: before_report` 的门禁在选择规则前执行。
+`command_gates` 控制选中规则的 command quality gate。`required` 会在规则和 transition 解析后、应用 transition 前执行该 step 的 command gate，并且只在 gate 成功后应用 transition。`skip` 不执行 command gate，直接应用选中的 transition。省略时等同于 `required`。
 
 ## Step 类型
 
