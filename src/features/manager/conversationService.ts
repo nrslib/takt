@@ -39,6 +39,7 @@ import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
 import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 import { readWatchTasks, type WatchTask } from '../daemon/watchers/state.js';
 import { createLogger } from '../../shared/utils/debug.js';
+import { resolveManagerWorkspaceAccess, managerWorkspaceAccessNotice } from './workspaceAccess.js';
 
 const log = createLogger('manager-conversation-service');
 
@@ -263,6 +264,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               }
             }
             language = resolved.language;
+            const workspaceAccess = resolved.provider === 'opencode' && assignment.kind !== 'daemon'
+              ? resolveManagerWorkspaceAccess(input.turn.conversationId, assignment.repositoryDirectories) : undefined;
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending, configDirectory);
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const question = event.kind === 'inquiry_answered'
@@ -281,6 +284,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
+              ...(workspaceAccess === undefined ? {} : { openCodeWorkspaceAccess: workspaceAccess.access }),
               ...(imageAttachments.length === 0 ? {} : { imageAttachments }),
               requestDaemon: io.request,
               operationId: input.turn.operationId,
@@ -330,7 +334,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               validateGoalBranchReferences(repositoryDirectory, summary.startBranch, summary.integrationBranch);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
-            return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
+            const accessNotice = workspaceAccess === undefined ? '' : managerWorkspaceAccessNotice(
+              assignment.repositoryDirectories, latest.repositoryDirectories, workspaceAccess.missingDirectories, language);
+            return { kind: 'completed', result: { kind: 'reply', message: [output.message, accessNotice].filter(Boolean).join('\n\n') }, ...(patrol ? {} : { change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null,
                 ...(assignment.kind === 'daemon' || state.current.session.imageAttachmentIds === undefined && state.current.session.sessionId !== null ? {}
                   : { imageAttachmentIds: output.sessionId === undefined ? []

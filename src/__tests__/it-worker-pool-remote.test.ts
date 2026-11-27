@@ -56,7 +56,15 @@ function storedText(directory: string): string {
 function filesContaining(directory: string, value: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.name !== '.git').flatMap((entry) => {
     const path = join(directory, entry.name);
-    return entry.isDirectory() ? filesContaining(path, value) : entry.isFile() && readFileSync(path, 'utf8').includes(value) ? [path] : [];
+    if (entry.isDirectory()) return filesContaining(path, value);
+    if (!entry.isFile()) return [];
+    try {
+      return readFileSync(path, 'utf8').includes(value) ? [path] : [];
+    } catch (error) {
+      // The live daemon can remove a lock between listing and reading the file.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
   });
 }
 
@@ -985,7 +993,10 @@ isolatedWorkerTest.each(['requeue', 'retry'] as const)('resumes a failed clone o
     expect(current.executionId).not.toBe(failed.assignment.executionId);
     expect(current.assignmentGeneration).toBe(failed.assignment.assignmentGeneration + 1);
     worker.releaseAll();
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.status, worker.output()).toBe('completed'), { timeout: 20_000 });
+    await vi.waitFor(() => {
+      const task = f.store.read().tasks[0]!;
+      expect(task.status, JSON.stringify({ operation, failure: task.failure, workerOutput: worker.output() })).toBe('completed');
+    }, { timeout: 20_000 });
   } finally { worker.releaseAll(); await f.close(); }
 });
 

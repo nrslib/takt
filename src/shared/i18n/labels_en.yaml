@@ -461,6 +461,9 @@ director:
 manager:
   verifyRepositoryRequired: "Which repository should be verified? Specify the repository, create a proposal with /make-goal, and run /verify again."
   verifyInterpretationFailed: "Could not interpret the verification result. The checker result is shown below. Cause: {error}"
+  workspaceAddedNextTurn: "Added to the workspace: {repositories}. Read and write access is available from the next turn."
+  workspaceMissing: "Registered directories do not exist and were excluded from access for this turn: {repositories}. Their registrations are retained and will be checked again next turn."
+  workspaceAccessTiming: "Workspace read and write access is fixed to the registered repositories at the start of this turn. Repositories added during this turn become available next turn."
   goalPr:
     preparationFailed: "PR preparation failed. Inspect the cause and decide the next operation. Reason: {reason}"
     objective: "Objective"

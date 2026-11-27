@@ -1,5 +1,8 @@
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
@@ -63,6 +66,236 @@ describe('OpenCodeClient shared server', () => {
     streamDiagnostics.splice(0);
     const { resetSharedServer } = await import('../infra/opencode/client.js');
     resetSharedServer();
+  });
+
+  it.each(['v1', 'v2'] as const)('carries every writable workspace directory to %s server and session permissions while reusing canonical sets', async (generation) => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    const runtime = await import('../infra/opencode/runtime.js');
+    const selection = vi.mocked(runtime.openCodeRuntimeSelection).getMockImplementation()!;
+    const resolution = vi.mocked(runtime.resolveOpenCodeRuntime).getMockImplementation()!;
+    vi.mocked(runtime.openCodeRuntimeSelection).mockReturnValue({ generation, command: 'opencode' });
+    vi.mocked(runtime.resolveOpenCodeRuntime).mockResolvedValue({ generation, command: 'opencode', version: generation === 'v1' ? '1.18.2' : '2.0.0' });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-')));
+    const directories = ['b', 'c', 'context'].map((name) => join(root, name));
+    for (const directory of directories) mkdirSync(directory);
+    const [repositoryB, repositoryC, context] = directories as [string, string, string];
+    const alias = join(root, 'b-link');
+    symlinkSync(repositoryB, alias, 'dir');
+    let sequence = 0;
+    const sessionCreate = vi.fn(async (_input: { permission: Array<{ permission: string; pattern: string; action: string }> }) => ({ data: { id: `workspace-${++sequence}` } }));
+    const promptAsync = vi.fn(async (_input: { tools: Record<string, boolean>; workspaceAccess?: { ownerId: string; directories: readonly string[] } }) => {});
+    const close = vi.fn();
+    createOpencodeMock.mockResolvedValue({ client: {
+      requiresExplicitMcpTools: generation === 'v2',
+      session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+      event: { subscribe: vi.fn(async ({ sessionID }: { sessionID: string }) => ({
+        stream: new MockEventStream([sessionIdle(sessionID)], sessionID),
+      })) }, permission: { reply: vi.fn() },
+    }, server: { close } });
+    try {
+      const client = new OpenCodeClient();
+      for (const members of [[repositoryB, repositoryC], [repositoryC, alias, repositoryB]]) {
+        const options = { cwd: root, model: 'probe/model', permissionMode: 'full' as const,
+          externalDirectoryAllowlist: [context], workspaceAccess: { ownerId: 'workspace-manager', directories: members } };
+        expect(await client.call('manager', 'inspect workspace', options)).toMatchObject({ status: 'done' });
+      }
+
+      expect(createOpencodeMock).toHaveBeenCalledOnce();
+      const config = createOpencodeMock.mock.calls[0]![0].config;
+      if (generation === 'v1') expect(config.permission).toEqual({ external_directory: 'ask' });
+      else expect(config.permissions).toEqual([
+        { action: 'external_directory', resource: '*', effect: 'ask' },
+        { action: 'edit', resource: join(context, '*'), effect: 'deny' },
+      ]);
+      expect(sessionCreate).toHaveBeenCalledTimes(2);
+      if (generation === 'v1') for (const [input] of sessionCreate.mock.calls) {
+        expect(input.permission.filter((rule) => rule.permission === 'external_directory')).toEqual([
+          { permission: 'external_directory', pattern: '*', action: 'ask' },
+        ]);
+      }
+      for (const [input] of promptAsync.mock.calls) {
+        expect(input.tools).toMatchObject({ read: true, edit: true, write: true });
+        if (generation === 'v2') {
+          expect(input.workspaceAccess?.ownerId).toBe('workspace-manager');
+          expect([...new Set(input.workspaceAccess?.directories.map((directory) => realpathSync(directory)))].sort())
+            .toEqual([repositoryB, repositoryC].sort());
+        }
+      }
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      resetSharedServer(); rmSync(root, { recursive: true, force: true });
+      vi.mocked(runtime.openCodeRuntimeSelection).mockImplementation(selection);
+      vi.mocked(runtime.resolveOpenCodeRuntime).mockImplementation(resolution);
+    }
+  });
+
+  it('retires changed workspace servers after active turns finish without stopping other managers or workflows', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-retire-')));
+    const repositoryB = join(root, 'b'); const repositoryC = join(root, 'c');
+    mkdirSync(repositoryB); mkdirSync(repositoryC);
+    const blocked = deferred();
+    let started = false;
+    let sequence = 0;
+    const closes: Array<ReturnType<typeof vi.fn>> = [];
+    createOpencodeMock.mockImplementation(async () => {
+      const close = vi.fn(); closes.push(close);
+      return { client: {
+        session: { create: vi.fn(async () => ({ data: { id: `workspace-${++sequence}` } })),
+          promptAsync: vi.fn(async (input: { parts: Array<{ type: string; text?: string }> }) => {
+            if (input.parts.some((part) => part.text === 'active turn')) { started = true; await blocked.promise; }
+          }), abort: successfulSessionAbort() },
+        event: { subscribe: vi.fn(async ({ sessionID }: { sessionID: string }) => ({
+          stream: new MockEventStream([sessionIdle(sessionID)], sessionID),
+        })) }, permission: { reply: vi.fn() },
+      }, server: { close } };
+    });
+    const client = new OpenCodeClient();
+    const base = { cwd: root, model: 'probe/model', permissionMode: 'full' as const };
+    let active: ReturnType<InstanceType<typeof OpenCodeClient>['call']> | undefined;
+    try {
+      expect(await client.call('coder', 'ordinary workflow', base)).toMatchObject({ status: 'done' });
+      const other = { ...base, workspaceAccess: { ownerId: 'other-manager', directories: [repositoryB] } };
+      expect(await client.call('manager', 'other manager', other)).toMatchObject({ status: 'done' });
+      const original = { ...base, workspaceAccess: { ownerId: 'changing-manager', directories: [repositoryB] } };
+      active = client.call('manager', 'active turn', original);
+      await vi.waitFor(() => expect(started).toBe(true));
+
+      const changed = { ...base, workspaceAccess: { ownerId: 'changing-manager', directories: [repositoryC] } };
+      expect(await client.call('manager', 'new registration', changed)).toMatchObject({ status: 'done' });
+      expect(createOpencodeMock).toHaveBeenCalledTimes(4);
+      for (const close of closes) expect(close).not.toHaveBeenCalled();
+
+      blocked.resolve();
+      expect(await active).toMatchObject({ status: 'done' });
+      await vi.waitFor(() => expect(closes[2]).toHaveBeenCalledOnce());
+      for (const index of [0, 1, 3]) expect(closes[index]).not.toHaveBeenCalled();
+      expect(await client.call('manager', 'unchanged registration', changed)).toMatchObject({ status: 'done' });
+      expect(createOpencodeMock).toHaveBeenCalledTimes(4);
+    } finally {
+      blocked.resolve();
+      await active;
+      resetSharedServer(); rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an earlier workspace server retirement failure when the owner closes', async () => {
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers, resetSharedServerPool } = await import('../infra/opencode/server-pool.js');
+    const runtime = await import('../infra/opencode/runtime.js');
+    const selection = vi.mocked(runtime.openCodeRuntimeSelection).getMockImplementation()!;
+    const resolution = vi.mocked(runtime.resolveOpenCodeRuntime).getMockImplementation()!;
+    vi.mocked(runtime.openCodeRuntimeSelection).mockReturnValue({ generation: 'v2', command: 'opencode' });
+    vi.mocked(runtime.resolveOpenCodeRuntime).mockResolvedValue({ generation: 'v2', command: 'opencode', version: '2.0.0' });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-close-failure-')));
+    const repositoryB = join(root, 'b'); const repositoryC = join(root, 'c');
+    mkdirSync(repositoryB); mkdirSync(repositoryC);
+    const closeFailure = new Error('retired workspace server close failed');
+    const closeOld = vi.fn(async () => { throw closeFailure; });
+    const closeCurrent = vi.fn(async () => {});
+    createOpencodeMock
+      .mockResolvedValueOnce({ client: {}, server: { close: closeOld } })
+      .mockResolvedValueOnce({ client: {}, server: { close: closeCurrent } });
+
+    try {
+      const original = await acquireOpenCodeClient(
+        'probe/model', undefined, undefined, undefined, undefined, undefined, false, undefined,
+        undefined, undefined, root, { ownerId: 'close-failure-owner', directories: [repositoryB] },
+      );
+      original.release();
+
+      const current = await acquireOpenCodeClient(
+        'probe/model', undefined, undefined, undefined, undefined, undefined, false, undefined,
+        undefined, undefined, root, { ownerId: 'close-failure-owner', directories: [repositoryC] },
+      );
+      current.release();
+      await vi.waitFor(() => expect(closeOld).toHaveBeenCalledOnce());
+
+      let closeError: unknown;
+      try {
+        await closeOpenCodeWorkspaceServers('close-failure-owner');
+      } catch (error) {
+        closeError = error;
+      }
+      expect(closeError).toBeInstanceOf(AggregateError);
+      expect((closeError as AggregateError).errors).toContain(closeFailure);
+      expect(closeCurrent).toHaveBeenCalledOnce();
+    } finally {
+      resetSharedServerPool();
+      rmSync(root, { recursive: true, force: true });
+      vi.mocked(runtime.openCodeRuntimeSelection).mockImplementation(selection);
+      vi.mocked(runtime.resolveOpenCodeRuntime).mockImplementation(resolution);
+    }
+  });
+
+  it('retains an initializing retired server until its provisional session is handed off and released', async () => {
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await import('../infra/opencode/server-pool.js');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-init-')));
+    const repositoryB = join(root, 'b'); const repositoryC = join(root, 'c');
+    mkdirSync(repositoryB); mkdirSync(repositoryC);
+    const closeOld = vi.fn(); const closeNew = vi.fn();
+    const initializing = deferred<{ client: object; server: { close: typeof closeOld } }>();
+    createOpencodeMock.mockImplementationOnce(() => initializing.promise)
+      .mockResolvedValueOnce({ client: {}, server: { close: closeNew } });
+    const acquire = (directories: string[], session: string) => acquireOpenCodeClient(
+      'probe/model', undefined, undefined, undefined, session, undefined, false, undefined,
+      undefined, undefined, root, { ownerId: 'initializing-manager', directories });
+    const pending = acquire([repositoryB], 'provisional');
+    await vi.waitFor(() => expect(createOpencodeMock).toHaveBeenCalledOnce());
+    let current: Awaited<ReturnType<typeof acquire>> | undefined;
+    let original: Awaited<ReturnType<typeof acquire>> | undefined;
+    let handedOff: Awaited<ReturnType<typeof acquire>> | undefined;
+    try {
+      current = await acquire([repositoryC], 'current');
+      initializing.resolve({ client: {}, server: { close: closeOld } });
+      original = await pending;
+      handedOff = await original.acquireSession('real-session');
+      original.release();
+      expect(closeOld).not.toHaveBeenCalled();
+      expect(handedOff.invalidationSignal.aborted).toBe(false);
+      handedOff.release();
+      await vi.waitFor(() => expect(closeOld).toHaveBeenCalledOnce());
+      expect(closeNew).not.toHaveBeenCalled();
+    } finally {
+      initializing.resolve({ client: {}, server: { close: closeOld } });
+      original ??= await pending;
+      original.release(); handedOff?.release(); current?.release();
+      await closeOpenCodeWorkspaceServers('initializing-manager');
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drains queued workspace acquisitions before closing a retired server', async () => {
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await import('../infra/opencode/server-pool.js');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-opencode-workspace-queue-')));
+    const repositoryB = join(root, 'b'); const repositoryC = join(root, 'c');
+    mkdirSync(repositoryB); mkdirSync(repositoryC);
+    const closeOld = vi.fn(); const closeNew = vi.fn();
+    createOpencodeMock.mockResolvedValueOnce({ client: {}, server: { close: closeOld } })
+      .mockResolvedValueOnce({ client: {}, server: { close: closeNew } });
+    const acquire = (directory: string, session: string) => acquireOpenCodeClient(
+      'probe/model', undefined, undefined, undefined, session, undefined, false, undefined,
+      undefined, undefined, root, { ownerId: 'queued-manager', directories: [directory] });
+    const first = await acquire(repositoryB, 'same-session');
+    const pending = acquire(repositoryB, 'same-session');
+    const current = await acquire(repositoryC, 'new-session');
+    let queued: Awaited<ReturnType<typeof acquire>> | undefined;
+    try {
+      expect(closeOld).not.toHaveBeenCalled();
+      first.release();
+      queued = await pending;
+      expect(queued.invalidationSignal.aborted).toBe(false);
+      expect(closeOld).not.toHaveBeenCalled();
+      const closing = closeOpenCodeWorkspaceServers('queued-manager');
+      queued.release();
+      current.release();
+      await closing;
+      expect(closeOld).toHaveBeenCalledOnce();
+      expect(closeNew).toHaveBeenCalledOnce();
+    } finally {
+      first.release(); queued ??= await pending; queued.release(); current.release();
+      await closeOpenCodeWorkspaceServers('queued-manager');
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('should discard a server invalidated while its error listener is registered', async () => {

@@ -4,8 +4,10 @@ import { deferred } from './helpers/daemon-turn.js';
 import { makeProvider } from './test-helpers.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createHash } from 'node:crypto';
+import { conversationId } from '../infra/conversations/identity.js';
 
-const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), preflight: vi.fn(), dispose: vi.fn(), execute: vi.fn() }));
+const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), preflight: vi.fn(), dispose: vi.fn(), execute: vi.fn(), closeWorkspace: vi.fn() }));
+vi.mock('../infra/opencode/server-pool.js', () => ({ closeOpenCodeWorkspaceServers: doubles.closeWorkspace }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
 vi.mock('../features/manager/managerMcp.js', () => ({ TAKT_MANAGER_MCP_SERVER_NAME: 'takt', connectManagerMcp: doubles.connect }));
 vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: () => ({ execute: doubles.execute }) }));
@@ -26,6 +28,24 @@ it('reuses compatible setup while resolving the current plan for every turn', as
   const first = await runtime.resolve(assignment, signal);
   expect(await runtime.resolve(assignment, signal)).toBe(first);
   expect(doubles.plan).toHaveBeenCalledTimes(2); expect(doubles.connect).toHaveBeenCalledOnce(); expect(doubles.preflight).toHaveBeenCalledOnce();
+});
+
+it('closes owned OpenCode servers on runtime replacement and shutdown', async () => {
+  plan.ctx.providerType = 'opencode';
+  await runtime.resolve(assignment, signal);
+  plan.ctx.model = 'model-B';
+  await runtime.resolve(assignment, signal);
+  expect(doubles.closeWorkspace).toHaveBeenCalledExactlyOnceWith(conversationId(assignment));
+  await runtime.close();
+  expect(doubles.closeWorkspace.mock.calls).toEqual([[conversationId(assignment)], [conversationId(assignment)]]);
+});
+
+it('reports OpenCode server cleanup failure while still disposing MCP', async () => {
+  plan.ctx.providerType = 'opencode';
+  await runtime.resolve(assignment, signal);
+  doubles.closeWorkspace.mockRejectedValueOnce(new Error('server did not stop'));
+  await expect(runtime.close()).rejects.toBeInstanceOf(AggregateError);
+  expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
 it('changes the Codex context key so a stored manager session from the prior contract is not resumed', async () => {

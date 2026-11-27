@@ -461,6 +461,9 @@ director:
 manager:
   verifyRepositoryRequired: "どのリポジトリの仕様を検証しますか？対象を伝えて /make-goal で登録案を作成し、もう一度 /verify を実行してください。"
   verifyInterpretationFailed: "検証結果の説明に失敗しました。検査器の結果を表示します。原因: {error}"
+  workspaceAddedNextTurn: "workspace に追加しました: {repositories}。次のターンから読み取りと書き込みができます。"
+  workspaceMissing: "登録先が存在しないため、このターンの許可対象から除外しました: {repositories}。登録は保持し、次のターンで再確認します。"
+  workspaceAccessTiming: "workspace の読み書き権限はターン開始時の登録一覧に固定されています。このターンで追加したリポジトリは次のターンから使えます。"
   goalPr:
     preparationFailed: "PR の準備に失敗しました。原因を確認し、次の操作を判断してください。原因: {reason}"
     objective: "目的"
