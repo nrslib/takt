@@ -84,4 +84,22 @@ describe('sanitizeSensitiveText performance', () => {
     expect(elapsed(64 * 1024)).toBeLessThan(500);
     expect(elapsed(256 * 1024)).toBeLessThan(2000);
   });
+
+  // Long runs that keep a scheme-like or key-like tail open on every repetition. The times
+  // grow with the input rather than with its square on the `://`-anchored pattern.
+  it.each([
+    ['repeated 1000-letter runs before ://', 'a'.repeat(1000) + '://'],
+    ['repeated sk- prefixed 2000-letter runs', 'sk-' + 'a'.repeat(2000)],
+    ['repeated eyJ- prefixed 4000-letter runs', 'eyJ-' + 'a'.repeat(4000)],
+  ])('stays linear on %s', (_name, unit) => {
+    const elapsed = (bytes: number): number => {
+      const start = performance.now();
+      sanitizeSensitiveText(unit.repeat(Math.ceil(bytes / unit.length)));
+      return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
 });
