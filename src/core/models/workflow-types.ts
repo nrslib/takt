@@ -126,7 +126,9 @@ export type OutputContractEntry = OutputContractItem;
 
 export interface CommandQualityGate {
   type: 'command';
+  runAt?: 'before_report';
   name?: string;
+  guidance?: string;
   command: string;
   cwd?: string;
   timeoutMs?: number;

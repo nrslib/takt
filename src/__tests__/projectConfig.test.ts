@@ -496,6 +496,11 @@ workflow_overrides:
           command: "./.takt/quality-gates/check.sh"
           cwd: "."
           timeout_ms: 300000
+        - type: command
+          name: fixture-check
+          run_at: before_report
+          command: "npm run check:fixtures"
+          guidance: "Inspect {report:fixture.md} on failure"
 `;
       writeFileSync(configPath, configContent, 'utf-8');
 
@@ -509,6 +514,13 @@ workflow_overrides:
           cwd: '.',
           timeoutMs: 300000,
         },
+        {
+          type: 'command',
+          name: 'fixture-check',
+          runAt: 'before_report',
+          command: 'npm run check:fixtures',
+          guidance: 'Inspect {report:fixture.md} on failure',
+        },
       ]);
 
       saveProjectConfig(testDir, loaded);
@@ -516,6 +528,7 @@ workflow_overrides:
       const saved = readFileSync(configPath, 'utf-8');
       expect(saved).toContain('timeout_ms: 300000');
       expect(saved).not.toContain('timeoutMs');
+      expect(saved).toContain('run_at: before_report');
 
       const reloaded = loadProjectConfig(testDir);
       expect(reloaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([
@@ -526,6 +539,13 @@ workflow_overrides:
           command: './.takt/quality-gates/check.sh',
           cwd: '.',
           timeoutMs: 300000,
+        },
+        {
+          type: 'command',
+          name: 'fixture-check',
+          runAt: 'before_report',
+          command: 'npm run check:fixtures',
+          guidance: 'Inspect {report:fixture.md} on failure',
         },
       ]);
     });

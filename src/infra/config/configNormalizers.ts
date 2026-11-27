@@ -113,7 +113,9 @@ function normalizeQualityGate(gate: RawQualityGate): QualityGate {
   }
   return {
     type: gate.type,
+    ...(gate.run_at === undefined ? {} : { runAt: gate.run_at }),
     ...(gate.name !== undefined ? { name: gate.name } : {}),
+    ...(gate.guidance !== undefined ? { guidance: gate.guidance } : {}),
     command: gate.command,
     ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
     ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
@@ -130,7 +132,9 @@ function denormalizeQualityGate(gate: QualityGate): RawQualityGate {
   }
   return {
     type: gate.type,
+    ...(gate.runAt === undefined ? {} : { run_at: gate.runAt }),
     ...(gate.name !== undefined ? { name: gate.name } : {}),
+    ...(gate.guidance !== undefined ? { guidance: gate.guidance } : {}),
     command: gate.command,
     ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
     ...(gate.timeoutMs !== undefined ? { timeout_ms: gate.timeoutMs } : {}),

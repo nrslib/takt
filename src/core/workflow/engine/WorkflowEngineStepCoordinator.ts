@@ -294,6 +294,11 @@ export class WorkflowEngineStepCoordinator {
         executionUnitKey,
         providerInfo,
       ),
+      finish: (executionUnitKey) => {
+        const key = this.stepDeadlineKey(step, stepIteration, executionUnitKey);
+        this.stepDeadlines.get(key)?.dispose();
+        this.stepDeadlines.delete(key);
+      },
       runWith: <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T> => {
         if (this.deps.stepAbortSignalContext === undefined) {
           return operation();
@@ -424,7 +429,9 @@ export class WorkflowEngineStepCoordinator {
           parallelParentStepName,
         );
       }
-      completed = result.response.status === 'done';
+      completed = result.response.status === 'done'
+        && result.response.beforeReportGateFailed !== true
+        && result.response.parallelBeforeReportGateFailures === undefined;
       return result;
     } finally {
       this.deps.persistResults?.();

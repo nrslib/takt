@@ -124,7 +124,7 @@ TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で un
 |------|------|
 | 実装中 | unit gate を反復する |
 | 実装完了時 | unit gate の後に light IT gate を実行する |
-| IT を追加・変更した | 分類契約テスト `releaseVerificationWiring.test.ts` を単体実行する |
+| IT を追加・変更した | 分類契約テスト `releaseVerificationWiring.test.ts` を単体で実行する。Phase 1 の案内で TAKT が担当すると明示されている場合は、作業後に TAKT が実行する |
 | heavy IT を追加・変更した | 変更したファイルを `npm test -- <test-file>` で対象指定し、自分で実行する |
 | PR CI / release の確認 | light IT と heavy IT の全件を実行する |
 

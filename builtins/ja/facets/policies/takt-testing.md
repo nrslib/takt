@@ -13,7 +13,7 @@ light IT は `npm run test:it` で回るテスト、heavy IT は `npm run test:i
 | light IT で完了確認 | 実装完了時に light IT gate を実行する |
 | 変更した heavy IT は自己検証 | 追加・変更した heavy IT は `npm test -- <test-file>` で対象指定し、担当者が実行する |
 | 無関係な heavy IT を実行しない | 追加・変更した heavy IT、または今回の変更を直接検証する heavy IT 以外は実行しない。実行する場合は `npm test -- <test-file>` で対象指定する |
-| 分類契約を個別確認 | IT を追加・変更したら分類契約テストを単体実行する |
+| 分類契約を個別確認 | IT を追加・変更したら分類契約テストを単体で確認する。Phase 1 の案内で担当を確認する |
 | heavy IT の全件は PR / release gate | 変更外を含む heavy IT の全件は PR CI と release の確認で実行する |
 | heavy IT の全件をローカルで実行しない | heavy IT の全件（`npm run test:it:heavy`）のローカル実行は REJECT。ユーザーが明示的に指示した場合だけ実行する |
 | PR へ初回実行を委ねない | PR gate は変更した heavy IT の対象実行を代替しない |
@@ -44,7 +44,7 @@ TAKT ナレッジの unit、light IT、heavy IT、E2E の境界定義を正本�
 | heavy IT を追加・変更 | 分類契約テストの単体実行と、変更した heavy IT の対象実行 |
 | テスト分類・runner を変更 | unit、light IT、heavy IT の排他性と routing 契約 |
 
-IT を追加・変更した場合は、全 gate を待たずに分類契約テストを単体実行する。
+IT を追加・変更した場合は分類契約テストを単体実行する。Phase 1 でこの分類確認を TAKT が担当すると明示されている場合は、作業後のゲートで TAKT が実行する。案内がない場合は担当者が次のコマンドを単体実行する。
 
 ```bash
 npm test -- src/__tests__/releaseVerificationWiring.test.ts

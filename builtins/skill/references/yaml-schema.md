@@ -235,7 +235,7 @@ output_contracts:
 
 ## Quality Gates 定義
 
-Step 完了時の品質 gate を定義する。文字列は AI への指示としてプロンプトに含まれる。`type: command` の object gate は rule condition と transition の解決後、選択された rule の `command_gates` が `required` の場合に transition 適用前に worktree 内で機械実行され、exit code `0` の場合のみ成功する。`command_gates: skip` では実行せず、省略時は `required`。workflow YAML の command gate は config 側の `workflow_command_gates.custom_scripts: true` が必要。失敗時は command metadata / cwd / exit code または timeout・output limit 情報 / 非公開 output log path が同じ step の差し戻し入力に含まれる。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、step への差し戻し入力には含まれない。
+Step 完了時の品質 gate を定義する。文字列は AI への指示としてプロンプトに含まれる。`run_at` を省略した `type: command` の gate は rule condition と transition の解決後、選択された rule の `command_gates` が `required` の場合に transition 適用前に worktree 内で機械実行され、exit code `0` の場合のみ成功する。`command_gates: skip` では実行せず、省略時は `required`。workflow YAML の command gate は config 側の `workflow_command_gates.custom_scripts: true` が必要。失敗時は command metadata / cwd / exit code または timeout・output limit 情報 / 非公開 output log path が同じ step の差し戻し入力に含まれる。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、step への差し戻し入力には含まれない。
 
 ```yaml
 quality_gates:
@@ -244,10 +244,14 @@ quality_gates:
   - ESLint 違反がないこと
   - type: command
     name: quality-check
+    run_at: before_report
     command: "./.takt/quality-gates/check.sh"
+    guidance: "失敗した場合は生成したフィクスチャを確認する"
     cwd: "."
     timeout_ms: 300000
 ```
+
+`run_at: before_report` を指定すると、作業が終わってから報告と判定の前に TAKT がコマンドを実行する。任意の `guidance` は空白以外の文字を含む文字列で、作業開始時と該当ゲートが失敗したときに AI に渡る。波括弧は文字として扱う。
 
 配列内で文字列 gate と command gate を混在できる。command gate が失敗した場合、後続 gate は実行されない。`quality_gates` は agent step 専用で、`system` / `workflow_call` step では指定できない。
 
