@@ -18,7 +18,7 @@ export async function readDaemonConfiguration(path: string) {
   if (bytes === undefined) return config.parse({});
   const document = parseDocument(bytes.toString('utf8'));
   if (document.errors.length > 0) throw document.errors[0];
-  return config.parse(document.toJS({ maxAliasCount: 0 }) as unknown);
+  return config.parse(document.toJS() as unknown);
 }
 
 export function globalDaemonConfiguration(directory: string) {
