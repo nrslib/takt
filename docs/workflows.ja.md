@@ -206,7 +206,7 @@ workflow 全体で nested 展開は64段、参照は512個までで、各 fragme
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、非公開 output log path が同じ agent step の差し戻し入力に含まれます。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、agent feedback には挿入されません。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
-`run_at: before_report` を指定すると、作業フェーズ（Phase 1）の完了後、レポート生成と判定の前にコマンドを実行します。失敗時はレポートを生成せず、終了コードなどの診断情報と利用可能なログの参照を同じステップの次の作業に渡します。成功時は今回の実行記録を保存し、レポート生成の入力に含めます。並列ステップでは各サブステップに指定してください。並列の親ステップと arpeggio ステップでは指定できません。
+`run_at: before_report` を指定すると、作業フェーズ（Phase 1）の完了後、レポート生成と判定の前にコマンドを実行します。失敗時はレポートを生成せず、終了コードなどの診断情報と利用可能なログの参照を同じステップの次の作業に渡します。成功時は今回の実行記録を保存し、レポート生成の入力に含めます。並列ステップでは各サブステップに指定してください。並列の親ステップと arpeggio ステップでは指定できません。共通設定の `workflow_overrides.quality_gates` に置いた報告前ゲートは、並列の子などの対応するエージェントステップだけが継承します。
 
 Phase 1 では TAKT が担当する完了確認を AI に案内します。ゲートが直接実行するのは `command` です。`run_at: before_report` のゲートでは、ラッパーの内部などで同じ完了確認を行うコマンドを任意の `covers` に指定できます。各項目には空白以外の文字が必要です。AI は `command` または `covers` のコマンドと実行ディレクトリの両方が一致する完了確認を TAKT に任せます。プロンプトには `cwd` をワークツリーのルートからの相対パスで表示します。`cwd` を省略すると `.`（ルート）になります。ラッパーが別のディレクトリを検証する場合は、ゲートの `cwd` を起点に対象を特定できるコマンドを `covers` に指定します。たとえば、ルートから `packages/api` を検証するには `npm --prefix packages/api test` を指定します。AI はほかの必須の検証を実施します。`guidance` に書いたコマンドにはこの扱いを適用しません。作業中に必要な対象テストや失敗の再現は実行できます。
 
@@ -376,7 +376,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - 役目だけでは選び方が決まらない候補には、選ぶ基準を `selection_hint` に書けます。`selection_hint` は `pool` の候補だけに指定できる任意項目で、指定する場合は空でない文字列が必要です。selector は `description` と `selection_hint` の両方を見て選びます。`selection_hint` がない既存の YAML も、今までどおり `description` だけで選びます。ほかの step やサブ step に `selection_hint` を書くとロード時にエラーになります。
 - `fixed` または `pool` の項目で `uses` を宣言する場合、`rules` はその呼び出し箇所に定義します。参照先 fragment には定義できません。
 - `fixed` は必ず実行されます。selector は展開後の `pool` step 名だけを選べ、実行順は YAML の定義順です。
-- `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。
+- `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。`replace` でも未解決の報告前ゲートがある再試行では直前の選択を使い、該当する子がゲートを再実行します。
 - プロセスの resume は保存済みの選択を復元せず、現在の pool に対して selector を再実行します。
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
 - 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。

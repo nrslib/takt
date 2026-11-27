@@ -11,6 +11,13 @@ const classificationInputs = [
   'scripts/test-classification.mjs',
   'scripts/test-integration-boundary.mjs',
   'tsconfig.tests.json',
+  'vitest.config.ts',
+  'vitest.config.shared.ts',
+  'vitest.config.unit.parallel.ts',
+  'vitest.config.it.parallel.ts',
+  'vitest.config.it.heavy.parallel.ts',
+  'vitest.config.it.serial.git.ts',
+  'vitest.config.it.serial.workflow.ts',
 ];
 
 function git(...args) {

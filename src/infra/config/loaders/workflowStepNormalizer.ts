@@ -443,6 +443,7 @@ export function normalizeStepFromRaw(
     personaOverrideKey,
     projectOverrides,
     globalOverrides,
+    step.parallel === undefined && step.arpeggio === undefined,
   ));
 
   // A step's own `capabilities:` replaces the workflow default rather than merging. Capability

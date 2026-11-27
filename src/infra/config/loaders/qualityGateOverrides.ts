@@ -88,6 +88,7 @@ function dedupeQualityGates(gates: QualityGate[]): QualityGate[] {
  * @param personaName - Persona name used by the step
  * @param projectOverrides - Project-level workflow_overrides (from .takt/config.yaml)
  * @param globalOverrides - Global-level workflow_overrides (from ~/.takt/config.yaml)
+ * @param inheritBeforeReportGates - Whether the step can inherit report gates from shared lists
  * @returns Merged quality gates array
  */
 export function applyQualityGateOverrides(
@@ -97,6 +98,7 @@ export function applyQualityGateOverrides(
   personaName: string | undefined,
   projectOverrides: WorkflowOverrides | undefined,
   globalOverrides: WorkflowOverrides | undefined,
+  inheritBeforeReportGates = true,
 ): QualityGate[] | undefined {
   if (personaName !== undefined && personaName.trim().length === 0) {
     throw new Error(`Invalid persona name for step "${stepName}": empty value`);
@@ -106,12 +108,15 @@ export function applyQualityGateOverrides(
   // Track whether yamlGates was explicitly defined (even if empty)
   const hasYamlGates = yamlGates !== undefined;
   const gates: QualityGate[] = [];
+  const allowsSharedGate = (gate: QualityGate) => (
+    inheritBeforeReportGates || typeof gate === 'string' || gate.runAt !== 'before_report'
+  );
 
   // Collect global gates from global config
   const globalGlobalGates = globalOverrides?.qualityGates;
   const globalEditOnly = globalOverrides?.qualityGatesEditOnly ?? false;
   if (globalGlobalGates && (!globalEditOnly || editFlag === true)) {
-    gates.push(...globalGlobalGates);
+    gates.push(...globalGlobalGates.filter(allowsSharedGate));
   }
 
   // Collect step-specific gates from global config
@@ -132,7 +137,7 @@ export function applyQualityGateOverrides(
   const projectGlobalGates = projectOverrides?.qualityGates;
   const projectEditOnly = projectOverrides?.qualityGatesEditOnly ?? false;
   if (projectGlobalGates && (!projectEditOnly || editFlag === true)) {
-    gates.push(...projectGlobalGates);
+    gates.push(...projectGlobalGates.filter(allowsSharedGate));
   }
 
   // Collect step-specific gates from project config

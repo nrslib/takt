@@ -534,6 +534,62 @@ steps:
     ]);
   });
 
+  it('inherits shared pre-report checks only on the parallel child and rejects explicit parent checks', () => {
+    loadGlobalConfigMock.mockReturnValue({
+      workflowOverrides: { qualityGates: [{ type: 'command', runAt: 'before_report', command: 'npm test' }] },
+    });
+    const projectConfigPath = join(testDir, '.takt', 'config.yaml');
+    const projectConfig = `
+workflow_overrides:
+  quality_gates:
+    - type: command
+      run_at: before_report
+      command: npm run lint
+    - type: command
+      command: npm run build
+`;
+    writeFileSync(projectConfigPath, projectConfig);
+    const workflowPath = join(testDir, 'parallel-gates.yaml');
+    writeFileSync(workflowPath, `
+name: parallel-gates
+max_steps: 2
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      - name: check
+        persona: coder
+        instruction: Run the checks
+        rules:
+          - condition: Complete
+            next: COMPLETE
+    rules:
+      - condition: all("Complete")
+        next: COMPLETE
+`);
+
+    const config = loadWorkflowFromFile(workflowPath, testDir);
+    expect(() => validateWorkflowConfig(config, { projectCwd: testDir })).not.toThrow();
+    const [parent] = config.steps;
+    expect(parent?.qualityGates).toEqual([{ type: 'command', command: 'npm run build' }]);
+    expect(Array.isArray(parent?.parallel) && parent.parallel[0]?.qualityGates).toEqual([
+      { type: 'command', runAt: 'before_report', command: 'npm test' },
+      { type: 'command', runAt: 'before_report', command: 'npm run lint' },
+      { type: 'command', command: 'npm run build' },
+    ]);
+
+    writeFileSync(projectConfigPath, projectConfig + `
+  steps:
+    reviewers:
+      quality_gates:
+        - type: command
+          run_at: before_report
+          command: npm test
+`);
+    const invalidConfig = loadWorkflowFromFile(workflowPath, testDir);
+    expect(() => validateWorkflowConfig(invalidConfig, { projectCwd: testDir })).toThrow(/parallel parent or arpeggio/);
+  });
+
   it('should allow step without quality_gates', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });

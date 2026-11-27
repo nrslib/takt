@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -468,45 +469,63 @@ describe('release verification wiring', () => {
     expect(result.log).not.toContain('stale log entry');
   });
 
-  it('runs the classification contract when a classified test and its classification are removed together', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-removed-it-classification-'));
-    const testFile = 'src/__tests__/retired-classification-fixture.test.ts';
-    const classificationInput = 'scripts/test-classification.mjs';
-    const program = join(process.cwd(), 'scripts/check-changed-it-wiring.mjs');
-    const npmExecPath = join(cwd, 'npm-cli.js');
-    const git = (...args: string[]): void => {
-      const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-      expect(result.status, result.stderr).toBe(0);
-    };
-    try {
-      git('init', '-q');
-      mkdirSync(join(cwd, 'src/__tests__'), { recursive: true });
-      mkdirSync(join(cwd, 'scripts'));
-      writeFileSync(join(cwd, testFile), "import { describe } from 'vitest';\nvoid describe;");
-      writeFileSync(join(cwd, classificationInput), `export const integrationTests = [${JSON.stringify(testFile)}];`);
-      writeFileSync(join(cwd, 'tsconfig.tests.json'), JSON.stringify({ files: [testFile] }));
-      git('add', '.');
-      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'baseline');
-      rmSync(join(cwd, testFile));
-      writeFileSync(join(cwd, classificationInput), 'export const integrationTests = [];');
-      writeFileSync(npmExecPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");');
+  it.each([
+    'scripts/test-classification.mjs',
+    'vitest.config.unit.parallel.ts',
+    'vitest.config.shared.ts',
+  ])(
+    'runs the classification contract when %s changes',
+    (classificationInput) => {
+      const cwd = mkdtempSync(join(tmpdir(), 'takt-removed-it-classification-'));
+      const testFile = 'src/__tests__/retired-classification-fixture.test.ts';
+      const removesTest = classificationInput === 'scripts/test-classification.mjs';
+      const program = join(process.cwd(), 'scripts/check-changed-it-wiring.mjs');
+      const npmExecPath = join(cwd, 'npm-cli.js');
+      const git = (...args: string[]): void => {
+        const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+        expect(result.status, result.stderr).toBe(0);
+      };
+      try {
+        git('init', '-q');
+        mkdirSync(join(cwd, 'src/__tests__'), { recursive: true });
+        mkdirSync(join(cwd, 'scripts'));
+        writeFileSync(join(cwd, testFile), "import { describe } from 'vitest';\nvoid describe;");
+        const vitestConfigBody = classificationInput === 'vitest.config.shared.ts'
+          ? (exclude: string) => `export const unitTestExcludes = ${exclude};`
+          : (exclude: string) => `export default { test: { exclude: ${exclude} } };`;
+        writeFileSync(join(cwd, classificationInput), removesTest
+          ? `export const integrationTests = [${JSON.stringify(testFile)}];`
+          : vitestConfigBody('["integration.test.ts"]'));
+        writeFileSync(join(cwd, 'tsconfig.tests.json'), JSON.stringify({ files: [testFile] }));
+        git('add', '.');
+        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'baseline');
+        if (removesTest) rmSync(join(cwd, testFile));
+        const updatedInput = removesTest ? 'export const integrationTests = [];' : vitestConfigBody('[]');
+        writeFileSync(join(cwd, classificationInput), updatedInput);
+        writeFileSync(npmExecPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");');
 
-      const execution = spawnSync(process.execPath, [program], {
-        cwd, encoding: 'utf8', env: { ...process.env, npm_execpath: npmExecPath },
-      });
+        const execution = spawnSync(process.execPath, [program], {
+          cwd, encoding: 'utf8', env: { ...process.env, npm_execpath: npmExecPath },
+        });
 
-      expect(execution.status, execution.stderr).toBe(0);
-      const [record, invocation, ...remaining] = execution.stdout.trim().split('\n');
-      expect(remaining).toEqual([]);
-      expect(JSON.parse(invocation!)).toEqual(['test', '--', 'src/__tests__/releaseVerificationWiring.test.ts']);
-      expect(JSON.parse(record!.slice(record!.indexOf('{')))).toMatchObject({
-        changedClassificationInputs: [classificationInput],
-        fileHashes: expect.arrayContaining([{ file: testFile, sha256: null }]),
-      });
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
+        expect(execution.status, execution.stderr).toBe(0);
+        const [record, invocation, ...remaining] = execution.stdout.trim().split('\n');
+        expect(remaining).toEqual([]);
+        expect(invocation, execution.stdout).toBeDefined();
+        expect(JSON.parse(invocation!)).toEqual(['test', '--', 'src/__tests__/releaseVerificationWiring.test.ts']);
+        expect(JSON.parse(record!.slice(record!.indexOf('{')))).toMatchObject({
+          changedClassificationInputs: [classificationInput],
+          integrationTests: [],
+          fileHashes: expect.arrayContaining([
+            { file: classificationInput, sha256: createHash('sha256').update(updatedInput).digest('hex') },
+            ...(removesTest ? [{ file: testFile, sha256: null }] : []),
+          ]),
+        });
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('should keep fast unit and integration classifications disjoint', () => {
     const parallelIntegration = new Set(parallelIntegrationTestFiles);

@@ -375,7 +375,7 @@ export class ParallelRunner {
     const previousFailures = state.currentStep === step.name && lastOutput?.persona === step.name
       ? lastOutput.parallelBeforeReportGateFailures
       : undefined;
-    // A confirmed failure remains pending across live restarts until its child receives it.
+    // Keep the diagnostic through provider retries and live restarts until the check runs again.
     const pendingGateFailures = new Map(previousFailures?.map((failure) => [failure.persona, failure]));
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
@@ -513,17 +513,29 @@ export class ParallelRunner {
       }
     };
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
-    const selectorProvider = this.deps.engineOptions.selectorProvider;
-    const selectorDeadline = isDynamicParallelSubSteps(step.parallel) && selectorProvider !== undefined
-      ? executionDeadlineContext?.begin('parallel-selector', selectorProvider)
-      : undefined;
-    const subSteps = isDynamicParallelSubSteps(step.parallel)
-      ? await runWithExecutionDeadline(
+    let subSteps: WorkflowStep[];
+    if (!isDynamicParallelSubSteps(step.parallel)) {
+      subSteps = step.parallel;
+    } else if (step.parallel.selection.mode === 'replace' && pendingGateFailures.size > 0) {
+      subSteps = this.deps.dynamicParallelSelector.reuseSelectionForGateRetry(
+        step, state, pendingGateFailures.keys(),
+      );
+    } else {
+      const selectorProvider = this.deps.engineOptions.selectorProvider;
+      const key = 'parallel-selector';
+      const deadline = selectorProvider === undefined
+        ? undefined
+        : executionDeadlineContext?.begin(key, selectorProvider);
+      try {
+        subSteps = await runWithExecutionDeadline(
           executionDeadlineContext,
-          selectorDeadline,
+          deadline,
           () => this.deps.dynamicParallelSelector.selectParticipants(step, state, task),
-        )
-      : step.parallel;
+        );
+      } finally {
+        if (deadline !== undefined) executionDeadlineContext?.finish(key);
+      }
+    }
     this.resolveAbortSignal()?.throwIfAborted();
     log.debug('Running parallel step', {
       step: step.name,
@@ -861,19 +873,14 @@ export class ParallelRunner {
                 phase1ExecutionLog.markDispatched();
               },
             };
-        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined && gateFailure === undefined
+        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
           ? recordingAgentOptions
           : {
               ...recordingAgentOptions,
               onDispatch: (permissionMode) => {
                 recordingAgentOptions.onDispatch?.(permissionMode);
-                if (gateFailure !== undefined && pendingGateFailures.get(subStep.name) === gateFailure) {
-                  pendingGateFailures.delete(subStep.name);
-                }
-                if (liveDeliveryCommitter !== undefined) {
-                  liveDeliveryCommitter.onDispatch(permissionMode);
-                  reportInputTracker.recordDelivery(liveDelivery);
-                }
+                liveDeliveryCommitter.onDispatch(permissionMode);
+                reportInputTracker.recordDelivery(liveDelivery);
               },
             };
         const promptResolvedAttempts = new Set<number>();

@@ -963,8 +963,10 @@ export class TeamLeaderRunner {
             projectRoot: this.deps.getCwd(),
             step: executableStep,
             childProcessEnv: this.deps.engineOptions.childProcessEnv,
-            signal: combineAbortSignals([executionAbortScope.signal, leaderDeadline?.signal]),
-            runWithoutInactivityTimeout: leaderDeadline?.runWithoutInactivityTimeout,
+            signal: executionAbortScope.signal,
+            runWithoutInactivityTimeout: leaderDeadline?.signal.aborted === false
+              ? leaderDeadline.runWithoutInactivityTimeout
+              : undefined,
             observabilityEnabled: this.deps.observabilityEnabled,
             runId: this.deps.observabilityRunId,
             workflowName: this.deps.getWorkflowName(),
