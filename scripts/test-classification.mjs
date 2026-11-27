@@ -410,7 +410,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/daemon-retired-watch-events.integration.test.ts',
-  'src/__tests__/daemon-startup.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/director-foundation.integration.test.ts',
   'src/__tests__/epic-storage.integration.test.ts',
@@ -475,6 +474,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/taskInstructionActions.test.ts',
   'src/__tests__/tool-activity-terminal.integration.test.ts',
   'src/__tests__/verify-across-providers.integration.test.ts',
+  'src/__tests__/worker-pool-transfer.integration.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

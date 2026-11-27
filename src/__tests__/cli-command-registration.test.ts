@@ -4,6 +4,15 @@ import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/c
 import { resolveRemovedRootCommand } from '../app/cli/helpers.js';
 
 describe('CLI command registration', () => {
+  it('describes --resident in daemon help as keeping the daemon running', () => {
+    const daemon = program.commands.find((command) => command.name() === 'daemon');
+    const resident = daemon?.options.find((option) => option.long === '--resident');
+
+    expect(resident).toBeDefined();
+    expect(resident?.description).toMatch(/running|alive|idle|常駐|自動終了/iu);
+    expect(daemon?.helpInformation()).toMatch(/--resident\s+\S/u);
+  });
+
   it('registers manager as an experimental conversation command without a one-shot argument', () => {
     const manager = program.commands.find((command) => command.name() === 'manager');
 

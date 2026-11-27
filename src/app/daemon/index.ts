@@ -1,4 +1,4 @@
 import '../environment.js';
 import { runDaemon } from '../../features/daemon/runDaemon.js';
 
-await runDaemon();
+await runDaemon(process.argv.includes('--resident'));

@@ -103,32 +103,9 @@ export async function commentLoopAnalysisReportOnPr(
  * Auto-commit, push, and optionally create a PR after successful task execution.
  */
 export async function postExecutionFlow(options: PostExecutionOptions): Promise<PostExecutionResult> {
-  const {
-    execCwd,
-    projectCwd,
-    task,
-    branch,
-    baseBranch,
-    shouldCreatePr,
-    managedPr,
-    shouldPublishBranchToOrigin,
-    draftPr,
-    workflowIdentifier,
-    issues,
-    orderContent,
-    repo,
-    outputMode,
-    gitProvider,
-    abortSignal,
-  } = options;
+  const { execCwd, projectCwd, task, branch, shouldCreatePr, shouldPublishBranchToOrigin,
+    outputMode, abortSignal } = options;
   const emitStatusLog = outputMode !== 'silent';
-  const display = {
-    ...(options.eventSink === undefined ? {} : { eventSink: options.eventSink }),
-    outputMode: outputMode ?? 'terminal',
-    taskPrefix: options.taskPrefix,
-    taskColorIndex: options.taskColorIndex,
-    taskDisplayLabel: options.taskDisplayLabel,
-  };
 
   const commitResult = await autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
@@ -185,75 +162,92 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.publishedHead && branch && shouldCreatePr) {
-    abortSignal?.throwIfAborted();
-    const resolvedGitProvider = gitProvider ?? getGitProvider();
-    const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
-    const existingPr = resolvedGitProvider.findExistingPr(branch, projectCwd);
-    const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report, orderContent));
-    if (existingPr) {
-      abortSignal?.throwIfAborted();
-      const commentResult = resolvedGitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
-      if (commentResult.success) {
-        if (emitStatusLog) {
-          success(`PR updated with comment: ${existingPr.url}`);
-        }
-        if (options.goalId === undefined) {
-          await runLinkedCacciaSafely(projectCwd, existingPr.url, options.workflowHasCaccia, abortSignal, display);
-          await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display, options.parentTaskName);
-        }
-        return { prUrl: existingPr.url };
-      } else {
-        log.error('PR comment failed', {
-          prNumber: existingPr.number,
-          outcome: PR_COMMENT_FAILURE_MESSAGE,
-        });
-        if (emitStatusLog) {
-          error(PR_COMMENT_FAILURE_MESSAGE);
-        }
-        return { prFailed: true, prError: PR_COMMENT_FAILURE_MESSAGE };
-      }
-    } else {
-      if (emitStatusLog) {
-        info('Creating pull request...');
-      }
-      const firstIssue = issues?.[0];
-      const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
-      const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
-      const prTitle = issuePrefix + truncatedTask;
-      abortSignal?.throwIfAborted();
-      const prResult: CreatePrResult = createPullRequestSafely(resolvedGitProvider, {
-        branch,
-        title: prTitle,
-        ...(managedPr === true ? buildTaktManagedPrOptions(prBody) : { body: prBody }),
-        base: baseBranch,
-        repo,
-        draft: draftPr,
-      }, projectCwd);
-      if (prResult.success) {
-        if (emitStatusLog) {
-          success(`PR created: ${prResult.url}`);
-        }
-        if (prResult.url && options.goalId === undefined) {
-          await runLinkedCacciaSafely(projectCwd, prResult.url, options.workflowHasCaccia, abortSignal, display);
-          await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display, options.parentTaskName);
-        }
-        return { prUrl: prResult.url };
-      } else {
-        const detailedPrError = prResult.error
-          ? `${PR_CREATION_FAILURE_MESSAGE} ${prResult.error}`
-          : PR_CREATION_FAILURE_MESSAGE;
-        log.error('PR creation failed', {
-          branch,
-          baseBranch,
-          outcome: detailedPrError,
-        });
-        if (emitStatusLog) {
-          error(detailedPrError);
-        }
-        return { prFailed: true, prError: detailedPrError };
-      }
-    }
+    return publishTaskPullRequest({ ...options, branch });
   }
 
   return {};
+}
+
+type PullRequestPublicationOptions = Omit<PostExecutionOptions, 'execCwd' | 'shouldCreatePr' | 'shouldPublishBranchToOrigin'> & { branch: string };
+
+/** Publish PR metadata after the caller has committed and pushed the branch. */
+export async function publishTaskPullRequest(options: PullRequestPublicationOptions): Promise<PostExecutionResult> {
+  const { projectCwd, task, branch, baseBranch, managedPr, draftPr, workflowIdentifier,
+    issues, orderContent, repo, outputMode, gitProvider, abortSignal } = options;
+  const emitStatusLog = outputMode !== 'silent';
+  const display = {
+    ...(options.eventSink === undefined ? {} : { eventSink: options.eventSink }),
+    outputMode: outputMode ?? 'terminal',
+    taskPrefix: options.taskPrefix,
+    taskColorIndex: options.taskColorIndex,
+    taskDisplayLabel: options.taskDisplayLabel,
+  };
+  abortSignal?.throwIfAborted();
+  const resolvedGitProvider = gitProvider ?? getGitProvider();
+  const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
+  const existingPr = resolvedGitProvider.findExistingPr(branch, projectCwd);
+  const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report, orderContent));
+  if (existingPr) {
+    abortSignal?.throwIfAborted();
+    const commentResult = resolvedGitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
+    if (commentResult.success) {
+      if (emitStatusLog) {
+        success(`PR updated with comment: ${existingPr.url}`);
+      }
+      if (options.goalId === undefined) {
+        await runLinkedCacciaSafely(projectCwd, existingPr.url, options.workflowHasCaccia, abortSignal, display);
+        await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display, options.parentTaskName);
+      }
+      return { prUrl: existingPr.url };
+    } else {
+      log.error('PR comment failed', {
+        prNumber: existingPr.number,
+        outcome: PR_COMMENT_FAILURE_MESSAGE,
+      });
+      if (emitStatusLog) {
+        error(PR_COMMENT_FAILURE_MESSAGE);
+      }
+      return { prFailed: true, prError: PR_COMMENT_FAILURE_MESSAGE };
+    }
+  } else {
+    if (emitStatusLog) {
+      info('Creating pull request...');
+    }
+    const firstIssue = issues?.[0];
+    const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
+    const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
+    const prTitle = issuePrefix + truncatedTask;
+    abortSignal?.throwIfAborted();
+    const prResult: CreatePrResult = createPullRequestSafely(resolvedGitProvider, {
+      branch,
+      title: prTitle,
+      ...(managedPr === true ? buildTaktManagedPrOptions(prBody) : { body: prBody }),
+      base: baseBranch,
+      repo,
+      draft: draftPr,
+    }, projectCwd);
+    if (prResult.success) {
+      if (emitStatusLog) {
+        success(`PR created: ${prResult.url}`);
+      }
+      if (prResult.url && options.goalId === undefined) {
+        await runLinkedCacciaSafely(projectCwd, prResult.url, options.workflowHasCaccia, abortSignal, display);
+        await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display, options.parentTaskName);
+      }
+      return { prUrl: prResult.url };
+    } else {
+      const detailedPrError = prResult.error
+        ? `${PR_CREATION_FAILURE_MESSAGE} ${prResult.error}`
+        : PR_CREATION_FAILURE_MESSAGE;
+      log.error('PR creation failed', {
+        branch,
+        baseBranch,
+        outcome: detailedPrError,
+      });
+      if (emitStatusLog) {
+        error(detailedPrError);
+      }
+      return { prFailed: true, prError: detailedPrError };
+    }
+  }
 }

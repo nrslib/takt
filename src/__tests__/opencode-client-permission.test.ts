@@ -65,9 +65,15 @@ describe('OpenCodeClient permissions', () => {
     }, server: { close: vi.fn() } });
 
     try {
-      const result = await new OpenCodeClient().call('coder', 'inspect reference', {
+      const client = new OpenCodeClient();
+      const options = {
         cwd: root, model: 'probe/model', permissionMode: 'full', readonlyDirectories: [referenceDirectory],
-      });
+      } as const;
+      const result = await client.call('coder', 'inspect reference', options);
+      const resumed = await client.call('coder', 'continue inspecting', { ...options, sessionId: result.sessionId });
+
+      expect(resumed.status).toBe('done');
+      expect(sessionCreate).toHaveBeenCalledOnce();
 
       expect(result.status).toBe('done');
       expect(promptAsync.mock.calls[0]![0].tools.bash).toBe(false);

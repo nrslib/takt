@@ -1267,8 +1267,10 @@ export class OpenCodeAttemptRunner {
     const isV1 = openCodeRuntimeSelection().generation === 'v1';
     const hasWorkspaceDirectoryPolicy = options.workspaceAccess !== undefined
       || (options.readonlyDirectories?.length ?? 0) > 0;
-    const v1DirectoryPolicyIdentity = isV1 ? getV1ExternalDirectoryPolicyIdentity(options) : undefined;
-    if (isV1 && hasWorkspaceDirectoryPolicy && sessionId !== undefined
+    const v1DirectoryPolicyIdentity = isV1 && hasWorkspaceDirectoryPolicy
+      ? getV1ExternalDirectoryPolicyIdentity(options)
+      : undefined;
+    if (v1DirectoryPolicyIdentity !== undefined && sessionId !== undefined
       && this.v1SessionDirectoryPolicies.get(sessionId) !== v1DirectoryPolicyIdentity) {
       throw new Error(
         'OpenCode v1 cannot update external-directory permissions on a resumed session. '
@@ -1287,7 +1289,7 @@ export class OpenCodeAttemptRunner {
       if (!sessionId) {
         throw new Error('Failed to create OpenCode session');
       }
-      if (isV1 && v1DirectoryPolicyIdentity !== undefined) {
+      if (v1DirectoryPolicyIdentity !== undefined) {
         this.v1SessionDirectoryPolicies.set(sessionId, v1DirectoryPolicyIdentity);
       }
       throwIfServerInvalidated();

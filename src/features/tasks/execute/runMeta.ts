@@ -6,6 +6,7 @@
  */
 
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
+import { redactExecutionSecrets } from '../../../shared/utils/execution-secrets.js';
 import {
   readRunMeta,
   type RunMeta,
@@ -66,6 +67,13 @@ function serializeRunMeta(meta: RunMeta, updatedAt: string): PersistedRunMeta {
   } = meta;
   return {
     ...baseMeta,
+    task: redactExecutionSecrets(meta.task),
+    ...(meta.reason === undefined ? {} : { reason: redactExecutionSecrets(meta.reason) }),
+    ...(meta.failure === undefined ? {} : { failure: { ...meta.failure, error: redactExecutionSecrets(meta.failure.error) } }),
+    ...(meta.observability?.traceDiscovery?.task?.summary === undefined ? {} : {
+      observability: { ...meta.observability, traceDiscovery: { ...meta.observability.traceDiscovery,
+        task: { ...meta.observability.traceDiscovery.task, summary: redactExecutionSecrets(meta.observability.traceDiscovery.task.summary) } } },
+    }),
     updatedAt,
     ...(resumePoint ? { resume_point: parseWorkflowResumePoint(resumePoint) } : {}),
     ...(sourceRunSlug ? { source_run_slug: sourceRunSlug } : {}),

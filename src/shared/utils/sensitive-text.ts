@@ -1,3 +1,5 @@
+import { redactExecutionSecrets, getExecutionSecrets } from './execution-secrets.js';
+
 export const REDACTED_VALUE = '[REDACTED]';
 
 const SENSITIVE_KEY_CHAR_PATTERN = String.raw`[A-Za-z0-9_.-]`;
@@ -55,7 +57,14 @@ const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
   'gi',
 );
 const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
-const URL_USERINFO_CREDENTIALS_REGEX = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@]+:[^/?#\s@]+)@/g;
+// `user:password@` after a URL scheme. The match starts at `://` and the lookbehind then
+// checks that a scheme (`\b[A-Za-z][A-Za-z0-9+.-]*`) ends there, so each scheme-like run is
+// read once, from its own `://`. Starting at the scheme instead rescans the rest of a run of
+// letters and hyphens from every letter after a `-` (quadratic), and a plain "not preceded by
+// a scheme character" lookbehind would miss `1-http://user:pass@host`.
+// The userinfo is split at its first colon past the first character: trying each colon as the
+// separator finds the same matches but rescans the rest of a colon-separated run every time.
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@][^/?#\s@:]*:[^/?#\s@]+)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,
@@ -168,7 +177,7 @@ function redactHttpHeaders(text: string): string {
   return parts.join('');
 }
 
-export function sanitizeSensitiveText(text: string): string {
+export function sanitizeSensitiveText(text: string, executionSecrets: readonly string[] = getExecutionSecrets()): string {
   if (!text) return text;
   const sanitized = text
     .replace(PEM_PRIVATE_KEY_REGEX, REDACTED_VALUE)
@@ -177,7 +186,7 @@ export function sanitizeSensitiveText(text: string): string {
       return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
     })
     .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
-  return redactHttpHeaders(sanitized)
+  const redacted = redactHttpHeaders(sanitized)
     .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_USER_SPACE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_SHORT_USER_COMPACT_REGEX, `$1$2${REDACTED_VALUE}`)
@@ -187,6 +196,7 @@ export function sanitizeSensitiveText(text: string): string {
     .replace(SENSITIVE_OPTION_VALUE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(SENSITIVE_QUERY_VALUE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(KNOWN_TOKEN_REGEX, REDACTED_VALUE);
+  return redactExecutionSecrets(redacted, executionSecrets);
 }
 
 export function isSensitiveKeyName(key: string): boolean {
@@ -194,6 +204,7 @@ export function isSensitiveKeyName(key: string): boolean {
 }
 
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
+  for (const value of getExecutionSecrets()) values.add(value);
   addMatches(text, PEM_PRIVATE_KEY_REGEX, 0, values);
   for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
     const quotedValue = match[2]!;

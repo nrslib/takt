@@ -11,9 +11,51 @@ import {
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
-import { maskSensitiveRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
+import { maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
 
 describe('sensitiveText', () => {
+  describe.each([
+    ['a plain scheme', 'https://', 'https://'],
+    ['a scheme with a plus', 'git+https://', 'git+https://'],
+    ['a scheme after a digit and a hyphen', '1-http://', '1-http://'],
+    ['a scheme after a long hyphenated run', 'abc-'.repeat(64) + 'ssh://', 'abc-'.repeat(64) + 'ssh://'],
+  ])('URL userinfo behind %s', (_name, scheme, keptPrefix) => {
+    const text = `clone ${scheme}user:pa55-word@host/repo.git failed`;
+
+    it('redacts the user and password', () => {
+      expect(sanitizeSensitiveText(text)).toBe(`clone ${keptPrefix}[REDACTED]@host/repo.git failed`);
+    });
+
+    it('redacts the same range when streaming', () => {
+      expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set())))
+        .toBe(`clone ${keptPrefix}[REDACTED]@host/repo.git failed`);
+    });
+
+    it('redacts the password where it is echoed later', () => {
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-word', { command: text })).toBe('echoed [REDACTED]');
+    });
+  });
+
+  it.each([
+    ['a password that contains colons', 'https://user:pa:ss:word@host', 'https://[REDACTED]@host'],
+    ['an empty user followed by a colon in the password', 'https://::word@host', 'https://[REDACTED]@host'],
+    ['each URL in a list', 'a://u:p@h,b://v:q@i', 'a://[REDACTED]@h,b://[REDACTED]@i'],
+    ['the URL after one without credentials', 'a://b://u:p@h', 'a://b://[REDACTED]@h'],
+  ])('redacts URL userinfo with %s', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+  });
+
+  it.each([
+    'https://user@host/path',
+    'https://host:8080/path@v2',
+    'https://host/a:b@c',
+    'mailto:user:name@host',
+    '://user:name@host',
+    '1://user:name@host',
+  ])('leaves %s readable', (text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+  });
+
   it.each(['known', 'substring'] as const)('masks the union of overlapping %s matches without hiding surrounding text', (matching) => {
     for (const [value, text] of [['abcab', 'before abcabcab after'], ['aaaa', 'before aaaaaa after']] as const) {
       const masked = matching === 'known'

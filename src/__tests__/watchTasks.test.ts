@@ -1,4 +1,5 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
+vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: [] }; } } }));
 import { beforeEach,describe,expect,it,vi } from 'vitest';
 import type { runWithWorkerPool as RunWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 

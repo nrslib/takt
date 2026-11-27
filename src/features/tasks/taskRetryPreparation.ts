@@ -123,11 +123,12 @@ export function prepareFailedTaskRetry(
   }
 
   const failure = requireFailedTaskFailure(task);
-  const worktreePath = resolveWorktreePath(projectDir, task);
-  const freshStart = worktreePath === undefined;
-  const interactionCwd = freshStart || task.data?.merge_task === true && task.data.merge_clone_prepared === false
+  const remote = task.remoteAssignment !== undefined;
+  const worktreePath = remote ? task.worktreePath : resolveWorktreePath(projectDir, task);
+  const freshStart = !remote && worktreePath === undefined;
+  const interactionCwd = remote || freshStart || task.data?.merge_task === true && task.data.merge_clone_prepared === false
     ? projectDir : worktreePath;
-  const runsBaseDir = freshStart || task.data?.merge_task === true ? projectDir : worktreePath;
+  const runsBaseDir = remote || freshStart || task.data?.merge_task === true ? projectDir : worktreePath!;
   const previousOrderContent = resolveTaskOrderContent(
     projectDir,
     task.taskDir,
@@ -144,7 +145,7 @@ export function prepareFailedTaskRetry(
   return {
     worktreePath,
     freshStart,
-    interactionCwd,
+    interactionCwd: interactionCwd!,
     runsBaseDir,
     failure,
     ...selection,

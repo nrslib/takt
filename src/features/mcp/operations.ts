@@ -142,7 +142,7 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
   const task = new TaskRunner(cwd)
     .listTaskStateItems()
     .find((candidate) => candidate.runSlug === runSlug);
-  if (task?.worktreePath === undefined || task.mergeTask === true) {
+  if (task?.remoteAssignment !== undefined || task?.worktreePath === undefined || task.mergeTask === true) {
     return cwd;
   }
   assertTaskStateWorktreeOwnership(cwd, task);
@@ -152,6 +152,10 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
 function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItems']>[number]): Record<string, unknown> {
   const summary: Record<string, unknown> = {
     name: task.name,
+    ...(task.workerName === undefined ? {} : { workerName: task.workerName }),
+    ...(task.remoteAssignment?.retryReservation ? { retryReservation: { workerName: task.remoteAssignment.workerName } } : {}),
+    ...(task.remoteAssignment?.restartReason === undefined ? {} : { restartReason: task.remoteAssignment.restartReason }),
+    ...(task.waitingReason === undefined ? {} : { waitingReason: task.waitingReason }),
     ...(task.executionId === undefined ? {} : { executionId: task.executionId }),
     ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
@@ -166,7 +170,7 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     summary.runSlug = task.runSlug;
     try {
       let runCwd = cwd;
-      if (task.worktreePath !== undefined && task.mergeTask !== true) {
+      if (task.remoteAssignment === undefined && task.worktreePath !== undefined && task.mergeTask !== true) {
         assertTaskStateWorktreeOwnership(cwd, task);
         runCwd = task.worktreePath;
       }
