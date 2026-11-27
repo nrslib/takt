@@ -20,6 +20,8 @@ export const ConversationAssignmentSchema = z.union([
   ManagerConversationAssignmentSchema, z.object({ kind: z.literal('daemon') }).strict(),
 ]);
 export const ConversationActorSchema = z.object({ namespace: nonempty, id: nonempty }).strict();
+export const DirectorMessageOriginSchema = z.enum(['director', 'human']);
+export type DirectorMessageOrigin = z.infer<typeof DirectorMessageOriginSchema>;
 const directorConversationId = ConversationIdSchema.refine((id) => id === conversationId({ kind: 'daemon' }));
 export const ConversationAgentOverridesSchema = z.object({
   provider: z.enum(PROVIDER_TYPES).optional(), model: nonempty.optional(),
@@ -49,7 +51,7 @@ export const ApprovalSchema = z.object({
 export const RunningOperationSchema = z.object({
   operationId: z.uuid(),
   directorConversationId: directorConversationId.optional(),
-  kind: z.enum(['message', 'approve_summary', 'dismiss_summary', 'answer_question', 'pause_goal', 'resume_goal', 'abort_goal']),
+  kind: z.enum(['message', 'approve_summary', 'dismiss_summary', 'answer_question', 'pause_goal', 'resume_goal', 'abort_goal', 'delete_goal']),
   owner: z.object({
     pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     identity: z.object({ startTime: nonempty }).strict(),
@@ -60,8 +62,11 @@ export const ConversationRecordSchema = z.object({
   assignment: ConversationAssignmentSchema,
   counterpart: ConversationActorSchema, lastSpeaker: ConversationActorSchema.nullable(),
   provider: nonempty, model: z.string().nullable(), sessionId: nonempty.nullable(),
+  contextKey: nonempty.max(128).optional(),
   agentOverrides: ConversationAgentOverridesSchema.optional(),
   interruptedMessage: z.string().nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
+  sessionImageAttachmentIds: z.array(z.uuid()).optional(),
   bindings: z.array(PortBindingSchema), revision,
   pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
   running: RunningOperationSchema.nullable(),

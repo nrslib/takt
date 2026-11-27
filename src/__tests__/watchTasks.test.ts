@@ -1,4 +1,5 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
+vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: [] }; } } }));
 import { beforeEach,describe,expect,it,vi } from 'vitest';
 import type { runWithWorkerPool as RunWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 
@@ -51,6 +52,7 @@ vi.mock('../shared/utils/index.js', () => ({
   notifySuccess: mocks.notifySuccess,
   notifyError: mocks.notifyError,
   sendSlackNotification: mocks.sendSlackNotification,
+  createLogger: () => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), enter: vi.fn(), exit: vi.fn() }),
 }));
 
 import { watchTasks } from '../features/tasks/watch/index.js';

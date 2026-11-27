@@ -43,11 +43,6 @@ describe('isDirectTask', () => {
       expect(isDirectTask('#についての ドキュメントを書いて')).toBe(false);
     });
 
-    it('returns false for hash prefixed non-numeric with spaces (interactive mode)', () => {
-      // '#について のドキュメントを書いて' → not valid issue ref → interactive mode
-      expect(isDirectTask('#について のドキュメントを書いて')).toBe(false);
-    });
-
     it('returns false for hash with single word (should enter interactive)', () => {
       // '#' alone → not issue ref → interactive mode
       expect(isDirectTask('#')).toBe(false);

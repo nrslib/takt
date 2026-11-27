@@ -1,5 +1,5 @@
 import { resolveProviderAlias } from '../../../shared/types/provider.js';
-import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { PreparedStepInstruction } from '../instruction/prepared-instruction.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { RATE_LIMIT_ERROR_MESSAGE } from '../../models/response.js';
 import type {
@@ -116,7 +116,7 @@ interface WorkflowRunLoopDeps {
   ) => Promise<string>;
   runStep: (
     step: WorkflowStep,
-    prebuiltInstruction?: PreparedInstruction,
+    prebuiltInstruction?: PreparedStepInstruction,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
@@ -141,7 +141,7 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     stepIteration: number,
     fallbackContext?: FallbackContext,
-  ) => PreparedInstruction;
+  ) => PreparedStepInstruction;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   /** Engine が通常 agent ステップに渡す、実行前に一度だけ確定した入力。 */
   prepareNormalStepExecution: (
@@ -921,7 +921,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
     let stepRuntime: RuntimeStepResolution | undefined;
     let preparedExecution: PreparedNormalStepExecution | undefined;
     let executionStep: WorkflowStep;
-    let prebuiltInstruction: PreparedInstruction | undefined;
+    let prebuiltInstruction: PreparedStepInstruction | undefined;
     let stepInstruction: string;
     let providerInfo: StepProviderInfo;
     let stepEventWorkflowStack: StepSpanParams['workflowStack'];

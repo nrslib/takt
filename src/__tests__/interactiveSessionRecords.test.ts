@@ -68,6 +68,19 @@ it('updates a conversation with the last three inputs and most recent response',
   expect(listRecords('/project', 'claude')).toEqual([]);
 });
 
+it('keeps old Codex records without letting them displace a current resumable session', async () => {
+  recordTurn({ cwd: '/project', provider: 'codex', sessionId: 'current', input: 'current input', response: 'current reply' });
+  const current = JSON.parse(disk.content!) as Record<string, unknown>[];
+  const old = Array.from({ length: 10 }, (_, index) => ({ provider: 'codex', sessionId: `old-${index}`, inputs: ['old input'],
+    response: 'old reply', modified: new Date().toISOString(), messageCount: 2 }));
+  disk.content = JSON.stringify([...old, ...current]);
+  await cleanRecords('/project', async () => true);
+
+  expect(listRecords('/project', 'codex').map((record) => record.sessionId)).toEqual(['current']);
+  expect(new InteractiveSessionRecords('/project').list('codex').map((record) => record.sessionId)).toEqual(['current']);
+  expect(JSON.parse(disk.content!)).toHaveLength(11);
+});
+
 it('records input before its response and ignores an older response after a newer input', () => {
   const owner = new InteractiveSessionRecords('/project');
   recordCompletedTurn(owner, 'codex', 'session', 'one', 'reply one');

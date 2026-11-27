@@ -38,7 +38,7 @@ beforeEach(async () => {
   await new Promise<void>((resolve) => realSetImmediate(resolve));
   taktEnvSnapshot = clearTaktEnv();
   process.env.TMPDIR = TEST_TMPDIR;
-  isolatedRootDir = mkdtempSync(join(tmpdir(), 'takt-test-global-'));
+  isolatedRootDir = realpathSync(mkdtempSync(join(tmpdir(), 'takt-test-global-')));
   gitEnvSnapshot = new Map(gitEnvKeys.map((key) => [key, process.env[key]]));
   process.env.TAKT_CONFIG_DIR = join(isolatedRootDir, '.takt');
   const emptyGitConfig = join(isolatedRootDir, 'gitconfig');

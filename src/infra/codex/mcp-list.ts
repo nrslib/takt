@@ -6,6 +6,7 @@ export interface CodexMcpListInput {
   cwd: string;
   env: Record<string, string>;
   configOverrides: readonly string[];
+  configProfile?: string;
   abortSignal?: AbortSignal;
 }
 
@@ -19,7 +20,7 @@ function isMissingCodexMcpServerError(error: unknown, serverName: string): boole
     && lines.slice(0, -1).every((line) => line.startsWith(codexPathAliasWarningPrefix));
 }
 
-export async function hasCodexMcpServer(input: CodexMcpListInput & { serverName: string; configProfile?: string }): Promise<boolean> {
+export async function hasCodexMcpServer(input: CodexMcpListInput & { serverName: string }): Promise<boolean> {
   try {
     await promisify(execFile)(input.executablePath, [
       ...(input.configProfile === undefined ? [] : ['--profile', input.configProfile]),
@@ -38,6 +39,7 @@ export async function hasCodexMcpServer(input: CodexMcpListInput & { serverName:
 export async function runCodexMcpList(input: CodexMcpListInput): Promise<string> {
   try {
     const { stdout } = await promisify(execFile)(input.executablePath, [
+      ...(input.configProfile === undefined ? [] : ['--profile', input.configProfile]),
       'mcp', 'list', '--json', ...input.configOverrides.flatMap((override) => ['-c', override]),
     ], {
       cwd: input.cwd, env: input.env, signal: input.abortSignal,

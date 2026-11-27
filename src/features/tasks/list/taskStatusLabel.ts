@@ -15,6 +15,9 @@ export function formatTaskStatusLabel(task: TaskListItem): string {
   if (task.issueNumber !== undefined) {
     status += ` #${task.issueNumber}`;
   }
+  if (task.remoteAssignment?.retryReservation) {
+    status += ` (worker ${sanitizeTerminalText(task.remoteAssignment.workerName)} reserved)`;
+  }
   if (task.branch) {
     return `${status} (${task.branch})`;
   }

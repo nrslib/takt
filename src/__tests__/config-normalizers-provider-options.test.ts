@@ -275,6 +275,25 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip Codex readonly permission base', () => {
+    const rawProviderOptions = {
+      codex: {
+        permission_control: 'codex' as const,
+        readonly_permission_base: 'takt-review-p2',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        permissionControl: 'codex',
+        readonlyPermissionBase: 'takt-review-p2',
+      },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
   it.each([true, false])('should normalize and denormalize Codex fast_mode=%s', (fastMode) => {
     const rawProviderOptions = { codex: { fast_mode: fastMode } };
     const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
@@ -565,6 +584,30 @@ describe('buildRawTaktProvidersOrThrow', () => {
       assistant: {
         provider: 'claude',
         model: 'haiku',
+      },
+    });
+  });
+
+  it('should round-trip Codex readonly permission base through selector provider options', () => {
+    const normalized = normalizeTaktSelectorProvider({
+      provider: 'codex',
+      provider_options: {
+        codex: { permission_control: 'codex', readonly_permission_base: 'takt-review-p2' },
+      },
+    });
+
+    expect(normalized).toEqual({
+      provider: 'codex',
+      providerOptions: {
+        codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' },
+      },
+    });
+    expect(buildRawTaktProvidersOrThrow({ selector: normalized })).toEqual({
+      selector: {
+        provider: 'codex',
+        provider_options: {
+          codex: { permission_control: 'codex', readonly_permission_base: 'takt-review-p2' },
+        },
       },
     });
   });

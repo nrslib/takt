@@ -10,20 +10,93 @@ import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { writeLegacyConversation, conversationRecord } from './helpers/conversation-fixtures.js';
 import { captureOwnedProcess, terminateOwnedProcess } from './helpers/owned-process.js';
-import { managerDaemonFixture, submitManagerText, waitForManager, type ManagerTuiProcess } from './helpers/manager-daemon-tui.js';
+import { expectDaemonSurvivesIdle, managerDaemonFixture, submitManagerText, waitForManager, type ManagerTuiProcess } from './helpers/manager-daemon-tui.js';
 import { concurrentTuiFixture } from './helpers/concurrent-tui-ipc.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { stripVTControlCharacters } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { conversationId } from '../infra/conversations/identity.js';
+import { ConversationImageStore } from '../infra/conversations/imageAttachments.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { removeManagerRepository } from '../features/manager/workspaceOperations.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 
-async function waitForQueuedMessage(tui: ManagerTuiProcess): Promise<void> {
-  const message = getLabel('manager.conversation.queued', 'en', { count: '1' }).replace(/\s+/gu, '');
-  await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, '')).toContain(message), { timeout: 30000 });
+it('reuses the same resident daemon for a conversation after idle startup and keeps it alive after TUI exit', async () => {
+  const fixture = managerDaemonFixture('en', ['Resident conversation completed']);
+  fixture.release();
+  try {
+    const owner = await fixture.startDaemon(true);
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+    await submitManagerText(tui, 'Talk to the waiting resident daemon');
+    await waitForManager(tui, 'Resident conversation completed');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+    expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', agent: 'manager' }));
+
+    await tui.exit();
+
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    expect((await readDaemonIpcState(fixture.directory))?.owner).toEqual(owner);
+  } finally { await fixture.cleanup(); }
+});
+
+it('automatically stops the daemon started by manager after a completed conversation and TUI exit', async () => {
+  const fixture = managerDaemonFixture('en', ['Ordinary conversation completed']);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    expect(owner).toBeDefined();
+    await submitManagerText(tui, 'Complete this ordinary conversation');
+    await waitForManager(tui, 'Ordinary conversation completed');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+
+    await tui.exit();
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 })).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
+
+async function waitForQueuedMessage(tui: ManagerTuiProcess, message: string): Promise<void> {
+  const heading = getLabel('tui.ui.queuedCount', 'en', { count: '1' });
+  await vi.waitFor(async () => {
+    const rows = stripVTControlCharacters(await tui.frame()).split('\n').map((row) => row.trim());
+    const headingRow = rows.indexOf(heading);
+    expect(headingRow).toBeGreaterThan(-1);
+    expect(rows[headingRow + 1]).toBe(`❯ ${message}`);
+  }, { timeout: 30000 });
+}
+
+async function waitForWaitingCount(tui: ManagerTuiProcess): Promise<void> {
+  const status = getLabel('manager.conversation.waiting', 'en', { count: '1' });
+  await vi.waitFor(async () => expect(stripVTControlCharacters(await tui.frame())).toContain(status), { timeout: 30000 });
+}
+
+async function waitForManagerNormalized(tui: ManagerTuiProcess, text: string): Promise<void> {
+  await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, ' ')).toContain(text), { timeout: 30000 });
+}
+
+function addRemoteTrackingMain(repository: string): void {
+  const commit = execFileSync('git', ['rev-parse', 'refs/heads/main'], { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim();
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/main', commit], { cwd: repository, stdio: 'pipe' });
+  expect(execFileSync('git', ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'],
+    { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim()).toBe(commit);
+  expect(execFileSync('git', ['for-each-ref', '--format=%(refname)', 'refs/heads/origin/main'],
+    { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim()).toBe('');
 }
 
 it('keeps make-goal instructions hidden on both connected manager screens', async () => {
@@ -80,14 +153,15 @@ it('executes provider calls in a conversation child and saves its result in the 
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'provider_complete', agent: 'manager', pid: expect.any(Number),
     })), { timeout: 10000 });
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
+    expect(await tui.frame()).not.toContain(fixture.summary.objective);
     const calls = fixture.readObservations().filter(({ event }) => event === 'provider_start');
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter(({ pid }) => pid === tui.child.pid)).toEqual([]);
     expect(calls.every(({ pid }) => pid !== owner.pid && pid !== tui.child.pid)).toBe(true);
     expect(calls.filter(({ agent }) => agent === 'manager')).toHaveLength(1);
     expect(calls.filter(({ agent }) => agent === 'director')).toEqual([]);
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: null, running: null }), { timeout: 30000 });
     const writes = fixture.readObservations().filter(({ event }) => event === 'write');
     expect(writes.some(({ pid, running }) => pid === owner.pid && !running)).toBe(true);
     expect(writes.filter(({ pid }) => pid === tui.child.pid)).toEqual([]);
@@ -96,7 +170,159 @@ it('executes provider calls in a conversation child and saves its result in the 
   } finally { await fixture.cleanup(); }
 });
 
-it.each(['ja', 'en'] as const)('displays transient thinking and tool activity from the real turn child (%s)', async (lang) => {
+it('keeps queued image associations, bytes and numbering through TUI detach and a real daemon restart without replay', async () => {
+  const fixture = managerDaemonFixture('en', ['Image turn completed', 'Image turn completed', 'Image turn completed']);
+  const png = (number: number) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(`image-${number}`)]);
+  const id = conversationId({ kind: 'repository', repositoryDirectory: fixture.repository });
+  const images = new ConversationImageStore(fixture.repository, id);
+  const paste = async (tui: ManagerTuiProcess, number: number) => {
+    tui.key(`Message ${number} `);
+    tui.key('\x1b]');
+    const payload = `1337;File=inline=1:${png(number).toString('base64')}\x07`;
+    tui.key(payload.slice(0, 25)); tui.key(payload.slice(25));
+    await waitForManager(tui, `Message ${number} [Image #${number}]`);
+    tui.key('\r');
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, kind }) => event === 'submit_result' && kind === 'accepted')).toHaveLength(number), { timeout: 30000 });
+  };
+  try {
+    const first = await fixture.start(fixture.repository, undefined); await first.ready();
+    await paste(first, 1);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(1), { timeout: 30000 });
+    await paste(first, 2); await paste(first, 3);
+    const saved = (await images.read()).images;
+    expect(saved).toHaveLength(3);
+    const expected = saved.map((image, index) => ({ id: image.id, path: images.path(image.fileName),
+      digest: createHash('sha256').update(png(index + 1)).digest('hex') }));
+    await first.exit();
+    for (const [index, image] of expected.entries()) expect(readFileSync(image.path)).toEqual(png(index + 1));
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    await lifecycle.stopDaemon();
+    fixture.release();
+    const second = await fixture.start(fixture.repository, undefined); await second.ready();
+    expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toHaveLength(2), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager').map(({ images }) => images))
+      .toEqual([[expected[0]], [expected[1], expected[0]], [expected[2]]]);
+    for (const [index, image] of expected.entries()) expect(readFileSync(image.path)).toEqual(png(index + 1));
+    await paste(second, 4);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toHaveLength(3), { timeout: 30000 });
+    const fourth = (await images.read()).images[3]!;
+    expect(fourth.placeholder).toBe('[Image #4]');
+    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start').at(-1)?.images).toEqual([
+      { id: fourth.id, path: images.path(fourth.fileName), digest: createHash('sha256').update(png(4)).digest('hex') },
+    ]);
+    await second.exit();
+    const third = await fixture.start(fixture.repository, undefined); await third.ready(null);
+    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(4);
+    await third.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('delivers a queued workspace image from the same private path after removing its first repository and restarting the daemon', async () => {
+  const fixture = managerDaemonFixture('en', ['Workspace image completed', 'Later text completed']);
+  const secondRepository = fixture.createRepository(join(fixture.directory, 'second-repository'));
+  const workspace = await createWorkspace({ globalConfigDirectory: fixture.directory, name: 'Image workspace',
+    repositoryDirectories: [fixture.repository, secondRepository] });
+  const assignment = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const id = conversationId(assignment);
+  const images = new ConversationImageStore(join(fixture.directory, 'workspaces', workspace.id), id);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const calls = () => fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+  try {
+    const first = await fixture.start(fixture.repository, undefined); await first.ready(null);
+    await submitManagerText(first, 'Keep this turn running');
+    await vi.waitFor(() => expect(calls()).toHaveLength(1), { timeout: 30000 });
+    first.key(`Queued inspection \x1b]1337;File=inline=1:${png.toString('base64')}\x07`);
+    await waitForManager(first, 'Queued inspection [Image #1]'); first.key('\r');
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, kind }) => event === 'submit_result' && kind === 'accepted')).toHaveLength(2), { timeout: 30000 });
+    const saved = (await images.read()).images;
+    expect(saved).toHaveLength(1);
+    const image = saved[0]!;
+    const expected = { id: image.id, path: images.path(image.fileName), digest: createHash('sha256').update(png).digest('hex') };
+    const queued = [];
+    for await (const entry of (await new FileEventStore(fixture.directory).restore()).pending) {
+      if (entry.state === 'queued' && entry.event.conversationId === id) queued.push(entry.event.event);
+    }
+    expect(queued).toEqual([{ kind: 'human_command', command: { kind: 'message', text: 'Queued inspection [Image #1]', imageAttachmentIds: [image.id] },
+      speaker: expect.any(Object), agentOverrides: { provider: 'mock' } }]);
+    first.key(`\x1b]1337;File=inline=1:${png.toString('base64')}\x07`);
+    await waitForManager(first, '[Image #2]');
+    const unused = (await images.read()).images[1]!;
+    const updated = await removeManagerRepository({ ...assignment, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories }, fixture.repository, fixture.directory);
+    expect(updated.repositoryDirectories).toEqual([secondRepository]);
+    await first.exit();
+    await vi.waitFor(() => expect(() => readFileSync(images.path(unused.fileName))).toThrow(), { timeout: 10000 });
+    expect((await images.read()).images).toEqual(saved);
+    expect(readFileSync(expected.path)).toEqual(png);
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    await lifecycle.stopDaemon(); fixture.release();
+    const second = await fixture.start(secondRepository, undefined); await second.ready();
+    expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
+    await waitForManager(second, 'Workspace image completed');
+    await second.ready(null);
+    expect(calls().map(({ images }) => images)).toEqual([[], [expected]]);
+    expect((await images.read()).images).toEqual(saved);
+    expect(readFileSync(expected.path)).toEqual(png);
+    await submitManagerText(second, 'Unrelated text');
+    await waitForManager(second, 'Later text completed'); await second.ready(null);
+    expect(calls().map(({ images }) => images)).toEqual([[], [expected], []]);
+    await second.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
+});
+
+it('restores an interrupted image turn after daemon restart and clears its references before later messages', async () => {
+  const fixture = managerDaemonFixture('en', ['Resumed image completed', 'Later text completed']);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const id = conversationId({ kind: 'repository', repositoryDirectory: fixture.repository });
+  const images = new ConversationImageStore(fixture.repository, id);
+  const calls = () => fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+  try {
+    const first = await fixture.start(fixture.repository, undefined); await first.ready(null);
+    first.key(`Inspect \x1b]1337;File=inline=1:${png.toString('base64')}\x07`);
+    await waitForManager(first, 'Inspect [Image #1]');
+    first.key('\r');
+    await vi.waitFor(() => expect(calls()).toHaveLength(1), { timeout: 30000 });
+    const image = (await images.read()).images[0]!;
+    const expected = { id: image.id, path: images.path(image.fileName), digest: createHash('sha256').update(png).digest('hex') };
+    expect(calls()[0]!.images).toEqual([expected]);
+    const operationId = (await fixture.state())!.turn!.operationId;
+    await first.ready(operationId);
+    first.key('\x1b[27u');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ turn: null, running: null,
+      interruptedMessage: 'Inspect [Image #1]', interruptedImageAttachmentIds: [image.id] }), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event }) => event === 'provider_complete')).toEqual([]);
+    await first.exit();
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    await lifecycle.stopDaemon();
+    expect((await new ConversationStateStore(fixture.directory).read(id))?.record).toMatchObject({
+      interruptedMessage: 'Inspect [Image #1]', interruptedImageAttachmentIds: [image.id],
+    });
+    expect(readFileSync(expected.path)).toEqual(png);
+
+    const second = await fixture.start(fixture.repository, undefined); await second.ready(null);
+    expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
+    expect(await fixture.state()).toMatchObject({ interruptedMessage: 'Inspect [Image #1]', interruptedImageAttachmentIds: [image.id] });
+    expect(calls()).toHaveLength(1);
+    fixture.release();
+    await submitManagerText(second, 'Continue the interrupted inspection');
+    await waitForManager(second, 'Resumed image completed');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ turn: null, running: null,
+      interruptedMessage: null, interruptedImageAttachmentIds: [] }), { timeout: 30000 });
+    expect(calls().map(({ images }) => images)).toEqual([[expected], [expected]]);
+    expect((await new ConversationStateStore(fixture.directory).read(id))?.record).toMatchObject({
+      interruptedMessage: null, interruptedImageAttachmentIds: [],
+    });
+
+    await submitManagerText(second, 'An unrelated text-only request');
+    await waitForManager(second, 'Later text completed');
+    await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
+    expect(calls().map(({ images }) => images)).toEqual([[expected], [expected], []]);
+    expect(readFileSync(expected.path)).toEqual(png);
+    await second.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
+});
+
+it.each(['ja', 'en'] as const)('delivers descriptions and ordered text from the real turn child without replaying or saving text (%s)', async (lang) => {
   const fixture = managerDaemonFixture(lang, ['Activity completed'], true);
   try {
     const tui = await fixture.start(fixture.repository, undefined);
@@ -104,12 +330,18 @@ it.each(['ja', 'en'] as const)('displays transient thinking and tool activity fr
     await submitManagerText(tui, 'Show current activity');
     await waitForManager(tui, getLabel('tui.ui.extendedThinking', lang));
     fixture.useTool();
-    await waitForManager(tui, 'ActivityToolUnique');
-    expect(await tui.frame()).not.toContain('private-');
+    await waitForManager(tui, '見回りの予定のコードを読む');
+    const beforeReconnect = await tui.frame();
+    expect(beforeReconnect).toContain('コードを読んでいるところです。');
+    expect(beforeReconnect.indexOf('コードを読んでいるところです。')).toBeLessThan(beforeReconnect.indexOf('見回りの予定のコードを読む'));
+    expect(await tui.frame()).not.toContain('private-reasoning-marker');
     await tui.exit();
     const reconnected = await fixture.start(fixture.repository, undefined);
-    await waitForManager(reconnected, 'ActivityToolUnique');
-    expect(await reconnected.frame()).not.toContain('private-');
+    await waitForManager(reconnected, '見回りの予定のコードを読む');
+    const during = await reconnected.frame();
+    expect(during).not.toContain('private-reasoning-marker');
+    expect(during).not.toContain('コードを読んでいるところです。');
+    expect(during.split('\n').find((row) => row.includes('見回りの予定のコードを読む'))).toMatch(/\b\d+(?:m\d{2})?s\b/u);
     const owner = (await readDaemonOwner(fixture.directory))!;
     const calls = fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
     expect(calls).toHaveLength(1);
@@ -119,12 +351,69 @@ it.each(['ja', 'en'] as const)('displays transient thinking and tool activity fr
     await waitForManager(reconnected, 'Activity completed');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 10000 });
     const frame = await reconnected.frame();
-    expect(frame).not.toContain('ActivityToolUnique');
+    expect(frame).not.toContain('見回りの予定のコードを読む');
+    expect(frame).not.toContain('調べがつきました。');
+    expect(frame.split('Activity completed')).toHaveLength(2);
     expect(frame).not.toContain(getLabel('tui.ui.extendedThinking', lang));
-    expect(frame).not.toContain('private-');
+    expect(frame).not.toContain('private-reasoning-marker');
     const saved = JSON.stringify(await fixture.state());
-    expect(saved).not.toContain('ActivityToolUnique');
-    expect(saved).not.toContain('private-');
+    for (const transient of ['コードを読んでいるところです。', '調べがつきました。', 'private-reasoning-marker']) expect(saved).not.toContain(transient);
+    await reconnected.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
+});
+
+it('restores a tool completed while the TUI process was closed exactly once without restarting the provider', async () => {
+  const fixture = managerDaemonFixture('en', ['Detached tool completed'], true);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await tui.ready();
+    await submitManagerText(tui, 'Keep the tool running after close');
+    await waitForManager(tui, getLabel('tui.ui.extendedThinking', 'en'));
+    fixture.useTool();
+    await waitForManager(tui, '見回りの予定のコードを読む');
+    const before = (await fixture.state())!;
+    expect(before.turn).not.toBeNull();
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    const calls = () => fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+    expect(calls()).toHaveLength(1);
+    const workerPid = calls()[0]!.pid;
+    expect(workerPid).not.toBe(tui.child.pid);
+    expect(workerPid).not.toBe(owner.pid);
+    await tui.exit();
+    expect(tui.child.exitCode).toBe(0);
+    expect((await fixture.state())?.turn).toEqual(before.turn);
+    expect(await isDaemonOwnerRunning(owner, { signal: AbortSignal.timeout(5000), timeoutMs: 5000 })).toBe(true);
+    fixture.release();
+    await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager'))
+      .toEqual([expect.objectContaining({ pid: workerPid })]);
+
+    const reconnected = await fixture.start(fixture.repository, undefined);
+    await reconnected.ready(null);
+    await waitForManager(reconnected, 'private-result-marker');
+    const checkHistory = (value: string): void => {
+      const frame = stripVTControlCharacters(value);
+      expect(frame.split('private-result-marker')).toHaveLength(2);
+      const toolRows = frame.split('\n').filter((row) => row.includes('private-input-marker'));
+      expect(toolRows).toHaveLength(1);
+      expect(toolRows[0]!.trim()).toMatch(/^◆ Bash Ran private-input-marker ✓ (?:\d+ ms|\d+\.\d s)$/u);
+      expect(frame).not.toContain('private-reasoning-marker');
+      expect(frame).not.toContain('コードを読んでいるところです。');
+      expect(frame).not.toContain('調べがつきました。');
+    };
+    checkHistory(await reconnected.frame());
+    const snapshotsBefore = fixture.readObservations().filter(({ event, method, pid }) =>
+      event === 'request' && method === 'snapshot' && pid === reconnected.child.pid).length;
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, method, pid }) =>
+      event === 'request' && method === 'snapshot' && pid === reconnected.child.pid).length)
+      .toBeGreaterThanOrEqual(snapshotsBefore + 2), { timeout: 10000 });
+    checkHistory(await reconnected.frame());
+    expect(calls()).toHaveLength(1);
+    const opens = fixture.readObservations().filter(({ event, method }) => event === 'request' && method === 'open');
+    for (const screen of [tui, reconnected]) {
+      expect(opens.filter(({ pid }) => pid === screen.child.pid).map(({ conversationId }) => conversationId)).toEqual([before.id]);
+    }
+    expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'abort_turn')).toEqual([]);
     await reconnected.exit();
   } finally { fixture.release(); await fixture.cleanup(); }
 });
@@ -141,7 +430,7 @@ it('finishes an accepted turn after Ctrl+C has exited the TUI process', async ()
     await tui.exit();
     expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) });
     fixture.release();
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: null, turn: null }), { timeout: 30000 });
     expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', agent: 'manager', pid: expect.any(Number) }));
   } finally { await fixture.cleanup(); }
 });
@@ -152,7 +441,7 @@ it('reopens the same conversation and approves its restored summary with Up and 
   try {
     const first = await fixture.start(fixture.repository, undefined);
     await waitForManager(first, 'Discuss your goal');
-    await submitManagerText(first, 'Remember this proposal');
+    await submitManagerText(first, '/make-goal');
     await waitForManager(first, fixture.summary.objective);
     await vi.waitFor(async () => expect((await fixture.state())?.pending?.summary).toEqual(fixture.summary), { timeout: 30000 });
     const saved = (await fixture.state())!;
@@ -179,6 +468,101 @@ it('reopens the same conversation and approves its restored summary with Up and 
     expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'request', pid: second.child.pid,
       command: 'approve_summary', revision: saved.pending!.revision }));
     await second.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('rejects an invalid branch proposal without saving it, then accepts a message and /make-goal', async () => {
+  const fixture = managerDaemonFixture('en');
+  const saved = conversationRecord(fixture.repository);
+  addRemoteTrackingMain(fixture.repository);
+  fixture.setResponses([
+    { message: 'The proposal uses an unavailable local branch.', summary: { ...fixture.summary, startBranch: 'origin/main' } },
+    { message: 'The conversation can continue.', summary: null },
+    { message: 'A fresh proposal is ready.', summary: fixture.summary },
+  ]);
+  fixture.release();
+  const conversations = new ConversationStateStore(fixture.directory);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    await submitManagerText(tui, '/make-goal');
+    await waitForManager(tui, 'Unable to resolve local branch');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+
+    await submitManagerText(tui, 'Continue after the rejected proposal');
+    await waitForManager(tui, 'The conversation can continue.');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+
+    await submitManagerText(tui, '/make-goal');
+    await waitForManager(tui, fixture.summary.objective);
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: { summary: fixture.summary }, approval: null, running: null }), { timeout: 30000 });
+    const observations = fixture.readObservations();
+    expect(observations.filter(({ event, summaryRequest }) => event === 'provider_start' && summaryRequest)).toHaveLength(2);
+    const submissions = observations.filter(({ event }) => event === 'submit_result');
+    expect(submissions.map(({ command }) => command)).toEqual(['message', 'message', 'message']);
+    expect(submissions.map(({ kind }) => kind)).toEqual(['accepted', 'accepted', 'accepted']);
+    expect(await tui.frame()).not.toContain(getLabel('manager.conversation.registration_recovery', 'en'));
+    expect((await new GoalStore(fixture.repository).list()).goals).toEqual([]);
+    await tui.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('releases a persisted same-revision reservation and accepts dismissal, messages, and /make-goal', async () => {
+  const fixture = managerDaemonFixture('en');
+  const saved = conversationRecord(fixture.repository);
+  addRemoteTrackingMain(fixture.repository);
+  const originalPending = saved.pending!;
+  saved.pending = { ...originalPending, summary: { ...originalPending.summary, startBranch: 'origin/main' } };
+  const goalId = randomUUID();
+  saved.approval = { state: 'reserved', revision: originalPending.revision, goalId, repositoryDirectory: fixture.repository };
+  writeLegacyConversation(fixture.directory, saved);
+  fixture.setResponses([
+    { message: 'The conversation has recovered.', summary: null },
+    { message: 'A fresh proposal is ready.', summary: fixture.summary },
+  ]);
+  fixture.release();
+  const conversations = new ConversationStateStore(fixture.directory);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, originalPending.summary.objective);
+    await tui.approveSummary(originalPending.revision);
+    await waitForManagerNormalized(tui, 'Unable to resolve local branch "origin/main" to a commit');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record).toMatchObject({
+      revision: originalPending.revision,
+      pending: { revision: originalPending.revision, summary: { startBranch: 'origin/main' } },
+      approval: null,
+      running: null,
+    }), { timeout: 30000 });
+    expect((await conversations.read(saved.id))?.state.version).toBeGreaterThan(0);
+    expect(execFileSync('git', ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${goalId.slice(0, 8)}`],
+      { cwd: fixture.repository, encoding: 'utf8', stdio: 'pipe' }).trim()).toBe('');
+
+    await tui.ready(null);
+    tui.key('\x1b');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event, command, kind }) => event === 'submit_result'
+      && command === 'dismiss_summary').map(({ kind }) => kind)).toEqual(['accepted']);
+
+    await submitManagerText(tui, 'Continue after clearing the reservation');
+    await waitForManager(tui, 'The conversation has recovered.');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+
+    await submitManagerText(tui, '/make-goal');
+    await waitForManager(tui, fixture.summary.objective);
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: { summary: fixture.summary }, approval: null, running: null }), { timeout: 30000 });
+    const observations = fixture.readObservations();
+    expect(observations.filter(({ event, summaryRequest }) => event === 'provider_start' && summaryRequest)).toHaveLength(1);
+    const submissions = observations.filter(({ event }) => event === 'submit_result');
+    expect(submissions.map(({ command }) => command)).toEqual(['approve_summary', 'dismiss_summary', 'message', 'message']);
+    expect(submissions.map(({ kind }) => kind)).toEqual(['accepted', 'accepted', 'accepted', 'accepted']);
+    expect(await tui.frame()).not.toContain(getLabel('manager.conversation.registration_recovery', 'en'));
+    await tui.exit();
   } finally { await fixture.cleanup(); }
 });
 
@@ -296,8 +680,8 @@ it('opens the same conversation after daemon stop and restart and accepts a new 
     expect((await fixture.state())).toMatchObject({ id: before.id, running: null,
       interruptedMessage: 'This turn will be interrupted' });
     await submitManagerText(second, 'A new request after restart');
-    await waitForManager(second, fixture.summary.objective);
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: { summary: fixture.summary },
+    await waitForManager(second, 'The daemon completed this request.');
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: null,
       running: null, interruptedMessage: null }), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === second.child.pid)
       .filter(({ command }) => command === 'message')).toHaveLength(1);
@@ -337,9 +721,9 @@ it('accepts a busy TUI message and executes it after the active turn completes',
     await submitManagerText(tui, 'The accepted request');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) }), { timeout: 30000 });
     await submitManagerText(tui, 'The queued request');
-    await waitForQueuedMessage(tui);
+    await waitForQueuedMessage(tui, 'The queued request');
     fixture.release();
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
     await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2));
     await tui.exit();
@@ -360,7 +744,7 @@ it('keeps the queued /make-goal proposal unregistered until explicit approval on
     await tui.ready(operationId);
     expect((await fixture.state())?.pending).toBeNull();
     await submitManagerText(tui, '/make-goal');
-    await waitForQueuedMessage(tui);
+    await waitForWaitingCount(tui);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({
@@ -397,7 +781,7 @@ it('passes CLI provider and model overrides to the turn process even when the co
     const tui = await fixture.start(fixture.repository, 'selected-manager-model');
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Use my selected model');
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     const owner = (await readDaemonOwner(fixture.directory))!;
     expect(owner).toBeDefined();
     const calls = fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
@@ -467,7 +851,7 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
     const opened = (await observer.request('open', selected)).result!;
     await observer.items(opened.read.transferId);
     expect((await observer.request('submit', { attachmentId: opened.attachmentId, speaker: selected.speaker,
-      command: { kind: 'message', text: 'Replace the restored proposal' } })).result?.kind).toBe('accepted');
+      command: { kind: 'message', text: 'Replace the restored proposal', requestProposal: true } })).result?.kind).toBe('accepted');
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(async () => expectProposalFrame(await tui.frame(), true), { timeout: 30000 });
     await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ revision: 5, running: null, approval: null,
@@ -538,7 +922,7 @@ it('reauthenticates and restores the proposal on the same mounted screen after a
     }, { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'message' && pid === tui.child.pid)).toEqual([]);
     tui.key('\r');
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'message' && pid === tui.child.pid)).toHaveLength(1);
     await tui.exit(); await second.exit();
   } finally { await fixture.cleanup(); }
@@ -585,7 +969,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) }), { timeout: 30000 });
     const operationId = (await fixture.state())!.turn!.operationId;
     await tui.ready(operationId);
-    await waitForManager(tui, 'Working');
+    await waitForManager(tui, getLabel('tui.ui.thinking', 'en'));
     tui.key('\x1b[27u');
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'request', pid: tui.child.pid, command: 'abort_turn', operationId,
@@ -597,7 +981,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
     fixture.release();
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'A new turn after Escape');
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     expect((await fixture.state())?.interruptedMessage).toBeNull();
     await tui.exit();
   } finally { await fixture.cleanup(); }

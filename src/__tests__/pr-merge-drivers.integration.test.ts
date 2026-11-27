@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync,
-  symlinkSync, writeFileSync } from 'node:fs';
+  symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,7 @@ import type { SystemStepServicesOptions } from '../core/workflow/system/system-s
 import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workflow/system/system-sync-effects.js';
 import { stageAndCommit } from '../infra/task/git.js';
 import { captureSyncConflictFiles } from '../infra/service/syncConflictFiles.js';
+import { createGitEnvironment } from '../infra/task/git-environment-settings.js';
 import { createCheckoutFilter } from './helpers/checkout-filter.js';
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -42,6 +43,9 @@ describe('PR custom merge drivers and conflict recovery', () => {
     vi.stubEnv('GIT_CONFIG_GLOBAL', join(root, 'global'));
     vi.stubEnv('GIT_CONFIG_SYSTEM', join(root, 'system'));
     vi.stubEnv('GIT_CONFIG_NOSYSTEM', '0');
+    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CONFIG']) {
+      vi.stubEnv(key, undefined);
+    }
     vi.stubEnv('PI_CODING_AGENT_DIR', join(root, 'agent'));
     execFileSync('git', ['init', '-b', 'main', join(root, 'project')], { cwd: root, stdio: 'pipe' });
     execFileSync('git', ['remote', 'add', 'origin', cwd], { cwd: join(root, 'project'), stdio: 'pipe' });
@@ -98,6 +102,11 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git(['ls-files', '-u'])).toBe('');
     expect(existsSync(join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe(original);
+  }
+
+  function stageEmptyFile(): void {
+    writeFileSync(join(cwd, 'empty.txt'), '');
+    git(['add', 'empty.txt']);
   }
 
   function preparePlainConflict(markerSize?: number, conflictStyle?: 'diff3' | 'zdiff3'): void {
@@ -177,6 +186,199 @@ describe('PR custom merge drivers and conflict recovery', () => {
       'code.txt', 'notes.txt', 'package-lock.json',
     ]));
     expect(git(['ls-files', '-u'])).toBe('');
+  });
+
+  it.each(['AIの作業前', 'AIの作業中'] as const)(
+    '%sに競合外ファイルの更新時刻だけが変わっても解決をstageする', (timing) => {
+      preparePlainConflict();
+      const rewriteWithSameContent = (): void => {
+        const stale = new Date(Date.now() - 60_000);
+        utimesSync(join(cwd, 'notes.txt'), stale, stale);
+      };
+      if (timing === 'AIの作業前') rewriteWithSameContent();
+      const conflictFiles = captureSyncConflictFiles(cwd);
+      if (timing === 'AIの作業中') rewriteWithSameContent();
+      writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+      conflictFiles.validateAndStage();
+      expect(git(['ls-files', '-u'])).toBe('');
+      expect(git(['show', ':code.txt'])).toBe('resolved');
+      expect(git(['diff', '--cached', '--name-only'])).toBe('code.txt');
+      expect(git(['status', '--porcelain'])).toBe('M  code.txt');
+    });
+
+  it('AIがgit statusで状態を確認しただけなら解決をstageする', () => {
+    preparePlainConflict();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    const stale = new Date(Date.now() - 60_000);
+    utimesSync(join(cwd, 'notes.txt'), stale, stale);
+    git(['status']);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+  });
+
+  it.each([
+    ['別の操作がstageした変更', (blob: string) => `--add --cacheinfo 100644,${blob},concurrent.txt`,
+      ['ls-files', '-s', 'concurrent.txt'], () => /\tconcurrent\.txt$/u],
+    ['別の操作が付けたskip-worktree', () => '--skip-worktree notes.txt',
+      ['ls-files', '-v', 'notes.txt'], () => /^S notes\.txt$/u],
+    ['別の操作が付けたassume-unchanged', () => '--assume-unchanged notes.txt',
+      ['ls-files', '-v', 'notes.txt'], () => /^h notes\.txt$/u],
+    ['別の操作が変えたmode', () => '--chmod=+x notes.txt',
+      ['ls-files', '-s', 'notes.txt'], () => /^100755 /u],
+    ['別の操作が変えたblob', (blob: string) => `--cacheinfo 100644,${blob},notes.txt`,
+      ['ls-files', '-s', 'notes.txt'], (blob: string) => new RegExp(`^100644 ${blob} 0\tnotes\\.txt$`, 'u')],
+    ['別の操作が空のファイルをintent-to-addに変えたこと',
+      () => '--force-remove empty.txt && env -u GIT_INDEX_FILE git add -N empty.txt',
+      ['diff-index', '--cached', '--name-only', '--ita-invisible-in-index', 'HEAD', '--', 'empty.txt'], () => /^$/u],
+  ] as const)('runtime stagingの途中で%sは上書きせずに停止する', (_name, updateIndexArgs, inspect, expected) => {
+    preparePlainConflict();
+    stageEmptyFile();
+    writeFileSync(join(cwd, '.gitattributes'), 'code.txt filter=concurrent\n');
+    const blob = git(['rev-parse', 'HEAD:.gitattributes']);
+    git(['config', 'filter.concurrent.clean', 'if [ -n "$GIT_INDEX_FILE" ]; then '
+      + `env -u GIT_INDEX_FILE git update-index ${updateIndexArgs(blob)}; fi; cat`]);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('Git index changed during runtime staging');
+    expect(git([...inspect])).toMatch(expected(blob));
+    expect(git(['ls-files', '-u'])).not.toBe('');
+    expect(existsSync(join(cwd, '.git', 'index.lock'))).toBe(false);
+  });
+
+  it('AIが空のファイルをintent-to-addに変えたら解決をstageせずに停止する', () => {
+    preparePlainConflict();
+    stageEmptyFile();
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    git(['rm', '--cached', '-q', 'empty.txt']);
+    git(['add', '-N', 'empty.txt']);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('AI changed the Git index before runtime validation');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+  });
+
+  it('AIがHEADにある空でないファイルをstagedの空ファイルからintent-to-addへ変えたら解決をstageせずに停止する', () => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, 'notes.txt'), '');
+    git(['add', 'notes.txt']);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    git(['rm', '--cached', '-q', 'notes.txt']);
+    git(['add', '-N', 'notes.txt']);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    expect(() => conflictFiles.validateAndStage()).toThrow('AI changed the Git index before runtime validation');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+    const oldObjectId = git(['rev-parse', 'HEAD:notes.txt']);
+    const deletedObjectId = '0'.repeat(oldObjectId.length);
+    expect(git(['diff-index', '--cached', '--raw', '--ita-invisible-in-index', 'HEAD', '--', 'notes.txt']))
+      .toBe(`:100644 000000 ${oldObjectId} ${deletedObjectId} D\tnotes.txt`);
+  });
+
+  it('AIの作業前からintent-to-addのパスがあっても解決をstageする', () => {
+    preparePlainConflict();
+    writeFileSync(join(cwd, 'planned.txt'), 'planned\n');
+    git(['add', '-N', 'planned.txt']);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+    expect(git(['diff-index', '--cached', '--name-only', '--ita-visible-in-index', 'HEAD', '--', 'planned.txt']))
+      .toBe('planned.txt');
+    expect(git(['diff-index', '--cached', '--name-only', '--ita-invisible-in-index', 'HEAD', '--', 'planned.txt']))
+      .toBe('');
+  });
+
+  it('stage済みの大量削除でcached raw diffが1 MiBを超えても競合の比較とstageを行える', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    const hashBlob = (content: string) => execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd, input: content, encoding: 'utf8', stdio: 'pipe',
+    }).trim();
+    const emptyBlob = hashBlob('');
+    const rootIndexInfo = Array.from({ length: 12_000 }, (_, index) =>
+      `100644 blob ${emptyBlob}\tdel/f${String(index).padStart(5, '0')}.txt`);
+    rootIndexInfo.push(`100644 blob ${hashBlob('original\n')}\tcode.txt`);
+    execFileSync('git', ['update-index', '--index-info'], {
+      cwd, input: `${rootIndexInfo.join('\n')}\n`, stdio: 'pipe',
+    });
+    const rootCommit = git(['commit-tree', git(['write-tree']), '-m', 'root']);
+    git(['update-ref', 'refs/heads/main', rootCommit]);
+    git(['update-index', '--cacheinfo', `100644,${hashBlob('feature\n')},code.txt`]);
+    const featureCommit = git(['commit-tree', git(['write-tree']), '-p', rootCommit, '-m', 'feature']);
+    git(['update-ref', 'refs/heads/feature/pr', featureCommit]);
+    git(['read-tree', '--empty']);
+    git(['update-index', '--add', '--cacheinfo', `100644,${hashBlob('base\n')},code.txt`]);
+    const baseCommit = git(['commit-tree', git(['write-tree']), '-p', rootCommit, '-m', 'base']);
+    git(['update-ref', 'refs/heads/main', baseCommit]);
+    git(['read-tree', featureCommit]);
+    git(['checkout-index', '-f', 'code.txt']);
+    git(['symbolic-ref', 'HEAD', 'refs/heads/feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+    stageEmptyFile();
+    const rawDiff = execFileSync(
+      'git',
+      ['diff-index', '--cached', '--raw', '-z', '--ita-invisible-in-index', 'HEAD'],
+      { cwd, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 },
+    );
+    expect(rawDiff.length).toBeGreaterThan(1024 * 1024);
+
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    git(['rm', '--cached', '-q', 'empty.txt']);
+    git(['add', '-N', 'empty.txt']);
+    expect(() => conflictFiles.validateAndStage()).toThrow('AI changed the Git index before runtime validation');
+    expect(git(['ls-files', '-u'])).not.toBe('');
+
+    git(['add', 'empty.txt']);
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+  });
+
+  it('追跡パスが多くてls-files -s -vの出力が1 MiBを超えても競合の比較とstageを行える', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    const hashBlob = (content: string) => execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd, input: content, encoding: 'utf8', stdio: 'pipe',
+    }).trim();
+    const emptyBlob = hashBlob('');
+    const pathAt = (index: number) => `f${String(index).padStart(8, '0')}`;
+    const oneMiB = 1024 * 1024;
+    // The -v tag adds two bytes per entry. Use the midpoint to put the limit between the two outputs.
+    const entryBytes = Buffer.byteLength(`100644 ${emptyBlob} 0\t${pathAt(0)}\0`);
+    const entryCount = Math.floor(oneMiB / (entryBytes + 1));
+    const rootIndexInfo = Array.from({ length: entryCount }, (_, index) =>
+      `100644 blob ${emptyBlob}\t${pathAt(index)}`);
+    rootIndexInfo.push(`100644 blob ${hashBlob('original\n')}\tcode.txt`);
+    execFileSync('git', ['update-index', '--index-info'], {
+      cwd, input: `${rootIndexInfo.join('\n')}\n`, stdio: 'pipe',
+    });
+    const rootCommit = git(['commit-tree', git(['write-tree']), '-m', 'root']);
+    git(['update-ref', 'refs/heads/main', rootCommit]);
+    git(['update-index', '--cacheinfo', `100644,${hashBlob('feature\n')},code.txt`]);
+    const featureCommit = git(['commit-tree', git(['write-tree']), '-p', rootCommit, '-m', 'feature']);
+    git(['update-ref', 'refs/heads/feature/pr', featureCommit]);
+    git(['update-index', '--cacheinfo', `100644,${hashBlob('base\n')},code.txt`]);
+    const baseCommit = git(['commit-tree', git(['write-tree']), '-p', rootCommit, '-m', 'base']);
+    git(['update-ref', 'refs/heads/main', baseCommit]);
+    git(['read-tree', featureCommit]);
+    git(['checkout-index', '-f', 'code.txt']);
+    git(['symbolic-ref', 'HEAD', 'refs/heads/feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+    const lsFiles = (flags: string[]) => execFileSync('git', ['ls-files', ...flags, '-z'], {
+      cwd, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024,
+    });
+    expect(lsFiles(['-s']).length).toBeLessThan(oneMiB);
+    expect(lsFiles(['-s', '-v']).length).toBeGreaterThan(oneMiB);
+
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
   });
 
   it('Gitの8文字競合マーカーを残す解決はstageしない', () => {
@@ -271,6 +473,84 @@ describe('PR custom merge drivers and conflict recovery', () => {
     expect(git(['ls-files', '-u'])).toBe('');
     git(['commit', '--no-edit']);
     expect(readFileSync(join(cwd, 'code.txt'), 'utf8')).toBe('kept\n');
+  });
+
+  it('HEADという名前の追跡ファイルがあっても、競合の比較とstageを行える', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    writeFileSync(join(cwd, 'HEAD'), 'tracked file named HEAD\n');
+    writeFileSync(join(cwd, 'code.txt'), 'original\n');
+    git(['add', '.']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    writeFileSync(join(cwd, 'code.txt'), 'feature\n');
+    git(['commit', '-am', 'feature']);
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'code.txt'), 'base\n');
+    git(['commit', '-am', 'base']);
+    git(['checkout', 'feature/pr']);
+    expect(() => git(['merge', 'main'])).toThrow();
+
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+    conflictFiles.validateAndStage();
+
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+  });
+
+  it('racy-cleanな競合外エントリへ、mtimeを保つ同サイズ編集が入ってもstageする', () => {
+    preparePlainConflict();
+    git(['config', 'core.trustctime', 'false']);
+    const notes = join(cwd, 'notes.txt');
+    const index = join(cwd, '.git', 'index');
+    const racyTime = new Date(Date.now() - 60_000);
+    utimesSync(notes, racyTime, racyTime);
+    git(['status', '--porcelain']);
+    utimesSync(index, racyTime, racyTime);
+    const conflictFiles = captureSyncConflictFiles(cwd);
+    utimesSync(index, racyTime, racyTime);
+    writeFileSync(notes, 'NOTES\nmiddle\nthird\n', { flag: 'r+' });
+    utimesSync(notes, racyTime, racyTime);
+    writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
+
+    conflictFiles.validateAndStage();
+
+    expect(git(['ls-files', '-u'])).toBe('');
+    expect(git(['show', ':notes.txt'])).toBe('NOTES\nmiddle\nthird');
+    expect(git(['show', ':code.txt'])).toBe('resolved');
+  });
+
+  it('親プロセスのGIT_DIRがあっても、linked worktreeの競合を現在のHEADで検証する', () => {
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Driver Test']);
+    git(['config', 'user.email', 'test@example.test']);
+    writeFileSync(join(cwd, 'code.txt'), 'original\n');
+    git(['add', '.']); git(['commit', '-m', 'root']);
+    git(['checkout', '-b', 'feature/pr']);
+    writeFileSync(join(cwd, 'code.txt'), 'feature\n');
+    git(['commit', '-am', 'feature']);
+    git(['checkout', 'main']);
+    writeFileSync(join(cwd, 'code.txt'), 'base\n');
+    git(['commit', '-am', 'base']);
+    const linked = join(root, 'linked');
+    git(['worktree', 'add', linked, 'feature/pr']);
+    expect(() => execFileSync('git', ['merge', 'main'], { cwd: linked, stdio: 'pipe' })).toThrow();
+    const env = createGitEnvironment(false);
+    expect(env.GIT_DIR).toBeUndefined();
+    const inheritedGitDir = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(cwd, '.git');
+    try {
+      const conflictFiles = captureSyncConflictFiles(linked, env);
+      writeFileSync(join(linked, 'code.txt'), 'resolved\n');
+      conflictFiles.validateAndStage();
+    } finally {
+      if (inheritedGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = inheritedGitDir;
+    }
+
+    expect(execFileSync('git', ['ls-files', '-u'], { cwd: linked, encoding: 'utf8' })).toBe('');
+    expect(execFileSync('git', ['show', ':code.txt'], { cwd: linked, encoding: 'utf8' }).trim()).toBe('resolved');
   });
 
   function setupFilter(kind: 'smudge' | 'process', attributed: boolean, conflict: boolean) {

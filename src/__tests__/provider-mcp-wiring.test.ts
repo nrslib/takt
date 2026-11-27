@@ -204,18 +204,19 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       providerOptions: { codex: { skills: { repo: true, user: true } } },
     });
     expect(provider.supportsMcpOnlySideEffects).toBe(true);
-    expect(getLastCallOptions(vi.mocked(systemPrompt ? callCodexCustom : callCodex))).toMatchObject({
+    expect(callCodex).not.toHaveBeenCalled();
+    expect(getLastCallOptions(vi.mocked(callCodexCustom))).toMatchObject({
       mcpOnlySideEffects: true, permissionMode: 'readonly', preparedMcp,
     });
   });
 
   it('enables Codex MCP-only isolation even with an empty tool allowlist', async () => {
     const { CodexProvider } = await import('../infra/providers/codex.js');
-    const { callCodex } = await import('../infra/codex/client.js');
+    const { callCodexCustom } = await import('../infra/codex/client.js');
     await new CodexProvider().setup({ name: 'manager' }).call('prompt', {
       cwd: '/tmp', permissionMode: 'readonly', mcpOnlySideEffects: [],
     });
-    expect(getLastCallOptions(vi.mocked(callCodex)).mcpOnlySideEffects).toBe(true);
+    expect(getLastCallOptions(vi.mocked(callCodexCustom)).mcpOnlySideEffects).toBe(true);
   });
 
   it('Given claude-sdk provider, When ProviderCallOptions.preparedMcp is set, Then callClaude receives preparedMcp in ClaudeCallOptions', async () => {
@@ -257,16 +258,16 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     expect(options.preparedMcp).toBe(preparedMcp);
   });
 
-  it('Given codex provider, When ProviderCallOptions.preparedMcp is set, Then callCodex receives preparedMcp in CodexCallOptions', async () => {
+  it('Given codex provider, When ProviderCallOptions.preparedMcp is set, Then callCodexCustom receives preparedMcp in CodexCallOptions', async () => {
     const { CodexProvider } = await import('../infra/providers/codex.js');
-    const { callCodex } = await import('../infra/codex/client.js');
+    const { callCodexCustom } = await import('../infra/codex/client.js');
     const provider = new CodexProvider();
     const agent = provider.setup({ name: 'test' });
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
     });
-    const options = getLastCallOptions(callCodex as unknown as { mock: { calls: unknown[][] } });
+    const options = getLastCallOptions(callCodexCustom as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
 
@@ -351,13 +352,13 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
 
   it('Given a provider with no preparedMcp, Then XxxCallOptions.preparedMcp is undefined (not silently dropped or defaulted)', async () => {
     const { CodexProvider } = await import('../infra/providers/codex.js');
-    const { callCodex } = await import('../infra/codex/client.js');
+    const { callCodexCustom } = await import('../infra/codex/client.js');
     const provider = new CodexProvider();
     const agent = provider.setup({ name: 'test' });
     await agent.call('prompt', {
       cwd: '/tmp',
     });
-    const options = getLastCallOptions(callCodex as unknown as { mock: { calls: unknown[][] } });
+    const options = getLastCallOptions(callCodexCustom as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBeUndefined();
   });
 });

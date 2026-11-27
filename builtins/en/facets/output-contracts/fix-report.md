@@ -19,6 +19,11 @@
 |-------------|-----------------------|-------------------|---------------|--------------------------------------|
 | {Only when applicable} | {Claim linked to the prior finding} | {Whether the gap exists after comparison with authoritative sources, current guards, and observation points} | {Repair and verification of a real gap, or evidence refuting the premise} | {Items previously marked complete under the same premise and their results} |
 
+## Applied Repair Method and Evidence
+| Repair Unit | Planned and Actual Methods | Shared-Cause Treatment and Preserved Conditions | Current Evidence | Superseded Old-Plan Verification |
+|-------------|----------------------------|------------------------------------------------|------------------|----------------------------------|
+| {Name} | {Method, implementation locations, and reasons for differences} | {Removed assumption, success and failure outcomes} | {Target code state, observed conditions, results, and references} | {Latest instruction, superseded verification and reason, original acceptance criteria retained, or N/A} |
+
 ## Quality Gates
 | Type | Result | Evidence |
 |------|--------|----------|

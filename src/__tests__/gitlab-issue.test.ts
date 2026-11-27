@@ -524,7 +524,7 @@ describe('createIssue', () => {
     expect(mockLogError).toHaveBeenCalledWith(
       expect.any(String),
       {
-        error: 'Failed to extract issue number from created issue URL',
+        error: 'Error: Issue URL must end with a positive issue number',
         url: 'https://gitlab.com/org/repo/-/issues/not-a-number',
       },
     );

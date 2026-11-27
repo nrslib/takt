@@ -18,14 +18,14 @@ export async function createTurnBusiness(configDirectory: string, assignment: Co
   }
   let current: { input: TurnStart; io: TurnIo } | undefined;
   const runtime = createDaemonConversationRuntime(configDirectory, {
-    async tellManager(managerId, text) {
+    async tellManager(managerId, text, origin) {
       const turn = current;
       if (turn === undefined || turn.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
       const reply = await turn.io.request({ kind: 'get_delivery', conversationId: managerId });
       if (reply.kind !== 'delivery' || reply.conversationId !== managerId || reply.assignment.kind === 'daemon'
         || conversationId(reply.assignment) !== managerId) throw new Error('Unknown manager delivery');
       return tellDirectorManager({ turn: turn.input.turn,
-        bus: { request: (_turn, request, _signal) => turn.io.request(request) } }, managerId, text, turn.io.signal);
+        bus: { request: (_turn, request, _signal) => turn.io.request(request) } }, managerId, text, origin, turn.io.signal);
     },
     async notifyHuman(message, subject) {
       if (current === undefined) throw new Error('Active turn required');

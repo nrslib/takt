@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { copyPrivateTaskAttachments, readManagerImageTask } from './managerImageAttachments.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { StoredImageAttachment } from '../../shared/types/image-attachments.js';
@@ -214,7 +215,7 @@ function assertTaskAttachmentManifestEntry(
   }
 }
 
-function assertTaskAttachmentsMatchManifest(
+export function assertTaskAttachmentsMatchManifest(
   taskDir: string,
   expectedManifest: TaskAttachmentManifest,
 ): void {
@@ -289,7 +290,8 @@ export function copyTaskAttachmentsToRunContext(
   assertTaskAttachmentsMatchManifest(sourceTaskDir, expectedManifest);
   const sourceAttachmentsDir = path.join(sourceTaskDir, 'attachments');
   if (expectedManifest.length !== 0) {
-    copyAttachmentEntry(sourceAttachmentsDir, path.join(runContextTaskDir, 'attachments'));
+    if (readManagerImageTask(sourceTaskDir) === undefined) copyAttachmentEntry(sourceAttachmentsDir, path.join(runContextTaskDir, 'attachments'));
+    else copyPrivateTaskAttachments(sourceAttachmentsDir, path.join(runContextTaskDir, 'attachments'), runContextTaskDir);
   }
   assertTaskAttachmentsMatchManifest(sourceTaskDir, expectedManifest);
   assertTaskAttachmentsMatchManifest(runContextTaskDir, expectedManifest);

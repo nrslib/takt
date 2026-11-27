@@ -99,17 +99,12 @@ loop_monitors:
 steps:
   - name: review-adjudication
     uses: peer-review-adjudication
-    with:
-      review_policy_additions:
-        $param: plan_policy
-      review_knowledge_additions:
-        $param: fix_knowledge
     rules:
-      - condition: Problems require repair
+      - condition: The entire task does not need replanning, and there are problems to repair or factual investigations needed to decide acceptance that can proceed within the current scope
         next: fix-plan
-      - condition: No problems require repair
+      - condition: The entire task does not need replanning, and there are no problems to repair or factual investigations to decide acceptance that can proceed within the current scope (including when only items awaiting external confirmation or unverifiable in this environment remain)
         return: no_fix
-      - condition: The entire task must be replanned
+      - condition: The entire task must be replanned, including decisions about protection obligations or repair scope
         return: need_replan
 
   - name: fix-plan

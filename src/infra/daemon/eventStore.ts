@@ -4,39 +4,83 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
 import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
-import type { EventStore, StoredEvent } from '../../core/daemon/ports.js';
-import { AcceptedEventSchema, EventRecordSchema, isRetiredWatchEvent, StoredResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
-import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
+import type { ConversationTurns, EventStore, StoredEvent } from '../../core/daemon/ports.js';
+import type { ConversationAssignment } from '../conversations/schema.js';
+import { AcceptedEventSchema, EventRecordSchema, EventRecordWriteSchema, isRetiredWatchEvent, storedStandaloneInboxAnswer, TurnResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
+import { ensurePrivateDirectory, hasCode, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
+import { ConversationStateStore } from './conversationStateStore.js';
+import { DaemonPersistedFiles } from './persistedFiles.js';
 
-const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
-export class FileEventStore implements EventStore {
+export class FileEventStore implements EventStore, ConversationTurns {
   private readonly directory: string;
   private readonly ids = new Map<string, string>();
   private readonly requests = new Map<string, string>();
   private readonly sequences = new Map<number, string>();
+  private readonly byConversation = new Map<string, Map<string, string>>();
   private readonly knownFiles = new Set<string>();
   private readonly lock = new FileAsyncLock();
+  private readonly conversations: ConversationStateStore;
+  private readonly files: DaemonPersistedFiles;
   private lastSequence = 0;
 
-  constructor(configDirectory: string) { this.directory = join(configDirectory, 'daemon-events'); }
+  constructor(configDirectory: string, private readonly routing?: {
+    permits(assignment: ConversationAssignment, id: string): Promise<boolean>;
+  }) {
+    this.directory = join(configDirectory, 'daemon-events');
+    this.conversations = new ConversationStateStore(configDirectory);
+    this.files = new DaemonPersistedFiles(configDirectory);
+  }
 
   private exclusive<T>(action: () => Promise<T>): Promise<T> {
     return this.lock.exclusive(join(this.directory, '.lock'), action, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
   private async read(path: string): Promise<EventRecord> {
-    const content = await readPrivateFile(path, MAX_RECORD_BYTES);
-    if (content === undefined) throw new Error(`Missing stored event: ${path}`);
+    const record = await this.readStored(path);
+    if (record === undefined) throw new Error(`Missing stored event: ${path}`);
+    return record;
+  }
+
+  // The rollback in accept() unlinks after releasing the lock, so a file
+  // another instance has just confirmed in refresh() can still disappear
+  // before it is read. Callers that iterate stored events tolerate the
+  // disappearance through this variant instead of failing the whole read.
+  private async readStored(path: string): Promise<EventRecord | undefined> {
+    const content = await readEntirePrivateFile(path);
+    if (content === undefined) return undefined;
     const input: unknown = JSON.parse(content.toString('utf8'));
     const record = EventRecordSchema.parse(input);
     if (path !== this.path(record.event.eventId)) throw new Error('Stored event identity mismatch');
     if (record.state === 'running') this.assertTurn(record.event, record.turn);
     if (record.state === 'settling' || record.state === 'settled') this.assertResult(record.event, record.result);
-    return record;
+    const event = await this.restoreStandaloneInboxAnswer(record.event);
+    if (record.state === 'settling' || record.state === 'settled') return { ...record, event, result: { ...record.result, event } };
+    return { ...record, event };
+  }
+
+  private async restoreStandaloneInboxAnswer(saved: AcceptedEvent): Promise<AcceptedEvent> {
+    const answer = storedStandaloneInboxAnswer(saved);
+    if (answer === undefined || saved.event.kind !== 'director_message' || this.routing === undefined) return saved;
+    const savedAssignment = (await this.conversations.read(saved.conversationId))?.state.assignment;
+    if (savedAssignment === undefined || savedAssignment.kind === 'daemon') return saved;
+    const repositories = savedAssignment.kind === 'repository' ? [savedAssignment.repositoryDirectory]
+      : await this.files.readWorkspaceRepositories(savedAssignment.workspaceId);
+    // 保存済み assignment は探索候補であり、現在の配送先を保証しない。
+    for (const repository of repositories) {
+      let inboxDirectory: string;
+      try {
+        if (!await this.routing.permits({ kind: 'repository', repositoryDirectory: repository }, saved.conversationId)) continue;
+        inboxDirectory = await this.files.inboxDirectory(repository);
+      } catch (error) { if (hasCode(error, 'ENOENT')) continue; throw error; }
+      const expected = `standalone-answer-${createHash('sha256').update(JSON.stringify([inboxDirectory, answer.questionId])).digest('hex')}`;
+      // 旧 inbox の createdAt は回答日時とは別に採番される。
+      if (saved.eventId === expected) return { ...saved, event: { ...saved.event, inquiryAnswer: answer } };
+    }
+    return saved;
   }
 
   private path(eventId: string): string { return join(this.directory, `${fileKey(eventId)}.json`); }
@@ -50,26 +94,91 @@ export class FileEventStore implements EventStore {
     this.ids.set(event.eventId, path);
     this.requests.set(request, path);
     this.sequences.set(event.acceptedSequence, event.eventId);
+    let conversation = this.byConversation.get(event.conversationId);
+    if (conversation === undefined) {
+      conversation = new Map<string, string>();
+      this.byConversation.set(event.conversationId, conversation);
+    }
+    conversation.set(event.eventId, path);
     this.lastSequence = Math.max(this.lastSequence, event.acceptedSequence);
     this.knownFiles.add(path);
   }
 
+  readTurns(conversationId: string): ReturnType<ConversationTurns['readTurns']> {
+    return this.exclusive(async () => {
+      await this.refresh();
+      const turns: Awaited<ReturnType<ConversationTurns['readTurns']>>[number][] = [];
+      // Completed turns and background-turn order must survive missed live
+      // delivery. Read the durable events of this conversation through the
+      // index that refresh() and accept() maintain, instead of reading every
+      // event file in the shared directory on every call.
+      const paths = this.byConversation.get(conversationId);
+      if (paths === undefined) return turns;
+      for (const path of [...paths.values()]) {
+        const record = await this.readStored(path);
+        if (record === undefined) {
+          this.forget(path);
+          continue;
+        }
+        const { event } = record;
+        const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
+          && event.event.command.display !== false ? event.event.command.text : undefined;
+        turns.push({ operationId: event.operationId, ...(message === undefined ? {} : { message }),
+          acceptedSequence: event.acceptedSequence, pending: record.state === 'queued',
+          ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}) });
+      }
+      return turns.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
+    });
+  }
+
   private async refresh(): Promise<void> {
     await ensurePrivateDirectory(this.directory);
+    const present = new Set<string>();
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
-      const path = join(this.directory, entry.name);
+      present.add(join(this.directory, entry.name));
+    }
+    // A file another instance indexed can disappear afterwards (the
+    // rollback in accept() unlinks after releasing the lock). Drop index
+    // entries whose file is gone before registering new files: a new
+    // event may reuse the vanished event's sequence or request key, and
+    // registering it against the stale entry would throw a conflict.
+    for (const path of this.knownFiles) {
+      if (!present.has(path)) this.forget(path);
+    }
+    for (const path of present) {
       if (!this.knownFiles.has(path)) {
-        const record = await this.read(path);
+        const record = await this.readStored(path);
+        if (record === undefined) continue;
         this.index(record, path);
       }
     }
   }
 
+  private forget(path: string): void {
+    this.knownFiles.delete(path);
+    const removedIds = new Set<string>();
+    for (const [eventId, candidate] of this.ids) {
+      if (candidate === path) {
+        this.ids.delete(eventId);
+        removedIds.add(eventId);
+      }
+    }
+    for (const [request, candidate] of this.requests) {
+      if (candidate === path) this.requests.delete(request);
+    }
+    if (removedIds.size === 0) return;
+    for (const [sequence, eventId] of this.sequences) {
+      if (removedIds.has(eventId)) this.sequences.delete(sequence);
+    }
+    for (const [conversationId, conversation] of this.byConversation) {
+      for (const eventId of removedIds) conversation.delete(eventId);
+      if (conversation.size === 0) this.byConversation.delete(conversationId);
+    }
+  }
+
   private async write(record: EventRecord): Promise<void> {
-    const content = JSON.stringify(EventRecordSchema.parse(record));
-    if (Buffer.byteLength(content) > MAX_RECORD_BYTES) throw new Error('Stored event exceeds capacity');
-    await writePrivateFile(this.path(record.event.eventId), content);
+    await writePrivateFile(this.path(record.event.eventId), JSON.stringify(EventRecordWriteSchema.parse(record)));
   }
 
   async accept(input: AcceptedEvent): ReturnType<EventStore['accept']> {
@@ -101,6 +210,7 @@ export class FileEventStore implements EventStore {
         this.ids.delete(event.eventId);
         this.requests.delete(requestKey(event));
         this.sequences.delete(event.acceptedSequence);
+        this.byConversation.get(event.conversationId)?.delete(event.eventId);
         this.knownFiles.delete(this.path(event.eventId));
       }
       throw error;
@@ -131,7 +241,7 @@ export class FileEventStore implements EventStore {
   }
 
   async saveResult(eventId: string, input: TurnResult): Promise<void> {
-    const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
+    const result = TurnResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
       this.assertResult(record.event, result);
@@ -145,7 +255,7 @@ export class FileEventStore implements EventStore {
   }
 
   async markSettled(eventId: string, input: TurnResult): Promise<void> {
-    const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
+    const result = TurnResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
       if (result.outcome.kind === 'deferred' && record.state === 'queued' && isDeepStrictEqual(record.event, result.event)) return;
@@ -160,6 +270,27 @@ export class FileEventStore implements EventStore {
       await this.refresh();
       return { lastAcceptedSequence: this.lastSequence, pending: this.pending() };
     });
+  }
+
+  async hasImageReference(conversationId: string, imageId: string, activeOnly = false): Promise<boolean> {
+    return this.conversations.withConversationLock(conversationId, async () => this.exclusive(async () => {
+      const state = activeOnly ? (await this.conversations.read(conversationId))?.state : undefined;
+      if (state?.interruptedImageAttachmentIds?.includes(imageId)) return true;
+      if (state?.session.sessionId !== null && state?.session.imageAttachmentIds?.includes(imageId)) return true;
+      // Task 1 sessions did not record ownership. Preserve their accepted images until an explicit session switch.
+      const legacySession = state !== undefined && state.session.sessionId !== null && state.session.imageAttachmentIds === undefined;
+      await ensurePrivateDirectory(this.directory);
+      for await (const entry of await opendir(this.directory)) {
+        if (!entry.name.endsWith('.json')) continue;
+        const record = await this.readStored(join(this.directory, entry.name));
+        if (record === undefined) continue;
+        const event = record.event.event;
+        if ((!activeOnly || legacySession || record.state !== 'settled')
+          && record.event.conversationId === conversationId && event.kind === 'human_command'
+          && event.command.kind === 'message' && event.command.imageAttachmentIds?.includes(imageId)) return true;
+      }
+      return false;
+    }));
   }
 
   async hasGoalRegistration(repositoryDirectory: string, goalId: string): Promise<boolean> {

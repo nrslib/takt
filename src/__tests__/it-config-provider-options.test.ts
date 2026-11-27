@@ -288,6 +288,98 @@ describe('IT: config provider_options reflection', () => {
     });
   });
 
+  it('global claude permissions should reach runAgent providerOptions', async () => {
+    setGlobalConfig(
+      env.globalDir,
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./.env)"',
+        '      import_user_read_deny: true',
+      ].join('\n'),
+    );
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      workflowIdentifier: 'config-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions?.claude?.permissions).toEqual({
+      deny: ['Read(./.env)'],
+      importUserReadDeny: true,
+    });
+  });
+
+  it('project claude permissions.deny should replace global deny without concatenating', async () => {
+    setGlobalConfig(
+      env.globalDir,
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./.env)"',
+      ].join('\n'),
+    );
+    setProjectConfig(
+      env.projectDir,
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(~/.ssh/**)"',
+      ].join('\n'),
+    );
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      workflowIdentifier: 'config-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions?.claude?.permissions?.deny).toEqual(['Read(~/.ssh/**)']);
+  });
+
+  it('env claude permissions should override yaml claude permissions leaf by leaf', async () => {
+    setGlobalConfig(
+      env.globalDir,
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./.env)"',
+        '      import_user_read_deny: false',
+      ].join('\n'),
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY = 'true';
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      workflowIdentifier: 'config-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions?.claude?.permissions).toEqual({
+      deny: ['Read(./.env)'],
+      importUserReadDeny: true,
+    });
+  });
+
   it('should resolve Codex config profile from project options and environment override', async () => {
     setGlobalConfig(env.globalDir, [
       'provider_options:',

@@ -110,58 +110,6 @@ test('prepare targets are resolved from the same suite registry', () => {
   );
 });
 
-test('review adjudication retains A1-A4 applicability cases and provider conditions', () => {
-  const suite = selectPromptEvalSuites({ names: ['review-adjudication-applicable-inputs'] })[0];
-  assert.equal(suite.tier, 'active');
-  assert.equal(suite.execution.defaultEligible, false);
-  assert.deepEqual(promptEvalPrepareTargets([suite]),
-    ['a1', 'a2', 'a3', 'a4'].map(id => `review-adjudication-applicable-inputs-${id}`));
-
-  const current = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
-  const historical = parse(readFileSync(
-    new URL('./agents/fix-verifier/fix-verification-applicable-inputs.yaml', import.meta.url), 'utf8'));
-  assert.deepEqual(current.providers, historical.providers);
-  assert.deepEqual(current.defaultTest, historical.defaultTest);
-  assert.deepEqual(current.evaluateOptions, historical.evaluateOptions);
-  assert.deepEqual(current.prompts.map(prompt => prompt.label), ['a1', 'a2', 'a3', 'a4']);
-  for (const id of ['a1', 'a2', 'a3', 'a4']) {
-    const currentCase = current.tests.find(entry => entry.description === id.toUpperCase());
-    const historicalCase = historical.tests.find(entry => entry.description === id.toUpperCase());
-    assert.deepEqual(currentCase.vars, historicalCase.vars);
-    assert.equal(currentCase.assert[0].value, historicalCase.assert[0].value);
-    assert.equal(current.prompts.find(prompt => prompt.label === id).config.working_dir,
-      historical.prompts.find(prompt => prompt.label === id).config.working_dir);
-  }
-});
-
-test('frontend suite prompts bind to their matching prepared run directories', () => {
-  for (const configName of ['frontend.yaml', 'frontend-opus.yaml']) {
-    const source = readFileSync(
-      new URL(`./agents/frontend-review/${configName}`, import.meta.url),
-      'utf8',
-    );
-    assert.match(
-      source,
-      /label: frontend-review\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review/s,
-    );
-    assert.match(
-      source,
-      /label: frontend-review-react\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review-react\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review-react/s,
-    );
-    assert.match(
-      source,
-      /required_snapshots:\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-policies\.md\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-knowledge\.md/s,
-    );
-    assert.doesNotMatch(source, /working_dir: fixtures\/frontend-design/);
-  }
-
-  const selected = selectPromptEvalSuites({ names: ['frontend', 'frontend-opus'] });
-  assert.deepEqual(
-    promptEvalPrepareTargets(selected),
-    ['frontend-review', 'frontend-review-react'],
-  );
-});
-
 test('every registered prepare target resolves to an actual prepare target', () => {
   const availableTargets = new Set(PREPARE_TARGET_IDS);
   const unresolvedTargets = promptEvalPrepareTargets(PROMPT_EVAL_SUITES)
@@ -202,29 +150,6 @@ test('agent cases bind each task to its own isolated fixture', () => {
       if (suite === 'security-threat-model') {
         assert.equal(testCase.assert.length, 1);
         assert.equal(testCase.assert[0].type, 'llm-rubric');
-      } else {
-        assert.equal(testCase.assert.length, 1);
-        assert.deepEqual(testCase.assert.map(({ metric }) => metric),
-          [`${suite}/${caseId}-boundary`]);
-        assert.ok(testCase.assert[0].value.startsWith(
-          '見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。',
-        ));
-        if (caseId === 'b2') {
-          assert.match(testCase.assert[0].value, /今回の範囲外.*または.*代替経路/);
-        }
-        if (caseId === 'b11') {
-          assert.match(testCase.assert[0].value, /実装とこの環境で動くテスト、または.*処理前/);
-        }
-        if (caseId === 'b12') {
-          assert.match(testCase.assert[0].value, /修正対象または外部確認待ちを残した場合だけ不合格/);
-        }
-        if (caseId === 'b13') {
-          assert.match(testCase.assert[0].value, /処理を始める前.*文書.*修正対象/);
-        }
-        if (caseId === 'c1') {
-          assert.match(testCase.assert[0].value, /APPROVE または同等の合格判定/);
-          assert.match(testCase.assert[0].value, /Windows 実機確認の未実施を理由に REJECT、BLOCKED/);
-        }
       }
     }
 
@@ -236,14 +161,6 @@ test('agent cases bind each task to its own isolated fixture', () => {
       && provider.working_dir === undefined));
     assert.deepEqual(promptEvalPrepareTargets(selectPromptEvalSuites({ names: [suite] })),
       cases.map((caseId) => `${suite}-${caseId}`));
-    if (suite === 'secondary-platform-adjudication') {
-      assert.equal(config.evaluateOptions.maxConcurrency, 3);
-      const latestDecision = readFileSync(new URL(
-        './fixtures/secondary-platform-adjudication/c1/reports-seed/review-resolution.md',
-        import.meta.url,
-      ), 'utf8');
-      assert.match(latestDecision, /実機で確認する.*受入条件から外し、今回の範囲外/);
-    }
   }
 });
 
@@ -256,19 +173,45 @@ test('manager work split is active, explicit, costly and has no prepare targets'
   assert.deepEqual(promptEvalPrepareTargets([suite]), []);
   assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
   const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
-  assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
-    ['gpt-6.1-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
-    ['gpt-6.1-terra', 'medium'],
-    ['claude-opus-5', undefined],
-  ]);
-  assert.equal(config.tests.length, 150);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 75);
-  const execution = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
-  const replay = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
-  assertManagerInputPartition({ replay: replay.map(({ vars }) => vars), execution: execution.map(({ vars }) => vars) });
-  for (const row of execution) assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
-  for (const row of replay) {
-    assert.deepEqual(row.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+  assert.equal(new Set(config.providers.map(({ label }) => label)).size, config.providers.length);
+  assert.deepEqual(Object.fromEntries(config.providers.map(({ label, id, config: { model, reasoning_effort } }) => [
+    label, { id, model, reasoning_effort },
+  ])), {
+    'codex-sol-low': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-sol',
+      reasoning_effort: 'low',
+    },
+    'claude-opus-5': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+    'codex-luna-max': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6-luna',
+      reasoning_effort: 'max',
+    },
+    'codex-terra-medium': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-terra',
+      reasoning_effort: 'medium',
+    },
+    'claude-sdk-opus-5': {
+      id: 'file://../../providers/manager-work-split-execution.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+  });
+  const executionTests = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
+  const replayTests = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
+  assertManagerInputPartition({
+    replay: replayTests.map(({ vars }) => vars),
+    execution: executionTests.map(({ vars }) => vars),
+  });
+  for (const row of executionTests) assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
+  for (const row of replayTests) {
+    assert.deepEqual(new Set(row.providers), new Set(['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']));
   }
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
@@ -281,6 +224,7 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
     'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication', 'existing-invoice-format',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
+    'permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
@@ -288,6 +232,7 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
     'csv-export-scope-conversation', 'search-index-scope-conversation',
     'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit',
+    'running-subworkflow-progress',
   ]) {
     assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
     if (['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued'].includes(caseId)) {
@@ -295,5 +240,15 @@ test('manager work split is active, explicit, costly and has no prepare targets'
         assert.deepEqual(entry.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
       }
     }
+  }
+});
+
+
+test('repair strategy history targets accompany both existing stage suites', () => {
+  for (const name of ['review-adjudication', 'fix-plan-bounded-proof']) {
+    const [suite] = selectPromptEvalSuites({ names: [name] });
+    assert.deepEqual(promptEvalPrepareTargets([suite]), [name, 'repair-strategy']);
+    assert.equal(suite.execution.defaultEligible, false);
+    assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
   }
 });

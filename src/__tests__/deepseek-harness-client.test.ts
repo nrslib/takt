@@ -12,6 +12,9 @@ import { parse as parseYaml } from 'yaml';
 import { createPartTimeoutReason } from '../shared/types/agent-failure.js';
 import type { DeepSeekHarnessOptions } from '../infra/deepseek-harness/sdk-types.js';
 import { loadDeepSeekTestModules } from './helpers/deepseek-managed-sdk.js';
+import type { StreamEvent } from '../shared/types/provider.js';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
+import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
 
 interface ManagedModuleLoadEvidence {
   directory: string;
@@ -130,7 +133,7 @@ const SUPPORTED_RUNTIME = (
 const DUMMY_CREDENTIAL = 'TAKT_DUMMY_CLIENT_CREDENTIAL_SENTINEL';
 const ASYNC_WAIT_TIMEOUT_MS = 30_000;
 const offlineManagedNpmCache = process.env.TAKT_DSH_OFFLINE_NPM_CACHE;
-const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', managedPackageRootEnvironmentKey] as const;
+const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', 'TMPDIR', 'TEMP', 'TMP', managedPackageRootEnvironmentKey] as const;
 const savedEnvironment = new Map<string, string | undefined>();
 let temporaryRoot: string;
 let localApis: LocalApi[] = [];
@@ -416,6 +419,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     managedModuleLoads.mockClear();
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(join(tmpdir(), 'takt-deepseek-client-sdk-'));
+    for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = temporaryRoot;
     process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
     process.env.TAKT_CONFIG_DIR = join(temporaryRoot, 'takt');
     process.env.PI_CODING_AGENT_DIR = join(temporaryRoot, 'pi-agent');
@@ -441,6 +445,422 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     }
     savedEnvironment.clear();
   }, 120_000);
+
+  it.each([
+    { name: 'text', type: 'text-delta', prefix: 'prefix' },
+    { name: 'thinking', type: 'reasoning-delta', prefix: 'prefix' },
+  ])('masks configured short values as substrings in $name, final responses and logs', async ({ type, prefix }) => {
+    process.env.DEEPSEEK_API_KEY = 'abc';
+    const events: StreamEvent[] = [];
+    const logger = createProviderEventLogger({ logsDir: temporaryRoot, sessionId: 'short-configured', runId: 'run', enabled: true });
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'short-configured-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      for (const text of [prefix + 'a', 'bcSuffix\n']) send({ type: 'assistant/chunk', data: { chunk: { type, text } } });
+      send({ type: 'tool/call', data: { callId: 'call-1', name: 'Bash', arguments: JSON.stringify({ command: prefix + 'abcSuffix' }) } });
+      send({ type: 'tool/result', data: { message: { source: { callId: 'call-1' }, content: [{ type: 'text', text: prefix + 'abcSuffix' }] } } });
+      send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: prefix + 'abcSuffix', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => {
+      events.push(event);
+      logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-chat', step: 'inspect' }, event);
+    } });
+    expect(response.status).toBe('done');
+    expect(response.content).toBe(prefix + '[REDACTED]Suffix');
+    const text = events.map((event) => type === 'text-delta' && event.type === 'text' ? event.data.text
+      : type === 'reasoning-delta' && event.type === 'thinking' ? event.data.thinking : '').join('');
+    expect(text).toBe(prefix + '[REDACTED]Suffix\n');
+    expect(events).toContainEqual({ type: 'tool_use', data: { id: 'call-1', tool: 'Bash', input: { command: prefix + '[REDACTED]Suffix' } } });
+    expect(events).toContainEqual({ type: 'tool_result', data: { id: 'call-1', content: prefix + '[REDACTED]Suffix', isError: false } });
+    expect(JSON.stringify(events)).not.toContain('abc');
+    expect(await readFile(logger.filepath, 'utf8')).not.toContain('abc');
+  });
+
+  it('masks configured short values embedded in abort diagnostics', async () => {
+    process.env.DEEPSEEK_API_KEY = 'abc';
+    const controller = new AbortController();
+    const events: StreamEvent[] = [];
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async () => {
+      controller.abort('prefixabcSuffix');
+      return { sessionId: 'short-abort-session', finalResponse: '', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot,
+      abortSignal: controller.signal, onStream: (event) => events.push(event) });
+    expect(response.status).toBe('error');
+    expect(response.error).toContain('prefix[REDACTED]Suffix');
+    expect(response.content).not.toContain('abc');
+    expect(JSON.stringify(events)).not.toContain('abc');
+  });
+
+  it.each(['success', 'abort'] as const)('keeps ordinary short-value matching for tool-input-only values on %s', async (ending) => {
+    const controller = new AbortController();
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'short-tool-input-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      send({ type: 'tool/call', data: { callId: 'call-1', name: 'Bash', arguments: '{"token":"abc"}' } });
+      send({ type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 'prefixabcSuffix\n' } } });
+      if (ending === 'abort') controller.abort('prefixabcSuffix');
+      else send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: 'prefixabcSuffix', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, abortSignal: controller.signal });
+    expect(response.status).toBe(ending === 'success' ? 'done' : 'error');
+    expect(response.content).toContain('prefixabcSuffix');
+  });
+
+  it('masks overlapping configured and tool-input values on a complete line', async () => {
+    process.env.DEEPSEEK_API_KEY = 'abc';
+    const events: StreamEvent[] = [];
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'substring-overlap-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      send({ type: 'tool/call', data: { callId: 'call-1', name: 'Bash', arguments: '{"token":"bcDef"}' } });
+      for (const text of ['xa', 'bcD', 'efSuffix\n']) send({ type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text } } });
+      send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: 'xabcDefSuffix', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => events.push(event) });
+    expect(response.status).toBe('done');
+    expect(response.content).toBe('x[REDACTED]Suffix');
+    expect(events.filter((event) => event.type === 'text').map((event) => event.data.text).join('')).toBe('x[REDACTED]Suffix\n');
+  });
+
+  it.each((['standalone', 'message-block'] as const).flatMap((delivery) =>
+    (['success', 'abort'] as const).map((ending) => ({ delivery, ending }))))(
+    'carries tool-input secrets into separate notifications and logs: $delivery / $ending', async ({ delivery, ending }) => {
+      const events: StreamEvent[] = [];
+      const controller = new AbortController();
+      const logger = createProviderEventLogger({ logsDir: temporaryRoot, sessionId: 'input-candidates', runId: 'run', enabled: true });
+      vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+      vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+      vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+        const sessionId = 'input-candidates-session';
+        const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+        const call = { type: 'tool-call', id: 'call-1', name: 'Bash', arguments: '{"token":"s3cr3t"}' };
+        if (delivery === 'standalone') send({ type: 'tool/call', data: { callId: call.id, name: call.name, arguments: call.arguments } });
+        else send({ type: 'assistant/message', data: { message: { content: [call] } } });
+        send({ type: 'tool/result', data: { message: { source: { callId: 'call-1' }, content: [{ type: 'text', text: 's3cr3t' }] } } });
+        send({ type: 'tool/call', data: { callId: 'call-2', name: 'Bash', arguments: '{"command":"echo s3cr3t"}' } });
+        for (const type of ['text-delta', 'reasoning-delta']) {
+          for (const text of ['s3', 'cr3t\n']) send({ type: 'assistant/chunk', data: { chunk: { type, text } } });
+        }
+        if (ending === 'abort') controller.abort('cancel s3cr3t');
+        else send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+        return { sessionId, finalResponse: 'final s3cr3t', events: [], notifications: [] };
+      });
+
+      const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, abortSignal: controller.signal,
+        onStream: (event) => {
+          events.push(event);
+          logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-chat', step: 'inspect' }, event);
+        } });
+
+      expect(response.status).toBe(ending === 'success' ? 'done' : 'error');
+      expect(response.content.length).toBeGreaterThan(0);
+      expect(response.content).not.toContain('s3cr3t');
+      expect(response.error ?? '').not.toContain('s3cr3t');
+      if (ending === 'success') expect(response.content).toBe('final [REDACTED]');
+      expect(events).toContainEqual({ type: 'tool_result', data: { id: 'call-1', content: '[REDACTED]', isError: false } });
+      expect(events).toContainEqual({ type: 'tool_use', data: { id: 'call-2', tool: 'Bash', input: { command: 'echo [REDACTED]' } } });
+      expect(events.filter((event) => event.type === 'text').map((event) => event.data.text).join('')).toBe('[REDACTED]\n');
+      expect(events.filter((event) => event.type === 'thinking').map((event) => event.data.thinking).join('')).toBe('[REDACTED]\n');
+      expect(JSON.stringify(events)).not.toContain('s3cr3t');
+      const jsonl = await readFile(logger.filepath, 'utf8');
+      expect(jsonl).not.toContain('s3cr3t');
+      const records = jsonl.trim().split('\n').map((line) => JSON.parse(line) as { event_type: string; data: unknown });
+      expect(records.find((record) => record.event_type === 'tool_result')?.data).toMatchObject({ content: '[REDACTED]' });
+      expect(records.find((record) => record.event_type === 'result')?.data).toMatchObject({ result: response.content });
+    },
+  );
+
+  it.each(['text-delta', 'reasoning-delta'] as const)('masks held %s with the next tool input before emitting text and provider logs', async (type) => {
+    const events: StreamEvent[] = [];
+    const logger = createProviderEventLogger({ logsDir: temporaryRoot, sessionId: 'held-tool-input', runId: 'run', enabled: true });
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'held-tool-input-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      send({ type: 'assistant/chunk', data: { chunk: { type, text: 'Before s3cr3t' } } });
+      send({ type: 'tool/call', data: { callId: 'call-1', name: 'Bash', arguments: '{"token":"s3cr3t"}' } });
+      send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: 'done', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => {
+      events.push(event);
+      logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-chat', step: 'inspect' }, event);
+    } });
+    expect(response.status).toBe('done');
+    const field = type === 'text-delta' ? 'text' : 'thinking';
+    const beforeTool = events.slice(0, events.findIndex((event) => event.type === 'tool_use'));
+    expect(beforeTool).toContainEqual(field === 'text'
+      ? { type: 'text', data: { text: 'Before [REDACTED]' } }
+      : { type: 'thinking', data: { thinking: 'Before [REDACTED]' } });
+    for (const event of events) expect(JSON.stringify(event)).not.toContain('s3cr3t');
+    const records = (await readFile(logger.filepath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { event_type: string; data: unknown });
+    const tool = records.findIndex((record) => record.event_type === 'tool_use');
+    expect(tool).toBeGreaterThan(0);
+    expect(records.slice(0, tool)).toContainEqual(expect.objectContaining({ event_type: field,
+      data: field === 'text' ? { text: 'Before [REDACTED]' } : { thinking: 'Before [REDACTED]' } }));
+    for (const record of records) expect(JSON.stringify(record)).not.toContain('s3cr3t');
+  });
+
+  it('keeps tool-input candidates turn-scoped without remasking previously emitted text', async () => {
+    const events: StreamEvent[] = [];
+    let turn = 0;
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'input-candidates-scope-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      send({ type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 's3cr3t\n' } } });
+      if (turn++ === 0) {
+        send({ type: 'tool/call', data: { callId: 'call-1', name: 'Bash', arguments: '{"token":"s3cr3t"}' } });
+        send({ type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 's3cr3t\n' } } });
+      }
+      send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: 's3cr3t', events: [], notifications: [] };
+    });
+    const options = { cwd: temporaryRoot, onStream: (event: StreamEvent) => events.push(event) };
+
+    const first = await callDeepSeekHarness('worker', 'inspect', options);
+    expect(first.status).toBe('done');
+    expect(first.content).toBe('[REDACTED]');
+    expect(events.filter((event) => event.type === 'text').map((event) => event.data.text).join('')).toBe('s3cr3t\n[REDACTED]\n');
+    events.length = 0;
+    const second = await callDeepSeekHarness('worker', 'continue', { ...options, sessionId: first.sessionId });
+    expect(second.status).toBe('done');
+    expect(second.content).toBe('s3cr3t');
+    expect(events.filter((event) => event.type === 'text').map((event) => event.data.text).join('')).toBe('s3cr3t\n');
+  });
+
+  it('rejects a requested session ID containing an embedded short credential before SDK use', async () => {
+    process.env.DEEPSEEK_API_KEY = 'abc';
+    const run = vi.spyOn(DeepSeekHarness.prototype, 'run');
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'inspect', {
+      cwd: temporaryRoot, sessionId: 'session-xabcx', onStream: (event) => events.push(event),
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.sessionId).toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+    const results = events.filter((event) => event.type === 'result');
+    expect(results).toHaveLength(1);
+    expect(results[0]!.data.sessionId).not.toContain('abc');
+  });
+
+  it.each([
+    { sessionId: 'session-xabcx', status: 'error' },
+    { sessionId: 'session-xabdx', status: 'done' },
+  ])('validates SDK session ID $sessionId with configured substring masking', async ({ sessionId, status }) => {
+    process.env.DEEPSEEK_API_KEY = 'abc';
+    const events: StreamEvent[] = [];
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
+      return { sessionId, finalResponse: 'xabcx', events: [], notifications: [] };
+    });
+
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => events.push(event) });
+
+    expect(response.status).toBe(status);
+    if (status === 'done') {
+      expect(response.sessionId).toBe(sessionId);
+      expect(response.content).toBe('x[REDACTED]x');
+      expect(events).toContainEqual({ type: 'text', data: { text: 'x[REDACTED]x' } });
+    } else {
+      expect(response.sessionId).toBeUndefined();
+      const results = events.filter((event) => event.type === 'result');
+      expect(results).toHaveLength(1);
+      expect(results[0]!.data.sessionId).not.toContain('abc');
+    }
+  });
+
+  it.each([{ token: 'opaque', command: 'echo opaque' }, { command: 'echo opaque', token: 'opaque' }])(
+    'redacts same-event discoveries in SDK tool events and their logs: %j', async (input) => {
+      const events: StreamEvent[] = [];
+      const logger = createProviderEventLogger({ logsDir: temporaryRoot, sessionId: 'same-event', runId: 'run', enabled: true });
+      vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+      vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+      vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+        const sessionId = 'same-event-session';
+        options?.onNotification?.({ method: 'session.event', params: { sessionId,
+          event: { type: 'tool/call', data: { callId: 'call-1', name: 'Bash', arguments: JSON.stringify(input) } } } });
+        options?.onNotification?.({ method: 'session.event', params: { sessionId,
+          event: { type: 'tool/result', data: { message: { source: { callId: 'call-1' },
+            content: [{ type: 'text', text: 'token=result-secret echo result-secret' }] } } } } });
+        options?.onNotification?.({ method: 'session.event', params: { sessionId,
+          event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
+        return { sessionId, finalResponse: 'done', events: [], notifications: [] };
+      });
+      const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => {
+        events.push(event);
+        logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-chat', step: 'inspect' }, event);
+      } });
+      expect(response.status, response.error ?? response.content).toBe('done');
+      expect(events.filter((event) => event.type === 'tool_use' || event.type === 'tool_result')).toEqual([
+        { type: 'tool_use', data: { id: 'call-1', tool: 'Bash', input: { token: '[REDACTED]', command: 'echo [REDACTED]' } } },
+        { type: 'tool_result', data: { id: 'call-1', content: 'token=[REDACTED] echo [REDACTED]', isError: false } },
+      ]);
+      const jsonl = await readFile(logger.filepath, 'utf8');
+      expect(jsonl).not.toMatch(/opaque|result-secret/u);
+      const records = jsonl.trim().split('\n').map((line) => JSON.parse(line) as { event_type: string; data: unknown });
+      expect(records.find((record) => record.event_type === 'tool_use')?.data).toMatchObject({ input: { command: 'echo [REDACTED]' } });
+      expect(records.find((record) => record.event_type === 'tool_result')?.data).toMatchObject({ content: 'token=[REDACTED] echo [REDACTED]' });
+      expect(input.command).toBe('echo opaque');
+    },
+  );
+
+  it.each((['text-delta', 'reasoning-delta'] as const).flatMap((type) => [
+    { type, delivery: 'standalone' as const, before: 'Before tok', expected: 'Before tok' },
+    { type, delivery: 'message-block' as const, before: 'Before token=opaque', expected: 'Before token=[REDACTED]' },
+  ]))('flushes pending $type before $delivery tool events: $before', async ({ type, delivery, before, expected }) => {
+    const events: StreamEvent[] = [];
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'ordered-tool-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      send({ type: 'assistant/chunk', data: { chunk: { type, text: before } } });
+      const call = { type: 'tool-call', id: 'call-1', name: 'Bash', arguments: JSON.stringify({ command: 'echo ok' }) };
+      if (delivery === 'standalone') send({ type: 'tool/call', data: { callId: call.id, name: call.name, arguments: call.arguments } });
+      else send({ type: 'assistant/message', data: { message: { content: [call] } } });
+      send({ type: 'assistant/chunk', data: { chunk: { type, text: 'After tok' } } });
+      const result = { type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: 'ok' }], isError: false };
+      if (delivery === 'standalone') send({ type: 'tool/result', data: { message: { source: { callId: 'call-1' }, content: [result] } } });
+      else send({ type: 'assistant/message', data: { message: { content: [result] } } });
+      send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: 'finished', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => events.push(event) });
+    expect(response.status, response.error ?? response.content).toBe('done');
+    const textOf = (values: StreamEvent[]): string => values.map((event) => event.type === 'text' ? event.data.text
+      : event.type === 'thinking' ? event.data.thinking : '').join('');
+    const use = events.findIndex((event) => event.type === 'tool_use');
+    const result = events.findIndex((event) => event.type === 'tool_result');
+    expect(use).toBeGreaterThanOrEqual(0);
+    expect(result).toBeGreaterThan(use);
+    expect(textOf(events.slice(0, use))).toBe(expected);
+    expect(textOf(events.slice(use + 1, result))).toBe('After tok');
+    expect(JSON.stringify(events)).not.toContain('opaque');
+  });
+
+  it.each(['text-delta', 'reasoning-delta'] as const)('commits %s by line and flushes its final unterminated line', async (type) => {
+    const events: StreamEvent[] = [];
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'live-response-session';
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'assistant/chunk', data: { chunk: { type, text: 'ready' } } } } });
+      expect(events.some((event) => event.type === 'text' || event.type === 'thinking')).toBe(false);
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'assistant/chunk', data: { chunk: { type, text: '\nlast' } } } } });
+      expect(events).toContainEqual(type === 'text-delta'
+        ? { type: 'text', data: { text: 'ready\n' } } : { type: 'thinking', data: { thinking: 'ready\n' } });
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
+      return { sessionId, finalResponse: 'ready\nlast', events: [], notifications: [] };
+    });
+    const result = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot,
+      childProcessEnv: { DEEPSEEK_API_KEY: 'unrelated-credential' }, onStream: (event) => events.push(event) });
+    expect(result.status, result.error ?? result.content).toBe('done');
+    expect(events).toContainEqual(type === 'text-delta'
+      ? { type: 'text', data: { text: 'last' } } : { type: 'thinking', data: { thinking: 'last' } });
+  });
+
+  it.each(splitSecretScenarios.flatMap((scenario) => (['text-delta', 'reasoning-delta'] as const).map((type) => ({ scenario, type }))))(
+    'holds and redacts split credentials in $type notifications: $scenario.name', async ({ scenario, type }) => {
+      const events: StreamEvent[] = [];
+      const shown = (): string => events.flatMap((event) => event.type === 'text' ? [event.data.text]
+        : event.type === 'thinking' ? [event.data.thinking] : []).join('');
+      vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+      vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+      vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+        const sessionId = 'split-credential-session';
+        for (const text of scenario.chunks) {
+          options?.onNotification?.({ method: 'session.event', params: { sessionId,
+            event: { type: 'assistant/chunk', data: { chunk: { type, text } } } } });
+          expect(secretFragmentsIn(shown(), scenario)).toEqual([]);
+        }
+        options?.onNotification?.({ method: 'session.event', params: { sessionId,
+          event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
+        return { sessionId, finalResponse: scenarioText(scenario), events: [], notifications: [] };
+      });
+
+      const response = await callDeepSeekHarness('worker', 'inspect tool output', {
+        cwd: temporaryRoot, onStream: (event) => events.push(event),
+      });
+
+      expect(response.status).toBe('done');
+      expect(secretFragmentsIn(response.content, scenario)).toEqual([]);
+      expect(secretFragmentsIn(shown(), scenario)).toEqual([]);
+      expect(shown()).toContain('[REDACTED]');
+      expect(events.some((event) => event.type === (type === 'text-delta' ? 'text' : 'thinking'))).toBe(true);
+    },
+  );
+
+  it.each(['whole', 'known-line'])('carries streamed secret discoveries into the final content and result event: %s', async (kind) => {
+    const events: StreamEvent[] = [];
+    const secret = 'stream-discovered-secret';
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'final-secret-session';
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: kind === 'whole' ? `password=${secret}\n` : 'first-line-secret\n' } } } } });
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
+      return { sessionId, finalResponse: kind === 'whole' ? `echo ${secret}` : 'first-line-secret\n', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => events.push(event),
+      ...(kind === 'whole' ? {} : { childProcessEnv: { DEEPSEEK_API_KEY: 'first-line-secret\nsecond-line-secret' } }) });
+    expect(response.status).toBe('done');
+    expect(response.content).toBe(kind === 'whole' ? 'echo [REDACTED]' : '[REDACTED]\n');
+    expect(events.filter((event) => event.type === 'result')).toMatchObject([{ data: { result: response.content } }]);
+  });
+
+  it('retains safe text on its original channel when a credential spans text and reasoning notifications', async () => {
+    const events: StreamEvent[] = [];
+    const channel = (type: 'text' | 'thinking'): string => events.flatMap((event) => event.type === type
+      ? [event.type === 'text' ? event.data.text : event.data.thinking] : []).join('');
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'cross-channel-session';
+      for (const [type, text] of [['text-delta', 'visible\nAPI_TOKEN="first-private'],
+        ['reasoning-delta', 'second-private"\nanalysis\n']] as const) {
+        options?.onNotification?.({ method: 'session.event', params: { sessionId,
+          event: { type: 'assistant/chunk', data: { chunk: { type, text } } } } });
+      }
+      options?.onNotification?.({ method: 'session.event', params: { sessionId,
+        event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
+      return { sessionId, finalResponse: 'completed', events: [], notifications: [] };
+    });
+
+    expect((await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => events.push(event) })).status).toBe('done');
+
+    expect(channel('text')).toContain('visible\n');
+    expect(channel('text')).not.toContain('analysis');
+    expect(channel('thinking')).toContain('analysis\n');
+    expect(channel('thinking')).not.toContain('visible');
+    for (const type of ['text', 'thinking'] as const) {
+      for (const secret of ['first-private', 'second-private']) expect(channel(type)).not.toContain(secret);
+    }
+  });
 
   it.skipIf(!SUPPORTED_RUNTIME)('reports missing or damaged SDK before resolving any configured Git plugin', async () => {
     managedModuleLoads.mockImplementationOnce(() => { throw new DeepSeekHarnessInstallRequiredError(); });
@@ -517,7 +937,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
         'pi-ai',
         'package.json',
       )),
-      piAiVersion: '1.5.0',
+      piAiVersion: '1.5.2',
     });
     expect(api.requests).toHaveLength(1);
     expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
@@ -2447,6 +2867,36 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       'deepseek-v4-flash',
       'deepseek-v4-pro',
     ]);
+    await closeDeepSeekHarnessProcesses();
+  }, 90_000);
+
+  it.skipIf(!SUPPORTED_RUNTIME)('refuses continuing a session after its repository identity changes', async () => {
+    const api = await startLocalApi();
+    const workspace = join(temporaryRoot, 'repository-identity-workspace');
+    await mkdir(workspace, { recursive: true });
+
+    for (const [key, firstValue, secondValue] of [
+      ['GH_REPO', 'github.com/owner/first', 'github.com/owner/second'],
+      ['GITLAB_REPO', 'https://gitlab.example.com/group/first', 'https://gitlab.example.com/group/second'],
+    ] as const) {
+      const call = (sessionId: string | undefined, value: string) => callDeepSeekHarness(
+        'worker',
+        'continue with the same repository identity',
+        {
+          cwd: workspace,
+          sessionId,
+          providerOptions: { baseUrl: api.endpoint, reasoningEffort: 'low' },
+          childProcessEnv: { [key]: value },
+        },
+      );
+      const initial = await call(undefined, firstValue);
+      expect(initial).toMatchObject({ status: 'done', sessionId: expect.any(String) });
+
+      const changed = await call(initial.sessionId, secondValue);
+      expect(changed).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    }
+
+    expect(api.requests).toHaveLength(2);
     await closeDeepSeekHarnessProcesses();
   }, 90_000);
 

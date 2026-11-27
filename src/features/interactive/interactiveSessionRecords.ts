@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { getProjectConfigDir } from '../../infra/config/paths.js';
 import { writeFileAtomic } from '../../infra/config/project/sessionStore.js';
 import { warn } from '../../shared/ui/index.js';
+import { CODEX_SESSION_CONTRACT } from '../../shared/codex-session-contract.js';
 
 export interface InteractiveSessionRecord {
   provider: string;
@@ -11,6 +12,7 @@ export interface InteractiveSessionRecord {
   response: string;
   modified: string;
   messageCount: number;
+  codexSessionContract?: string;
 }
 
 type CheckSession = (provider: string, sessionId: string) => Promise<boolean | undefined>;
@@ -29,7 +31,8 @@ function readRecords(cwd: string): InteractiveSessionRecord[] {
     return typeof record.provider === 'string' && typeof record.sessionId === 'string'
       && Array.isArray(record.inputs) && record.inputs.every((input: unknown) => typeof input === 'string')
       && typeof record.response === 'string' && typeof record.modified === 'string'
-      && typeof record.messageCount === 'number';
+      && typeof record.messageCount === 'number'
+      && (record.codexSessionContract === undefined || typeof record.codexSessionContract === 'string');
   })) throw new Error('Invalid interactive session records');
   return data as InteractiveSessionRecord[];
 }
@@ -48,6 +51,10 @@ function sessionKey(record: SessionKey): string {
   return JSON.stringify([record.provider, record.sessionId]);
 }
 
+function isResumableRecord(record: InteractiveSessionRecord): boolean {
+  return record.provider !== 'codex' || record.codexSessionContract === CODEX_SESSION_CONTRACT;
+}
+
 function appendInput(records: InteractiveSessionRecord[], args: Input): { records: InteractiveSessionRecord[]; revision: number } {
   const previous = records.find((record) => record.provider === args.provider && record.sessionId === args.sessionId);
   const next: InteractiveSessionRecord = {
@@ -57,6 +64,7 @@ function appendInput(records: InteractiveSessionRecord[], args: Input): { record
     response: previous?.response ?? '',
     modified: new Date().toISOString(),
     messageCount: (previous?.messageCount ?? 0) + 1,
+    ...(args.provider === 'codex' ? { codexSessionContract: CODEX_SESSION_CONTRACT } : {}),
   };
   return { records: [next, ...records.filter((record) => record !== previous)], revision: next.messageCount };
 }
@@ -85,7 +93,8 @@ export function recordTurn(args: Turn): void {
 }
 
 export function listRecords(cwd: string, provider: string): InteractiveSessionRecord[] {
-  return readRecords(cwd).filter((record) => record.provider === provider).slice(0, 10);
+  return readRecords(cwd).filter((record) => record.provider === provider
+    && isResumableRecord(record)).slice(0, 10);
 }
 
 async function cleanAndReadRecords(cwd: string, exists: CheckSession): Promise<InteractiveSessionRecord[]> {
@@ -101,6 +110,7 @@ async function cleanAndReadRecords(cwd: string, exists: CheckSession): Promise<I
   const counts = new Map<string, number>();
   const missing = new Map<string, string>();
   for (const record of records) {
+    if (!isResumableRecord(record)) continue;
     const count = counts.get(record.provider) ?? 0;
     if (count >= 10) continue;
     let existsResult: boolean | undefined;
@@ -124,6 +134,7 @@ async function cleanAndReadRecords(cwd: string, exists: CheckSession): Promise<I
   }
   const retainedCounts = new Map<string, number>();
   const retained = latest.filter((record) => {
+    if (!isResumableRecord(record)) return true;
     if (missing.get(sessionKey(record)) === JSON.stringify(record)) return false;
     const count = retainedCounts.get(record.provider) ?? 0;
     if (count >= 10) return false;
@@ -166,7 +177,8 @@ export class InteractiveSessionRecords {
         warn(`Interactive session records could not be read: ${String(error)}`);
       }
     }
-    return (this.pending ?? this.snapshot).filter((record) => record.provider === provider).slice(0, 10);
+    return (this.pending ?? this.snapshot).filter((record) => record.provider === provider
+      && isResumableRecord(record)).slice(0, 10);
   }
 
   private update<T>(change: (records: InteractiveSessionRecord[]) => { records: InteractiveSessionRecord[]; value: T } | undefined): T | undefined {

@@ -6,7 +6,9 @@
 
 Each patrol runs in a new session, separate from the conversation, and does not read the conversation history. The initial prompt includes the business context it needs. Results remain in work records and are available to later conversation turns through that context. Human conversations continue in their original session.
 
-For each repository with active goals (excluding paused, aborted, completed and awaiting-merge goals), the manager periodically inspects eligible goals together. No patrol runs when there are no eligible goals. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+For each repository with active goals (excluding paused, aborted, completed and human merge waits), the manager periodically inspects eligible goals together. No patrol runs when there are no eligible goals. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+
+A goal is waiting for human merge when it is `awaiting_merge`, none of its linked finishing tasks (`merge_task: true`) are `pending` or `running`, and its last finishing task is not `failed`, `exceeded` or `pr_failed`. The last task is determined by its position in `tasks.yaml`. A goal with no finishing tasks also waits for human merge. Goals with pending or running finishing work, or whose last finishing task failed, remain eligible for patrols.
 
 The daemon saves the last accepted patrol time for each repository. On startup, it queues one patrol at the first observation if eligible goals exist and either the interval has elapsed or no patrol has been accepted before. Otherwise, it waits until the last accepted patrol time plus the interval. Restarting the daemon repeatedly does not add patrols before that interval has elapsed.
 
@@ -23,20 +25,22 @@ Patrols compare the latest reports and records from running runs against the tas
 
 ## Discussion and registration
 
+While a turn is running, the TUI shows its elapsed time and current activity. Bash displays its description when available; other tools display their names. Long tool labels end with an ellipsis so elapsed time remains visible at 80 columns. In ordinary turns and the interpretation stage of `/verify`, intermediate text appears in the conversation in order when the next tool starts, before the final reply. Text remaining at the end of the turn or interpretation stage is discarded without being shown as intermediate output. The final reply is still displayed. This intermediate text is not saved or redisplayed after reconnecting. Patrol turns show tool activity and elapsed time but omit intermediate text. Slack does not receive intermediate text or tool descriptions.
+
 Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Manager starts the daemon if needed and waits until it is ready; the TUI connects to it to send requests and display results. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the conversation. Review the displayed proposal and use `↑↓` to choose **Register goal** or **Return to conversation without registering**, then press `Enter`. The default returns to the conversation and dismisses the proposal. Select **Register goal** to ask the daemon to register it. Returning to the conversation, pressing `Esc` while idle, or typing changes dismisses the proposal; ask manager for changes and generate a new proposal. During processing, `Esc` interrupts the operation.
 
-Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting **Register goal** and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a goal proposal itself.
+Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting **Register goal** and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Ordinary consultation does not automatically generate a proposal. Once agreement is reached, manager suggests `/make-goal`; in both TUI and Slack, only explicit execution creates a proposal awaiting approval.
 
-The bottom status line shows the assignment name, counts of ongoing goals (active and paused) and unanswered inquiries. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal` and `/verify` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. Input starting with `/` other than `/make-goal` and `/verify` is sent to manager as a regular message.
+The bottom status line shows the assignment name, counts of ongoing goals (active and paused), human merge waits and unanswered inquiries. Goals with pending or running finishing work, or whose last finishing task failed, count as ongoing. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal`, `/verify` and `/clear` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. `/clear` starts the conversation over: manager's AI begins a new session and earlier messages are no longer shown, while goals, proposals and saved records stay as they are. Input starting with `/` other than `/make-goal`, `/verify` and `/clear` is sent to manager as a regular message.
 
-Below the input box, key hints are followed by the status line (example below). The `/make-goal` and `/verify` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
+Below the input box, key hints are followed by the status line (example below). The `/make-goal`, `/verify` and `/clear` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
 
 ```text
-Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
+Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^T Epics  ^C Exit
 Assignment: takt | Ongoing 1 / Pending 0
 ```
 
-The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting **Register goal** and pressing `Enter`, but previous messages and replies are not redisplayed. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.
+The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting **Register goal** and pressing `Enter`. Previous messages, completed tool history, and replies are also shown again in the conversation log, in that order for each turn; Thinking and text shown between tool calls are not. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.
 
 The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn. Within the other queue, patrols wait behind ordinary events; acceptance order is preserved among human inputs, among ordinary events and among patrols. Turns other than patrols share one conversation session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
 
@@ -49,8 +53,42 @@ By default, required runs start automatically. Disable this to start `takt run` 
 ```yaml
 manager:
   auto_run: false
-  default_workflow: default
 ```
+
+Set `manager.workflows` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to choose the workflows manager may use for new development tasks. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair, using the same notation as `workflow_categories.workflows`.
+
+```yaml
+manager:
+  workflows:
+    - default: Regular features and bug fixes, covering planning through review.
+    - simple: Small changes in one or two files, using a lightweight workflow.
+    - takt-default
+```
+
+When `manager.workflows` is omitted at both project and global scopes, the candidates are `default` and `simple`. Manager receives the usage descriptions above in English or their Japanese equivalents according to `language` and selects a workflow suited to the task. Explicit name-only entries have no usage description. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
+
+Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
+
+Set `manager.runtime_assignments` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to list the runtime assignments manager may choose for each task. A project value replaces the entire global list. Each entry is a name or an object containing a single `{ name: usage description }` pair. `all` is not supported.
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: Tasks of a goal that is not urgent and may take longer to finish.
+    - fast
+```
+
+Define the names in `provider.assignments` of `runtime.yaml`. When `manager.runtime_assignments` is omitted at both project and global scopes, the candidates are empty and manager cannot specify a runtime assignment. An undefined name produces a warning when the manager conversation plan is created and is excluded from the candidates.
+
+Manager uses these tools to inspect candidates and select the name saved on a task:
+
+- `takt_list_runtime_assignments` lists candidates and their usage descriptions.
+- `runtimeAssignment` on `takt_enqueue_goal_task` selects the name for a new task. Resubmitting an existing task does not change its saved value.
+- `runtimeAssignment` on `takt_retry_goal_task` or `takt_requeue_goal_task` changes the saved value when the task returns to pending. Omitting it preserves the saved value.
+
+The selected name must be among the candidates. It is saved as the task's `runtime_assignment` and used by requeue and retry. Starting a run with `--runtime-assignment` gives the CLI selection priority for that invocation without changing the task's saved value.
+
+See [Manager runtime assignments](./configuration.md#manager-runtime-assignments) in the configuration guide for the conditions for changing saved values, behavior when an assignment definition is removed, recovery steps, and precautions when deleting worktrees.
 
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 
@@ -61,9 +99,11 @@ Use these tools for inquiries that do not belong to a goal.
 | `takt_list_standalone_inquiries` | Read unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time. |
 | `takt_withdraw_standalone_inquiry` | Withdraw an unanswered inquiry without a goal by passing its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged. |
 
+Every turn, manager receives a summary of the goals in its assigned repositories. The summary lists only goals that are not finished; for finished goals (completed or aborted) it receives only a per-repository count (`finishedGoalCount`). This keeps finished goals out of status reports, including after `/clear`. When manager needs a finished goal's contents, it reads them with `takt_list_goals` and `state: finished`. The `state` argument of `takt_list_goals` is `open` (not finished), `finished` (completed or aborted) or `all`; it defaults to `all`. `offset`, `limit` and `totalCount` apply to the filtered goals, and unreadable records are always returned as individual errors regardless of `state`.
+
 Every turn, manager reviews unanswered inquiries both with and without a goal. It withdraws inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and records that reason in work records. It keeps inquiries that still need a human decision.
 
-Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers with `full` permissions, preserving configured provider options. There is no manager-specific permission judge, read-scope review or execution control based on saved approvals.
+Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers, preserving configured provider options. Select `auto` (the default) or `full` with `manager.permission` and provider-specific `manager.provider_permissions`. In `auto` mode, Claude and Codex use AI permission review; other providers behave as in `full` mode. See [Manager tool permissions](./configuration.md#manager-tool-permissions) for details. TAKT has no separate manager-specific permission judge, read-scope review or execution control based on saved approvals.
 
 Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. Instructions already given are not reconfirmed. The goal branch is kept after its PR is merged for subsequent checks and work. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
 
@@ -96,10 +136,56 @@ Ask to add `/path/to/web`, remove a repository from the assignment, or rename th
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
 
+## Managing combined verification with Epics
+
+An Epic is a workspace-owned persistent record linking goals and evidence that their combined results meet an overall objective. All members belong to the same workspace manager. Each goal keeps its single-repository, single-PR contract; an Epic does not create its own branch, PR, or task scheduler. Cross-manager operations and automatic dependency ordering by director are outside this feature.
+
+### Creation and member changes
+
+Tell manager the overall objective, acceptance criteria, and combined verification procedure. For example, ask it to create an Epic for the API and UI integration and add the two existing workspace goals. Manager uses the existing MCP tools. Mutation tools require a nonempty reason.
+
+| Operation | MCP tools and recorded input |
+|-----------|------------------------------|
+| Create and read | `takt_create_epic`, `takt_list_epics`, `takt_get_epic`. Creation records `objective`, `acceptanceCriteria` with `id` and `description`, `verificationProcedure` with `version` and `steps`, and `reason`. |
+| Add or remove a member | `takt_add_epic_member`, `takt_remove_epic_member`, with `member: { repositoryDirectory, goalId }` and a reason. |
+| Replace with a correction goal | `takt_replace_epic_member`, with the old `member`, new `replacement`, and reason. Completed goals are not reopened. |
+| Revise the definition | `takt_update_epic_definition`, with changes to the objective, acceptance criteria, or procedure and a reason. |
+| Pin or refresh targets | `takt_refresh_epic_targets` records the integrated SHAs of completed members. |
+
+The tools take an absolute `cwd` inside an assigned repository and, for an existing Epic, its `epicId`. Workspace ownership comes from the current manager assignment. Unassigned repositories, missing goals, and duplicate members are rejected. Records live under `~/.takt/workspaces/<workspaceId>/epics/<epicId>/epic.json`, or under `TAKT_CONFIG_DIR` when set.
+
+### Fixed targets and verification evidence
+
+Each target is the goal's `completion.targetSha`: the fixed SHA integrated into the target branch. It is not `completion.goalSha` or a moving branch tip. Unrelated main advancement does not change that fixed target set or invalidate its evidence.
+
+`takt_start_epic_verification` records an execution ID, revision, target SHA set, definition, procedure version, and start time. It does not execute verification commands. Manager uses existing shell/run facilities and a temporary workspace, then records the result with `takt_record_epic_verification_result`.
+
+The result includes the matching `runId`, `revision`, `targets`, `procedureVersion`, start and completion times, and outcome. Record the environment name and description, artifact references linked to source target SHAs, the verification workspace and its artifact references, acceptance results for each criterion, and log references. Conversation history alone is not completion evidence.
+
+For a Terraform procedure, explicitly record `verificationProcedure.terraform.requiresApply` as `true` or `false`. The result must also record Terraform `phase` (`plan` or `post_apply`), `applyStatus` (`not_applied`, `applied`, or `failed`), and artifact references. With `requiresApply: true`, a successful plan alone is insufficient: verification must record `post_apply` and `applied`. With `requiresApply: false`, the procedure does not require application. Environment, application state, and artifact references must still be recorded. TAKT does not automatically run Terraform apply or destroy.
+
+### Completion, invalidation, abort, and recovery
+
+Recording a successful result does not complete an Epic. Call `takt_complete_epic` explicitly after checking that the member set is nonempty, every member is completed, no member is aborted, current successful evidence matches the definition and fixed targets, and no verification is running. An active Epic awaiting verification remains daemon work and a manager patrol target even after all member goals complete.
+
+Member, acceptance-criteria, procedure, and fixed-target changes advance the revision and invalidate existing evidence. A completed Epic returns to active; previous evidence and invalidation reasons remain readable. A delayed pre-change result is retained as `stale` and cannot supply current evidence or complete the revised Epic. Verify the revised targets with a new execution.
+
+`takt_abort_epic` records a reason and retains the Epic history. It does not abort or reopen member goals or close their PRs. A repository referenced by an active Epic cannot be unassigned even when its member goal is completed. Remove the reference, complete the Epic, or abort it first. After completion or abort, unassignment preserves member references, fixed SHAs, evidence, and change reasons.
+
+A running verification left after restart is neither treated as success nor automatically rerun. Read `takt_get_epic_verification_recovery` and the saved records, inspect the actual outcome and side effects, and explicitly decide how to recover, such as registering the verified result.
+
+### Reading Epics in the TUI
+
+Press `Ctrl+T` for the Epic list, use `↑↓` to choose, and `Enter` for details. Active, completed, and aborted Epics remain available. The list shows objectives, states, completed-member counts, current evidence, and verification or invalidation summaries. Details show repository and goal identities, fixed targetSha values, member states, verification results and history, invalidation reasons, and result-confirmation or recovery work. When unassignment prevents reading a member's current state, it is shown as unavailable while saved history remains.
+
+Scroll long details with `↑↓`, `PageUp`/`PageDown`, or `Home`/`End`. `Esc` returns from details to the list and from the list to the conversation. `Ctrl+R`/`Ctrl+G` switches to the existing menus while retaining your unsent conversation draft. Within Epic browsing, `Enter` and `Esc` navigate rather than sending a message or interrupting the running turn.
+
+Both views follow the current snapshot, including evidence invalidation, member changes, and verification results while already open. Reconnecting restores the same persisted state without duplicate Epics or appending historical Epic screens to the conversation transcript.
+
 
 Workflows may use names, scope references or file paths, including workflows with merge_pr / close_pr. Set `autoPr` and `shouldPublishBranchToOrigin` on submission when needed; both default to false, retaining worktree isolation and the goal branch as the base.
 
-`takt_remove_goal_task` may cancel pending work while paused. To discard an unintegrated completed result, supply `discardUnmerged: true` and a reason. Running-state, ownership and cleanup-success checks remain.
+`takt_remove_goal_task` may cancel pending work while paused. To discard an unintegrated completed result, supply `discardUnmerged: true` and a reason. Running-state, ownership and cleanup-success checks remain. It removes the task's worktree without checking it for uncommitted changes except on the merge-task and unintegrated-completed-result paths, so inspect the worktree and save any needed changes before removing the task; re-enqueueing does not restore changes that were deleted.
 
 `takt_merge_goal_pr` requires `cwd`, `goalId`, a `prNumber` matching the saved PR, and `until`, without a conversation ID or director-only authorization. Stopped-state, saved PR and head/base checks remain. Manager may investigate and recover push or PR preparation failures itself; calling `takt_complete_goal` again retries preparation when `awaiting_merge` has no saved PR. Final verification may be delegated, with manager responsible for checking target SHA, methods and result evidence.
 
@@ -132,7 +218,7 @@ Director cannot run shell commands, write files, or change settings. It does not
 
 Only when the human explicitly says, for example, “merge goal G,” does director ask G's manager to merge its PR using `takt merge`. Before forwarding, director uniquely identifies the repository, goal, and manager, checks that the current goal is `awaiting_merge`, and reads the saved PR number and URL. If the target is ambiguous, the state differs, the PR is missing, or reading fails, it reports the reason without forwarding. Director never performs the merge itself. The manager executes it through `takt_merge_goal_pr`, which invokes `takt merge`. Forwarding or accepting the request alone does not mean the merge succeeded; director reports success or failure from the later result with the same operation ID. At execution time, existing checks prevent merging if the goal is paused, aborted, no longer `awaiting_merge`, or has a different saved PR number.
 
-Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers.
+Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers. The director's `takt_list_goals` accepts the same `state` filter as manager (`open`, `finished` or `all`, defaulting to `all`).
 
 ### Events and notifications
 
@@ -163,18 +249,20 @@ A post outside a thread receives a reply in that post's thread. Continue there; 
 
 Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`, separately from conversation replies. Both can be enabled together.
 
-## Answers, pause and abort
+## Answers, pause, abort and deletion
 
 Open menus with the following keys, including while manager is processing.
 
 | Key | Behavior |
 |-----|----------|
 | `Ctrl+R` | List unanswered inquiries with and without a goal together, then answer the selected inquiry. |
-| `Ctrl+G` | List only ongoing goals (active and paused) by short name and state. Use `↑↓` to select a goal and `Enter` to choose pause, resume or abort. |
+| `Ctrl+G` | List goals by short name and state, with ongoing goals (active and paused) first and finished goals (completed and aborted) after them. Use `↑↓` to select a goal and `Enter` to choose an operation: pause, resume or abort for an ongoing goal, and only delete for a finished goal. |
 
 Pausing stops new submissions, integrations, and running tasks. Stopped tasks remain as retryable failures, and their result events are deferred. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision.
+
+Deletion is a human operation for clearing out finished goals. After you confirm that it cannot be undone, it removes the goal record under `.takt/goals/<id>/` and the records of the goal's tasks from `tasks.yaml`. The goal branch, the integration branch and run records under `.takt/runs/` remain. The clone directories of failed tasks also remain, because they may hold work that was never pushed. If the goal still has a pending or running task, the TUI shows the reason and does not delete it. If a workspace Epic references the goal as a member or a fixed target, the TUI shows the referencing Epics and does not delete the goal, whether the Epic is active, completed or aborted. This also applies to Epics of other workspaces, such as the workspace a repository was removed from, and to deletion from a repository manager. Deletion is available only from `Ctrl+G` in the TUI; neither the manager nor the director AI has a tool for it.
 
 ### Answering inquiries
 
@@ -188,11 +276,23 @@ Notifications flowing onto the normal screen show only the key points: the headi
 
 ## Goal operations in conversation
 
-With any provider supporting the required MCP capability, ask manager to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Goal registration still requires approval in the TUI.
+With any provider supporting the required MCP capability, ask manager to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Goal registration still requires approval in the TUI or Slack.
 
 Pausing also stops running tasks, which remain as retryable failures. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 
-Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available.
+Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available. Deleting a finished goal cannot be requested in conversation; use `Ctrl+G`.
+
+## Commands for waiting on external state
+
+The manager-only `takt_wait_command` is available in conversations with a daemon request route. It registers a one-line shell command with the daemon and immediately returns its registration ID. Examples include `gh run watch <id> --exit-status`, `gh pr checks <n> --watch`, and `until curl -sf …; do sleep 30; done`. Arguments are `command`, a `description` of what is being awaited, an absolute directory `cwd` inside an assigned repository, and optional `goalId` and `timeoutSeconds`. Subdirectories are preserved as the execution directory. The timeout defaults to 3600 seconds and cannot exceed 86400 seconds. To match the daemon's event admission capacity, at most 32 registrations across the daemon may be running or awaiting completion delivery or retry. New registrations fail with an error at capacity and can be retried once completion delivery frees a slot.
+
+The manager may end its turn after registering. The daemon keeps requests in memory and delivers one `wait_command_completed` event to the requesting conversation after success, failure, timeout, or cancellation caused by a stopped goal. The event contains the registration ID, description, optional goal, status, exit code (`null` when unavailable), signal, elapsed milliseconds, and the last 16 KiB of combined stdout/stderr.
+
+On Windows, if natural exit cannot be distinguished from termination after a Job stop or handle close, the daemon records a stop error and retains the registration, monitoring, and pending deliveries without sending a completion event. A matching Job termination code or successful handle close alone does not establish cancellation or timeout. Daemon shutdown fails at its shared 15-second deadline and can be retried. An unresolved exit cause remains incomplete after retries.
+
+An optional `goalId` must identify an active goal in the selected repository. The daemon checks for goal pause or abort every five seconds and stops the command's process tree. Timeouts also stop the process tree. Daemon shutdown stops requests and their child processes and, when possible, delivers a `cancelled` completion event to the requesting conversation. Registrations are not rerun on restart. During startup patrol, the manager checks current state and registers again if needed.
+
+The daemon executes these commands directly, bypassing the manager's `auto` AI permission review. Use waiting commands only; do not use operations that change state. This usage restriction is described by the tool and is not enforced mechanically.
 
 ## Integration and completion
 
@@ -211,9 +311,11 @@ Both `main_merge: approve` and `auto` publish a PR. With the default `approve`, 
 
 Completion pushes the reviewed SHA to `origin` and creates or reuses a PR from the goal branch to its saved integration target. Failures remain in work logs and `blocked` notifications. Manager inspects causes and side effects and decides what to do next; no timed or counted automatic PR-creation retries run. When no PR is saved, call `takt_complete_goal` again after fixing the cause.
 
-`takt_merge_goal_pr` requires `cwd`, `goalId`, `prNumber` and `until`. It enqueues a pending task with `merge_task: true` and `goal_id` in `tasks.yaml` and immediately returns its name. `prepare` selects `merge-prepare`; `merge` selects `merge.workflow`, defaulting to `merge-review-fix-simple`. Pending or running work for the same target is rejected.
+`takt_merge_goal_pr` requires `cwd`, `goalId`, `prNumber` and `until`. It enqueues a pending task with `merge_task: true` and `goal_id` in `tasks.yaml` and immediately returns its name. `prepare` selects `merge.prepare_workflow`, defaulting to `merge-prepare`; `merge` selects `merge.workflow`, defaulting to `merge-review-fix-simple`. Pending or running work for the same target is rejected.
 
-The daemon executes it like other goal tasks: incorporate the target branch, resolve conflicts, review and fix, push, run Caccia and wait for CI. Conflicting PRs use this same path instead of ordinary conflict-fix tasks. PR merge tasks push directly to the PR branch and must not be integrated with `takt_merge_goal_task`. `takt_list_tasks` shows `mergeTask` and completion results. Completion events include `mergeOutcome` (`prepared`, `merged` or `unresolved`) and `branchSynchronization`. When merged, manager completes the goal with `takt_check_goal_completion`.
+The daemon executes the selected workflow like other goal tasks. The default `merge-prepare` and `merge-review-fix-simple` workflows incorporate the target branch, push, run Caccia and wait for CI. When AI resolves conflicts, they review and fix before pushing on both initial synchronization and resynchronization. Custom workflows follow their own step definitions, including whether they perform these operations. Conflicting PRs use this same path instead of ordinary conflict-fix tasks. PR merge tasks push directly to the PR branch and must not be integrated with `takt_merge_goal_task`. `takt_list_tasks` shows `mergeTask` and completion results. Completion events include `mergeOutcome` (`prepared`, `merged` or `unresolved`) and `branchSynchronization`. When merged, manager completes the goal with `takt_check_goal_completion`.
+
+After synchronization, `merge-prepare` and `merge-review-fix-simple` review the entire cumulative PR diff and incoming base-branch changes. They fix only incorrect conflict resolution and defects caused by combining the two sides, including defects in non-conflicted files. Pre-existing issues unrelated to synchronization are recorded with reasons and carried forward without triggering fix planning, implementation, or rejection at the final check. Clean synchronization still skips the full review, and normal development review and adjudication criteria remain unchanged.
 
 After push, the original repository fast-forwards its goal branch if it is an ancestor of origin. Divergent histories are preserved and reported as failure in task results and events. Checked-out working copies are preserved and synchronization stops with a report. The same checks run before task integration and completion publication. If synchronization changes the tip, verify acceptance criteria at that new SHA before submitting completion again.
 
@@ -239,7 +341,7 @@ Development and implementation goals use Gherkin for important observable behavi
 
 Enter `/verify` in the manager conversation in either TUI or Slack to generate Quint and Alloy specifications from the current agreement and run the same checkers as interactive mode. Results return to the same conversation for the manager to interpret diagnostics and counterexamples. When formal specifications are disabled, verification is reported as unavailable. Registration does not automatically run verification, and verification alone does not register a goal or modify its proposal or saved specifications.
 
-Specifications are stored as code bodies in the optional goal field `specifications: { gherkin?, quint?, alloy? }` and displayed in both TUI and Slack proposals. Existing goals without specifications remain readable. As with acceptance criteria, the manager includes complete relevant specifications in assigned task instructions as the basis for implementation and review. Final PR review tasks automatically receive all saved specifications.
+Specifications are stored as code bodies in the optional goal field `specifications: { gherkin?, quint?, alloy? }` and displayed in both TUI and Slack proposals. Existing goals without specifications remain readable. At the start of each goal task run, including final PR review, TAKT writes saved specifications by notation to `context/task/specifications/gherkin.feature`, `quint.qnt`, and `alloy.als`, and automatically lists their paths in each step's execution context. Files are created only for saved notations. The manager includes identifiers for the requirements assigned to each task, such as acceptance criteria IDs, instead of pasting complete specifications into task instructions. Existing instructions containing specification bodies continue to run unchanged.
 
 Read complete specification bodies using `takt_get_goal` with `path: specifications.gherkin`, `specifications.quint`, or `specifications.alloy`. Specifications are finalized at registration and saved with the goal.
 

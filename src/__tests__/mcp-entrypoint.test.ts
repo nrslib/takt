@@ -70,7 +70,7 @@ describe('goal tell operation', () => {
     vi.spyOn(liveIntervention, 'resolveTellableRunningTask').mockImplementation(() => target);
     vi.spyOn(liveIntervention, 'issueTellableRunningTask').mockImplementation(async () => ({ instructionId: 7, target }));
     vi.spyOn(goalNotifications, 'resolveManagerNotificationOptions').mockReturnValue({
-      mainMerge: 'approve', webhookUrl: undefined,
+      mainMerge: 'approve', preserveGoalWorktree: false, webhookUrl: undefined,
       policy: { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true },
     });
     vi.spyOn(goalNotifications, 'sendSavedGoalNotifications').mockResolvedValue();
@@ -758,7 +758,7 @@ describe('MCP package entrypoint', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('advertises goal PR finishing while CI is running through listTools', async () => {
+  it('advertises goal PR workflow selection and conditional full review through listTools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'goal-pr-tools', version: '1' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -768,7 +768,33 @@ describe('MCP package entrypoint', () => {
       const { tools } = await client.listTools();
       const merge = tools.find(({ name }) => name === 'takt_merge_goal_pr')!;
       expect(merge.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'prNumber', 'until']);
-      expect(merge.description).toMatch(/until: prepare.*without merging/iu);
+      expect(merge.description).toMatch(/until: prepare.*merge\.prepare_workflow.*merge-prepare.*without merging/iu);
+      expect(merge.description).toMatch(/until: merge.*merge\.workflow.*merge-review-fix-simple/iu);
+      expect(merge.description).toMatch(/enqueue.*while CI is still running/iu);
+      expect(merge.description).toMatch(/CodeRabbit.*CI waiting/iu);
+      expect(merge.description).toMatch(/both initial.*resynchronization.*clean base sync skips the full review/iu);
+      expect(merge.description).toMatch(/after AI conflict resolution.*review and fixes.*before push/iu);
+      expect(merge.description).toMatch(/custom workflows.*defined steps/iu);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('advertises the runtime assignment list tool and the enqueue runtimeAssignment contract through listTools', async () => {
+    const server = createTaktMcpServer();
+    const client = new Client({ name: 'runtime-assignment-tools', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      expect(TAKT_MCP_MANAGER_TOOL_NAMES).toContain('takt_list_runtime_assignments');
+      const { tools } = await client.listTools();
+      const list = tools.find(({ name }) => name === 'takt_list_runtime_assignments')!;
+      expect(list.description).toMatch(/runtime assignment names and usage descriptions/iu);
+      expect(list.description).toMatch(/An empty list means no runtime assignment may be specified/iu);
+      expect(list.inputSchema.required).toEqual(['cwd']);
+      expect(list.inputSchema.properties).not.toHaveProperty('errorOffset');
+      const enqueue = tools.find(({ name }) => name === 'takt_enqueue_goal_task')!;
+      expect(enqueue.description).toContain('runtimeAssignment is optional and must be a name from takt_list_runtime_assignments.');
+      expect(enqueue.inputSchema.properties).toHaveProperty('runtimeAssignment');
     } finally { await client.close(); await server.close(); }
   });
 
@@ -981,6 +1007,29 @@ describe('MCP package entrypoint', () => {
     }
   });
 
+  it.each(['manager', 'all', 'read-only'] as const)('exposes goal branch correction with a required reason only to writable %s tools', async (toolSet) => {
+    const server = createTaktMcpServer({}, { toolSet });
+    const client = new Client({ name: 'takt-mcp-update-goal-branches-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tool = (await client.listTools()).tools.find(({ name }) => name === 'takt_update_goal_branches');
+      if (toolSet === 'read-only') {
+        expect(tool).toBeUndefined();
+      } else {
+        expect(tool?.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'integrationBranch', 'reason']);
+        expect(Object.keys(tool!.inputSchema.properties!).sort()).toEqual(['cwd', 'goalId', 'integrationBranch', 'reason']);
+        expect(tool?.inputSchema.properties?.reason).toMatchObject({ type: 'string', maxLength: 128 * 1024 });
+        for (const selector of ['takt_check_goal_completion', '64 KiB', 'truncation', 'takt_get_goal', 'workLog.summary', 'recordId', 'textOffset/maxBytes']) {
+          expect(tool?.description).toContain(selector);
+        }
+      }
+    } finally {
+      await client.close(); await server.close();
+    }
+  });
+
   it.each(['manager', 'all', 'read-only', undefined] as const)('exposes the appropriate tell schema for tool set %s', async (toolSet) => {
     const server = createTaktMcpServer({}, { toolSet });
     const client = new Client({ name: 'tell-schema-client', version: '1' });
@@ -1025,7 +1074,9 @@ describe('MCP package entrypoint', () => {
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_get_goal',
+        'takt_get_goal_proposal',
         'takt_get_run',
+        'takt_list_goal_proposals',
         'takt_list_goals',
         'takt_list_tasks',
       ]);
@@ -1190,6 +1241,9 @@ describe('MCP package entrypoint', () => {
         currentIteration: 2,
         currentStepStartedAt: '2026-09-09T00:02:00.000Z',
         currentStepExecutionCount: 1,
+        currentStepPath: [{
+          workflow: 'review-fix', step: 'implement', startedAt: '2026-09-09T00:02:00.000Z', executionCount: 1,
+        }],
         phase: 2,
         stepLogs: expect.arrayContaining([
           expect.objectContaining({ step: 'plan', persona: 'planner', status: 'done', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),

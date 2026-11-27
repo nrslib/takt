@@ -1,13 +1,13 @@
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn() }));
 import { beforeEach,expect,it,vi } from 'vitest';
-import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask,mergeTaktGoalPr,reopenTaktGoal } from '../features/mcp/goalIntegrationOperations.js';
+import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask,mergeTaktGoalPr,reopenTaktGoal,updateTaktGoalBranches } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
-const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), mergePr: vi.fn(), complete: vi.fn(), check: vi.fn(), reopen: vi.fn(), notify: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), mergePr: vi.fn(), complete: vi.fn(), check: vi.fn(), reopen: vi.fn(), updateBranches: vi.fn(), notify: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { update = vi.fn(async (_id, transform) => transform(waitingGoal)); get = doubles.get; } }));
-vi.mock('../infra/goals/integration.js', () => ({ integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check, reopenGoal: doubles.reopen }));
+vi.mock('../infra/goals/integration.js', () => ({ integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check, reopenGoal: doubles.reopen, updateGoalBranches: doubles.updateBranches }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
 vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: doubles.resolve }));
 vi.mock('../features/mcp/operations.js', async (original) => ({ ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: vi.fn() }));
@@ -47,12 +47,12 @@ it.each(['ja', 'en'])('passes human verification steps and resolved language %s 
   expect(doubles.complete).toHaveBeenCalledOnce();
   expect(doubles.complete.mock.calls[0]).toEqual(expect.arrayContaining([completion.humanChecks, language]));
 });
-beforeEach(() => { vi.resetAllMocks(); doubles.get.mockResolvedValue(goalRecord()); doubles.config.mockReturnValue({ mainMerge: 'approve', policy }); doubles.resolve.mockReturnValue('ja'); doubles.merge.mockResolvedValue({ status: 'merged' }); doubles.complete.mockResolvedValue({ status: 'awaiting_merge' }); doubles.check.mockResolvedValue({ included: true }); });
+beforeEach(() => { vi.resetAllMocks(); doubles.get.mockResolvedValue(goalRecord()); doubles.config.mockReturnValue({ mainMerge: 'approve', preserveGoalWorktree: false, policy }); doubles.resolve.mockReturnValue('ja'); doubles.merge.mockResolvedValue({ status: 'merged' }); doubles.complete.mockResolvedValue({ status: 'awaiting_merge' }); doubles.check.mockResolvedValue({ included: true }); });
 it.each(['paused', 'aborted'] as const)('rejects writes against a %s goal before invoking tools', async (executionStatus) => {
   doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus });
-  for (const result of [await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal), await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal), await checkTaktGoalCompletion(input, {}, signal), await reopenTaktGoal({ ...input, reason: '追加の修正' }, {}, signal)]) expect(result.isError).toBe(true);
+  for (const result of [await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal), await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal), await checkTaktGoalCompletion(input, {}, signal), await reopenTaktGoal({ ...input, reason: '追加の修正' }, {}, signal), await updateTaktGoalBranches({ ...input, integrationBranch: 'integration/takt-mcp', reason: '宛先が変わったため' }, {}, signal)]) expect(result.isError).toBe(true);
   expect(doubles.merge).not.toHaveBeenCalled(); expect(doubles.complete).not.toHaveBeenCalled(); expect(doubles.check).not.toHaveBeenCalled();
-  expect(doubles.reopen).not.toHaveBeenCalled(); expect(doubles.notify).not.toHaveBeenCalled();
+  expect(doubles.reopen).not.toHaveBeenCalled(); expect(doubles.updateBranches).not.toHaveBeenCalled(); expect(doubles.notify).not.toHaveBeenCalled();
 });
 
 it.each([undefined, '', ' \n\t ', 'a'.repeat(128 * 1024 + 1)])('rejects an invalid reopen reason before invoking integration', async (reason) => {
@@ -61,6 +61,26 @@ it.each([undefined, '', ' \n\t ', 'a'.repeat(128 * 1024 + 1)])('rejects an inval
   expect(doubles.get).not.toHaveBeenCalled();
   expect(doubles.reopen).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it('corrects branches on a created goal and returns the saved integration branch', async () => {
+  const integrationBranch = 'integration/takt-mcp';
+  const reason = '宛先が変わったため';
+  const previous = goalRecord();
+  const saved = { ...previous, integrationBranch, workLog: [{ id: '550e8400-e29b-41d4-a716-446655440001', summary: reason, recordedAt: '2026-10-15T00:00:00Z' }] };
+  doubles.get.mockResolvedValue(previous);
+  doubles.updateBranches.mockImplementation(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return { goal: saved, workLogEntryId: saved.workLog[0]!.id };
+  });
+
+  const result = await updateTaktGoalBranches({ ...input, integrationBranch, reason }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.updateBranches).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, integrationBranch, reason, signal);
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    workLogEntryId: saved.workLog[0]!.id, goal: { id: saved.id, integrationBranch },
+  });
 });
 
 it('passes the reason and cancellation through integration and notifies using the saved goal before responding', async () => {
@@ -84,9 +104,10 @@ it('passes the reason and cancellation through integration and notifies using th
     id: saved.id, status: 'created', executionStatus: 'active', branch: saved.branch, integrationBranch: saved.integrationBranch,
   }, workLogEntryId: saved.workLog[0]!.id });
 });
-it('passes reviewed SHA, notification policy and cancellation directly to integration', async () => {
+it.each([false, true])('passes reviewed SHA, notification policy, cancellation, and preserveGoalWorktree=%s directly to integration', async (preserveGoalWorktree) => {
+  doubles.config.mockReturnValue({ mainMerge: 'approve', preserveGoalWorktree, policy });
   await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal);
-  expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, policy, 'ja');
+  expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, policy, 'ja', preserveGoalWorktree);
 });
 it('returns clone cleanup diagnostics without changing the successful MCP merge response', async () => {
   const sha = 'a'.repeat(40);

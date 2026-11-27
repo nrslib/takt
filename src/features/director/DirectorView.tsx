@@ -59,7 +59,7 @@ export function DirectorView({ client, lang, onExit }: {
       }
     }
   }, [snapshot.items]);
-  usePaste((text) => edit(applyEditorKey(editorRef.current, { kind: 'insert', text })));
+  usePaste((text) => edit(applyEditorKey(editorRef.current, { kind: 'paste', text })));
   useInput((input, key) => {
     if (key.ctrl && (input === 'c' || input === 'd')) { onExit(); return; }
     if (key.escape) {

@@ -27,6 +27,11 @@ Record current implementation as authoritative only where a definition separate 
 |----------|---------------|-----------------|-----------------------------|----------------------------------------------------|-----------------|----------|----------|
 | {Fix-unit name from the plan} | {ID corresponding to the fix report, or an ID added by independent verification} | {IDs} | {One behavior-correction, consumer-migration, obsolete-path-removal, or existing-contract-preservation obligation and its path} | {Method selected without treating the fix report as an answer key} | {holds / violated / unverified} | {Code, diff, targeted test, search} | {complete / incomplete / plan invalid} |
 
+## Applied Repair Method and Evidence
+| Repair Unit | Planned and Actual Methods | Shared-Cause Treatment and Preserved Conditions | Current Evidence | Superseded Old-Plan Verification |
+|-------------|----------------------------|------------------------------------------------|------------------|----------------------------------|
+| {Name} | {Method, implementation locations, and reasons for differences} | {Removed assumption, success and failure outcomes} | {Target code state, observed conditions, results, and references} | {Latest instruction, superseded verification and reason, original acceptance criteria retained, or N/A} |
+
 ## Unmet or Unverified Items
 | Fix Unit | Obligation ID | Type | Evidence | Basis for the Counterexample Being in Scope | Why the Fix Report Evidence Could Not Detect It | Scope Re-audited with the Same Detection Pattern | Required Action |
 |----------|---------------|------|----------|---------------------------------------------|--------------------------------------------------|--------------------------------------------------|-----------------|

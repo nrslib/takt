@@ -17,7 +17,8 @@ export interface SessionLog {
   startTime: string;
   endTime?: string;
   status: 'running' | 'completed' | 'aborted';
-  stepStarts?: Array<Pick<NdjsonStepStart, 'step' | 'iteration' | 'timestamp' | 'workflow' | 'stack' | 'parallel'>>;
+  stepStarts?: Array<Pick<NdjsonStepStart, 'step' | 'iteration' | 'timestamp' | 'workflow' | 'stack'>>;
+  workflowCallCompletions?: Array<Pick<NdjsonWorkflowCallComplete, 'stack'>>;
   history: Array<{
     step: string;
     persona: string;

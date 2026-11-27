@@ -1,4 +1,4 @@
-import { checkGoalCompletion, completeGoal, integrateGoalTask, reopenGoal } from '../../infra/goals/integration.js';
+import { checkGoalCompletion, completeGoal, integrateGoalTask, reopenGoal, updateGoalBranches } from '../../infra/goals/integration.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
@@ -7,11 +7,11 @@ import { GoalStore } from '../../infra/goals/store.js';
 import type { McpOperationDependencies } from './operations.js';
 import { goalWrite } from './goalWrite.js';
 import { integrationSummary } from './goalResponse.js';
-import type { CompleteGoalInput, GoalIdentityInput, MergeGoalTaskInput, MergeGoalPrInput, ReopenGoalInput } from './schemas.js';
+import type { CompleteGoalInput, GoalIdentityInput, MergeGoalTaskInput, MergeGoalPrInput, ReopenGoalInput, UpdateGoalBranchesInput } from './schemas.js';
 
 export function mergeTaktGoalTask(input: MergeGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
-  return goalWrite(input, deps, signal, async ({ policy }) => integrationSummary(await integrateGoalTask(
-    input.cwd, input.goalId, input.taskName, input.expectedSha, signal, policy, resolveConfigValue(input.cwd, 'language'),
+  return goalWrite(input, deps, signal, async ({ policy, preserveGoalWorktree }) => integrationSummary(await integrateGoalTask(
+    input.cwd, input.goalId, input.taskName, input.expectedSha, signal, policy, resolveConfigValue(input.cwd, 'language'), preserveGoalWorktree,
   )), 'Goal integration failed', 'integrate');
 }
 
@@ -51,4 +51,10 @@ export function reopenTaktGoal(input: ReopenGoalInput, deps: McpOperationDepende
   return goalWrite(input, deps, signal, async () => integrationSummary(await reopenGoal(
     input.cwd, input.goalId, input.reason, signal,
   )), 'Goal reopen failed', 'reopen');
+}
+
+export function updateTaktGoalBranches(input: UpdateGoalBranchesInput, deps: McpOperationDependencies, signal: AbortSignal) {
+  return goalWrite(input, deps, signal, async () => integrationSummary(await updateGoalBranches(
+    input.cwd, input.goalId, input.integrationBranch, input.reason, signal,
+  )), 'Goal branch correction failed', 'update_branches');
 }

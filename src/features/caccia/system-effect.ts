@@ -13,9 +13,10 @@ import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBr
 import { checkForkThreats, toPublicThreatCheckComment } from '../merge/threat-check.js';
 import { resolveMergeSettings } from '../merge/settings.js';
 import { resolveCacciaSettings, runCaccia } from './index.js';
-import type { CacciaDisplayOptions } from './output.js';
+import { createCacciaOutput, type CacciaDisplayOptions } from './output.js';
 import type { WorkflowExecutionEventSink } from '../tasks/execute/types.js';
 import { parseGitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
+import { hasCodeRabbitReviewThreads } from '../../infra/github/pr.js';
 
 import { CacciaWorkflowError } from './workflow-report.js';
 
@@ -142,10 +143,17 @@ export async function cacciaEffect(
     if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
     await waitForExpectedPrHead(provider, context, options.projectCwd, initialHeadSha,
       'Pull request head changed before Caccia execution', options.abortSignal);
+    const pullRequest = context.prUrl === undefined ? undefined : parseGitHubPullRequestTarget(context.prUrl);
+    const hasReviewThreads = await hasCodeRabbitReviewThreads(
+      prNumber, options.projectCwd, initialHeadSha, options.abortSignal, pullRequest,
+    );
     let expectedHeadSha = initialHeadSha;
-    const result = await runCaccia({
+    const result = !hasReviewThreads ? {
+      outcome: 'skipped' as const, headSha: initialHeadSha, unresolvedCount: 0,
+      skipReason: 'no_review_threads' as const, reason: 'No unresolved CodeRabbit review threads',
+    } : await runCaccia({
       entry: 'linked', prNumber, projectCwd: options.projectCwd, settings,
-      ...(context.prUrl === undefined ? {} : { pullRequest: parseGitHubPullRequestTarget(context.prUrl) }),
+      ...(pullRequest === undefined ? {} : { pullRequest }),
       expectedInitialHeadSha: initialHeadSha, abortSignal: options.abortSignal,
       onPushedHead: (headSha) => {
         options.prMergePushRecorder?.record(headSha, expectedHeadSha, context);
@@ -198,6 +206,15 @@ export async function cacciaEffect(
     }
     if (expectedHeadSha === initialHeadSha) {
       options.prMergePushRecorder?.record(headSha, headSha, context);
+    }
+    if (!hasReviewThreads) {
+      const out = createCacciaOutput({
+        outputMode: options.outputMode ?? 'terminal',
+        taskPrefix: options.taskPrefix,
+        taskColorIndex: options.taskColorIndex,
+        taskDisplayLabel: options.taskDisplayLabel,
+      }, resolveConfigValue(options.projectCwd, 'language'));
+      out.result({ outcome: result.outcome, unresolvedCount: result.unresolvedCount, reason: result.reason });
     }
     return { success: true, failed: false, outcome: result.outcome, headSha,
       unresolvedCount: result.unresolvedCount, skipReason: result.skipReason ?? null, reason: result.reason ?? null };

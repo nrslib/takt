@@ -4,12 +4,17 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { expect, vi } from 'vitest';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { readDaemonOwner } from '../../infra/daemon/owner.js';
+import { readDaemonOwner, isDaemonOwnerRunning, type DaemonOwner } from '../../infra/daemon/owner.js';
+import { isConversationIpcReady } from '../../features/daemon/conversationReadiness.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import { UPDATE_NOTIFIER_DISABLED_ARG } from '../../shared/utils/updateNotifierProcess.js';
 import { captureOwnedChild, terminateOwnedProcess } from './owned-process.js';
+import type { ManagerGoalSummary } from '../../infra/goals/schema.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
 const require = createRequire(import.meta.url);
@@ -22,6 +27,7 @@ interface Observation {
   running?: boolean;
   approvalState?: 'reserved' | 'registered' | null;
   agent?: string;
+  images?: { id: string; path: string; digest: string }[];
   model?: string;
   summaryRequest?: boolean;
   method?: string;
@@ -53,6 +59,11 @@ export interface ManagerTuiProcess {
   exit(): Promise<void>;
 }
 
+export interface ManagerDaemonResponse {
+  message: string;
+  summary: (ManagerGoalSummary & { repositoryDirectory?: string }) | null;
+}
+
 export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[], activity = false) {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'team-a', 'takt3');
@@ -79,7 +90,11 @@ export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly s
   const responses = replies === undefined
     ? Array.from({ length: 8 }, () => ({ message: 'The daemon completed this request.', summary: { ...summary, repositoryDirectory: repository } }))
     : replies.map((message) => ({ message, summary: null }));
-  writeFileSync(scenario, JSON.stringify(responses.map((structured_output) => ({ persona: 'manager', content: '', structured_output }))));
+  const setResponses = (next: readonly ManagerDaemonResponse[]): void => writeFileSync(scenario, JSON.stringify(next.map(({ message, summary: responseSummary }) => ({
+    persona: 'manager', content: '', structured_output: { message,
+      summary: responseSummary === null ? null : { ...responseSummary, repositoryDirectory: responseSummary.repositoryDirectory ?? repository } },
+  }))));
+  setResponses(responses);
   const harness = join(directory, 'ink-harness.mjs');
   writeFileSync(harness, `
 import { render } from ${JSON.stringify(pathToFileURL(require.resolve('ink-testing-library')).href)};
@@ -175,12 +190,12 @@ export async function mountInk(buildTree) {
   // 本文と capability は記録せず、実処理の所有 PID と公開操作だけを観測する。
   writeFileSync(preload, `
 import { registerHooks } from 'node:module';
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Socket } from 'node:net';
 import { ConversationStateStore } from ${JSON.stringify(built('infra/daemon/conversationStateStore.js'))};
 import { MockProvider } from ${JSON.stringify(built('infra/providers/mock.js'))};
-import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
 const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid, at: Date.now() }) + '\\n');
 const save = ConversationStateStore.prototype.write;
 ConversationStateStore.prototype.write = async function(stored, signal) {
@@ -194,8 +209,11 @@ const setup = MockProvider.prototype.setup;
 MockProvider.prototype.setup = function(config) {
   const agent = setup.call(this, config);
   return { ...agent, call: async (prompt, options) => {
+    const imageMetadata = /Image attachments: (\\[.*\\])/u.exec(prompt)?.[1];
+    const images = options.imageAttachments ?? (imageMetadata === undefined ? [] : JSON.parse(imageMetadata));
     record({ event: 'provider_start', agent: config.name, model: options.model,
-      summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
+      images: images.map(({ id, path }) => ({ id, path, digest: createHash('sha256').update(readFileSync(path)).digest('hex') })),
+      summaryRequest: prompt.includes('"requestProposal":true') });
     const deadline = Date.now() + 60000;
     const showActivity = ${JSON.stringify(activity)} && config.name === 'manager';
     if (showActivity) options.onStream?.({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
@@ -205,9 +223,17 @@ MockProvider.prototype.setup = function(config) {
       if (Date.now() >= deadline) throw new Error('Test provider was not released');
       if (showActivity && !toolShown && existsSync(${JSON.stringify(toolGate)})) {
         toolShown = true;
-        options.onStream?.({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
+        options.onStream?.({ type: 'text', data: { text: 'コードを読んで' } });
+        options.onStream?.({ type: 'text', data: { text: 'いるところです。' } });
+        options.onStream?.({ type: 'tool_use', data: { id: 'activity-tool', tool: 'Bash', input: {
+          description: '見回りの予定のコードを読む', command: 'private-input-marker',
+        } } });
       }
       await delay(20);
+    }
+    if (showActivity && toolShown) {
+      options.onStream?.({ type: 'tool_result', data: { id: 'activity-tool', content: 'private-result-marker', isError: false } });
+      options.onStream?.({ type: 'text', data: { text: '調べがつきました。' } });
     }
     const result = await agent.call(prompt, options);
     record({ event: 'provider_complete', agent: config.name });
@@ -237,6 +263,47 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 } });
 `);
   const clients: Array<{ child: ChildProcess; owned: Awaited<ReturnType<typeof captureOwnedChild>> }> = [];
+  const launchCli = async (args: readonly string[]) => {
+    const cli = join(process.cwd(), 'dist/app/cli/index.js');
+    const terminal = join(directory, 'cli-terminal.mjs');
+    writeFileSync(terminal, `
+Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+`);
+    const child = spawn(process.execPath, ['--import', pathToFileURL(terminal).href, cli, UPDATE_NOTIFIER_DISABLED_ARG, ...args], {
+      cwd: repository, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
+      HOME: home, TAKT_CONFIG_DIR: directory, TAKT_MOCK_SCENARIO: scenario,
+      NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, TAKT_NO_TTY: '',
+    } });
+    let output = '';
+    child.stdout!.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr!.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    const closed = new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => resolve({ code, output: stripVTControlCharacters(output) }));
+    });
+    clients.push({ child, owned: await captureOwnedChild(child) });
+    return { child, closed };
+  };
+  const runCli = async (args: readonly string[]) => {
+    const cli = await launchCli(args);
+    await vi.waitFor(() => expect(cli.child.exitCode ?? cli.child.signalCode).not.toBeNull(), { timeout: 30000 });
+    return cli.closed;
+  };
+  const startDaemon = async (resident: boolean): Promise<DaemonOwner> => {
+    const cli = await launchCli(['daemon', ...(resident ? ['--resident'] : [])]);
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      if (cli.child.exitCode !== null || cli.child.signalCode !== null) {
+        const { code, output } = await cli.closed;
+        throw new Error(`Daemon CLI exited before readiness (${code}): ${output}`);
+      }
+      const owner = await readDaemonOwner(directory);
+      if (owner !== undefined && await isConversationIpcReady(directory, owner)) return owner;
+      await delay(50);
+    }
+    throw new Error('Daemon CLI readiness was not confirmed');
+  };
   const readObservations = (): Observation[] => readFileSync(observations, 'utf8').trim().split('\n')
     .filter(Boolean).map((line) => JSON.parse(line) as Observation);
   const state = async (path = repository) => {
@@ -344,7 +411,17 @@ finally { process.disconnect(); }
     const owner = await readDaemonOwner(directory);
     if (owner !== undefined) await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
   };
-  return { directory, repository, summary, start, release, useTool, state, readObservations, cleanup, createRepository };
+  return { directory, repository, summary, start, startDaemon, runCli, release, useTool, state, readObservations, cleanup, createRepository, setResponses };
+}
+
+export async function expectDaemonSurvivesIdle(directory: string, owner: DaemonOwner): Promise<void> {
+  const started = Date.now();
+  // 認証接続を保持すると通常 daemon も生存するため、観測中は socket を開かない。
+  await vi.waitFor(async () => {
+    expect(await readDaemonOwner(directory)).toEqual(owner);
+    expect(await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 })).toBe(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1500);
+  }, { timeout: 5000 });
 }
 
 export async function waitForManager(tui: ManagerTuiProcess, text: string): Promise<void> {

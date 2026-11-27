@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { CreateAgentSessionOptions, DefaultPackageManager, ResolvedPaths } from '@earendil-works/pi-coding-agent';
+import type { AgentSessionEvent, CreateAgentSessionOptions, DefaultPackageManager, ResolvedPaths } from '@earendil-works/pi-coding-agent';
 import { DebugLogger } from '../shared/utils/debug.js';
+import { runAgent } from '../agents/runner.js';
 
 type MockResolvedPaths = {
   [Kind in 'extensions' | 'skills' | 'prompts' | 'themes']: Array<Pick<ResolvedPaths[Kind][number], 'path' | 'enabled'>>;
@@ -67,6 +68,7 @@ const mocks = vi.hoisted(() => {
     extensionPath: string;
   }> = [];
   let sessionSequence = 0;
+  let activeToolNames: string[] = [];
 
   const assistantMessage = {
     role: 'assistant',
@@ -78,7 +80,10 @@ const mocks = vi.hoisted(() => {
     sessionId: 'sdk-session-0',
     model: { provider: 'test', id: 'model' } as { provider: string; id: string } | undefined,
     messages: [],
-    setActiveToolsByName: vi.fn(),
+    setActiveToolsByName: vi.fn((toolNames: string[]) => {
+      activeToolNames = [...toolNames];
+    }),
+    getActiveToolNames: vi.fn(() => [...activeToolNames]),
     setModel: vi.fn(async () => undefined),
     setThinkingLevel: vi.fn((level: string) => {
       currentThinkingLevel = level;
@@ -198,7 +203,9 @@ const mocks = vi.hoisted(() => {
       loadedExtensions = [];
       pendingProviderRegistrations = [];
       toolDefinitions = createDefaultTools();
+      activeToolNames = [];
       mocks.session.setActiveToolsByName.mockClear();
+      mocks.session.getActiveToolNames.mockClear();
       mocks.session.bindExtensions.mockReset();
       mocks.session.bindExtensions.mockResolvedValue(undefined);
       mocks.session.setModel.mockClear();
@@ -605,6 +612,76 @@ export default function registerLifecycleTool(pi) {
     }));
   });
 
+  it.each(
+    (['threshold', 'overflow', 'manual', undefined] as const).flatMap((reason) =>
+      ([true, false, undefined] as const).flatMap((willRetry) =>
+        (['success', 'missing-result', 'aborted', 'error'] as const).map((outcome) => ({ reason, willRetry, outcome })))),
+  )('notifies TAKT only for successful automatic compaction without SDK continuation ($reason, willRetry=$willRetry, $outcome)', async ({ reason, willRetry, outcome }) => {
+    mocks.resetTransient();
+    const prompt = mocks.session.prompt.getMockImplementation()!;
+    mocks.session.prompt.mockImplementationOnce(async (...args) => {
+      await prompt(...args);
+      // Missing reason/willRetry probes an unclassified runtime event, not a valid SDK event.
+      type CompactionEnd = Extract<AgentSessionEvent, { type: 'compaction_end' }>;
+      mocks.emit({
+        type: 'compaction_end',
+        ...(reason === undefined ? {} : { reason }),
+        ...(willRetry === undefined ? {} : { willRetry }),
+        aborted: outcome === 'aborted',
+        errorMessage: outcome === 'error' ? 'failed summary' : undefined,
+        result: outcome === 'missing-result' ? undefined : { summary: 'earlier context', firstKeptEntryId: 'entry-1', tokensBefore: 120000 },
+      } satisfies Omit<CompactionEnd, 'reason' | 'willRetry'> & Partial<Pick<CompactionEnd, 'reason' | 'willRetry'>>);
+    });
+    const sessions: string[] = [];
+    const result = await callPi('reviewer', 'review', {
+      ...sessionOptions('compaction-event-matrix'),
+      permissionMode: 'readonly',
+      onStream: (event) => { if (event.type === 'context_compacted') sessions.push(event.data.sessionId!); },
+    });
+    const notified = (reason === 'threshold' || reason === 'overflow') && willRetry === false && outcome === 'success';
+    expect(result.status).toBe('done');
+    expect(sessions).toEqual(notified ? [result.sessionId] : []);
+  });
+
+  it.each([
+    { reason: 'overflow', willRetry: true, promptCalls: 1 },
+    { reason: 'overflow', willRetry: false, promptCalls: 2 },
+    { reason: 'threshold', willRetry: false, promptCalls: 2 },
+  ] as const)('coordinates the Phase 1 recovery replay with Pi SDK continuation ($reason, willRetry=$willRetry)', async ({ reason, willRetry, promptCalls }) => {
+    mocks.resetTransient();
+    const prompt = mocks.session.prompt.getMockImplementation()!;
+    const sdkContinue = vi.fn(async () => {
+      mocks.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'SDK continued review' } });
+      mocks.emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } });
+    });
+    mocks.session.prompt.mockImplementationOnce(async (...args) => {
+      mocks.emit({
+        type: 'compaction_end', reason, willRetry, aborted: false,
+        result: { summary: 'earlier context', firstKeptEntryId: 'entry-1', tokensBefore: 120000 },
+      } satisfies AgentSessionEvent);
+      // Pi's post-run loop continues inside prompt(), before its promise resolves.
+      if (willRetry) await sdkContinue();
+      else await prompt(...args);
+    });
+    const sessionIds: string[] = [];
+    const { model, ...options } = sessionOptions(`runner-compaction-${reason}-${willRetry}`);
+    const result = await runAgent(undefined, 'Review the remaining call path', {
+      ...options,
+      executionPhase: 1,
+      edit: false,
+      resolvedExecution: { provider: 'pi', model, providerOptions: undefined, permissionMode: 'readonly' },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'Review the remaining call path' },
+      onStream: (event) => { if (event.type === 'init') sessionIds.push(event.data.sessionId!); },
+    });
+    expect(result.status).toBe('done');
+    expect(result.content).toBe(willRetry ? 'SDK continued review' : 'hello from pi');
+    expect(sdkContinue).toHaveBeenCalledTimes(willRetry ? 1 : 0);
+    expect(mocks.session.prompt).toHaveBeenCalledTimes(promptCalls);
+    expect(mocks.session.prompt.mock.calls.map(([instruction]) => instruction)).toEqual(Array(promptCalls).fill('Review the remaining call path'));
+    expect(sessionIds).toEqual(Array(promptCalls).fill(result.sessionId));
+    expect(mocks.createAgentSession).toHaveBeenCalledOnce();
+  });
+
   it('invalidates extension runtime when SDK session creation fails', async () => {
     mocks.resetTransient();
     mocks.createAgentSession.mockRejectedValueOnce(new Error('session creation failed'));
@@ -1000,7 +1077,7 @@ export default function registerLifecycleTool(pi) {
     });
     expect(result.status).toBe('done');
     expect(mocks.getLoaderOptions()).toMatchObject({ [loaderKey]: [resourcePath] });
-    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls']);
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls', 'bash']);
   });
 
   it('loads multiple successful extension sources only once', async () => {
@@ -1585,13 +1662,54 @@ export default function registerLifecycleTool(pi) {
         imageAttachments: [{ placeholder: '[Image #1]', path: imagePath }],
       });
 
-      expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read']);
+      expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'bash']);
       expect(mocks.getPromptOptions()).toMatchObject({
         images: [{ type: 'image', mimeType: 'image/png', data: Buffer.from('image-data').toString('base64') }],
       });
     } finally {
       rmSync(imageDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { label: 'implicit inspection tools', allowedTools: undefined, expected: ['read', 'grep', 'find', 'ls'] },
+    { label: 'explicit deny-all', allowedTools: [], expected: [] },
+    { label: 'explicit Read', allowedTools: ['Read'], expected: ['read'] },
+    { label: 'explicit Bash', allowedTools: ['Bash'], expected: [] },
+    { label: 'explicit Read and Bash', allowedTools: ['Read', 'Bash'], expected: ['read'] },
+  ])('limits $label to inspection tools for strict-readonly', async ({ label, allowedTools, expected }) => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'generate verification specifications', {
+      ...sessionOptions(`pi-sdk-strict-${label}`),
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools,
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(expected);
+    mocks.triggerRuntimeRefreshTools();
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(expected);
+    mocks.triggerRuntimeSetActiveTools(['read', 'bash', 'edit', 'write']);
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(expected);
+    expect(invokeToolGuard('bash')).toMatchObject({ block: true });
+  });
+
+  it.each(['full', undefined] as const)('keeps strict-readonly inspection limits with permission mode %s', async (permissionMode) => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'inspect without shell access', {
+      ...sessionOptions(`pi-sdk-strict-mode-${permissionMode}`),
+      permissionMode,
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls']);
+    mocks.triggerRuntimeSetActiveTools(['bash']);
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls']);
+    expect(invokeToolGuard('bash')).toMatchObject({ block: true });
   });
 
   it('enables only read for verification interpretation with a read-only allowlist', async () => {
@@ -1626,15 +1744,16 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
     ]);
     expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith([
       'read',
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
   });
 
@@ -1672,6 +1791,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -1694,9 +1814,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -1734,9 +1854,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
     ]);
   });
 
@@ -1875,6 +1995,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2062,9 +2183,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
       'trusted_extension_tool',
     ]);
     expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith([
@@ -2072,6 +2193,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
     expect(mocks.createAgentSession).toHaveBeenCalledOnce();
@@ -2165,6 +2287,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2263,6 +2386,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2584,9 +2708,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
     ]);
   });
 
@@ -2648,6 +2772,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2679,6 +2804,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
 
     mocks.triggerRuntimeRefreshTools();
@@ -2687,6 +2813,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
 
     mocks.triggerRuntimeSetActiveTools(['read', 'grep']);
@@ -2695,6 +2822,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
     expect(mocks.createAgentSession).toHaveBeenCalledOnce();
   });
@@ -2727,6 +2855,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
 
     overrideRead.sourceInfo.path = AMBIENT_EXTENSION_PATH;
@@ -3172,6 +3301,78 @@ export default function registerLifecycleTool(pi) {
     expect(response.status).toBe('error');
     expect(response.error).toContain('Pi SDK returned no assistant text');
     expect(mocks.session.getLastAssistantText).not.toHaveBeenCalled();
+  });
+
+  /** Emits an SDK-shaped run: a message with text before a tool call, the tool execution, then a final message. */
+  function emitToolTurn(noteBeforeTool: string | undefined, finalText: string | undefined): void {
+    const toolCall = { type: 'toolCall', id: 'tool-1', name: 'edit', arguments: { path: 'retry.ts' } };
+    const toolMessage = {
+      role: 'assistant',
+      content: noteBeforeTool === undefined ? [toolCall] : [{ type: 'text', text: noteBeforeTool }, toolCall],
+      stopReason: 'toolUse',
+    };
+    const finalMessage = {
+      role: 'assistant',
+      content: finalText === undefined ? [] : [{ type: 'text', text: finalText }],
+      stopReason: 'stop',
+    };
+    if (noteBeforeTool !== undefined) {
+      mocks.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: noteBeforeTool } });
+    }
+    mocks.emit({ type: 'message_end', message: toolMessage });
+    mocks.emit({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'edit', args: { path: 'retry.ts' } });
+    mocks.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'tool-1',
+      toolName: 'edit',
+      result: { content: [{ type: 'text', text: 'edited' }] },
+      isError: false,
+    });
+    if (finalText !== undefined) {
+      mocks.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: finalText } });
+    }
+    mocks.emit({ type: 'message_end', message: finalMessage });
+    mocks.emit({ type: 'agent_end', messages: [toolMessage, finalMessage] });
+  }
+
+  it('returns only the text after the last tool call as the answer while streaming the earlier note', async () => {
+    mocks.resetTransient();
+    const texts: string[] = [];
+    mocks.session.prompt.mockImplementationOnce(async () => {
+      emitToolTurn('Note: editing retry.ts next.', 'Edit complete.');
+    });
+
+    const response = await callPi('worker', 'edit retry.ts', {
+      ...sessionOptions('pi-sdk-note-tool-answer'),
+      onStream: (event) => {
+        if (event.type === 'text') texts.push(event.data.text);
+      },
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Edit complete.' });
+    expect(texts).toEqual(['Note: editing retry.ts next.', 'Edit complete.']);
+  });
+
+  it.each([
+    { label: 'a note before the tool call', note: 'Note: editing retry.ts next.' },
+    { label: 'no text at all', note: undefined },
+  ])('returns an empty done result with the session ID when the turn ends with a tool call after $label', async ({ note }) => {
+    mocks.resetTransient();
+    const results: unknown[] = [];
+    mocks.session.prompt.mockImplementationOnce(async () => {
+      emitToolTurn(note, undefined);
+    });
+
+    const response = await callPi('worker', 'edit retry.ts', {
+      ...sessionOptions('pi-sdk-tool-ended-turn'),
+      onStream: (event) => {
+        if (event.type === 'result') results.push(event.data);
+      },
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId: mocks.session.sessionId });
+    expect(response.error).toBeUndefined();
+    expect(results).toEqual([expect.objectContaining({ result: '', success: true, sessionId: mocks.session.sessionId })]);
   });
 
   it('serializes concurrent calls that reuse one SDK session', async () => {

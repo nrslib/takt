@@ -39,6 +39,7 @@ interface RetryTaskRecordOptions {
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
+  runtimeAssignment?: string;
   taskDir?: string;
   resumeSource?: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
@@ -70,6 +71,7 @@ export function buildTerminalTaskRecord(
   return {
     ...nextTask,
     ...updates,
+    waiting_reason: undefined,
     owner_start_time: null,
     ...(nextRetryMetadata?.startStep ? { start_step: nextRetryMetadata.startStep } : {}),
     ...(nextRetryMetadata?.resumePoint ? { resume_point: nextRetryMetadata.resumePoint } : {}),
@@ -122,8 +124,13 @@ export function buildRetryTaskRecord(
   return {
     ...baseTask,
     ...(options.workflow ? { workflow: options.workflow } : {}),
+    ...(options.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
     ...taskSpecSource,
     status,
+    worker_name: task.remote_assignment?.workerName,
+    remote_assignment: task.remote_assignment === undefined ? undefined : { ...task.remote_assignment,
+      retryReady: false, retryWaitUntil: undefined },
+    waiting_reason: undefined,
     execution_id: status === 'running' ? randomUUID() : undefined,
     stop_request: undefined,
     started_at: status === 'running' ? nowIso() : null,

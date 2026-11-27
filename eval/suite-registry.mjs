@@ -19,7 +19,7 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を75ケース・日英150入力（再生71ケース・142入力、SDK実行4ケース・8入力）で測る（Python データ処理と Web アプリを含む）',
+    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・直し方と範囲への介入・人の対応が必要な場合の停止を92ケース・日英184入力（再生88ケース・176入力、SDK実行4ケース・8入力）で測る（Python データ処理と Web アプリを含む）',
     suites: ['manager-work-split'],
   },
   {
@@ -128,8 +128,11 @@ const CLASSIFICATIONS = [
       'scope-architecture-search-unrelated',
       'scope-architecture-boundary',
       'review-adjudication',
+      'adjudication-scope',
       'review-proof-boundary',
       'review-description-verification',
+      'review-proportionality',
+      'review-carry-forward',
       'testing-proof-boundary',
       'testing-proof-new-behavior',
       'review-proof-required-check',
@@ -266,7 +269,7 @@ const EXECUTION_OVERRIDES = {
   },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: '75ケース・日英150入力（再生71ケース・142入力を Sol Low、Opus 5、Terra Medium、Luna Max、SDK実行4ケース・8入力を Claude SDK）で操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・直し方と範囲への介入を比較する明示選択の評価',
+    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で92ケース・日英184入力（再生88ケース・176入力、SDK実行4ケース・8入力）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・直し方と範囲への介入・権限審査拒否後の判断を比較する明示選択の評価',
   },
   'phase-awareness': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -546,7 +549,7 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: 'キャッシュなしの3モデル反復を行う production-condition suite である',
+    reason: '既存ケースと修正方式6種の日英・両フェーズ（25ケース）を3モデル・3反復で比較する',
   },
   'fix-plan-impact-closure-primary': {
     defaultEligible: false,
@@ -616,15 +619,27 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: '説明文の更新と追加の自動検証義務を裁定で区別する実モデル評価',
   },
+  'review-proportionality': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '技術的成立と必須修正、人の不採用判断、重大な実欠陥を日英で比較する明示選択の評価',
+  },
+  'review-carry-forward': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '前回裁定で不採用とした保証の無再提出継承と根拠ある更新を日英の実Phase1/2で評価する',
+  },
   'review-proof-boundary': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: 'Luna Maxで裁定の証拠境界を比較する明示選択の評価',
+  },
+  'adjudication-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '裁定の両フェーズの道具実出力と採否を日英・3モデルで比較する明示選択の評価',
   },
   'review-adjudication': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+    reason: '既存3ケースと履歴を伴う採否6種の日英・両フェーズ（27ケース）を3モデルで比較する。方式比較は修正計画側で評価する',
   },
   'review-adjudication-report': {
     defaultEligible: false,
@@ -719,6 +734,13 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'review-proportionality': ['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) =>
+    ['ja', 'en'].map((language) => `review-proportionality-${caseId}-${language}`)),
+  'review-carry-forward': ['carry', 'update'].flatMap((caseId) =>
+    ['ja', 'en'].map((language) => `review-adjudication-carry-forward-${caseId}-${language}`)),
+  'adjudication-scope': ["adjudication-scope-input-local-ja","adjudication-scope-input-local-en","adjudication-scope-input-external-ja","adjudication-scope-input-external-en","adjudication-scope-local-condition-ja","adjudication-scope-local-condition-en","adjudication-scope-long-condition-ja","adjudication-scope-long-condition-en","adjudication-scope-quality-ja","adjudication-scope-quality-en","adjudication-scope-misdirected-evidence-ja","adjudication-scope-misdirected-evidence-en"],
+  'review-adjudication': ['review-adjudication', 'repair-strategy'],
+  'fix-plan-bounded-proof': ['fix-plan-bounded-proof', 'repair-strategy'],
   'adjudicator-no-fix': ADJUDICATOR_TARGETS,
   ...Object.fromEntries(['spec-deviation-phase1', 'spec-deviation-summary'].map(name => [name,
     ['grounded', 'reinterpretation', 'ungrounded', 'clean', 'other-unmet'].flatMap(scenario =>

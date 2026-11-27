@@ -1,12 +1,11 @@
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { resolveCurrentManagerAssignment } from './assignment.js';
-import { createConnection, type Socket } from 'node:net';
+import { managerImageDirectory } from './imageAttachments.js';
+import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
-import { conversationIpcEndpoint, DaemonIpcStateSchema, ipcStateMatchesOwner, readDaemonIpcState,
-  resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
-import { isDaemonOwnerRunning, readDaemonOwner } from '../../infra/daemon/owner.js';
+import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
@@ -40,9 +39,9 @@ export class ConversationIpcClient {
   private listeners = new Set<() => void>();
   private outputs = new Set<(output: Output) => void>();
   private activity: Extract<Output, { kind: 'activity' }> | undefined;
-  private pendingActivity: Extract<Output, { kind: 'activity' }> | undefined;
   private receiver: ConversationTransferReceiver | undefined;
   private resolved: ConversationOpen | undefined;
+  private configDirectory: string | undefined;
   private attachmentId: string | undefined;
   private closed = false;
   private connecting: Promise<void> | undefined;
@@ -78,6 +77,18 @@ export class ConversationIpcClient {
       throw failure;
     }).finally(() => { this.connecting = undefined; });
     return this.connecting;
+  }
+
+  async getImageDirectory(): Promise<string> {
+    if (this.view.connection !== 'connected' || this.resolved === undefined || this.configDirectory === undefined) throw new Error('Conversation is disconnected');
+    return managerImageDirectory(this.resolved.assignment, this.configDirectory);
+  }
+
+  async prepareImage(sourcePath: string): Promise<import('../../shared/types/image-attachments.js').ManagerImageAttachmentReference> {
+    if (this.view.connection !== 'connected' || this.attachmentId === undefined) throw new Error('Conversation is disconnected');
+    return this.request('prepare_image', { attachmentId: this.attachmentId, sourcePath }, (value) => z.object({
+      id: z.uuid(), placeholder: z.string().regex(/^\[Image #[1-9]\d*\]$/), path: z.string().min(1),
+    }).strict().parse(value));
   }
 
   async submit(command: ConversationCommand, onAccepted?: (operationId: string) => void): Promise<Submission> {
@@ -126,17 +137,8 @@ export class ConversationIpcClient {
     const running = this.view.state?.running;
     if (this.view.connection === 'disconnected' || running?.operationId !== this.activity?.operationId
       || running?.generation !== this.activity?.generation) this.activity = undefined;
-    let activityResumed = false;
-    if (this.view.connection === 'disconnected' || change.state === null || change.state?.running === null) {
-      this.pendingActivity = undefined;
-    } else if (this.pendingActivity !== undefined && running?.operationId === this.pendingActivity.operationId
-      && running.generation === this.pendingActivity.generation) {
-      this.activity = this.pendingActivity;
-      this.pendingActivity = undefined;
-      activityResumed = true;
-    }
     for (const listener of this.listeners) listener();
-    if ((previousConnection !== 'connected' || activityResumed) && this.view.connection === 'connected' && this.activity !== undefined) {
+    if (previousConnection !== 'connected' && this.view.connection === 'connected' && this.activity !== undefined) {
       for (const listener of this.outputs) listener(this.activity);
     }
   }
@@ -151,18 +153,12 @@ export class ConversationIpcClient {
         : this.assignment, configDirectory);
     const resolved = await port.resolve(selected);
     if (this.closed) return;
-    await ensureDaemon();
-    if (this.closed) return;
-    const owner = await readDaemonOwner(configDirectory);
-    const state = await readDaemonIpcState(configDirectory);
-    if (owner === undefined || state === undefined || !await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 }) || !ipcStateMatchesOwner(state, owner)
-      || state.endpoint !== conversationIpcEndpoint(configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
     if (this.resolved?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();
       this.items.clear();
       this.update({ state: null, items: [] });
       this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
-        state: (next) => this.update({ state: next }),
+        state: (next) => { this.update({ state: next }); },
         item: (item) => {
           const key = snapshotItemKey(item);
           this.readItems.set(key, item);
@@ -171,16 +167,10 @@ export class ConversationIpcClient {
         remove: (key) => { this.removed.add(key); },
         output: (output) => {
           if (output.kind === 'activity') {
-            const running = this.view.state?.running;
-            if (running?.operationId !== output.operationId || running.generation !== output.generation) {
-              this.pendingActivity = output;
-              return;
-            }
             this.activity = output;
             if (this.view.connection !== 'connected') return;
           } else if (output.kind === 'result') {
             if (output.operationId === this.activity?.operationId) this.activity = undefined;
-            if (output.operationId === this.pendingActivity?.operationId) this.pendingActivity = undefined;
           }
           for (const listener of this.outputs) listener(output);
         },
@@ -211,10 +201,13 @@ export class ConversationIpcClient {
       });
     }
     this.resolved = resolved;
-    const socket = createConnection(state.endpoint);
+    this.configDirectory = configDirectory;
+    const socket = await ensureDaemon({ retainConnection: true });
+    if (this.closed) { socket.destroy(); return; }
     this.socket = socket;
+    if (socket.destroyed) throw new Error('Daemon disconnected before opening conversation');
     const decoder = new ConversationFrameDecoder();
-    let authenticated = false;
+    this.receiver!.authenticated();
     socket.on('data', (chunk: Buffer) => {
       if (this.socket !== socket || socket.destroyed) return;
       try {
@@ -231,7 +224,6 @@ export class ConversationIpcClient {
               catch (error) { pending.reject(error instanceof Error ? error : new Error('Invalid IPC response')); throw error; }
             }
           } else {
-            if (!authenticated) throw new Error('IPC event before authentication');
             this.receiver!.receive(value);
           }
         }
@@ -239,17 +231,7 @@ export class ConversationIpcClient {
     });
     socket.on('error', (error) => { if (this.socket === socket) this.disconnect(error); });
     socket.once('close', () => { if (this.socket === socket) this.disconnect(new Error('Daemon disconnected')); });
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { socket.destroy(); reject(new Error('IPC connection timed out')); }, 5_000);
-      socket.once('connect', () => { clearTimeout(timer); resolve(); });
-      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
-    });
-    await this.request('hello', { capability: state.capability }, (value) => {
-      const hello = z.object({ owner: DaemonIpcStateSchema.shape.owner }).strict().parse(value);
-      if (!ipcStateMatchesOwner({ ...state, owner: hello.owner }, owner)) throw new Error('Daemon hello identity mismatch');
-      this.receiver!.authenticated();
-      authenticated = true;
-    });
+    socket.resume();
     await this.requestRead('open', { ...resolved, ...(this.agentOverrides === undefined ? {} : { agentOverrides: this.agentOverrides }) }, (value) => {
       const result = z.object({ attachmentId: z.uuid(), read: ConversationReadMetadataSchema }).strict().parse(value);
       this.attachmentId = result.attachmentId;
@@ -294,6 +276,9 @@ export class ConversationIpcClient {
   }
 
   private disconnect(error: Error): void {
+    const socket = this.socket;
+    this.socket = undefined;
+    socket?.destroy();
     for (const pending of this.requests.values()) { clearTimeout(pending.timer); pending.reject(error); }
     this.requests.clear();
     this.attachmentId = undefined;

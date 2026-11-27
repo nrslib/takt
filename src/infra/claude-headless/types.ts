@@ -28,6 +28,8 @@ export interface ClaudeHeadlessCallOptions {
   permissionMode?: PermissionMode;
   bypassPermissions?: boolean;
   sandbox?: ClaudeSandboxSettings;
+  /** Resolved permissions.deny rules passed to Claude through --settings */
+  denyRules?: string[];
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   claudeCliPath?: string;

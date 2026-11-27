@@ -26,6 +26,7 @@ import {
 import { normalizeObservabilityConfig } from '../observabilityConfig.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
+import { getConfigSnapshot } from '../configSnapshot.js';
 import { validateProviderModelRequirements } from '../providerModelRequirements.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
@@ -230,13 +231,20 @@ export class GlobalConfigManager {
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
       caccia: parsed.caccia,
+      daemon: parsed.daemon === undefined ? undefined : {
+        remoteWorker: parsed.daemon.remote_worker,
+        builtinWorker: parsed.daemon.builtin_worker === undefined ? undefined : {
+          concurrency: parsed.daemon.builtin_worker.concurrency,
+        },
+      },
       director: parsed.director === undefined ? undefined : {
         slack: parsed.director.slack === undefined ? undefined : {
           channelId: parsed.director.slack.channel_id, allowedUserIds: parsed.director.slack.allowed_user_ids,
         },
       },
       manager: parsed.manager === undefined ? undefined : {
-        patrolInterval: parsed.manager.patrol_interval, autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
+        permission: parsed.manager.permission, providerPermissions: parsed.manager.provider_permissions,
+        patrolInterval: parsed.manager.patrol_interval, refreshIntervalMs: parsed.manager.refresh_interval_ms, autoRun: parsed.manager.auto_run, preserveGoalWorktree: parsed.manager.preserve_goal_worktree, workflows: parsed.manager.workflows, runtimeAssignments: parsed.manager.runtime_assignments, notifications: parsed.manager.notifications,
       },
       merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),
@@ -314,6 +322,8 @@ export function invalidateGlobalConfigCache(): void {
 }
 
 export function loadGlobalConfig(): GlobalConfig {
+  const snapshot = getConfigSnapshot();
+  if (snapshot !== undefined) return snapshot.global;
   return GlobalConfigManager.getInstance().load();
 }
 
@@ -322,5 +332,7 @@ export function saveGlobalConfig(config: GlobalConfig): void {
 }
 
 export function loadGlobalConfigTraceState(): ConfigTrace {
+  const snapshot = getConfigSnapshot();
+  if (snapshot !== undefined) return snapshot.globalTrace;
   return GlobalConfigManager.getInstance().getTrace();
 }

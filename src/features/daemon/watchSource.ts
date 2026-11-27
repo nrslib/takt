@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { conversationId } from '../../infra/conversations/identity.js';
@@ -19,22 +20,24 @@ import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../../infra/daemo
 import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
-import { publishPendingInquiryAnswers } from './pendingInquiryAnswers.js';
-import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
+import { publishPendingGoalAnswers, publishPendingInquiryAnswers, type PendingGoalAnswer } from './pendingInquiryAnswers.js';
+import { isGoalFinished, isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 /** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
-  private readonly goalReader = new WatchGoalReader();
-
   async close(): Promise<void> { await this.goalReader.close(); }
   private readonly inquiriesSeen = new Map<string, string>();
+  private readonly epicFiles: DaemonEpicFiles;
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
     private readonly stateChanges?: WatchObservations,
-    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>) {}
+    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>,
+    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {
+    this.epicFiles = new DaemonEpicFiles(conversations.routing.directory);
+  }
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -51,7 +54,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         goalReadFailed = true;
         this.onError(error);
       }, this.goalReader)) {
-        if (goal.status !== 'completed' && goal.executionStatus !== 'aborted') return true;
+        if (!isGoalFinished(goal)) return true;
       }
       // 読取失敗ではゴールの終了を確認できないため、daemon を維持する。
       if (goalReadFailed) return true;
@@ -62,6 +65,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     }
     for (const assignment of await this.conversations.routing.assignments()) {
       if (assignment.kind === 'daemon') continue;
+      if (assignment.kind === 'workspace') {
+        try {
+          if ((await this.epicFiles.activeIds(assignment.workspaceId)).length > 0) return true;
+        } catch (error) { this.onError(error); return true; }
+      }
       const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
@@ -75,7 +83,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for await (const project of this.projects()) {
       try {
         for (const task of await readWatchTasks(project.repositoryDirectory)) {
-          if (task.status !== 'running' || task.goal_id === undefined) continue;
+          if (task.status !== 'running' || task.goal_id === undefined || task.remote_assignment !== undefined) continue;
           targets.push({ targetId: digest([project.repositoryDirectory, task.name]),
             generation: digest([task.run_slug, task.execution_id, task.owner_pid, task.owner_start_time]), conversationId: project.conversationId,
             task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name,
@@ -94,6 +102,16 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async patrols(): Promise<readonly ManagerPatrolTarget[]> {
     const global = await globalDaemonConfiguration(this.conversations.routing.directory);
     const targets: ManagerPatrolTarget[] = [];
+    for (const assignment of await this.conversations.routing.assignments()) {
+      if (assignment.kind !== 'workspace') continue;
+      try {
+        const epicIds = await this.epicFiles.activeIds(assignment.workspaceId);
+        if (epicIds.length === 0) continue;
+        await this.conversations.ensure(assignment);
+        targets.push({ conversationId: conversationId(assignment), workspaceId: assignment.workspaceId, epicIds,
+          intervalSeconds: global.manager?.patrol_interval ?? 1800 });
+      } catch (error) { this.onError(error); }
+    }
     for await (const project of this.projects()) {
       try {
         const config = await readDaemonConfiguration(join(project.repositoryDirectory, '.takt', 'config.yaml'));
@@ -133,7 +151,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async inquiries(): Promise<void> {
     const present = new Set<string>();
+    const pendingGoalAnswers: PendingGoalAnswer[] = [];
     for await (const notice of this.inquiryNotices()) {
+      if (notice.target.goalId !== null && notice.question.answerPublicationPending === true) {
+        pendingGoalAnswers.push({ repositoryDirectory: notice.target.repositoryDirectory, goalId: notice.target.goalId, question: notice.question });
+      }
       const key = JSON.stringify([notice.conversationId, notice.target, notice.question.id]);
       present.add(key);
       const version = digest(notice.question);
@@ -145,6 +167,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     this.inquiriesInitialized = true;
     for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
     await this.publishPendingAnswers();
+    await publishPendingGoalAnswers(this.conversations.routing.directory, pendingGoalAnswers, this.onError);
   }
 
   private async publishPendingAnswers(): Promise<void> {
@@ -168,7 +191,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
           await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
             blockedNotifications: goal.blockedNotifications,
             pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() },
-          goal.status === 'completed' || goal.executionStatus === 'aborted');
+          isGoalFinished(goal));
           for (const question of goal.questions ?? []) {
             yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };
           }
@@ -225,7 +248,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         }
         targets.push({ targetId: projectKey(project.repositoryDirectory), generation: digest(pending.map((task) => [task.name, task.created_at])),
           conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory,
-          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true, runnablePending: true, owner, launching,
+          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true,
+          runnablePending: global.daemon?.builtin_worker?.concurrency !== 0 && pending.some((task) => task.waiting_reason === undefined), owner, launching,
           pendingSince: pending.map((task) => task.created_at).sort()[0]! });
       } catch (error) { this.onError(error); }
     }

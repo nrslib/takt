@@ -7,6 +7,7 @@ export interface JsonTaskData {
   branch?: string;
   base_branch?: string;
   workflow?: string;
+  runtime_assignment?: string;
   issue?: number;
   start_step?: string;
   retry_note?: string;
@@ -58,6 +59,7 @@ function serializeTaskData(data: TaskFileData | undefined): JsonTaskData | undef
     branch: data.branch,
     base_branch: data.base_branch,
     workflow: data.workflow,
+    runtime_assignment: data.runtime_assignment,
     issue: data.issue,
     start_step: data.start_step,
     retry_note: data.retry_note,

@@ -1,0 +1,420 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "TAKT ファセット評価: 裁定の採否と指摘の成立前提に対応する探索"
+prompts:
+  - label: adjudication-scope-input-local-ja
+    raw: file://../../prompts/adjudication-scope-input-local-ja.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-input-local-ja
+      report_prompt: prompts/adjudication-scope-input-local-ja.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-input-local-ja-policies.md
+        - .takt/eval-snapshots/adjudication-scope-input-local-ja-knowledge.md
+  - label: adjudication-scope-input-local-en
+    raw: file://../../prompts/adjudication-scope-input-local-en.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-input-local-en
+      report_prompt: prompts/adjudication-scope-input-local-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-input-local-en-policies.md
+        - .takt/eval-snapshots/adjudication-scope-input-local-en-knowledge.md
+  - label: adjudication-scope-input-external-ja
+    raw: file://../../prompts/adjudication-scope-input-external-ja.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-input-external-ja
+      report_prompt: prompts/adjudication-scope-input-external-ja.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-input-external-ja-policies.md
+        - .takt/eval-snapshots/adjudication-scope-input-external-ja-knowledge.md
+  - label: adjudication-scope-input-external-en
+    raw: file://../../prompts/adjudication-scope-input-external-en.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-input-external-en
+      report_prompt: prompts/adjudication-scope-input-external-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-input-external-en-policies.md
+        - .takt/eval-snapshots/adjudication-scope-input-external-en-knowledge.md
+  - label: adjudication-scope-local-condition-ja
+    raw: file://../../prompts/adjudication-scope-local-condition-ja.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-local-condition-ja
+      report_prompt: prompts/adjudication-scope-local-condition-ja.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-local-condition-ja-policies.md
+        - .takt/eval-snapshots/adjudication-scope-local-condition-ja-knowledge.md
+  - label: adjudication-scope-local-condition-en
+    raw: file://../../prompts/adjudication-scope-local-condition-en.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-local-condition-en
+      report_prompt: prompts/adjudication-scope-local-condition-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-local-condition-en-policies.md
+        - .takt/eval-snapshots/adjudication-scope-local-condition-en-knowledge.md
+  - label: adjudication-scope-long-condition-ja
+    raw: file://../../prompts/adjudication-scope-long-condition-ja.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-long-condition-ja
+      report_prompt: prompts/adjudication-scope-long-condition-ja.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-long-condition-ja-policies.md
+        - .takt/eval-snapshots/adjudication-scope-long-condition-ja-knowledge.md
+  - label: adjudication-scope-long-condition-en
+    raw: file://../../prompts/adjudication-scope-long-condition-en.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-long-condition-en
+      report_prompt: prompts/adjudication-scope-long-condition-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-long-condition-en-policies.md
+        - .takt/eval-snapshots/adjudication-scope-long-condition-en-knowledge.md
+  - label: adjudication-scope-quality-ja
+    raw: file://../../prompts/adjudication-scope-quality-ja.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-quality-ja
+      report_prompt: prompts/adjudication-scope-quality-ja.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-quality-ja-policies.md
+        - .takt/eval-snapshots/adjudication-scope-quality-ja-knowledge.md
+  - label: adjudication-scope-quality-en
+    raw: file://../../prompts/adjudication-scope-quality-en.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-quality-en
+      report_prompt: prompts/adjudication-scope-quality-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-quality-en-policies.md
+        - .takt/eval-snapshots/adjudication-scope-quality-en-knowledge.md
+  - label: adjudication-scope-misdirected-evidence-ja
+    raw: file://../../prompts/adjudication-scope-misdirected-evidence-ja.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-misdirected-evidence-ja
+      report_prompt: prompts/adjudication-scope-misdirected-evidence-ja.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-misdirected-evidence-ja-policies.md
+        - .takt/eval-snapshots/adjudication-scope-misdirected-evidence-ja-knowledge.md
+  - label: adjudication-scope-misdirected-evidence-en
+    raw: file://../../prompts/adjudication-scope-misdirected-evidence-en.phase1.md
+    config:
+      working_dir: .work/adjudication-scope-misdirected-evidence-en
+      report_prompt: prompts/adjudication-scope-misdirected-evidence-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/adjudication-scope-misdirected-evidence-en-policies.md
+        - .takt/eval-snapshots/adjudication-scope-misdirected-evidence-en-knowledge.md
+providers:
+  - id: file://../../providers/cli-adjudication-scope.mjs
+    label: codex-low
+    config:
+      cli: codex
+      model: gpt-6.1-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-adjudication-scope.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-adjudication-scope.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  vars:
+    task: spec.md と Report Directory の最新レビューを、現在のコードと記録に照らして裁定してください。
+    previous_response: ""
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: ../../
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-luna
+        model_reasoning_effort: medium
+  assert:
+    - type: llm-rubric
+      metric: adjudication-scope/decisions
+      value: >-
+        このケースの採否の正解と確認してよい範囲は次のケース基準で決まる。正解や関係するファイルを自分で決め直さず、ケース基準と矛盾する理由で不合格にしない。
+
+        ケース基準: {{case_key}}
+
+        評価対象は、そのケースの依頼文と資料にある指摘・引き継ぎ項目だけとする。そのケースの要求・仕様と提出された証拠に照らして採否と根拠を評価し、別ケースの指摘 ID やファイルについての判断を要求しない。 見出し・文言・読んだ量ではなく、analysis/report の採否と理由を評価する。全対象について判断を返し、採用する未解消の欠陥には受入条件と修正境界を示す。正しい指摘の不採用は、読解量が少なくても不合格。未確認を確認済みの欠陥や問題なしへ読み替えない。 仕様・要求・既存契約に反する実在の不具合は、脅威モデルの内側なら今回の作業・計画との関係を問わず採る。品質改善・リファクタリングは今回の要求・変更との関係、機能追加・仕様変更は要求上の根拠で判断する。欠陥と提案された直し方は分けて裁定する。
+    - type: llm-rubric
+      metric: adjudication-scope/evidence
+      value: >-
+        このケースの採否の正解と確認してよい範囲は次のケース基準で決まる。正解や関係するファイルを自分で決め直さず、ケース基準と矛盾する理由で不合格にしない。
+
+        ケース基準: {{case_key}}
+
+        評価対象の指摘と資料は、そのケースの依頼文と資料にあるものとする。読解の証拠は出力JSONの initialPrompt と traces の各フェーズ・セッション・道具ID・入力・実返却本文とし、根拠のない自己申告では証明しない。資料は、供給された同内容を読めていればよく、出典ファイルを別途開くことは要求しない。 守る条件と具体的な違反、採否を変える成立前提を実際の証拠で確認する。必要な証拠がない推測、採否に必要な参照可能資料を残した未確認、ログ不足・切り詰めで確認できない場合は不合格。仕様に明記された導入条件も前提を決める証拠とする。短い関連ファイルの全文、所在検索、必要な長い経路は許す。 引き継いだ指摘は、独立検証・最新レビューの記録と現在の実装・設定および元の受入条件との対応で評価する。対応する記録は確認結果として使え、裁定者自身の再実行を一律の合格条件にしない。 受入条件は守る条件を満たす結果、修正境界は確認済みの原因と契約から示せば十分。全呼び出し元・唯一性・具体的な修正方式の追加調査を一律には要求しない。採否を決めた経路の説明だけを追加調査の証拠とみなさない。
+    - type: llm-rubric
+      metric: adjudication-scope/scope
+      value: >-
+        このケースの採否の正解と確認してよい範囲は次のケース基準で決まる。正解や関係するファイルを自分で決め直さず、ケース基準と矛盾する理由で不合格にしない。
+
+        ケース基準: {{case_key}}
+
+        そのケースの依頼文と資料にある裁定対象について、採否を変える未確定事項、反証や記録の食い違いを確かめる読解を認め、ファイル数・文字数・道具回数では罰しない。正しい不具合が今回の作業や計画と無関係であることは、採用やその前提確認を範囲外にする理由にならない。 裁定対象外の懸念をどこまで確かめてよいかは、各ケースの基準に従う。 引き継いだ結果との対応に必要な実装・検証記録・固定版の該当箇所の確認は許す。矛盾や不足もなく過去の計画・修正の本文を順に読み経過を再構築する、直ったかの検証をやり直す、採否が決まった後に全利用箇所や修正方式を道具で実際に探索する場合は不合格。修正方式の選択や全利用箇所の確認を修正計画へ渡す記述は探索ではなく、不合格にしない。 確認済みの原因・経路から受入条件と最小の修正境界を記述することは必要な報告であり、追加探索と区別する。実際の道具返却から無関係な読解や探索の再開を示して判定し、説明が詳しいことだけでは不合格にしない。
+    - type: llm-rubric
+      metric: adjudication-scope/handoff
+      value: >-
+        このケースの採否の正解と確認してよい範囲は次のケース基準で決まる。正解や関係するファイルを自分で決め直さず、ケース基準と矛盾する理由で不合格にしない。
+
+        ケース基準: {{case_key}}
+
+        そのケースの依頼文と資料にある引き継ぎ項目について、以前の採用と現在の解消状態を分け、元の受入条件と現在の状態に対応する独立検証・最新レビューの結果を引き継ぐ。対応する記録で確認済みの事項を、裁定者が自分で再実行していないという理由で未解決の作業に戻したら不合格。再実行していない旨の注記だけなら未解決への先送りとみなさない。 供給された固定版参照と実行順序・欠落や未完了の情報を報告に残す。参照の転記には本文読解を要求せず、報告への転記自体は履歴分析とみなさない。 採否が決まらない場合は未解決の事項と渡し先を示し、事実不足は修正計画の調査、要求上の義務の不明は再計画へ渡す。必要な証拠が揃った事項を未解決へ逃がせば不合格。採用後の具体的な直し方や全利用箇所の確認を後続へ渡す記述は許し、それらが未調査という理由で採否や受入条件を未確定としない。節の名前だけで未解決への先送りと判定しない。 Phase 2 は実 Phase 1 の判断を保持する。報告のために探索、再検証、履歴分析を再開すれば不合格。
+tests:
+  - description: adjudication-scope-input-local-ja
+    prompts:
+      - adjudication-scope-input-local-ja
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/input-local
+        value: >-
+          SEC-PATH は脅威モデルの外にある防御要求として非採用。日英とも spec.md:2 は所有者だけが編集する設定値による自身のファイル読込を許可、4行目は同じ権限によるローカル状態の変更を防御対象外、5行目はこの導入が所有者のローカル選択を使い外部リクエスト入口がないと明記する。3行目は外部投稿値を処理するときの保護義務であり、この導入で外部投稿値が到達するという意味ではない。 spec と entry → .state/selection.json の設定読込 → reader の実返却で主体・同じ権限の経路を確認すれば十分。所有者が公開範囲外の自身のファイルを読めることは仕様どおりであり、仕様との食い違いでも未解決の前提でもない。型だけから安全と推定すれば不合格。唯一の呼び出し元や共有経路の不在を全体検索で示すこと、仮定上の外部経路の追加調査、未解決として残すことは要求しない。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    vars:
+      case_key: |-
+        SEC-PATH は脅威モデルの外にある防御要求として非採用。日英とも spec.md:2 は所有者だけが編集する設定値による自身のファイル読込を許可、4行目は同じ権限によるローカル状態の変更を防御対象外、5行目はこの導入が所有者のローカル選択を使い外部リクエスト入口がないと明記する。3行目は外部投稿値を処理するときの保護義務であり、この導入で外部投稿値が到達するという意味ではない。 spec と entry → .state/selection.json の設定読込 → reader の実返却で主体・同じ権限の経路を確認すれば十分。所有者が公開範囲外の自身のファイルを読めることは仕様どおりであり、仕様との食い違いでも未解決の前提でもない。型だけから安全と推定すれば不合格。唯一の呼び出し元や共有経路の不在を全体検索で示すこと、仮定上の外部経路の追加調査、未解決として残すことは要求しない。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-input-local-en
+    vars:
+      task: Adjudicate spec.md and the latest reviews in the Report Directory against the current code and records.
+      case_key: |-
+        SEC-PATH は脅威モデルの外にある防御要求として非採用。日英とも spec.md:2 は所有者だけが編集する設定値による自身のファイル読込を許可、4行目は同じ権限によるローカル状態の変更を防御対象外、5行目はこの導入が所有者のローカル選択を使い外部リクエスト入口がないと明記する。3行目は外部投稿値を処理するときの保護義務であり、この導入で外部投稿値が到達するという意味ではない。 spec と entry → .state/selection.json の設定読込 → reader の実返却で主体・同じ権限の経路を確認すれば十分。所有者が公開範囲外の自身のファイルを読めることは仕様どおりであり、仕様との食い違いでも未解決の前提でもない。型だけから安全と推定すれば不合格。唯一の呼び出し元や共有経路の不在を全体検索で示すこと、仮定上の外部経路の追加調査、未解決として残すことは要求しない。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    prompts:
+      - adjudication-scope-input-local-en
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/input-local
+        value: >-
+          SEC-PATH は脅威モデルの外にある防御要求として非採用。日英とも spec.md:2 は所有者だけが編集する設定値による自身のファイル読込を許可、4行目は同じ権限によるローカル状態の変更を防御対象外、5行目はこの導入が所有者のローカル選択を使い外部リクエスト入口がないと明記する。3行目は外部投稿値を処理するときの保護義務であり、この導入で外部投稿値が到達するという意味ではない。 spec と entry → .state/selection.json の設定読込 → reader の実返却で主体・同じ権限の経路を確認すれば十分。所有者が公開範囲外の自身のファイルを読めることは仕様どおりであり、仕様との食い違いでも未解決の前提でもない。型だけから安全と推定すれば不合格。唯一の呼び出し元や共有経路の不在を全体検索で示すこと、仮定上の外部経路の追加調査、未解決として残すことは要求しない。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-input-external-ja
+    prompts:
+      - adjudication-scope-input-external-ja
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/input-external
+        value: 見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。SEC-PATH を修正対象に採用。entry の request.json → intake の外部値保存 → queue → storage の復元 → worker/dispatch → reader の所有者権限での読込まで、値の由来と保護境界を決める接続を実返却本文で確認する。ローカル保存後も外部投稿者が path を決める。保存場所がローカルだから安全とする、委譲先を確認せず読込制約の有無を断定する場合は不合格。受入条件は外部投稿から公開範囲外を読めないこと。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    vars:
+      case_key: |-
+        見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。SEC-PATH を修正対象に採用。entry の request.json → intake の外部値保存 → queue → storage の復元 → worker/dispatch → reader の所有者権限での読込まで、値の由来と保護境界を決める接続を実返却本文で確認する。ローカル保存後も外部投稿者が path を決める。保存場所がローカルだから安全とする、委譲先を確認せず読込制約の有無を断定する場合は不合格。受入条件は外部投稿から公開範囲外を読めないこと。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-input-external-en
+    vars:
+      task: Adjudicate spec.md and the latest reviews in the Report Directory against the current code and records.
+      case_key: |-
+        見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。SEC-PATH を修正対象に採用。entry の request.json → intake の外部値保存 → queue → storage の復元 → worker/dispatch → reader の所有者権限での読込まで、値の由来と保護境界を決める接続を実返却本文で確認する。ローカル保存後も外部投稿者が path を決める。保存場所がローカルだから安全とする、委譲先を確認せず読込制約の有無を断定する場合は不合格。受入条件は外部投稿から公開範囲外を読めないこと。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    prompts:
+      - adjudication-scope-input-external-en
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/input-external
+        value: 見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。SEC-PATH を修正対象に採用。entry の request.json → intake の外部値保存 → queue → storage の復元 → worker/dispatch → reader の所有者権限での読込まで、値の由来と保護境界を決める接続を実返却本文で確認する。ローカル保存後も外部投稿者が path を決める。保存場所がローカルだから安全とする、委譲先を確認せず読込制約の有無を断定する場合は不合格。受入条件は外部投稿から公開範囲外を読めないこと。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-local-condition-ja
+    prompts:
+      - adjudication-scope-local-condition-ja
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/local-condition
+        value: >-
+          CODE-PRICE を採用し、spec.md:2 の非負有限数を整数セントへ四捨五入する契約と src/entry.mjs:1 の切り捨てから、price(1.236) の123と期待124の不一致を示す。四捨五入の契約を満たし、spec.md:3 の公開インターフェースと正常返却形式を保つ受入条件、原因の処理を直す境界を記録すれば十分。 これは実在する仕様違反の不具合なので、計画が文書読込と件数だけを扱うこと、今回の変更との因果関係を示していないことは、採否や証拠充足を落とす理由にならない。spec と局所コードで前提が決まり、過去計画、別の脅威調査、品質基準、唯一の呼び出し元の検索は不要。テスト実行を必須にせず、コードから結果を説明できればよい。カタログ懸念の確認範囲は、このケースの対象外の懸念についての基準に従う。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    vars:
+      case_key: |-
+        CODE-PRICE を採用し、spec.md:2 の非負有限数を整数セントへ四捨五入する契約と src/entry.mjs:1 の切り捨てから、price(1.236) の123と期待124の不一致を示す。四捨五入の契約を満たし、spec.md:3 の公開インターフェースと正常返却形式を保つ受入条件、原因の処理を直す境界を記録すれば十分。 これは実在する仕様違反の不具合なので、計画が文書読込と件数だけを扱うこと、今回の変更との因果関係を示していないことは、採否や証拠充足を落とす理由にならない。spec と局所コードで前提が決まり、過去計画、別の脅威調査、品質基準、唯一の呼び出し元の検索は不要。テスト実行を必須にせず、コードから結果を説明できればよい。カタログ懸念の確認範囲は、このケースの対象外の懸念についての基準に従う。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-local-condition-en
+    vars:
+      task: Adjudicate spec.md and the latest reviews in the Report Directory against the current code and records.
+      case_key: |-
+        CODE-PRICE を採用し、spec.md:2 の非負有限数を整数セントへ四捨五入する契約と src/entry.mjs:1 の切り捨てから、price(1.236) の123と期待124の不一致を示す。四捨五入の契約を満たし、spec.md:3 の公開インターフェースと正常返却形式を保つ受入条件、原因の処理を直す境界を記録すれば十分。 これは実在する仕様違反の不具合なので、計画が文書読込と件数だけを扱うこと、今回の変更との因果関係を示していないことは、採否や証拠充足を落とす理由にならない。spec と局所コードで前提が決まり、過去計画、別の脅威調査、品質基準、唯一の呼び出し元の検索は不要。テスト実行を必須にせず、コードから結果を説明できればよい。カタログ懸念の確認範囲は、このケースの対象外の懸念についての基準に従う。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    prompts:
+      - adjudication-scope-local-condition-en
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/local-condition
+        value: >-
+          CODE-PRICE を採用し、spec.md:2 の非負有限数を整数セントへ四捨五入する契約と src/entry.mjs:1 の切り捨てから、price(1.236) の123と期待124の不一致を示す。四捨五入の契約を満たし、spec.md:3 の公開インターフェースと正常返却形式を保つ受入条件、原因の処理を直す境界を記録すれば十分。 これは実在する仕様違反の不具合なので、計画が文書読込と件数だけを扱うこと、今回の変更との因果関係を示していないことは、採否や証拠充足を落とす理由にならない。spec と局所コードで前提が決まり、過去計画、別の脅威調査、品質基準、唯一の呼び出し元の検索は不要。テスト実行を必須にせず、コードから結果を説明できればよい。カタログ懸念の確認範囲は、このケースの対象外の懸念についての基準に従う。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-long-condition-ja
+    prompts:
+      - adjudication-scope-long-condition-ja
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/long-condition
+        value: 見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。CODE-PAGE を採用。entry → selection → repository → driver → store.scan と slice の順序を実返却本文で確認し、limit という名前や小さい返却件数だけでは取得前の全行保持を抑えないと判断する。受入条件は指定範囲の取得と全行同時保持の解消。長い必要経路を省略した早期終了は不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    vars:
+      case_key: |-
+        見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。CODE-PAGE を採用。entry → selection → repository → driver → store.scan と slice の順序を実返却本文で確認し、limit という名前や小さい返却件数だけでは取得前の全行保持を抑えないと判断する。受入条件は指定範囲の取得と全行同時保持の解消。長い必要経路を省略した早期終了は不合格。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-long-condition-en
+    vars:
+      task: Adjudicate spec.md and the latest reviews in the Report Directory against the current code and records.
+      case_key: |-
+        見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。CODE-PAGE を採用。entry → selection → repository → driver → store.scan と slice の順序を実返却本文で確認し、limit という名前や小さい返却件数だけでは取得前の全行保持を抑えないと判断する。受入条件は指定範囲の取得と全行同時保持の解消。長い必要経路を省略した早期終了は不合格。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    prompts:
+      - adjudication-scope-long-condition-en
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/long-condition
+        value: 見出しや語ではなく採否・根拠・受入条件と実際の道具の返却を評価する。CODE-PAGE を採用。entry → selection → repository → driver → store.scan と slice の順序を実返却本文で確認し、limit という名前や小さい返却件数だけでは取得前の全行保持を抑えないと判断する。受入条件は指定範囲の取得と全行同時保持の解消。長い必要経路を省略した早期終了は不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-quality-ja
+    prompts:
+      - adjudication-scope-quality-ja
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/quality
+        value: CODE-NORMALIZE を採用する。spec の設計基準と src/entry.mjs の新しい preview、publish、src/normalization.mjs を照合し、同じ配信契約・変更理由の正規化が二箇所にあると確認する。現在の出力が正しく実障害が未発生でも修正対象とする。公開変換フレームワークの過剰な方式提案は分けて退け、既存の所有箇所へ正規化をまとめて正常結果と公開インターフェースを保つ受入条件にする。CODE-AUDIT は spec の監査の独立した契約・変更理由と src/audit.mjs の証拠から退ける。似た trim の形だけで統合する、または実障害がないことや過去計画にないことを理由に正しい品質指摘を捨てれば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    vars:
+      case_key: |-
+        CODE-NORMALIZE を採用する。spec の設計基準と src/entry.mjs の新しい preview、publish、src/normalization.mjs を照合し、同じ配信契約・変更理由の正規化が二箇所にあると確認する。現在の出力が正しく実障害が未発生でも修正対象とする。公開変換フレームワークの過剰な方式提案は分けて退け、既存の所有箇所へ正規化をまとめて正常結果と公開インターフェースを保つ受入条件にする。CODE-AUDIT は spec の監査の独立した契約・変更理由と src/audit.mjs の証拠から退ける。似た trim の形だけで統合する、または実障害がないことや過去計画にないことを理由に正しい品質指摘を捨てれば不合格。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-quality-en
+    vars:
+      task: Adjudicate spec.md and the latest reviews in the Report Directory against the current code and records.
+      case_key: |-
+        CODE-NORMALIZE を採用する。spec の設計基準と src/entry.mjs の新しい preview、publish、src/normalization.mjs を照合し、同じ配信契約・変更理由の正規化が二箇所にあると確認する。現在の出力が正しく実障害が未発生でも修正対象とする。公開変換フレームワークの過剰な方式提案は分けて退け、既存の所有箇所へ正規化をまとめて正常結果と公開インターフェースを保つ受入条件にする。CODE-AUDIT は spec の監査の独立した契約・変更理由と src/audit.mjs の証拠から退ける。似た trim の形だけで統合する、または実障害がないことや過去計画にないことを理由に正しい品質指摘を捨てれば不合格。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    prompts:
+      - adjudication-scope-quality-en
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/quality
+        value: CODE-NORMALIZE を採用する。spec の設計基準と src/entry.mjs の新しい preview、publish、src/normalization.mjs を照合し、同じ配信契約・変更理由の正規化が二箇所にあると確認する。現在の出力が正しく実障害が未発生でも修正対象とする。公開変換フレームワークの過剰な方式提案は分けて退け、既存の所有箇所へ正規化をまとめて正常結果と公開インターフェースを保つ受入条件にする。CODE-AUDIT は spec の監査の独立した契約・変更理由と src/audit.mjs の証拠から退ける。似た trim の形だけで統合する、または実障害がないことや過去計画にないことを理由に正しい品質指摘を捨てれば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-misdirected-evidence-ja
+    prompts:
+      - adjudication-scope-misdirected-evidence-ja
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/misdirected-evidence
+        value: CODE-RANGE を採用する。記載された src/entry.mjs:2 は定数であり、src/repository.mjs に scan() はないが、主張の page を起点に entry → selection → repository → driver をたどり、src/driver.mjs の store.scan() が全行取得してから slice する同じ欠陥を確認する。spec の指定範囲取得と全行同時保持の禁止を根拠に、取得元で範囲を制限し返却形式を保つ受入条件にする。証拠の記載ミスだけで退ける、limit の名前や最終件数だけで問題なしとする、仕様違反を過去の計画との因果関係がないとして退ける、必要な委譲先を読まず未解決へ渡す場合は不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    vars:
+      case_key: |-
+        CODE-RANGE を採用する。記載された src/entry.mjs:2 は定数であり、src/repository.mjs に scan() はないが、主張の page を起点に entry → selection → repository → driver をたどり、src/driver.mjs の store.scan() が全行取得してから slice する同じ欠陥を確認する。spec の指定範囲取得と全行同時保持の禁止を根拠に、取得元で範囲を制限し返却形式を保つ受入条件にする。証拠の記載ミスだけで退ける、limit の名前や最終件数だけで問題なしとする、仕様違反を過去の計画との因果関係がないとして退ける、必要な委譲先を読まず未解決へ渡す場合は不合格。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+  - description: adjudication-scope-misdirected-evidence-en
+    vars:
+      task: Adjudicate spec.md and the latest reviews in the Report Directory against the current code and records.
+      case_key: |-
+        CODE-RANGE を採用する。記載された src/entry.mjs:2 は定数であり、src/repository.mjs に scan() はないが、主張の page を起点に entry → selection → repository → driver をたどり、src/driver.mjs の store.scan() が全行取得してから slice する同じ欠陥を確認する。spec の指定範囲取得と全行同時保持の禁止を根拠に、取得元で範囲を制限し返却形式を保つ受入条件にする。証拠の記載ミスだけで退ける、limit の名前や最終件数だけで問題なしとする、仕様違反を過去の計画との因果関係がないとして退ける、必要な委譲先を読まず未解決へ渡す場合は不合格。
+        このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+        このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。
+    prompts:
+      - adjudication-scope-misdirected-evidence-en
+    assert:
+      - type: llm-rubric
+        metric: adjudication-scope/misdirected-evidence
+        value: CODE-RANGE を採用する。記載された src/entry.mjs:2 は定数であり、src/repository.mjs に scan() はないが、主張の page を起点に entry → selection → repository → driver をたどり、src/driver.mjs の store.scan() が全行取得してから slice する同じ欠陥を確認する。spec の指定範囲取得と全行同時保持の禁止を根拠に、取得元で範囲を制限し返却形式を保つ受入条件にする。証拠の記載ミスだけで退ける、limit の名前や最終件数だけで問題なしとする、仕様違反を過去の計画との因果関係がないとして退ける、必要な委譲先を読まず未解決へ渡す場合は不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/inherited-count
+        value: >-
+          このケースの P-COUNT / CODE-COUNT は以前の採用と元の2条件を保持し、解消済みとして引き継ぐ。reports-seed/review-resolution.md:2 の空配列の件数0・2件の件数2、reports-seed/fix-verification.md:2-3 の対象と成功結果、最新 coding-review.md の解消済み欄にある現在も独立検証と同じコード状態という記録の対応で十分。Report Directory に供給された同内容が initialPrompt または道具の実返却で読めていればよく、種ファイル自体の読解は要求しない。 ハッシュ再計算・テスト再実行・history/round-1 の固定版本文の再読は必須ではない。矛盾のない対応を読めていれば、裁定者が再実行・再計算していない旨の注記だけで不合格にしない。それらを未解決の作業として修正計画へ送れば不合格。src/count.mjs、現在の検証記録、固定版の計画・修正・検証記録の該当箇所の読解やハッシュ照合を、現在の状態との対応確認に使うことは許す。追加確認を行ったこと自体を不合格にせず、直ったかの検証のやり直しや、矛盾・不足のない過去の経過の再構築とは区別する。 reports-seed/review-resolution.md:4 で供給された round-1 の history/round-1/fix-plan.md、history/round-1/fix-report.md、history/round-1/fix-verification.md と、順序1・欠落や未完了なしの情報を報告に残す。このケースは新規指摘の採否と P-COUNT の解消を決める証拠が揃うので、それらを未解決へ逃がせば不合格。
+      - type: llm-rubric
+        metric: adjudication-scope/non-finding-concern
+        value: >-
+          このケースの最新 coding-review.md の「指摘にしなかった懸念」表（en は Non-Finding Concerns）にあるカタログ懸念は、分類が no_issue_after_verification で持ち越し指定がなく、対象指摘の採否にも関係しない。対象外は分類欄で決まるので、参照先の過去計画を開かないこと、この懸念を裁定表に載せないことは正しい扱いであり、不合格にしない。この懸念について開いてよいのは src/catalog-label.mjs、history/round-0/catalog-plan.md、docs/catalog.md の3ファイルで、これらを読むことは不合格にしない。出力契約は対象外の行の説明を求めていないが、その内容を対象外の理由として報告に書いたことだけでは、採否と調査範囲の評価に関係しないため不合格にしない。不合格にするのは、この懸念を裁定対象に加えて採否・受入条件・修正境界を決めた場合と、この懸念を確かめるために3ファイル以外へ進んだ場合（利用箇所の検索、テストやコードの実行、他の文書・コードの追跡）だけとする。evidence.test.mjs、package.json、仕様や対象指摘のコードを読むことは対象指摘の確認であり、この懸念の調査とはみなさない。カタログ懸念の調査と判定するのは、catalogLabel や表示名を対象にした検索・実行・追跡が道具の記録にある場合に限る。 最新レポートの分類欄や参照先の記載、自然な名前検索の断片・パスの確認は許す。最初の見渡しで小さな資料一式やソース一式をまとめて表示した中にこれらが混ざっただけで、その後この懸念を調べていなければ不合格にしない。対象外の行の説明を報告へ書くことは要求しない。

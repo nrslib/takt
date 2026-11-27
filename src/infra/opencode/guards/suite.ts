@@ -61,15 +61,6 @@ export class OpenCodeGuardSuite {
     this.sensitiveValues = context.sensitiveValues;
   }
 
-  onInitialSource(source: unknown): OpenCodeGuardSuiteResult {
-    const evaluations: OpenCodeGuardEvaluation[] = [];
-    for (const guard of this.guards) {
-      const verdict = guard.onInitialSource?.(source);
-      if (verdict !== undefined) evaluations.push(this.evaluation(guard, verdict));
-    }
-    return this.partition(evaluations);
-  }
-
   onEvent(event: OpenCodeStreamEvent): OpenCodeGuardSuiteResult {
     const terminal = this.toolOutcomes.observe(event);
     if (terminal.anomalyReason !== undefined) {
@@ -214,7 +205,7 @@ export function resolveOpenCodeGuardSuite(
   };
   return new OpenCodeGuardSuite(
     policy,
-    descriptors.map((descriptor) => descriptor.create(policy, context, initialAttemptTimeoutMs)),
+    descriptors.map((descriptor) => descriptor.create(policy, initialAttemptTimeoutMs)),
     context,
   );
 }

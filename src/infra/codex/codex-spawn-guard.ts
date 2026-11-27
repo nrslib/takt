@@ -31,7 +31,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { guardChildProcessStreams } from '../../shared/utils/child-process-guard.js';
 import { createLogger } from '../../shared/utils/debug.js';
-import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_PROFILE, type CodexSpawnEnvironment } from './types.js';
+import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_OPTIONS, type CodexSpawnEnvironment } from './types.js';
 import { escapeChildStdoutLineSeparators } from './json-line-separator-stream.js';
 
 const log = createLogger('codex-spawn-guard');
@@ -102,21 +102,22 @@ export function installCodexSpawnGuard(): void {
     const codexSpawn = isCodexSpawn(command, args, spawnOptions);
     let childArgsOrOptions = argsOrOptions;
     let childOptions = options;
-    const metadata = (spawnOptions?.env as CodexSpawnEnvironment | undefined)?.[CODEX_SPAWN_PROFILE];
+    const metadata = (spawnOptions?.env as CodexSpawnEnvironment | undefined)?.[CODEX_SPAWN_OPTIONS];
     const profileEnvKey = findCodexConfigProfileEnvKey(spawnOptions?.env);
     if (codexSpawn && (metadata !== undefined || profileEnvKey !== undefined) && spawnOptions?.env !== undefined) {
       const configProfile = metadata !== undefined ? metadata.configProfile : spawnOptions.env[profileEnvKey!];
-      const childEnv = metadata === undefined
-        ? removeCodexConfigProfileEnv(spawnOptions.env)
-        : { ...spawnOptions.env } as CodexSpawnEnvironment;
-      delete (childEnv as CodexSpawnEnvironment)[CODEX_SPAWN_PROFILE];
+      const childEnv = metadata?.preserveConfigProfileEnv
+        ? { ...spawnOptions.env } as CodexSpawnEnvironment
+        : removeCodexConfigProfileEnv(spawnOptions.env);
+      delete (childEnv as CodexSpawnEnvironment)[CODEX_SPAWN_OPTIONS];
       const cleanedOptions: SpawnOptions = {
         ...spawnOptions,
         env: childEnv,
       };
       if (isArgumentList(argsOrOptions)) {
-        childArgsOrOptions = typeof configProfile === 'string' && args[0] === 'exec'
-          ? [args[0], '--profile', configProfile, ...args.slice(1)]
+        childArgsOrOptions = args[0] === 'exec'
+          ? [args[0], ...(metadata?.execArgs ?? []),
+              ...(typeof configProfile === 'string' ? ['--profile', configProfile] : []), ...args.slice(1)]
           : argsOrOptions;
         childOptions = cleanedOptions;
       } else {

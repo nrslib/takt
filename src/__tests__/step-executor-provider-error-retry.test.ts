@@ -62,6 +62,7 @@ function queueAgentResponse(response: AgentResponse): void {
 function makeNormalDeps(cwd: string, runPaths: RunPaths): StepExecutorDeps {
   return {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd,
         projectCwd: cwd,

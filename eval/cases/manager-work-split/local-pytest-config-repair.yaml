@@ -119,6 +119,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 136
@@ -178,6 +179,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         task:
           content: 利用量 CSV を部署と月で集計し、既存の形式で保存する。途中の動作確認には手元の見本 CSV を使う。
@@ -201,6 +203,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 136
@@ -234,6 +237,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 136
@@ -267,6 +271,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 136
@@ -295,6 +300,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 136
@@ -692,6 +698,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 143
@@ -751,6 +758,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         task:
           content: Aggregate usage CSV data by department and month and save it in the existing format. Use the local sample CSV for checks during implementation.
@@ -774,6 +782,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 143
@@ -807,6 +816,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 143
@@ -840,6 +850,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 143
@@ -868,6 +879,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 143

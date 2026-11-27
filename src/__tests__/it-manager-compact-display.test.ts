@@ -26,13 +26,17 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { appendGoalWorkLog } from '../infra/goals/workLog.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { ManagerClientDouble, cwd as summaryRepository, ENTER, UP } from './helpers/manager-tui-fixtures.js';
+import { ManagerClientDouble, cwd as summaryRepository, managerConversationId, ENTER, UP } from './helpers/manager-tui-fixtures.js';
 import { conversationRecord, writeLegacyConversation } from './helpers/conversation-fixtures.js';
 import { harness, input } from './helpers/controlledDaemon.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
+import { EpicSnapshotSchema } from '../infra/epics/projection.js';
+import { epicView } from '../infra/epics/state.js';
+import { epicRecord, epicWorkspaceId } from './helpers/epic-fixtures.js';
+import { ToolActivityHistory } from '../shared/tool-activity/history.js';
 
 vi.mock('../features/tui/PromptInput.js', async (original) => {
   const actual = await original<typeof import('../features/tui/PromptInput.js')>();
@@ -85,9 +89,9 @@ describe('manager summary transcript and terminal height', () => {
     ...summary.constraints, summary.startBranch!, summary.integrationBranch!,
   ];
 
-  function mountTerminal(lang: 'ja' | 'en', summary = makeSummary(4), columns = 80) {
-    const client = new ManagerClientDouble();
-    client.proposal(summary, 4);
+  function mountTerminal(lang: 'ja' | 'en', summary: ManagerGoalSummary | null = makeSummary(4), columns = 80,
+    client = new ManagerClientDouble()) {
+    if (summary !== null) client.proposal(summary, 4);
     const frames: string[] = [];
     const stdout = Object.assign(new PassThrough(), { columns, rows: 24, isTTY: true });
     stdout.on('data', (chunk: Buffer) => { frames.push(chunk.toString()); });
@@ -104,16 +108,30 @@ describe('manager summary transcript and terminal height', () => {
       stderr: stderr as unknown as NodeJS.WriteStream, interactive: true, exitOnCtrlC: false, patchConsole: false,
     });
     let played = 0;
+    const flush = async (): Promise<void> => {
+      await app.waitUntilRenderFlush();
+      for (const frame of frames.slice(played)) {
+        await new Promise<void>((resolve) => terminal.write(frame, resolve));
+        played += 1;
+      }
+    };
     return {
       client, stdin,
       async text(): Promise<string> {
-        await app.waitUntilRenderFlush();
-        for (const frame of frames.slice(played)) {
-          await new Promise<void>((resolve) => terminal.write(frame, resolve));
-          played += 1;
-        }
+        await flush();
         return Array.from({ length: terminal.buffer.active.length }, (_, index) =>
           terminal.buffer.active.getLine(index)!.translateToString(true)).join('\n').trimEnd();
+      },
+      async viewport(): Promise<string> {
+        await flush();
+        return Array.from({ length: terminal.rows }, (_, index) =>
+          terminal.buffer.active.getLine(terminal.buffer.active.viewportY + index)?.translateToString(true) ?? '').join('\n');
+      },
+      resize(rows: number, nextColumns = columns): void {
+        terminal.resize(nextColumns, rows);
+        stdout.columns = nextColumns;
+        stdout.rows = rows;
+        stdout.emit('resize');
       },
       dispose(): void {
         app.unmount(); app.cleanup(); terminal.dispose();
@@ -121,6 +139,239 @@ describe('manager summary transcript and terminal height', () => {
       },
     };
   }
+
+  function historyClient(): ManagerClientDouble {
+    const history = new ToolActivityHistory();
+    const operationId = 'history-guidance';
+    const toolActivity = { callId: 'history-call', operationId, generation: 1 };
+    for (let index = 0; index < 12; index++) {
+      history.apply({ type: 'tool_use', toolActivity, data: { id: `tool-${index}`,
+        tool: index % 2 === 0 ? 'Bash' : 'Read', input: index % 2 === 0
+          ? { command: `command-${index}` } : { file_path: `file-${index}.ts` } } });
+      history.apply({ type: 'tool_result', toolActivity,
+        data: { id: `tool-${index}`, content: `result-${index}`, isError: false } });
+    }
+    return new ManagerClientDouble({ items: [{ kind: 'tool_history', history: {
+      operationId, generation: 1, finished: true, history: { entries: history.entries() },
+    } }] });
+  }
+
+  it.each(['ja', 'en'] as const)('shows Ctrl+O history guidance and opens Epics with Ctrl+T in %s', async (lang) => {
+    const context = mountTerminal(lang, null, 160, historyClient());
+    try {
+      const hint = async () => (await context.viewport()).split('\n').find((row) => /Tools:|ツール履歴:/u.test(row));
+      await waitFor(async () => {
+        expect(await hint()).toContain('Ctrl+O');
+        expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand');
+      });
+      context.stdin.write('\x0f');
+      await waitFor(async () => {
+        expect(await hint()).toContain('Ctrl+O');
+        expect(await hint()).toContain(lang === 'ja' ? '折りたたみ' : 'collapse');
+      });
+      context.stdin.write('\x0f');
+      await waitFor(async () => expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand'));
+      context.stdin.write('\x14');
+      await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
+      expect(context.client.submit).not.toHaveBeenCalled();
+    } finally { context.dispose(); }
+  });
+
+  it('erases the earlier log from the terminal on /clear, shows the notice and later messages, and keeps the log away after resizing', async () => {
+    const context = mountTerminal('en', null);
+    const notice = getLabel('manager.conversation.cleared', 'en');
+    try {
+      const earlier = randomUUID();
+      context.client.output({ kind: 'user_message', operationId: earlier, message: 'earlier question' });
+      context.client.output({ kind: 'result', operationId: earlier, result: { kind: 'reply', message: 'earlier reply' } });
+      await waitFor(async () => expect(await context.text()).toContain('earlier reply'));
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      context.stdin.write('\x1b[200~/clear\x1b[201~');
+      await waitFor(() => expect(prompt().text).toBe('/clear'));
+      context.stdin.write(ENTER);
+      await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: '/clear' }]));
+      const operationId = await context.client.operation();
+      context.client.output({ kind: 'result', operationId, result: { kind: 'notice', message: notice } });
+      await waitFor(async () => expect(await context.text()).toContain(notice));
+      expect(await context.text()).not.toContain('earlier');
+      context.client.output({ kind: 'user_message', operationId: randomUUID(), message: 'later question' });
+      await waitFor(async () => expect(await context.text()).toContain('later question'));
+      for (const columns of [60, 80]) {
+        context.resize(24, columns);
+        const text = await context.text();
+        expect(text).toContain(notice);
+        expect(text).toContain('later question');
+        expect(text).not.toContain('earlier');
+      }
+    } finally { context.dispose(); }
+  });
+
+  it.each(['ja', 'en'] as const)('renders each proposal hint separator once before and during work in %s', async (lang) => {
+    const context = mountTerminal(lang, makeSummary(4), 200);
+    try {
+      for (const busy of [false, true]) {
+        if (busy) context.client.change({ state: { ...context.client.getSnapshot().state!, running: {
+          operationId: 'busy', kind: 'turn', generation: 1, startedAt: Date.now(),
+        } } });
+        const expected = getLabel(busy ? 'manager.summaryInputHintWorking' : 'manager.summaryInputHint', lang);
+        await waitFor(async () => {
+          const rows = (await context.viewport()).split('\n');
+          const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+          expect(promptEnd).toBeGreaterThan(-1);
+          expect(rows[promptEnd + 1]).toBe(expected);
+        });
+      }
+    } finally { context.dispose(); }
+  });
+
+  it('reflows guidance and reserves one fewer history row when resized from 89 to 88 columns', async () => {
+    const context = mountTerminal('en', null, 89, historyClient());
+    const inspect = async (hintRows: number) => {
+      const rows = (await context.viewport()).split('\n');
+      const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+      expect(promptEnd).toBeGreaterThan(-1);
+      const hints = rows.slice(promptEnd + 1, promptEnd + 1 + hintRows);
+      expect(hints.join('  ')).toBe(getLabel('manager.inputHint', 'en'));
+      expect(rows[promptEnd + 1 + hintRows]).toContain('Ongoing 0');
+      const start = rows.findIndex((row) => row.startsWith('◆ ✓ Bash'));
+      const end = rows.findIndex((row) => row.includes('Tools:'));
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return end - start;
+    };
+    try {
+      context.stdin.write('\x0f');
+      await waitFor(async () => { await inspect(1); });
+      const wideRows = await inspect(1);
+      context.resize(24, 88);
+      await waitFor(async () => expect(await inspect(2)).toBe(wideRows - 1));
+      context.resize(24, 89);
+      await waitFor(async () => expect(await inspect(1)).toBe(wideRows));
+    } finally { context.dispose(); }
+  });
+
+  it.each(['list', 'detail'] as const)('keeps the Epic %s body and footer inside the viewport across the guidance wrap boundary', async (view) => {
+    const epic = { ...epicRecord(), verificationProcedure: { version: 1,
+      steps: Array.from({ length: 40 }, (_, index) => `Boundary step ${index}`) } };
+    const assignment: ManagerAssignment = { kind: 'workspace', workspaceId: epicWorkspaceId, name: 'Boundary workspace',
+      repositoryDirectories: [summaryRepository] };
+    const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment },
+      ...Array.from({ length: 12 }, (_, index) => EpicSnapshotSchema.parse({ kind: 'epic',
+        epic: epicView({ ...epic, id: randomUUID(), objective: `Boundary epic ${index}` }), memberProgress: [], recovery: [] }))] });
+    const context = mountTerminal('en', null, 89, client);
+    const inspect = async (hintRows: number) => {
+      const viewport = await context.viewport();
+      const rows = viewport.split('\n');
+      expect(viewport).toContain(getLabel(`manager.epics.${view}Title`, 'en'));
+      const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+      expect(promptEnd).toBeGreaterThan(-1);
+      expect(rows.slice(promptEnd + 1, promptEnd + 1 + hintRows).join('  ')).toBe(getLabel('manager.inputHint', 'en'));
+      expect(rows[promptEnd + 1 + hintRows]).toContain('Ongoing 0');
+      expect(boxes(viewport)).toHaveLength(2);
+      return contentRows(boxes(viewport)[0]).length;
+    };
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      context.stdin.write('\x1b[200~draft 1\ndraft 2\x1b[201~');
+      await waitFor(() => expect(prompt().text).toBe('draft 1\ndraft 2'));
+      context.stdin.write('\x14');
+      await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', 'en')));
+      if (view === 'detail') context.stdin.write(ENTER);
+      await waitFor(async () => { await inspect(1); });
+      const wideRows = await inspect(1);
+      context.resize(24, 88);
+      await waitFor(async () => expect(await inspect(2)).toBe(wideRows - (view === 'list' ? 2 : 1)));
+      context.resize(24, 89);
+      await waitFor(async () => expect(await inspect(1)).toBe(wideRows));
+    } finally { context.dispose(); }
+  });
+
+  it.each([['en', 1], ['en', 6], ['ja', 6]] as const)('keeps Epic detail pages inside the 80 by 24 viewport in %s with a %i-row draft', async (lang, draftRows) => {
+    const epic = { ...epicRecord(), objective: 'Epic viewport objective',
+      verificationProcedure: { version: 1, steps: Array.from({ length: 40 }, (_, index) => `Viewport step ${index}`) } };
+    const item = EpicSnapshotSchema.parse({ kind: 'epic', epic: epicView(epic), memberProgress: [], recovery: [] });
+    const assignment: ManagerAssignment = { kind: 'workspace', workspaceId: epicWorkspaceId, name: 'Viewport workspace',
+      repositoryDirectories: [summaryRepository] };
+    const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment }, item] });
+    client.change({ state: { ...client.getSnapshot().state!, assignment: { kind: 'workspace', workspaceId: epicWorkspaceId } } });
+    const context = mountTerminal(lang, null, 80, client);
+    const draft = Array.from({ length: draftRows }, (_, index) => `draft ${index + 1}`).join('\n');
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      context.stdin.write(`\x1b[200~${draft}\x1b[201~`);
+      await waitFor(() => expect(prompt().text).toBe(draft));
+      const draftCursor = prompt().cursor;
+      context.stdin.write('\x14');
+      await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
+      context.stdin.write(ENTER);
+      await waitFor(async () => {
+        const viewport = await context.viewport();
+        expect(viewport).toContain(getLabel('manager.epics.detailTitle', lang));
+        expect(viewport).toContain(epic.objective);
+      });
+      const firstPage = await context.viewport();
+      context.stdin.write('\x1b[6~');
+      await waitFor(async () => expect(await context.viewport()).not.toBe(firstPage));
+      expect(await context.viewport()).toContain(getLabel('manager.epics.detailTitle', lang));
+      expect(await context.viewport()).not.toContain(epic.objective);
+      context.stdin.write('\x1b[F');
+      await waitFor(async () => expect(await context.viewport()).toContain('Viewport step 39'));
+      context.stdin.write('\x1b[5~');
+      await waitFor(async () => expect(await context.viewport()).not.toContain('Viewport step 39'));
+      context.stdin.write('\x1b[H');
+      await waitFor(async () => expect(await context.viewport()).toContain(epic.objective));
+      context.resize(80);
+      await waitFor(async () => expect(await context.viewport()).toContain(epic.objective));
+      context.resize(24);
+      await waitFor(async () => expect(await context.viewport()).toContain(epic.objective));
+      context.stdin.write('\x1b[F');
+      await waitFor(async () => expect(await context.viewport()).toContain('Viewport step 39'));
+      context.stdin.write('\x1b[5~');
+      await waitFor(async () => expect(await context.viewport()).not.toContain('Viewport step 39'));
+      context.stdin.write('\x1b[6~');
+      await waitFor(async () => expect(await context.viewport()).toContain('Viewport step 39'));
+      context.stdin.write('\x1b[H');
+      client.change({ readStatus: 'incomplete' });
+      await waitFor(async () => {
+        const viewport = await context.viewport();
+        expect(viewport.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.incomplete', lang).replace(/\s+/gu, ''));
+        expect(viewport).toContain(epic.objective);
+      });
+      context.resize(24, 40);
+      await waitFor(async () => {
+        const viewport = await context.viewport();
+        expect(viewport).toContain(epic.objective);
+        expect(viewport.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.incomplete', lang).replace(/\s+/gu, ''));
+      });
+      context.stdin.write('\x1b[F');
+      await waitFor(async () => expect((await context.viewport()).replace(/[│\s]/gu, ''))
+        .toContain(epic.changes[0]!.reason.replace(/\s/gu, '')));
+      context.stdin.write('\x1b[H');
+      await waitFor(async () => expect(await context.viewport()).toContain(epic.objective));
+      context.resize(24, 80);
+      await waitFor(async () => expect(await context.viewport()).toContain(epic.objective));
+      expect(client.submit).not.toHaveBeenCalled();
+      context.stdin.write('\x1b[27u');
+      await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
+      client.change({ items: [{ kind: 'assignment', assignment }, ...Array.from({ length: 12 }, (_, index) =>
+        EpicSnapshotSchema.parse({ ...item, epic: { ...item.epic, id: randomUUID(), objective: `Epic candidate ${index}` } }))] });
+      await waitFor(async () => expect(await context.viewport()).toContain('Epic candidate 0'));
+      for (let index = 0; index < 10; index++) context.stdin.write('\x1b[B');
+      await waitFor(async () => {
+        const viewport = await context.viewport();
+        expect(viewport).toContain('Epic candidate 10');
+        expect(viewport).toContain(getLabel('manager.epics.listTitle', lang));
+      });
+      context.stdin.write('\x1b[27u');
+      await waitFor(() => {
+        expect(prompt().disabled).toBe(false);
+        expect(prompt().text).toBe(draft);
+        expect(prompt().cursor).toBe(draftCursor);
+      });
+      context.stdin.write(ENTER);
+      await waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: draft }]));
+    } finally { context.dispose(); }
+  });
 
   describe.each(['ja', 'en'] as const)('startup notice in %s', (lang) => {
     it.each([24, 40, 80])('prints the full notice once before a restored proposal within %i columns', async (columns) => {
@@ -146,7 +397,7 @@ describe('manager summary transcript and terminal height', () => {
     const conversations = new DaemonConversations(new ConversationStateStore(getGlobalConfigDir()),
       new DaemonRouting(getGlobalConfigDir()), new DaemonNotifications(getGlobalConfigDir()), async (_id, output) => {
         if (output.kind !== 'snapshot') context.client.output(output);
-      }, (error) => { throw error; });
+      }, (error) => { throw error; }, h.store);
     const record = conversationRecord(summaryRepository);
     writeLegacyConversation(getGlobalConfigDir(), record);
     h.owner.apply = vi.fn((result) => conversations.apply(result));
@@ -259,7 +510,7 @@ describe('manager summary transcript and terminal height', () => {
       await waitFor(() => expect(prompt().text).toBe('/make-goal'));
       context.stdin.write(ENTER);
       await waitFor(() => expect(context.client.commands()).toEqual([
-        { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false },
+        { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false, requestProposal: true },
       ]));
       context.client.proposal(next, 5);
       await waitFor(() => expect(prompt().disabled).toBe(true));
@@ -271,7 +522,7 @@ describe('manager summary transcript and terminal height', () => {
       }
       expect(text.indexOf(previous.objective)).toBeLessThan(text.indexOf(next.objective));
       context.stdin.write(UP); context.stdin.write(ENTER);
-      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5 }));
+      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5, conversationId: managerConversationId }));
     } finally { context.dispose(); }
   });
 
@@ -674,7 +925,7 @@ describe('manager polling and answer cancellation', () => {
       await mount('ja', undefined, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
       app!.stdout.emit('resize');
-      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^C 終了';
+      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^T Epic  ^C 終了';
       await waitFor(() => {
         const frame = app!.lastFrame()!;
         const rows = frame.split('\n');
@@ -683,8 +934,7 @@ describe('manager polling and answer cancellation', () => {
         const statusRows = columns === 40 ? 2 : 1;
         const hintRows = rows.slice(promptEnd + 1, -statusRows).filter((row) => row.trim() !== '');
         expect(hintRows.join('').replace(/\s+/gu, '')).toBe(expected.replace(/\s+/gu, ''));
-        if (columns === 40) expect(hintRows.length).toBeGreaterThan(1);
-        else expect(hintRows).toHaveLength(1);
+        expect(hintRows.length).toBeGreaterThan(1);
         for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
         const heading = getLabel('manager.assignmentHeading', 'ja', { name: basename(cwd) });
         const details = getLabel('manager.counts', 'ja', { goals: '0', awaiting: '0', questions: '0' });
@@ -706,9 +956,9 @@ describe('manager polling and answer cancellation', () => {
       expect(rows.at(-1)).toContain(basename(cwd));
       const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
       const hint = rows.slice(promptEnd + 1).join(' ');
-      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^C/iu);
+      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^T.*\^C/iu);
       expect(hint).not.toContain('/make-goal');
-      expect(hint).not.toMatch(/\^[ONP]/u);
+      expect(hint).not.toMatch(/\^[NP]/u);
       for (const row of rows.slice(promptEnd + 1)) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
       for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(stringWidth(row)).toBeLessThanOrEqual(80);
     });

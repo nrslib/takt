@@ -156,6 +156,7 @@ function makeRunner(options: {
   const projectDir = options.projectDir ?? '/tmp/project';
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
       resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),

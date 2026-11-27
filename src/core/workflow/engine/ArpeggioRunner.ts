@@ -37,7 +37,8 @@ import {
 } from '../live-intervention/delivery.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import type { InstructionContext } from '../instruction/instruction-context.js';
-import { preparePreviousResponseContent } from '../instruction/InstructionBuilder.js';
+import type { TaskReviewScope } from '../review-scope.js';
+import { preparePreviousResponseContent, renderGoalSpecificationNotice } from '../instruction/InstructionBuilder.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
 import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
@@ -56,6 +57,7 @@ import {
 const log = createLogger('arpeggio-runner');
 
 export interface ArpeggioRunnerDeps {
+  readonly goalSpecificationPaths?: readonly string[];
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly liveIntervention?: LiveInterventionChannel;
@@ -68,7 +70,7 @@ export interface ArpeggioRunnerDeps {
   readonly getMaxSteps: () => WorkflowMaxSteps;
   readonly getWorkflowName: () => string;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
-  readonly getReviewScope: () => InstructionContext['reviewScope'];
+  readonly getReviewScope: () => TaskReviewScope;
   readonly getWorkflowCallVars?: () => InstructionContext['workflowCallVars'];
   readonly getInteractive: () => boolean;
   readonly childProcessEnv?: RunAgentOptions['childProcessEnv'];
@@ -311,6 +313,7 @@ function buildArpeggioPrompt(
   return [
     phaseContext,
     gitRules,
+    renderGoalSpecificationNotice(instructionContext.goalSpecificationPaths, language),
     renderedRules.noticeAfterExecutionRules,
     renderedRules.afterExecutionRules,
     fallbackNotice,
@@ -370,7 +373,11 @@ export class ArpeggioRunner {
     const stepProviderModel = runtime
       ? this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)
       : this.deps.optionsBuilder.resolveStepProviderModel(step);
-    const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
+    const reviewScope = this.deps.getReviewScope();
+    const agentOptions: RunAgentOptions = {
+      ...this.deps.optionsBuilder.buildAgentOptions(step, runtime),
+      progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(step, reviewScope),
+    };
     const previousOutput = getPreviousOutput(state);
     const previousResponseText = step.passPreviousResponse && previousOutput
       ? preparePreviousResponseContent(
@@ -380,6 +387,7 @@ export class ArpeggioRunner {
         )
       : undefined;
     const instructionContext: InstructionContext = {
+      goalSpecificationPaths: this.deps.goalSpecificationPaths,
       workflowAssignment: agentOptions.workflowMeta?.context?.assignment,
       task: this.deps.getTask(),
       iteration: state.iteration,
@@ -398,7 +406,7 @@ export class ArpeggioRunner {
       ),
       language: agentOptions.language ?? 'en',
       interactive: this.deps.getInteractive(),
-      reviewScope: this.deps.getReviewScope(),
+      reviewScope,
       workflowState: state,
       workflowRules: this.deps.getWorkflowRules(),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),

@@ -53,6 +53,36 @@ describe('interactive session continuation refusal', () => {
     });
   });
 
+  it('reports an empty successful provider answer without retrying the original prompt fresh', async () => {
+    const providerCall = vi.fn<ProviderAgent['call']>().mockImplementation(async (_prompt, callOptions) => {
+      callOptions.onStream?.({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash', input: {} } });
+      return {
+        persona: 'interactive',
+        status: 'done',
+        content: '',
+        sessionId: 'session-after-tool',
+        timestamp: new Date(),
+      };
+    });
+    const provider = makeProvider({ setup: () => ({ call: providerCall }) });
+
+    const result = await callAIWithRetry(
+      'continue the saved conversation',
+      'system prompt',
+      [],
+      '/workspace',
+      makeSessionContext({ provider, providerType: 'devin', sessionId: 'session-after-tool' }),
+      { outputMode: 'silent', persistSession: false },
+    );
+
+    expect(providerCall).toHaveBeenCalledOnce();
+    expect(result.result).toMatchObject({
+      success: false,
+      content: 'The AI returned an empty response',
+      sessionId: 'session-after-tool',
+    });
+  });
+
   it.each([{ tools: ['Read'] }, { tools: [] }])('passes an explicit interactive allowedTools list $tools to the DeepSeek guard before client startup', async ({ tools }) => {
     vi.clearAllMocks();
     const context = makeSessionContext({

@@ -222,17 +222,17 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
   });
 
   it.each([
-    { mode: 'run', stage: 'create', goalTasksOnly: false },
-    { mode: 'run', stage: 'metadata', goalTasksOnly: false },
-    { mode: 'run', stage: 'create', goalTasksOnly: true },
-    { mode: 'watch', stage: 'create', goalTasksOnly: false },
-  ] as const)('$mode は実TaskStoreの $stage ENOSPCから同じ所有者で5秒後に回復する（goal限定=$goalTasksOnly）', async ({ mode, stage, goalTasksOnly }) => {
+    { mode: 'run', stage: 'create', belongsToGoal: false },
+    { mode: 'run', stage: 'metadata', belongsToGoal: false },
+    { mode: 'run', stage: 'create', belongsToGoal: true },
+    { mode: 'watch', stage: 'create', belongsToGoal: false },
+  ] as const)('$mode は実TaskStoreの $stage ENOSPCから同じ所有者で5秒後に回復する（goal所有=$belongsToGoal）', async ({ mode, stage, belongsToGoal }) => {
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-    if (goalTasksOnly) await new GoalStore(projectDir).create(goalRecord());
-    const task = runner.addTask('recover claim', goalTasksOnly ? { goal_id: goalRecord().id } : undefined);
+    if (belongsToGoal) await new GoalStore(projectDir).create(goalRecord());
+    const task = runner.addTask('recover claim', belongsToGoal ? { goal_id: goalRecord().id } : undefined);
     const { claim } = await injectClaimFailure(stage, 1);
-    const entry = mode === 'run' ? runAllTasks(projectDir, { goalTasksOnly }) : watchTasks(projectDir);
+    const entry = mode === 'run' ? runAllTasks(projectDir) : watchTasks(projectDir);
     const outcome = entry.then(() => undefined, (error: unknown) => error);
     try {
       await vi.advanceTimersByTimeAsync(0);
@@ -277,16 +277,12 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     }
   });
 
-  it.each([
-    { pending: false, goalTasksOnly: false },
-    { pending: true, goalTasksOnly: true },
-  ])('実取得ENOSPCでも対象pendingがなければ待たない（pending=$pending、goal限定=$goalTasksOnly）', async ({ pending, goalTasksOnly }) => {
+  it('実取得ENOSPCでも対象pendingがなければ待たない', async () => {
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-    if (pending) runner.addTask('ordinary task');
     const { claim, failure } = await injectClaimFailure('create', 1);
 
-    await expect(runAllTasks(projectDir, { goalTasksOnly })).rejects.toMatchObject({ cause: failure });
+    await expect(runAllTasks(projectDir)).rejects.toMatchObject({ cause: failure });
 
     expect(claim).toHaveBeenCalledTimes(1);
     expect(executions).toHaveLength(0);

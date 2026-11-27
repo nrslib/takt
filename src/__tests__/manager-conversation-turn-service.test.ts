@@ -1,22 +1,26 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { buildManagerEventPrompt } from '../features/daemon/inboxEvent.js';
+
+const turnData = (prompt: string) => JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
 import type { ConversationRuntime, PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { DaemonStateRequest } from '../core/daemon/processProtocol.js';
 import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
 import { turnStart, deferred } from './helpers/daemon-turn.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { randomUUID } from 'node:crypto';
+import { epicRecord, verificationRunId, verificationStartedAt, verificationResultFor } from './helpers/epic-fixtures.js';
+import { beginEpicVerification, applyEpicVerificationResult, finishEpic, epicView } from '../infra/epics/state.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
 import type { ConversationChange } from '../core/daemon/messages.js';
-import * as labels from '../shared/i18n/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
+import { conversationId } from '../infra/conversations/identity.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -24,17 +28,22 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
-const doubles = vi.hoisted(() => ({ readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+const doubles = vi.hoisted(() => ({ epics: vi.fn(), readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
+  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../infra/daemon/epicFiles.js', () => ({ DaemonEpicFiles: class { async *list(workspaceId: string) { yield* await doubles.epics(workspaceId); } } }));
 vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.getGoal; update = doubles.updateGoal; } }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { find = doubles.findGoal; get = doubles.getGoal; update = doubles.updateGoal; } }));
 vi.mock('../features/daemonTurn/reconcileLostRun.js', () => ({ reconcileLostRun: doubles.reconcile }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
   resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path,
   findAssignedGoalRepository: async () => '/repository' }));
-vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(), registerReservedGoal: doubles.register }));
+vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(),
+  registerReservedGoal: doubles.register, hasGoalRegistrationArtifacts: doubles.artifacts }));
+vi.mock('../infra/goals/git.js', async (original) => ({ ...await original<typeof import('../infra/goals/git.js')>(),
+  validateGoalBranchReferences: doubles.validateBranches }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.autoRun }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
 vi.mock('../features/daemonTurn/turnContext.js', () => ({ buildTurnBusinessContext: async () => 'saved-goal-memory' }));
@@ -54,12 +63,37 @@ function fixture() {
   const controller = new AbortController();
   const io = { signal: controller.signal, request, progress: vi.fn() };
   const input = turnStart(); input.state.version = version;
+  input.state.session.contextKey = 'context';
   return { service, execute, resolve, request, controller, io, input };
 }
 
-function humanMessage(text: string): TurnEvent {
-  return { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'human', id: 'test' } };
+function humanMessage(text: string, requestProposal?: boolean): TurnEvent {
+  return { kind: 'human_command', command: { kind: 'message', text,
+    ...(requestProposal === undefined ? {} : { requestProposal }) }, speaker: { namespace: 'human', id: 'test' } };
 }
+
+const turnConversationId = conversationId({ kind: 'repository', repositoryDirectory: '/repository' });
+
+it('uses the daemon turn identity for tool events while preserving call and provider tool identities', async () => {
+  const f = fixture();
+  const event = { type: 'tool_use' as const, data: { id: 'provider-tool', tool: 'Read', input: { file_path: 'a.ts' } },
+    toolActivity: { callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 } };
+  f.execute.mockImplementationOnce(async (input) => {
+    input.onToolEvent!(event);
+    input.onToolEvent!({ type: 'tool_result', data: { id: 'provider-tool', completedToolIds: ['provider-tool'], content: 'done', isError: false },
+      toolActivity: event.toolActivity });
+    return { message: 'reply', summary: null, sessionId: 'session-after', assignment: undefined };
+  });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  const tools = f.io.progress.mock.calls.map(([message]) => message).filter((message) => message.kind === 'tool_event');
+  expect(tools).toHaveLength(2);
+  expect(new Set(tools.map((message) => message.eventId)).size).toBe(2);
+  for (const message of tools) expect(message.event.toolActivity).toEqual({
+    callId: 'provider-call', operationId: f.input.turn.operationId, generation: f.input.turn.generation,
+  });
+  expect(tools[1]!.event.data).toMatchObject({ completedToolIds: ['provider-tool'] });
+  expect(event.toolActivity).toEqual({ callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 });
+});
 
 function conversationFixture() {
   const f = fixture();
@@ -106,7 +140,9 @@ beforeEach(() => {
   doubles.readTasks.mockResolvedValue([]);
   doubles.formalSpec.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 42 });
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
+  doubles.findGoal.mockImplementation((id: string) => id === goalRecord().id ? goalRecord() : undefined);
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
+  doubles.validateBranches.mockImplementation(() => {});
 });
 
 it('resumes the saved session on the next human turn after interruption without resending the interrupted turn', async () => {
@@ -135,13 +171,12 @@ it('resumes the session and interrupted message from restored state in a new con
 });
 
 it.each([
-  { language: 'ja' as const, recipient: 'human', explanation: /中断/ },
-  { language: 'en' as const, recipient: 'human', explanation: /interrupt/i },
-  { language: 'ja' as const, recipient: 'event', explanation: /中断/ },
-  { language: 'en' as const, recipient: 'event', explanation: /interrupt/i },
-])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, explanation }) => {
+  { language: 'ja' as const, recipient: 'human', interruptedHumanSource: /中断したターンで受け取った人の発言/ },
+  { language: 'en' as const, recipient: 'human', interruptedHumanSource: /human message received in an interrupted turn/i },
+  { language: 'ja' as const, recipient: 'event', interruptedHumanSource: /中断したターンで受け取った人の発言/ },
+  { language: 'en' as const, recipient: 'event', interruptedHumanSource: /human message received in an interrupted turn/i },
+])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, interruptedHumanSource }) => {
   const f = conversationFixture();
-  const getLabel = vi.spyOn(labels, 'getLabel');
   f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
   const text = '  interrupted {value}\noriginal text  ';
   const controller = new AbortController(); f.interruptNext(controller);
@@ -150,15 +185,10 @@ it.each([
   await f.run(recipient === 'human' ? humanMessage('current request')
     : { kind: 'director_message', text: 'current request', directorConversationId: 'director' });
   const prompt = f.execute.mock.calls[1]![0].prompt;
-  expect(prompt.slice(0, prompt.indexOf(text))).toMatch(explanation);
+  expect(prompt.slice(0, prompt.indexOf(text))).toMatch(interruptedHumanSource);
   expect(prompt).toContain(text);
   expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf('current request'));
-  expect(getLabel.mock.calls.some((call, index) => {
-    const result = getLabel.mock.results[index];
-    return call[1] === language && result?.type === 'return' && result.value.length > 0
-      && prompt.indexOf(result.value) >= 0 && prompt.indexOf(result.value) < prompt.indexOf('current request');
-  })).toBe(true);
-  if (recipient === 'event') expect(prompt.indexOf('Speaker:')).toBeGreaterThan(prompt.indexOf('current request'));
+  if (recipient === 'event') expect(turnData(prompt)).toMatchObject({ origin: 'unknown', directorConversationId: 'director' });
 });
 
 it('clears interrupted context after one completed message turn', async () => {
@@ -169,7 +199,8 @@ it('clears interrupted context after one completed message turn', async () => {
   expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('second continuation'));
-  expect(f.execute.mock.calls[2]![0].prompt).toBe('second continuation');
+  expect(turnData(f.execute.mock.calls[2]![0].prompt)).toMatchObject({ text: 'second continuation', speaker: { namespace: 'human', id: 'test' } });
+  expect(f.execute.mock.calls[2]![0].prompt).not.toContain('interrupted request');
 });
 
 it.each([true, false])('retains undelivered interrupted context through /verify with mode=%s and delivers it on the next message', async (mode) => {
@@ -200,7 +231,7 @@ it.each([true, false])('retains undelivered interrupted context through /verify 
   expect(call.mock.calls.at(-1)![0]).toContain('undelivered requirements');
   expect(f.state().interruptedMessage).toBeNull();
   await f.run(humanMessage('next request'));
-  expect(call.mock.calls.at(-1)![0]).toBe('next request');
+  expect(turnData(call.mock.calls.at(-1)![0]).text).toBe('next request');
 });
 
 it.each(['failed', 'error'] as const)('returns the completed %s verification with interruption and keeps undelivered context', async (verdict) => {
@@ -234,7 +265,7 @@ it('keeps prompts unchanged across completed turns with no interruption', async 
   const f = conversationFixture();
   await f.run(humanMessage('first request'));
   await f.run(humanMessage('second request'));
-  expect(f.execute.mock.calls.map(([turn]) => turn.prompt)).toEqual(['first request', 'second request']);
+  expect(f.execute.mock.calls.map(([turn]) => turnData(turn.prompt).text)).toEqual(['first request', 'second request']);
 });
 
 it('passes interrupted context without a session when no session was saved before interruption', async () => {
@@ -289,7 +320,7 @@ it('retains the interrupted human message through an interrupted event turn and 
   expect(f.execute.mock.calls[2]![0].prompt).not.toContain('interrupted event');
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('next human request'));
-  expect(f.execute.mock.calls[3]![0].prompt).toBe('next human request');
+  expect(turnData(f.execute.mock.calls[3]![0].prompt).text).toBe('next human request');
 });
 
 it('does not save an interrupted event as a human message', async () => {
@@ -297,7 +328,10 @@ it('does not save an interrupted event as a human message', async () => {
   const controller = new AbortController(); f.interruptNext(controller);
   await f.run({ kind: 'director_message', text: 'interrupted event', directorConversationId: 'director' }, controller);
   await f.run(humanMessage('next human request'));
-  expect(f.execute.mock.calls[1]![0]).toMatchObject({ prompt: 'next human request', sessionId: 'shared-session' });
+  expect(f.execute.mock.calls[1]![0]).toMatchObject({ sessionId: 'shared-session' });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({
+    speaker: { namespace: 'human', id: 'test' }, text: 'next human request',
+  });
 });
 
 it('retains interrupted context when an executor error leaves delivery unconfirmed', async () => {
@@ -325,13 +359,24 @@ it('retains interrupted context when runtime preparation fails before executor i
   expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
 });
 
+it('returns the provider failure reason when a patrol cannot finish', async () => {
+  const f = conversationFixture();
+  f.execute.mockRejectedValueOnce(new Error('provider.transport: ECONNRESET socket closed'));
+
+  expect(await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] }))
+    .toMatchObject({ kind: 'completed', result: {
+      kind: 'error', code: 'operation_failed', message: expect.stringContaining('provider.transport: ECONNRESET socket closed'),
+    } });
+  expect(f.execute).toHaveBeenCalledTimes(1);
+});
+
 it('retains interrupted context when a command is rejected and a patrol does not invoke the executor', async () => {
   const f = conversationFixture();
   const controller = new AbortController(); f.interruptNext(controller);
   await f.run(humanMessage('interrupted request'), controller);
   expect(await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'dismiss_summary', revision: f.state().revision } })).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'stale_summary' } });
-  doubles.getGoal.mockResolvedValue({ ...goalRecord(), executionStatus: 'paused' });
+    command: { kind: 'dismiss_summary', revision: f.state().revision, conversationId: turnConversationId } })).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'stale_summary' } });
+  doubles.findGoal.mockReturnValue({ ...goalRecord(), executionStatus: 'paused' });
   await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] });
   expect(f.execute).toHaveBeenCalledOnce();
   expect(f.state()).toMatchObject({ interruptedMessage: 'interrupted request' });
@@ -355,17 +400,101 @@ it.each([
   expect(f.execute.mock.calls[2]![0].prompt).toContain('interrupted with changed selection');
 });
 
-it('returns a system notice after dismissing a registration proposal without invoking AI', async () => {
+it('returns a system notice after dismissing a goal proposal without invoking AI', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
     summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
   f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
-    command: { kind: 'dismiss_summary', revision: 1 } };
+    command: { kind: 'dismiss_summary', revision: 1, conversationId: turnConversationId } };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
     kind: 'notice', message: getLabel('manager.conversation.dismissed', 'en'),
   } });
   expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({ proposal: { revision: 2, pending: null } }) }));
   expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('stores a proposed registration summary as the pending proposal without invoking AI', async () => {
+  const f = fixture();
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'proposal_created', proposal: { revision: f.input.state.revision + 1, repositoryDirectory: '/repository' },
+    message: getLabel('manager.conversation.proposed', 'en'),
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: f.input.state.revision + 1,
+      pending: { revision: f.input.state.revision + 1, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('assigns the first revision when creating a goal proposal on a fresh conversation', async () => {
+  const f = fixture();
+  f.input.state.revision = 0;
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId, summary } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'proposal_created', proposal: { revision: 1, repositoryDirectory: '/repository' },
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({
+    proposal: { revision: 1, pending: { revision: 1, repositoryDirectory: '/repository', summary } },
+  }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('refuses to create a goal proposal while another proposal is pending', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'propose_summary', conversationId: turnConversationId,
+      summary: { objective: 'another goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'proposal_pending' } });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('clears interrupted input references on /clear without invoking AI (daemon: %s)', async (daemon) => {
+  const f = fixture();
+  if (daemon) {
+    const id = conversationId({ kind: 'daemon' });
+    f.input.state.assignment = { kind: 'daemon' };
+    f.input.turn.conversationId = id;
+    f.input.event.conversationId = id;
+  }
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'kept goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  const imageId = randomUUID();
+  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' }, imageAttachmentIds: [imageId] };
+  f.input.state.interruptedMessage = 'undelivered request';
+  f.input.state.interruptedImageAttachmentIds = [imageId];
+  f.input.event.event = humanMessage(' /clear ');
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', 'en') } });
+  expect(outcome.change).toEqual({ operationId: expect.any(String), expectedVersion: f.input.state.version,
+    session: { ...f.input.state.session, sessionId: null, imageAttachmentIds: daemon ? [imageId] : [] }, interruptedMessage: null,
+    interruptedImageAttachmentIds: [] });
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('starts the next message in a new session without the interrupted message after /clear', async () => {
+  const f = conversationFixture();
+  await f.run(humanMessage('before clear'));
+  const controller = new AbortController(); f.interruptNext(controller);
+  await f.run(humanMessage('undelivered request'), controller);
+  expect(f.state()).toMatchObject({ session: { sessionId: 'session-after' }, interruptedMessage: 'undelivered request' });
+
+  await f.run(humanMessage('/clear'));
+  await f.run(humanMessage('after clear'));
+
+  expect(f.execute).toHaveBeenCalledTimes(3);
+  expect(f.execute.mock.calls[2]![0].sessionId).toBeUndefined();
+  expect(f.execute.mock.calls[2]![0].prompt).not.toContain('undelivered request');
 });
 
 it.each([
@@ -379,7 +508,7 @@ it.each([
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
     kind: 'notice', message: getLabel(label, 'en', { goalId }),
   } });
-  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal);
+  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal, 'human');
   expect(doubles.invalidate).toHaveBeenCalledTimes(status === 'aborted' ? 1 : 0);
   expect(f.execute).not.toHaveBeenCalled();
 });
@@ -387,11 +516,46 @@ it.each([
 it.each(['paused', 'aborted'] as const)('returns a system notice for an event on a %s goal without invoking AI', async (executionStatus) => {
   const f = fixture();
   const goal = { ...goalRecord(), executionStatus };
-  doubles.getGoal.mockResolvedValue(goal);
+  doubles.findGoal.mockReturnValue(goal);
   f.input.event.lane = 'other';
   f.input.event.event = { kind: 'goal_registered', repositoryDirectory: '/repository', goalId: goal.id };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice' } });
   expect(f.execute).not.toHaveBeenCalled();
+});
+it('discards an event accepted before its goal was deleted without an error or AI', async () => {
+  const f = fixture();
+  const deletedGoalId = randomUUID();
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'task_failed', task: { repositoryDirectory: '/repository', goalId: deletedGoalId, taskName: 'task', runSlug: 'run' },
+    result: { success: false, interrupted: true, workflowResult: 'error', failureReason: 'Interrupted by goal abort', shaUnavailableReason: 'Interrupted' } };
+  expect(await f.service.execute(f.input, f.io)).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+it.each([
+  { goal: 'deleted', executionStatus: undefined },
+  { goal: 'aborted', executionStatus: 'aborted' as const },
+])('handles a cancelled wait command completion for a $goal goal', async ({ executionStatus }) => {
+  const f = fixture();
+  const goalId = randomUUID();
+  doubles.findGoal.mockImplementation((id: string) => executionStatus !== undefined && id === goalId
+    ? { ...goalRecord(), id: goalId, executionStatus } : undefined);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'wait_command_completed', id: randomUUID(), repositoryDirectory: '/repository', goalId,
+    description: 'CI result', status: 'cancelled', exitCode: null, signal: null, outputTail: '', durationMs: 10 };
+  const outcome = await f.service.execute(f.input, f.io);
+  expect(doubles.findGoal).toHaveBeenCalledWith(goalId);
+  if (executionStatus === undefined) {
+    expect(outcome).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+  } else {
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toMatchObject({ kind: 'wait_command_completed', goalId, status: 'cancelled' });
+  }
+  expect(doubles.notify).not.toHaveBeenCalled();
 });
 it.each<AssistantCliOverrides>([{ provider: 'codex' }, { model: 'custom' }, { provider: 'codex', model: 'custom' }])('keeps selection %j and session across human, director and completion turns', async (overrides) => {
   const f = fixture();
@@ -423,11 +587,63 @@ it.each<AssistantCliOverrides>([{ provider: 'codex' }, { model: 'custom' }, { pr
       ...(outcome.change.proposal === undefined ? {} : outcome.change.proposal) };
   }
 });
+it.each([
+  { text: 'We agree on the goal' },
+  { text: getLabel('manager.goSummaryRequest', 'ja') },
+  { text: getLabel('manager.goSummaryRequest', 'en') },
+  { text: '/make-goal' },
+  { text: 'Prepare a proposal', requestProposal: false },
+])('ignores unsolicited summaries for ordinary input $text', async ({ text, requestProposal }) => {
+  const f = conversationFixture();
+  f.execute.mockResolvedValueOnce({ message: 'Use /make-goal', sessionId: 'next', assignment: undefined,
+    summary: { objective: 'unexpected', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] } });
+
+  expect(await f.run(humanMessage(text, requestProposal))).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Use /make-goal' } });
+
+  expect(f.state()).toMatchObject({ pending: null, approval: null, session: { sessionId: 'next' } });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).not.toHaveProperty('requestProposal');
+  expect(doubles.validateBranches).not.toHaveBeenCalled();
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('saves an explicitly requested proposal and registers it only after approval', async () => {
+  const f = conversationFixture();
+  const summary = { objective: 'requested goal', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] };
+  f.execute.mockResolvedValueOnce({ message: 'proposal ready', sessionId: 'next', assignment: undefined, summary });
+
+  expect(await f.run(humanMessage('localized instruction can change', true))).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toMatchObject({ requestProposal: true });
+  const pending = f.state().pending!;
+  expect(pending).toEqual({ revision: f.state().revision, repositoryDirectory: '/repository', summary });
+  expect(doubles.register).not.toHaveBeenCalled();
+  doubles.register.mockResolvedValue({ ...goalRecord(), ...summary });
+  expect(await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'approve_summary', revision: pending.revision, conversationId: turnConversationId } })).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered' } });
+  expect(doubles.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(summary), expect.any(AbortSignal));
+  expect(f.state()).toMatchObject({ pending: null, approval: { state: 'registered', revision: pending.revision } });
+});
+
+it.each(['approve_summary', 'dismiss_summary'] as const)(
+  'rejects a %s command whose conversationId is not this conversation and neither registers nor dismisses',
+  async (kind) => {
+    const f = fixture();
+    f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+      summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+    f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+      command: { kind, revision: 1, conversationId: conversationId({ kind: 'repository', repositoryDirectory: '/other' }) } };
+
+    expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
+    expect(doubles.register).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+  },
+);
+
 it('saves approval reservation before registering a goal and uses the returned state version for completion', async () => {
   const f = fixture(); const confirmation = deferred<void>(); const requested = deferred<DaemonStateRequest>();
   const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   f.request.mockImplementation(async (request) => {
     requested.resolve(request); await confirmation.promise;
     return { kind: 'state_saved', version: 42, duplicate: false };
@@ -447,10 +663,151 @@ it('saves approval reservation before registering a goal and uses the returned s
 it('never creates a goal if the reservation is rejected', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
-  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
   f.request.mockResolvedValue({ kind: 'error', code: 'version_conflict', message: 'conflict' });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(doubles.register).not.toHaveBeenCalled();
+});
+it('rejects a proposal whose requested start branch cannot resolve locally', async () => {
+  const f = fixture();
+  const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [], startBranch: 'origin/main' };
+  f.execute.mockResolvedValue({ message: 'proposal', summary, sessionId: 'session-after', assignment: undefined });
+  f.input.event.event = humanMessage('create proposal', true);
+  doubles.validateBranches.mockImplementation((_cwd: string, startBranch: string | undefined) => {
+    if (startBranch === 'origin/main') throw new Error('Unable to resolve local branch "origin/main" to a commit');
+  });
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(doubles.validateBranches).toHaveBeenCalledWith('/repository', 'origin/main', undefined);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'operation_failed',
+    message: expect.stringContaining('origin/main') } });
+  expect(outcome.change).toBeUndefined();
+  expect(f.request).toHaveBeenCalledOnce();
+  expect(f.request.mock.calls[0]![0]).toMatchObject({ kind: 'save_conversation', change: { proposal: { pending: null } } });
+});
+it('releases a persisted reservation after an invalid local branch fails validation with no registration artifacts', async () => {
+  const f = fixture(); const goalId = randomUUID();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [], startBranch: 'origin/main',
+  } };
+  f.input.state.approval = { state: 'reserved', revision: 1, goalId, repositoryDirectory: '/repository' };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
+  doubles.validateBranches.mockImplementation((_cwd: string, startBranch: string | undefined) => {
+    if (startBranch === 'origin/main') throw new Error('Unable to resolve local branch "origin/main" to a commit');
+  });
+  doubles.artifacts.mockResolvedValue(false);
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(doubles.register).not.toHaveBeenCalled();
+  expect(doubles.artifacts).toHaveBeenCalledWith('/repository', goalId);
+  expect(f.request).toHaveBeenCalledOnce();
+  expect(f.request.mock.calls[0]![0]).toMatchObject({ kind: 'save_conversation', change: { approval: null } });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error', message: expect.stringContaining('origin/main') } });
+
+  const saved = f.request.mock.calls[0]![0];
+  if (saved.kind !== 'save_conversation') throw new Error('Expected a conversation state save');
+  const nextInput = turnStart(2);
+  nextInput.state = { ...f.input.state, version: saved.change.expectedVersion + 1, approval: null };
+  nextInput.event.event = humanMessage('continue');
+  expect(await f.service.execute(nextInput, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+});
+it('resumes a saved goal when its approved branch disappears before approval is persisted', async () => {
+  const f = fixture(); const goal = goalRecord();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
+  } };
+  f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
+  doubles.findGoal.mockReturnValue(goal);
+  doubles.register.mockResolvedValue(goal);
+  doubles.validateBranches.mockImplementation(() => { throw new Error('Unable to resolve the deleted branch'); });
+  doubles.artifacts.mockResolvedValue(true);
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(doubles.validateBranches).not.toHaveBeenCalled();
+  expect(doubles.register).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/repository', id: goal.id,
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch }), f.io.signal);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal },
+    change: { approval: { state: 'registered', goalId: goal.id }, proposal: { pending: null } } });
+});
+it('validates approved branches when only the reserved goal branch remains', async () => {
+  const f = fixture(); const goal = goalRecord();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
+  } };
+  f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
+  doubles.findGoal.mockReturnValue(undefined);
+  doubles.register.mockRejectedValue(new Error('A branch for this reservation requires reconciliation'));
+  doubles.artifacts.mockResolvedValue(true);
+
+  await f.service.execute(f.input, f.io);
+
+  expect(doubles.validateBranches).toHaveBeenCalledExactlyOnceWith('/repository', goal.startBranch, goal.integrationBranch);
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(doubles.artifacts).toHaveBeenCalledWith('/repository', goal.id);
+});
+it('clears a new reservation when registration fails before leaving a goal or branch', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
+  } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
+  doubles.register.mockRejectedValue(new Error('registration failed before creating artifacts'));
+  doubles.artifacts.mockResolvedValue(false);
+
+  await f.service.execute(f.input, f.io);
+
+  expect(f.request.mock.calls.map(([request]) => request.kind === 'save_conversation' ? request.change.approval : undefined))
+    .toEqual([expect.objectContaining({ state: 'reserved' }), null]);
+  expect(doubles.artifacts).toHaveBeenCalledWith('/repository', expect.any(String));
+});
+it('keeps the reservation when registration fails after leaving a goal or branch', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
+  } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1, conversationId: turnConversationId } };
+  doubles.register.mockRejectedValue(new Error('registration failed after creating artifacts'));
+  doubles.artifacts.mockResolvedValue(true);
+
+  await f.service.execute(f.input, f.io);
+
+  expect(f.request.mock.calls.map(([request]) => request.kind === 'save_conversation' ? request.change.approval : undefined))
+    .toEqual([expect.objectContaining({ state: 'reserved' })]);
+  expect(doubles.artifacts).toHaveBeenCalledWith('/repository', expect.any(String));
+});
+it('keeps the reservation and reports reconciliation failure when registration artifacts cannot be checked', async () => {
+  const f = conversationFixture();
+  f.execute.mockResolvedValueOnce({ message: 'proposal', sessionId: 'session-after', assignment: undefined, summary: {
+    objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
+  } });
+  await f.run(humanMessage('prepare a goal', true));
+  const pending = f.state().pending;
+  if (pending === null) throw new Error('Expected a pending proposal');
+  f.request.mockClear();
+  doubles.register.mockRejectedValue(new Error('registration failed'));
+  const reconciliationError = new Error('artifact inspection failed');
+  doubles.artifacts.mockRejectedValue(reconciliationError);
+
+  const outcome = await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'approve_summary', revision: pending.revision, conversationId: turnConversationId } });
+
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(doubles.artifacts).toHaveBeenCalledExactlyOnceWith('/repository', f.state().approval?.goalId);
+  expect(f.request.mock.calls.map(([request]) => request.kind === 'save_conversation' ? request.change.approval : undefined))
+    .toEqual([expect.objectContaining({ state: 'reserved' })]);
+  expect(f.state()).toMatchObject({ approval: { state: 'reserved', revision: pending.revision,
+    goalId: expect.any(String), repositoryDirectory: '/repository' }, pending });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'operation_failed',
+    message: expect.stringContaining(reconciliationError.message) } });
+  expect(outcome.change).toBeUndefined();
 });
 it('invalidates the saved session before retrying and returns interrupted cleanup at the latest version', async () => {
   const f = conversationFixture();
@@ -491,7 +848,7 @@ it.each(['task_completed', 'pr_changed'] as const)('notifies the event repositor
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/second', goalId, failure, f.input.turn.operationId);
 });
-it('does not turn an event response into a human registration proposal', async () => {
+it('does not turn an event response into a human goal proposal', async () => {
   const f = fixture(); f.input.event.lane = 'other';
   f.input.event.event = { kind: 'director_message', directorConversationId: 'director', text: 'check goals' };
   f.execute.mockResolvedValue({ message: 'reply', sessionId: 'next', assignment: undefined,
@@ -522,7 +879,7 @@ it.each([true, false])('settles a run loss observation without AI and invokes AI
 it('inspects active patrol goals together without resuming or updating the conversation session', async () => {
   const f = fixture();
   const active = goalRecord(); const paused = { ...goalRecord(), id: randomUUID(), executionStatus: 'paused' };
-  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : paused);
+  doubles.findGoal.mockImplementation((id: string) => id === active.id ? active : paused);
   f.input.event.lane = 'other';
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, paused.id] };
   const message = 'Patrol: 1 goal, no anomalies';
@@ -533,11 +890,11 @@ it('inspects active patrol goals together without resuming or updating the conve
   expect(outcome.change?.proposal).toBeUndefined();
   expect(f.request).not.toHaveBeenCalled();
   const turn = f.execute.mock.calls[0]![0];
-  expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
+  expect(turnData(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
-  expect(turn.prompt).toBe(buildManagerEventPrompt({
+  expect(turnData(turn.prompt)).toEqual(JSON.parse(buildManagerEventPrompt({
     kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id],
-  }));
+  })));
   expect(turn).toMatchObject({ patrol: true, sessionId: undefined, recovery: { context: 'saved-goal-memory' } });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();
@@ -556,7 +913,7 @@ it.each(['completed', 'failed', 'interrupted'] as const)('preserves the conversa
     : { kind: 'completed', result: { kind: status === 'failed' ? 'error' : 'reply' } });
   const turn = f.execute.mock.calls[1]![0];
   expect(turn.sessionId).toBeUndefined();
-  expect(JSON.parse(turn.prompt).event.kind).toBe('patrol');
+  expect(turnData(turn.prompt).event.kind).toBe('patrol');
   expect(turn.prompt).not.toContain('undelivered human request');
   expect(f.state().session).toEqual(before.session);
   expect(f.state().interruptedMessage).toBe('undelivered human request');
@@ -580,17 +937,17 @@ it('keeps the human session and runtime context when a patrol resolves a differe
 it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
   const f = fixture();
   const goal = goalRecord();
-  doubles.getGoal.mockResolvedValue(status === 'completed' || status === 'awaiting_merge' ? { ...goal, status } : { ...goal, executionStatus: status });
+  doubles.findGoal.mockReturnValue(status === 'completed' || status === 'awaiting_merge' ? { ...goal, status } : { ...goal, executionStatus: status });
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goal.id] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
   expect(f.resolve).not.toHaveBeenCalled();
 });
 
-it.each(['pending', 'running'] as const)('includes awaiting-merge goals with %s merge work and rechecks before executing', async (status) => {
+it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed'] as const)('includes awaiting-merge goals with %s merge work and rechecks before executing', async (status) => {
   const f = fixture();
   const merging = { ...goalRecord(), status: 'awaiting_merge' };
   const waiting = { ...merging, id: randomUUID() };
-  doubles.getGoal.mockImplementation(async (id: string) => id === merging.id ? merging : waiting);
+  doubles.findGoal.mockImplementation((id: string) => id === merging.id ? merging : waiting);
   doubles.readTasks.mockResolvedValue([
     { goal_id: merging.id, merge_task: true, status },
     { goal_id: waiting.id, status: 'running' },
@@ -598,7 +955,7 @@ it.each(['pending', 'running'] as const)('includes awaiting-merge goals with %s 
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [merging.id, waiting.id] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(doubles.readTasks).toHaveBeenCalledExactlyOnceWith('/repository');
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([merging.id]);
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([merging.id]);
   doubles.readTasks.mockResolvedValue([{ goal_id: merging.id, merge_task: true, status: 'completed' }]);
   f.execute.mockClear();
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
@@ -608,7 +965,7 @@ it.each(['pending', 'running'] as const)('includes awaiting-merge goals with %s 
 it('delivers pr_conflicting for an awaiting-merge goal to the manager', async () => {
   const f = fixture();
   const goal = { ...goalRecord(), status: 'awaiting_merge' };
-  doubles.getGoal.mockResolvedValue(goal);
+  doubles.findGoal.mockReturnValue(goal);
   const evidence = { targetId: 'pr-1', generation: 'pr-1', observedAt: '2026-11-07T00:00:00Z',
     repositoryDirectory: '/repository', goalId: goal.id, url: 'https://github.com/owner/repo/pull/9' };
   const observation = { ...evidence, kind: 'pr_conflicting' as const };
@@ -616,7 +973,7 @@ it('delivers pr_conflicting for an awaiting-merge goal to the manager', async ()
   f.input.event.event = { kind: 'watch_observation', observation };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
   expect(f.execute.mock.calls[0]![0].patrol).toBe(false);
 });
 
@@ -624,13 +981,13 @@ it('continues patrolling ordinary active goals while excluding awaiting-merge go
   const f = fixture();
   const active = goalRecord();
   const waiting = { ...active, id: randomUUID(), status: 'awaiting_merge' };
-  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : waiting);
+  doubles.findGoal.mockImplementation((id: string) => id === active.id ? active : waiting);
   doubles.readTasks.mockRejectedValue(new Error('Invalid tasks YAML'));
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, waiting.id] };
 
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
   expect(doubles.notify).not.toHaveBeenCalled();
 });
 
@@ -656,7 +1013,7 @@ it('interrupts without reporting or executing when a task read fails after cance
 it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {
   const f = fixture();
   const active = goalRecord(); const unreadable = randomUUID();
-  doubles.getGoal.mockImplementation(async (id: string) => {
+  doubles.findGoal.mockImplementation((id: string) => {
     if (id === unreadable) throw new Error('unreadable goal');
     return active;
   });
@@ -664,8 +1021,26 @@ it.each([true, false])('reports unreadable goals and continues the patrol with r
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: readable ? [unreadable, active.id] : [unreadable] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
     goalIds: readable ? [active.id] : [], unreadableGoalIds: [unreadable] });
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('drops goals deleted after the patrol was accepted (remaining active goal: %s)', async (remaining) => {
+  const f = fixture();
+  const active = goalRecord(); const deleted = randomUUID();
+  doubles.findGoal.mockImplementation((id: string) => id === active.id ? active : undefined);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: remaining ? [deleted, active.id] : [deleted] };
+  const outcome = await f.service.execute(f.input, f.io);
+  if (remaining) {
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+    expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] });
+  } else {
+    expect(outcome).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+  }
   expect(doubles.notify).not.toHaveBeenCalled();
 });
 
@@ -695,7 +1070,7 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
 });
 
 
-it('routes only a human /verify to verification and preserves the current registration proposal', async () => {
+it('routes only a human /verify to verification and preserves the current goal proposal', async () => {
   const f = fixture();
   const pending = { revision: f.input.state.revision, repositoryDirectory: '/repository', summary: {
     objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [], specifications: { quint: 'module csv {}' },
@@ -727,6 +1102,47 @@ async function workspaceVerificationFixture(repositoryDirectories: string[]) {
   doubles.assignment.mockResolvedValue({ ...assignment, name: 'Workspace', repositoryDirectories });
   return f;
 }
+
+it('patrols an active Epic without goals and stops on the same service after completion', async () => {
+  const f = await workspaceVerificationFixture(['/repository']);
+  const owner = f.input.state.assignment;
+  if (owner.kind !== 'workspace') throw new Error('Expected workspace');
+  const member = { repositoryDirectory: '/repository', goalId: goalRecord().id };
+  const started = beginEpicVerification({ ...epicRecord(), workspaceId: owner.workspaceId,
+    members: [member], targets: [{ ...member, targetSha: 'b'.repeat(40) }] }, verificationRunId, verificationStartedAt);
+  const epic = applyEpicVerificationResult(started.epic, verificationResultFor(started.run));
+  const other = { ...epicRecord(), id: randomUUID(), workspaceId: owner.workspaceId };
+  doubles.epics.mockResolvedValue([other, epicView(epic)]);
+  f.input.event.event = { kind: 'patrol', workspaceId: owner.workspaceId, epicIds: [epic.id], goalIds: [] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  expect(f.execute).toHaveBeenCalledTimes(1);
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toMatchObject({ workspaceId: owner.workspaceId, epicIds: [epic.id], goalIds: [] });
+  doubles.epics.mockResolvedValue([other, epicView(finishEpic(epic))]);
+  expect(await f.service.execute(f.input, f.io)).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.execute).toHaveBeenCalledTimes(1);
+});
+
+it('does not run a partial Epic patrol when a later record cannot be read', async () => {
+  const f = await workspaceVerificationFixture([]);
+  const owner = f.input.state.assignment;
+  if (owner.kind !== 'workspace') throw new Error('Expected workspace');
+  const epic = { ...epicRecord(), workspaceId: owner.workspaceId };
+  doubles.epics.mockImplementation(async function* () { yield epic; throw new Error('Later Epic is unreadable'); });
+  f.input.event.event = { kind: 'patrol', workspaceId: owner.workspaceId, epicIds: [epic.id], goalIds: [] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each(['epic_verification_result', 'epic_completed'] as const)('settles %s without starting a model or another verification', async (kind) => {
+  const f = await workspaceVerificationFixture([]);
+  const owner = f.input.state.assignment;
+  if (owner.kind !== 'workspace') throw new Error('Expected workspace');
+  f.input.event.event = { kind, workspaceId: owner.workspaceId, epicId: epicRecord().id, revision: 1, runId: randomUUID() };
+  expect(await f.service.execute(f.input, f.io)).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
 
 it.each([true, false])('uses the proposed repository settings rather than the workspace first repository when enabled=%s', async (mode) => {
   const f = await workspaceVerificationFixture(['/A', '/B']);
@@ -791,4 +1207,44 @@ it('rejects a verification proposal whose repository has left the workspace', as
   } };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
   expect(f.resolve).not.toHaveBeenCalled(); expect(doubles.formalSpec).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('delivers a saved goal question and its human answer in %s', async (language) => {
+  const f = conversationFixture();
+  const questionId = randomUUID();
+  const answer = { text: 'Wait on X. Continue Y.', source: 'slack' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const goal = { ...goalRecord(), questions: [{ id: questionId, kind: 'question' as const, recipient: 'human' as const,
+    body: 'Continue verification of X?', status: 'answered' as const, answer }] };
+  doubles.findGoal.mockReturnValue(goal);
+  f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
+  await f.run({ kind: 'inquiry_answered', repositoryDirectory: '/repository', goalId: goal.id, questionId, answer });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toMatchObject({ kind: 'inquiry_answered',
+    goalId: goal.id, questionId, question: goal.questions[0]!.body, answer });
+});
+
+it('distinguishes a structured standalone answer from similar director text', async () => {
+  const f = conversationFixture();
+  const answer = { text: 'Wait on X.', source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const inquiryAnswer = { questionId: randomUUID(), question: 'Continue X?', answer };
+  const text = 'A person answered a standalone inquiry. Wait on X.';
+  await f.run({ kind: 'director_message', directorConversationId: 'director', text, inquiryAnswer });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...inquiryAnswer });
+  await f.run({ kind: 'director_message', directorConversationId: 'director', text });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({ text, origin: 'unknown', directorConversationId: 'director' });
+  expect(f.execute.mock.calls[1]![0].sessionId).toBe('session-after');
+});
+
+it.each(['ja', 'en'] as const)('delivers structured origins and treats missing origins as unknown in %s', async (language) => {
+  const f = conversationFixture();
+  f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
+  for (const origin of ['human', 'manager', undefined] as const) {
+    await f.run({ kind: 'goal_resumed', goalId: goalRecord().id, repositoryDirectory: '/repository', origin });
+    const data = turnData(f.execute.mock.lastCall![0].prompt);
+    expect(data.event).toEqual({ kind: 'goal_resumed', goalId: goalRecord().id, repositoryDirectory: '/repository', origin: origin ?? 'unknown' });
+  }
+  for (const origin of ['human', 'director', undefined] as const) {
+    const text = 'The human says stop.';
+    await f.run({ kind: 'director_message', directorConversationId: 'director', text, origin });
+    expect(turnData(f.execute.mock.lastCall![0].prompt)).toEqual({ text, directorConversationId: 'director', origin: origin ?? 'unknown' });
+  }
 });

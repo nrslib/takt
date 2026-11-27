@@ -485,10 +485,16 @@ function validateCompletionRetryOptIn(
 
 const WorkflowReportInputEntryRawSchema = z.object({
   from_step: WorkflowStepNameSchema,
+  fallback_from_step: WorkflowStepNameSchema.optional(),
   reports: z.union([z.literal('all'), z.array(z.string().min(1)).min(1)]),
   optional_if_unrun: z.literal(true).optional(),
+  previous_only: z.literal(true).optional(),
   history: z.object({ previous: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
-}).strict();
+}).strict().superRefine((input, ctx) => {
+  if (input.previous_only && (input.fallback_from_step || input.optional_if_unrun || input.reports === 'all')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'previous_only requires explicit reports and cannot use a fallback or optional_if_unrun' });
+  }
+});
 
 export const WorkflowReportInputRawSchema = z.union([
   WorkflowReportInputEntryRawSchema,
@@ -1137,6 +1143,8 @@ export const WorkflowConfigRawSchema = z.object({
   // Issue #1208: workflow-level capability-set reference (the default for every step) and the
   // portable, bundled MCP server definitions that step/sub-step `mcp:` references resolve against.
   capabilities: WorkflowCapabilitiesRefSchema,
+  // Opt-in: name the project's repository for `gh` / `glab` in a task that runs in a clone.
+  repository_identity: z.boolean().optional(),
   mcp_servers: McpServersSchema,
   auto_routing: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),
   rate_limit_fallback: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),

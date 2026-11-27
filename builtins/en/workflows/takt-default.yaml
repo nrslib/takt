@@ -63,6 +63,7 @@ steps:
         - takt
       testing_knowledge:
         - takt
+        - takt-test-execution
         - architecture
         - unit-testing
         - e2e-testing
@@ -76,6 +77,7 @@ steps:
         - takt
       development_knowledge:
         - takt
+        - takt-test-execution
         - architecture
         - implementation-semantics
     rules:

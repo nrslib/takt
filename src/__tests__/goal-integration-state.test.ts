@@ -5,7 +5,7 @@ import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { projectManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
-import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal } from '../infra/goals/integration.js';
+import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal,updateGoalBranches } from '../infra/goals/integration.js';
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), getSync: vi.fn(), list: vi.fn(), update: vi.fn(), tasks: vi.fn(), merge: vi.fn(), sha: vi.fn(), remoteSha: vi.fn(), included: vi.fn(), contentIncluded: vi.fn(), worktrees: vi.fn(), diff: vi.fn(), environment: vi.fn(), gitSync: vi.fn() }));
@@ -44,6 +44,8 @@ vi.mock('../infra/goals/pull-request.js', async (original) => ({
 }));
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
+const sameTipCorrection = /same expectedSha[^.]*only (?:if|when)[^.]*current goal branch tip/i;
+const advancedTipCorrection = /(?:if|when)[^.]*tip[^.]*advanced[^.]*review[^.]*new expectedSha[^.]*summary[^.]*humanChecks/i;
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const now = '2026-10-19T03:00:00.000Z';
 const earlier = '2026-10-19T01:00:00.000Z';
@@ -116,6 +118,15 @@ beforeEach(() => {
   doubles.gitSync.mockImplementation((_command: string, args: string[]) => syncGitResult(args, targetSha, false));
 });
 afterEach(() => vi.useRealTimers());
+
+it('refuses a remote result before reading or merging its claimed artifact branch', async () => {
+  const task = doubles.tasks()[0];
+  doubles.tasks.mockReturnValue([{ ...task, remoteAssignment: { executionId: 'remote-execution' } }]);
+  await expect(integrateGoalTask('/project', goal.id, task.name, sourceSha, undefined, policy, 'en', false))
+    .rejects.toThrow('Remote task artifacts have not been received and verified');
+  expect(doubles.sha).not.toHaveBeenCalled();
+  expect(doubles.merge).not.toHaveBeenCalled();
+});
 
 describe('completion from the saved merged PR', () => {
   function prResponse(overrides: Record<string, unknown> = {}) {
@@ -345,7 +356,7 @@ it.each(['check', 'complete', 'reopen'] as const)('preserves the goal when fetch
 });
 it('integrates reviewed task work and records it only in the shared work log', async () => {
   doubles.contentIncluded.mockResolvedValue(true);
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged', sha: targetSha });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged', sha: targetSha });
   expect(doubles.merge).toHaveBeenCalledExactlyOnceWith('/project', sourceSha, goal.branch, undefined);
   expect(goal.workLog).toEqual([expect.objectContaining({ summary: expect.stringContaining('task') })]);
   expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'progress' })]);
@@ -354,10 +365,10 @@ it('integrates reviewed task work and records it only in the shared work log', a
 });
 it('cleans the clone without duplicating integration when Git already contains a result whose recording failed', async () => {
   doubles.update.mockRejectedValueOnce(new Error('save failed'));
-  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toThrow();
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).rejects.toThrow();
   expect(clones.cleanup).not.toHaveBeenCalled();
   doubles.included.mockResolvedValue(true);
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged' });
   expect(doubles.merge).toHaveBeenCalledOnce();
   expect(doubles.update).toHaveBeenCalledOnce();
   expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
@@ -365,13 +376,13 @@ it('cleans the clone without duplicating integration when Git already contains a
 it.each(['changed SHA', 'different goal', 'still running', 'still pending'])('rejects %s before changing Git', async (condition) => {
   if (condition === 'changed SHA') doubles.sha.mockResolvedValue(targetSha);
   else doubles.tasks.mockReturnValue([{ name: 'task', goalId: condition === 'different goal' ? 'other' : goal.id, status: condition === 'still pending' ? 'pending' : 'running', branch: 'takt/result', completion: { branch: 'takt/result' } }]);
-  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toThrow();
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).rejects.toThrow();
   expect(doubles.merge).not.toHaveBeenCalled(); expect(doubles.update).not.toHaveBeenCalled();
   expect(clones.cleanup).not.toHaveBeenCalled();
 });
 it.each(['conflict', 'checked_out'] as const)('leaves work unrecorded after a %s merge result', async (status) => {
   doubles.merge.mockResolvedValue({ status, conflicts: ['file'], worktrees: ['/worktree'] });
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'en')).toMatchObject({ status });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'en', false)).toMatchObject({ status });
   expect(doubles.update).not.toHaveBeenCalled();
   expect(clones.cleanup).not.toHaveBeenCalled();
 });
@@ -379,18 +390,32 @@ it.each(['pending', 'running'])('preserves a %s task clone even when its reviewe
   doubles.included.mockResolvedValue(true);
   doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, status, branch: 'takt/result', completion: { branch: 'takt/result' } }]);
 
-  await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja');
+  await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false);
 
   expect(clones.cleanup).not.toHaveBeenCalled();
   expect(doubles.merge).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
+});
+it.each([false, true])('preserves the clone and metadata without reading cleanup state when preservation is enabled with already included=%s', async (included) => {
+  doubles.included.mockResolvedValue(included);
+  doubles.sha.mockResolvedValueOnce(sourceSha).mockResolvedValueOnce(targetSha);
+
+  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', true);
+
+  expect(result).toMatchObject({ status: 'merged', sha: targetSha });
+  expect(result).not.toHaveProperty('cleanupWarning');
+  expect(clones.load).not.toHaveBeenCalled();
+  expect(clones.cleanup).not.toHaveBeenCalled();
+  expect(doubles.merge).toHaveBeenCalledTimes(included ? 0 : 1);
+  expect(doubles.tasks()).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'task', status: 'completed' })]));
+  expect(goal.workLog).toHaveLength(included ? 0 : 1);
 });
 it.each([false, true])('returns the merged result and clone cleanup failure with already included=%s', async (included) => {
   doubles.included.mockResolvedValue(included);
   doubles.sha.mockResolvedValueOnce(sourceSha).mockResolvedValueOnce(targetSha);
   clones.cleanup.mockImplementation(() => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); });
 
-  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja');
+  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false);
 
   expect(result).toMatchObject({ status: 'merged', sha: targetSha, sourceBranch: 'takt/result', expectedSha: sourceSha,
     targetBranch: goal.branch, cleanupWarning: { path: '/takt-worktrees/task-clone', reason: expect.stringMatching(/permission denied/i) } });
@@ -401,7 +426,7 @@ it('does not clean the task clone when the Git merge throws', async () => {
   const failure = new Error('merge failed');
   doubles.merge.mockRejectedValueOnce(failure);
 
-  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toBe(failure);
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).rejects.toBe(failure);
 
   expect(clones.cleanup).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
@@ -413,7 +438,7 @@ it('preserves the clone if the task resumes before integration finishes', async 
     return { status: 'merged', sha: targetSha };
   });
 
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged' });
 
   expect(clones.cleanup).not.toHaveBeenCalled();
 });
@@ -806,7 +831,7 @@ it('preserves inquiries and publishes a PR without attempting a conflicting loca
 
 it('lets the manager integrate reviewed useful work from a failed task', async () => {
   doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, goalPurpose: '確認済みの途中成果', status: 'failed', branch: 'takt/result', completion: { success: false, branch: 'takt/result' } }]);
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged' });
   expect(doubles.merge).toHaveBeenCalledOnce();
   expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
 });
@@ -835,12 +860,19 @@ it.each(['created', 'completed'] as const)('rejects reopening a %s goal without 
   expect(doubles.update).not.toHaveBeenCalled();
 });
 
-it('rejects an included approval SHA and directs the manager to check completion', async () => {
+it.each([sourceSha, 'c'.repeat(40)])('rejects an included approval SHA and explains correction when the tip is %s', async (goalTip) => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
   const before = structuredClone(goal);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? goalTip : targetSha);
   doubles.contentIncluded.mockResolvedValue(true);
   doubles.update.mockClear();
-  await expect(reopenGoal('/project', goal.id, '追加の修正', undefined)).rejects.toThrow('takt_check_goal_completion');
+  const reopening = reopenGoal('/project', goal.id, '追加の修正', undefined);
+  await expect(reopening).rejects.toThrow(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
+  await expect(reopening).rejects.toThrow(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
+  await expect(reopening).rejects.toThrow(/expectedSha/);
+  await expect(reopening).rejects.toThrow(/summary/);
+  await expect(reopening).rejects.toThrow(sameTipCorrection);
+  await expect(reopening).rejects.toThrow(advancedTipCorrection);
   expect(goal).toEqual(before);
   expect(doubles.update).not.toHaveBeenCalled();
 });
@@ -861,6 +893,15 @@ it('rechecks the saved status before applying the reopen update', async () => {
   const before = structuredClone(goal);
   await expect(reopenGoal('/project', goal.id, '追加の修正', undefined)).rejects.toThrow();
   expect(goal).toEqual({ ...before, status: 'completed', completion: { ...before.completion!, targetSha } });
+});
+
+it('rechecks the saved integration branch before applying the reopen update', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
+  doubles.contentIncluded.mockImplementation(async () => { goal = { ...goal, integrationBranch: 'release' }; return false; });
+  const before = structuredClone(goal);
+  await expect(reopenGoal('/project', goal.id, '追加の修正', undefined))
+    .rejects.toThrow('Goal integration branch changed during the reopen check');
+  expect(goal).toEqual({ ...before, integrationBranch: 'release' });
 });
 
 it.each([
@@ -920,15 +961,16 @@ it('does not save a reopen after cancellation during the containment check', asy
 });
 
 it.each([
-  { finalTarget: targetSha, included: false },
-  { finalTarget: 'c'.repeat(40), included: true },
-  { finalTarget: 'd'.repeat(40), included: false },
-])('checks target $finalTarget at save time and rejects only included approvals', async ({ finalTarget, included }) => {
+  { finalTarget: targetSha, included: false, goalTip: sourceSha },
+  { finalTarget: 'c'.repeat(40), included: true, goalTip: sourceSha },
+  { finalTarget: 'c'.repeat(40), included: true, goalTip: 'd'.repeat(40) },
+  { finalTarget: 'd'.repeat(40), included: false, goalTip: sourceSha },
+])('checks target $finalTarget at save time with tip $goalTip and rejects only included approvals', async ({ finalTarget, included, goalTip }) => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
   const before = structuredClone(goal);
   const reason = '追加の修正';
   let currentTarget = targetSha;
-  doubles.sha.mockImplementation(async () => currentTarget);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? goalTip : currentTarget);
   doubles.contentIncluded.mockClear();
   let finishCheck!: (included: boolean) => void;
   let checkStarted!: () => void;
@@ -949,7 +991,12 @@ it.each([
   expect(doubles.contentIncluded).toHaveBeenCalledExactlyOnceWith('/project', sourceSha, targetSha, undefined);
   finishCheck(false);
   if (included) {
-    await expect(reopening).rejects.toThrow('takt_check_goal_completion');
+    await expect(reopening).rejects.toThrow(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
+    await expect(reopening).rejects.toThrow(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
+    await expect(reopening).rejects.toThrow(/expectedSha/);
+    await expect(reopening).rejects.toThrow(/summary/);
+    await expect(reopening).rejects.toThrow(sameTipCorrection);
+    await expect(reopening).rejects.toThrow(advancedTipCorrection);
     expect(goal).toEqual(before);
   } else {
     const result = await reopening;
@@ -1014,7 +1061,70 @@ it.each(['before final check', 'after final check'])(
   },
 );
 
-it('saves completion evidence and the failure reason when a PR is unavailable, then recovers on retry', async () => {
+it('saves PR finishing guidance with conditional full review and retained CodeRabbit and CI handling', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+
+  const instruction = goal.completion!.instructions.find((text) => text.includes('takt_merge_goal_pr'));
+  expect(instruction).toMatch(/until: prepare.*approval.*until: merge.*automatic.*human instruction/iu);
+  expect(instruction).toMatch(/merge-prepare.*merge-review-fix-simple.*CodeRabbit.*CI waiting/iu);
+  expect(instruction).toMatch(/both initial.*resynchronization.*clean base sync skips the full review/iu);
+  expect(instruction).toMatch(/after AI conflict resolution.*review and fixes.*before push/iu);
+  expect(instruction).toMatch(/custom merge\.prepare_workflow.*merge\.workflow.*own steps/iu);
+});
+
+it('instructs the manager to review an advanced goal tip and resubmit all completion evidence', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+
+  const instruction = goal.completion!.instructions.find((text) => /(?:advanc|tip.*chang|new.*tip)/i.test(text));
+  expect(instruction).toBeDefined();
+  expect(instruction).toMatch(/(?:review|recheck|re-check|verify)/i);
+  for (const input of ['takt_complete_goal', 'expectedSha', 'summary', 'humanChecks']) {
+    expect(instruction).toContain(input);
+  }
+});
+
+it('distinguishes evidence correction from checking completion after the approved SHA is included', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+
+  const instruction = goal.completion!.instructions.find((text) => /already.*(?:includ|merg)/i.test(text));
+  expect(instruction).toBeDefined();
+  expect(instruction).toMatch(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
+  expect(instruction).toMatch(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
+  expect(instruction).toMatch(sameTipCorrection);
+  expect(instruction).toMatch(advancedTipCorrection);
+  for (const input of ['takt_complete_goal', 'expectedSha', 'summary', 'takt_check_goal_completion']) {
+    expect(instruction).toContain(input);
+  }
+});
+
+it.each(['configured', 'missing'] as const)('rejects a retry without saved or supplied human checks before publication with a %s origin', async (origin) => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  delete goal.pullRequest;
+  delete goal.completion!.humanChecks;
+  const before = structuredClone(goal);
+  const actual = await vi.importActual<typeof import('../infra/goals/pull-request.js')>('../infra/goals/pull-request.js');
+  vi.mocked(prepareGoalPullRequest).mockClear().mockImplementation(actual.prepareGoalPullRequest);
+  if (origin === 'configured') {
+    publication.git.mockResolvedValue({ output: Buffer.from('https://github.com/example/project.git\n'), code: 0, truncated: false });
+  } else {
+    publication.git.mockRejectedValue(new Error('No such remote origin'));
+  }
+  doubles.update.mockClear();
+  vi.mocked(saveManagerEvent).mockClear();
+
+  await expect(completeGoal('/project', goal.id, sourceSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja'))
+    .rejects.toThrow(/humanChecks.*(?:provide|supply).*takt_complete_goal/i);
+
+  expect(goal).toEqual(before);
+  expect(goal.pullRequest).toBeUndefined();
+  expect(prepareGoalPullRequest).not.toHaveBeenCalled();
+  expect(publication.git).not.toHaveBeenCalled();
+  expect(publication.create).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(saveManagerEvent).not.toHaveBeenCalled();
+});
+
+it('saves PR recovery instructions and the failure reason when a PR is unavailable, then recovers on retry', async () => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(new GoalPullRequestUnavailableError('origin unavailable'));
   const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   expect(result).toMatchObject({ status: 'awaiting_merge', goal });
@@ -1254,10 +1364,131 @@ it.each(['integrate', 'complete'] as const)('stops %s before changing or publish
   const error = new Error('Goal branch diverged from origin');
   vi.mocked(synchronizeGoalBranch).mockRejectedValueOnce(error);
   const pending = operation === 'integrate'
-    ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')
+    ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)
     : completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   await expect(pending).rejects.toBe(error);
   expect(doubles.merge).not.toHaveBeenCalled();
   expect(prepareGoalPullRequest).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
+});
+
+describe('goal branch correction', () => {
+  const changeSummary = { filesChanged: 1, additions: 2, deletions: 1, files: [], truncated: false, totalsTruncated: false };
+  const branchChangedDuringCheck = 'Goal integration branch changed during the completion check';
+
+  beforeEach(() => {
+    doubles.tasks.mockReturnValue([]);
+  });
+
+  it('corrects the integration branch of a created goal and saves the reason in the work log', async () => {
+    const result = await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', 'プルリクエストの宛先が変わったため', undefined);
+    expect(goal.integrationBranch).toBe('integration/takt-mcp');
+    expect(goal.completion).toBeUndefined();
+    expect(goal.workLog).toHaveLength(1);
+    expect(goal.workLog.at(-1)?.summary).toBe('プルリクエストの宛先が変わったため');
+    expect(result).toMatchObject({ goal: { integrationBranch: 'integration/takt-mcp' }, workLogEntryId: goal.workLog.at(-1)?.id });
+  });
+
+  it('corrects the completion target branch of a goal awaiting merge and keeps the other evidence', async () => {
+    const completion = { goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', summary: 'evidence', changeSummary, instructions: [] };
+    goal = { ...goal, status: 'awaiting_merge', completion };
+    await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined);
+    expect(goal).toMatchObject({ status: 'awaiting_merge', integrationBranch: 'integration/takt-mcp',
+      completion: { ...completion, targetBranch: 'integration/takt-mcp' } });
+  });
+
+  it('rejects a completed goal', async () => {
+    goal = { ...goal, status: 'completed', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', targetSha,
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow('Goal is already completed');
+    expect(goal).toEqual(before);
+  });
+
+  it.each(['paused', 'aborted'] as const)('rejects a goal that becomes %s after the saved goal is read', async (executionStatus) => {
+    doubles.get.mockImplementationOnce(async () => {
+      const snapshot = structuredClone(goal);
+      goal = { ...goal, executionStatus };
+      return snapshot;
+    });
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow(executionStatus === 'paused'
+        ? 'Goal is paused. Resume it before continuing work.'
+        : 'Goal is aborted. Work cannot continue for this goal.');
+    expect(goal.integrationBranch).toBe('main');
+    expect(goal.workLog).toHaveLength(0);
+  });
+
+  it('rejects the goal branch itself as the integration branch', async () => {
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, goal.branch, '宛先の訂正', undefined))
+      .rejects.toThrow('The integration branch must differ from the goal branch');
+    expect(goal).toEqual(before);
+  });
+
+  it('rejects an invalid branch name', async () => {
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, 'bad branch', '宛先の訂正', undefined)).rejects.toThrow('bad branch');
+    expect(goal).toEqual(before);
+  });
+
+  it('rejects while a PR merge task for the goal is running', async () => {
+    doubles.tasks.mockReturnValue([{ name: 'merge-pr-1950', goalId: goal.id, mergeTask: true, status: 'running' }]);
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow('A PR merge task is running for this goal');
+    expect(goal).toEqual(before);
+  });
+
+  it('corrects the branches when no PR merge task for the goal is running', async () => {
+    doubles.tasks.mockReturnValue([
+      { name: 'merge-pr-1950', goalId: goal.id, mergeTask: true, status: 'completed' },
+      { name: 'merge-pr-1951', goalId: 'another-goal', mergeTask: true, status: 'running' },
+      { name: 'task', goalId: goal.id, status: 'running' },
+    ]);
+    await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined);
+    expect(goal.integrationBranch).toBe('integration/takt-mcp');
+  });
+
+  it('does not complete a goal when the integration branch changes during the completion check', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main',
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return true;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow(branchChangedDuringCheck);
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.completion?.targetBranch).toBe('main');
+  });
+
+  it('does not return a negative result when the integration branch changes during the completion check', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main',
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return false;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow(branchChangedDuringCheck);
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.completion?.targetBranch).toBe('main');
+  });
+
+  it.each([true, false])('does not save completion evidence when the integration branch changes during completion (included: %s)', async (included) => {
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return included;
+    });
+    await expect(completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja'))
+      .rejects.toThrow(branchChangedDuringCheck);
+    expect(goal).toMatchObject({ status: 'created', integrationBranch: 'release' });
+    expect(goal.completion).toBeUndefined();
+  });
 });

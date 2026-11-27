@@ -1,8 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { humanTurnText } from './helpers/daemon-turn.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { conversationId } from '../infra/conversations/identity.js';
@@ -14,14 +16,32 @@ import { makeProvider } from './test-helpers.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import * as conversationPlan from '../features/manager/conversationPlan.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
+import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { receiveInboxChange } from '../features/daemon/inbox.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import * as privateFiles from '../infra/daemon/privateFile.js';
+import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
+import { createSessionImageAttachmentStore } from '../features/interactive/imageAttachments.js';
+import { ManagerImageAttachments, resolveManagerImages } from '../features/manager/imageAttachments.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
 }));
 
-vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
-  resolveCurrentManagerAssignment: async (assignment: { repositoryDirectory: string }) => ({ ...assignment, repositoryDirectories: [assignment.repositoryDirectory] }),
-}));
+vi.mock('../features/manager/assignment.js', async (original) => {
+  const actual = await original<typeof import('../features/manager/assignment.js')>();
+  return { ...actual, resolveCurrentManagerAssignment: async (...[assignment, directory]: Parameters<typeof actual.resolveCurrentManagerAssignment>) =>
+    assignment.kind === 'repository' ? { ...assignment, repositoryDirectories: [assignment.repositoryDirectory] }
+      : actual.resolveCurrentManagerAssignment(assignment, directory) };
+});
 const execute = vi.fn(async (value: ManagerTurnInput) => ({ message: value.prompt, summary: null, sessionId: 'persisted-session', assignment: value.assignment }));
 const resolveRuntime = vi.fn();
 let fixture: Awaited<ReturnType<typeof conversationDaemon>>;
@@ -52,6 +72,246 @@ async function open() {
   return { ...attachment, outputs, completed, submit: (text: string) => fixture.input.submit({ attachmentId: attachment.attachmentId, requestId: randomUUID(), speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text } }) };
 }
 
+type WrittenToolHistoryRecord = { kind: 'completed'; entry: ToolActivityEntry };
+function writtenToolHistory(path: string, content: string | Uint8Array): WrittenToolHistoryRecord[] {
+  if (!path.endsWith(join('conversation-tool-history', `${id}.jsonl`))) return [];
+  const text = typeof content === 'string' ? content : Buffer.from(content).toString('utf8');
+  return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as WrittenToolHistoryRecord);
+}
+
+it('restores an accepted message after detaching and settling before reattachment', async () => {
+  const release = deferred<void>();
+  execute.mockImplementationOnce(async (value) => {
+    await release.promise;
+    return { message: value.prompt, summary: null, sessionId: 'persisted-session', assignment: value.assignment };
+  });
+  const port = await open();
+  try {
+    const admission = await port.submit('message completed while disconnected');
+    if (admission.kind !== 'accepted') throw new Error('Expected acceptance');
+    fixture.input.detach(port.attachmentId);
+    release.resolve();
+    await fixture.settled();
+    const next = await fixture.input.open({ conversationId: id, assignment: { kind: 'repository', repositoryDirectory: repository },
+      speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: randomUUID(), counterpart: { namespace: 'local', id: 'operator' } } }, {
+      async deliver() { return { kind: 'delivered' }; },
+    });
+    const items = []; for await (const item of next.read.items) items.push(item);
+    next.read.complete();
+    expect(items.filter((item) => item.kind === 'user_message')).toEqual([
+      { kind: 'user_message', operationId: admission.operationId, message: 'message completed while disconnected', acceptedSequence: 1, pending: false },
+    ]);
+    fixture.input.detach(next.attachmentId);
+  } finally { release.resolve(); }
+});
+
+it('reprepares an unsent image after a real attachment detach and accepts the draft on reconnect', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('draft screenshot')]);
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const source = await temporary.saveImage(png, 'image/png');
+    const first = await open();
+    const image = await fixture.input.prepareImage({ attachmentId: first.attachmentId, sourcePath: source.tempPath });
+    fixture.input.detach(first.attachmentId);
+    await vi.waitFor(async () => expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' }));
+    const reopened = await open();
+    const prepared = await fixture.input.prepareImage({ attachmentId: reopened.attachmentId, sourcePath: source.tempPath });
+    expect(prepared.id).not.toBe(image.id);
+    expect(await fixture.input.submit({ attachmentId: reopened.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Inspect ' + prepared.placeholder, imageAttachmentIds: [prepared.id],
+      } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect(execute.mock.calls.at(-1)![0].imageAttachments).toEqual([prepared]);
+  } finally { temporary.cleanup(); }
+});
+
+it('waits for a conversation save before deciding whether an image is unreferenced', async () => {
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const port = await open();
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    const images = new ManagerImageAttachments(fixture.events);
+    const referenceCheck = deferred<void>();
+    const actualReferenceCheck = fixture.events.hasImageReference.bind(fixture.events);
+    vi.spyOn(fixture.events, 'hasImageReference').mockImplementation((...args) => {
+      referenceCheck.resolve();
+      return actualReferenceCheck(...args);
+    });
+    let finished = false;
+    let releasing!: Promise<void>;
+    await fixture.store.withConversationLock(id, async () => {
+      releasing = images.release(repository, id, port.attachmentId).then(() => { finished = true; });
+      await referenceCheck.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+      const path = join(getGlobalConfigDir(), 'conversations', `${id}.json`);
+      const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...saved, sessionId: 'saved-session', sessionImageAttachmentIds: [image.id] }));
+    });
+    await releasing;
+    expect(await readFile(image.path)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  } finally { temporary.cleanup(); }
+});
+
+it('retains an image for a resumed provider session and releases it when that session context changes', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('session screenshot')]);
+  const temporary = createSessionImageAttachmentStore(repository);
+  const source = await temporary.saveImage(png, 'image/png');
+  const first = await open();
+  const image = await fixture.input.prepareImage({ attachmentId: first.attachmentId, sourcePath: source.tempPath });
+  expect(await fixture.input.submit({ attachmentId: first.attachmentId, requestId: randomUUID(),
+    speaker: { namespace: 'local', id: 'operator' }, command: {
+      kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+    } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute.mock.calls.at(-1)![0].imageAttachments).toEqual([image]);
+  fixture.input.detach(first.attachmentId);
+  await fixture.close();
+  temporary.cleanup();
+
+  fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
+  const images = new ManagerImageAttachments(new FileEventStore(getGlobalConfigDir()));
+  await images.release(repository, id, first.attachmentId);
+  expect(await readFile(image.path)).toEqual(png);
+  const resumed = await open();
+  expect(await resumed.submit('Continue without attaching another image')).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute.mock.calls.at(-1)![0].sessionId).toBe('persisted-session');
+  await images.release(repository, id, first.attachmentId);
+  expect(await readFile(image.path)).toEqual(png);
+
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'changed-context', executor: { execute } });
+  execute.mockImplementationOnce(async (value) => ({ message: value.prompt, summary: null, sessionId: 'new-session', assignment: value.assignment }));
+  expect(await resumed.submit('Start the new context without images')).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute.mock.calls.at(-1)![0].sessionId).toBeUndefined();
+  expect(execute.mock.calls.at(-1)![0].imageAttachments).toBeUndefined();
+  await images.release(repository, id, first.attachmentId);
+
+  await expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(resolveManagerImages(repository, id, [image.id])).rejects.toThrow();
+});
+
+it.each([
+  { clear: false, newImage: false },
+  { clear: true, newImage: false },
+  { clear: true, newImage: true },
+])('handles interrupted images on the next turn (clear: $clear, new image: $newImage)', async ({ clear, newImage }) => {
+  const entered = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', content: '',
+    timestamp: new Date(), sessionId: 'next-session', structuredOutput: { message: 'done', summary: null } });
+  call.mockImplementationOnce(async (_prompt, options) => {
+    entered.resolve();
+    await new Promise<void>((resolve) => options.abortSignal!.addEventListener('abort', () => resolve(), { once: true }));
+    options.abortSignal!.throwIfAborted();
+    throw new Error('Expected interruption');
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ supportsNativeImageInput: true, setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const port = await open();
+    const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    const admission = await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Interrupted inspection ' + image.placeholder, imageAttachmentIds: [image.id],
+      } });
+    if (admission.kind !== 'accepted') throw new Error('Expected acceptance');
+    await entered.promise;
+    const running = port.outputs.find((output) => output.kind === 'running' && output.state.running?.operationId === admission.operationId);
+    if (running?.kind !== 'running' || running.state.running?.generation === undefined) throw new Error('Missing running turn');
+    await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'abort_turn', operationId: admission.operationId,
+        generation: running.state.running.generation } });
+    await fixture.settled();
+    expect((await fixture.store.read(id))!.state.interruptedImageAttachmentIds).toEqual([image.id]);
+    if (clear) {
+      expect(await port.submit('/clear')).toMatchObject({ kind: 'accepted' });
+      await fixture.settled();
+    }
+    const nextSource = newImage ? await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), 'image/png') : undefined;
+    const nextImage = nextSource === undefined ? undefined
+      : await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: nextSource.tempPath });
+    expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text: 'Next request' + (nextImage === undefined ? '' : ' ' + nextImage.placeholder),
+        ...(nextImage === undefined ? {} : { imageAttachmentIds: [nextImage.id] }) } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect(call).toHaveBeenCalledTimes(2);
+    const [prompt, options] = call.mock.calls[1]!;
+    const expectedImages = nextImage === undefined ? clear ? [] : [image] : [nextImage];
+    expect(options.imageAttachments ?? []).toEqual(expectedImages);
+    const metadata = prompt.split('\n\n').find((part) => part.startsWith('Image attachments: '));
+    expect(metadata === undefined ? [] : JSON.parse(metadata.slice('Image attachments: '.length))).toEqual(expectedImages);
+    expect(prompt.includes('Interrupted inspection')).toBe(!clear);
+  } finally { temporary.cleanup(); }
+});
+
+it.each([false, true])('releases old session images after a text-only turn only when cleared (clear: %s)', async (clear) => {
+  const state = (await fixture.store.read(id))!.state;
+  expect(await fixture.store.save({ conversationId: id, operationId: randomUUID(), generation: 1 }, {
+    operationId: randomUUID(), expectedVersion: state.version,
+    session: { ...state.session, sessionId: null, imageAttachmentIds: [] },
+  }, new AbortController().signal)).toMatchObject({ kind: 'state_saved' });
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const port = await open();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const source = await temporary.saveImage(png, 'image/png');
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+      } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual([image.id]);
+    if (clear) {
+      expect(await port.submit('/clear')).toMatchObject({ kind: 'accepted' });
+      await fixture.settled();
+    }
+    expect(await port.submit('Next request without images')).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    const next = execute.mock.calls.at(-1)![0];
+    expect(next.imageAttachments).toBeUndefined();
+    expect(next.sessionId).toBe(clear ? undefined : 'persisted-session');
+    expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual(clear ? [] : [image.id]);
+    const images = new ManagerImageAttachments(fixture.events);
+    await images.release(repository, id, port.attachmentId);
+    if (clear) {
+      await expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(resolveManagerImages(repository, id, [image.id])).rejects.toThrow();
+    } else expect(await readFile(image.path)).toEqual(png);
+  } finally { temporary.cleanup(); }
+});
+
+it('retains newly delivered images when a continuing provider session fails before returning its response', async () => {
+  const signal = new AbortController().signal;
+  expect(await fixture.store.save({ conversationId: id, operationId: randomUUID(), generation: 1 }, {
+    operationId: randomUUID(), expectedVersion: 0,
+    session: { provider: 'mock', model: null, sessionId: 'provider-session', contextKey: 'test', imageAttachmentIds: [] },
+  }, signal)).toMatchObject({ kind: 'state_saved' });
+  const temporary = createSessionImageAttachmentStore(repository);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const source = await temporary.saveImage(png, 'image/png');
+  const port = await open();
+  const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+  execute.mockRejectedValueOnce(new Error('Provider failed after receiving the image'));
+  expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+    speaker: { namespace: 'local', id: 'operator' }, command: {
+      kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+    } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  fixture.input.detach(port.attachmentId);
+  const images = new ManagerImageAttachments(fixture.events);
+  await images.release(repository, id, port.attachmentId);
+  expect(await readFile(image.path)).toEqual(png);
+  expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual([image.id]);
+  temporary.cleanup();
+});
+
 it('persists the session and applies the human response to the current proposal', async () => {
   const port = await open();
   expect(await port.submit('continue the existing goal')).toMatchObject({ kind: 'accepted', acceptedSequence: 1 });
@@ -59,7 +319,316 @@ it('persists the session and applies the human response to the current proposal'
   await fixture.dispatcher.drain();
   expect((await fixture.store.read(id))!.state).toMatchObject({ revision: 5, pending: null, session: { sessionId: 'persisted-session' } });
   expect(execute.mock.calls[0]![0].sessionId).toBe('provider-session');
+  expect((await fixture.store.read(id))!.state.session.contextKey).toBe('test');
 });
+
+it('does not resume a legacy Codex manager session without a contract fingerprint', async () => {
+  await fixture.close();
+  const path = join(getGlobalConfigDir(), 'conversations', `${id}.json`);
+  const record = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  await writeFile(path, JSON.stringify({ ...record, provider: 'codex' }));
+  fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
+  resolveRuntime.mockResolvedValue({ provider: 'codex', model: null, language: 'en', contextKey: 'current-codex-contract', executor: { execute } });
+  const port = await open();
+
+  await port.submit('continue the goal');
+  await fixture.settled();
+
+  expect(execute.mock.calls[0]![0].sessionId).toBeUndefined();
+  expect(execute.mock.calls[0]![0].recovery?.context).toBeDefined();
+  expect((await fixture.store.read(id))!.state.session.contextKey).toBe('current-codex-contract');
+});
+
+it.each(['result', 'delivery'] as const)('preserves the acquired change without repeating the provider after a history %s failure', async (failure) => {
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), sessionId: 'acquired-session',
+      structuredOutput: { message: 'done', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const append = privateFiles.appendPrivateFile; let failed = false;
+  vi.spyOn(privateFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
+    if (failure !== 'delivery' && !failed && writtenToolHistory(path, content).some((record) => record.kind === 'completed' && record.entry.status === 'success')) {
+      failed = true; throw new Error('Injected publication failure');
+    }
+    await append(path, content);
+  });
+  const completed = deferred<Extract<PortOutput, { kind: 'result' }>>();
+  const attachment = await fixture.input.open({ conversationId: id, assignment: { kind: 'repository', repositoryDirectory: repository },
+    speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: randomUUID(), counterpart: { namespace: 'local', id: 'operator' } } }, {
+    async deliver(_id, output) {
+      if (failure === 'delivery' && output.kind === 'tool_completed' && !failed) { failed = true; throw new Error('Injected delivery failure'); }
+      if (output.kind === 'result') completed.resolve(output);
+      return { kind: 'delivered' };
+    },
+  });
+  attachment.read.cancel();
+  const admission = await fixture.input.submit({ attachmentId: attachment.attachmentId, requestId: randomUUID(),
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text: 'Read once' } });
+  expect(admission).toMatchObject({ kind: 'accepted' });
+  const result = await completed.promise;
+  await expect(fixture.settled()).rejects.toThrow();
+  expect(failed).toBe(true);
+  expect(result.result).toMatchObject({ kind: 'reply', message: 'done' });
+  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('acquired-session');
+  const records = await fixture.events.restore();
+  const pending = []; for await (const event of records.pending) pending.push(event);
+  expect(pending).toHaveLength(0);
+  expect(fixture.dispatcher.activeTurnCount).toBe(0);
+  expect(call).toHaveBeenCalledOnce();
+  const snapshot = await fixture.conversations.snapshot(id, { toolHistory: true });
+  const items = []; for await (const item of snapshot.items) items.push(item);
+  snapshot.complete();
+  expect(items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { finished: true,
+    history: { entries: [{ status: 'success', result: 'ready' }] } } });
+});
+
+it.each([1, 2])('replaces persisted history after the daemon restarts its generation counter following %s completed turns', async (previousTurns) => {
+  let invocation = 0;
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = ++invocation;
+    options.onStream!({ type: 'tool_use', data: { id: 'reused-tool', tool: 'Read', input: { file_path: `turn-${index}.ts` } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'reused-tool', content: `result-${index}`, isError: false } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), sessionId: 'restored-session',
+      structuredOutput: { message: 'done', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const first = await open();
+  for (let index = 0; index < previousTurns; index++) {
+    await first.submit(`Previous turn ${index}`); await fixture.settled();
+  }
+  const previous = (await fixture.store.readToolHistories(id)).at(-1)!;
+  expect(previous.history.entries).toMatchObject([{ result: `result-${previousTurns}`, status: 'success' }]);
+  await fixture.close();
+  fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
+  const second = await open(); await second.submit('New turn after restart'); await fixture.settled();
+  const current = (await fixture.store.readToolHistories(id)).at(-1)!;
+  expect(current.operationId).not.toBe(previous.operationId);
+  expect(previous.generation).toBe(previousTurns);
+  expect(current.generation).toBe(1);
+  expect(current).toMatchObject({ finished: true, history: { entries: [{ toolId: 'reused-tool', result: `result-${previousTurns + 1}`, status: 'success' }] } });
+  expect(current.history.entries).toHaveLength(1);
+  const snapshot = await fixture.conversations.snapshot(id, { toolHistory: true });
+  const items = [];
+  for await (const item of snapshot.items) items.push(item);
+  snapshot.complete();
+  expect(items.find((item) => item.kind === 'tool_history' && item.history.operationId === current.operationId))
+    .toMatchObject({ kind: 'tool_history', history: current });
+  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('restored-session');
+  expect(call).toHaveBeenCalledTimes(previousTurns + 1);
+});
+
+it.each([false, true])('compares the saved system prompt fingerprint on the first turn after restart (changed: %s)', async (changed) => {
+  const directory = getGlobalConfigDir();
+  const call = vi.fn<ProviderAgent['call']>().mockImplementation(async () => ({
+    persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+    structuredOutput: { message: 'done', summary: null }, sessionId: `session-${call.mock.calls.length}`,
+  }));
+  const plan: ManagerConversationPlan = { ctx: { provider: makeProvider({ setup: () => ({ call }) }),
+    providerType: 'mock', model: undefined, lang: 'en' }, strategy: { systemPrompt: 'original system prompt' } };
+  vi.spyOn(conversationPlan, 'createManagerConversationPlan').mockImplementation(() => plan);
+  vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({
+    client: new Client({ name: 'fixture', version: 'test' }), servers: {}, async dispose() {},
+  });
+  let runtime = createConversationRuntime(directory);
+  resolveRuntime.mockImplementation((...args: Parameters<typeof runtime.resolve>) => runtime.resolve(...args));
+  try {
+    const first = await open();
+    await first.submit('first request');
+    await fixture.settled();
+    const saved = (await fixture.store.read(id))!.state.session;
+    expect(saved.sessionId).toBe('session-1');
+    expect(saved.contextKey).toBeDefined();
+    await fixture.close();
+    await runtime.close();
+    if (changed) plan.strategy.systemPrompt = 'changed system prompt';
+    runtime = createConversationRuntime(directory);
+    fixture = await conversationDaemon(directory, { resolve: resolveRuntime, async close() {} });
+    const next = await open();
+    await next.submit('request after restart');
+    await fixture.settled();
+    expect(call.mock.calls[1]![1].sessionId).toBe(changed ? undefined : 'session-1');
+    if (changed) expect(call.mock.calls[1]![0]).toContain('Business context (not approval):');
+    const restored = (await fixture.store.read(id))!.state.session;
+    expect(restored.sessionId).toBe('session-2');
+    if (changed) expect(restored.contextKey).not.toBe(saved.contextKey);
+    else expect(restored.contextKey).toBe(saved.contextKey);
+  } finally { await runtime.close(); }
+});
+
+it.each(['legacy', 'legacy-without-question', 'structured', 'unidentified', 'mismatched-request', 'director', 'quoted', 'invalid-payload', 'other-director', 'other-workspace', 'question-mismatch', 'wrong-time'] as const)(
+  'redelivers a saved %s event with its original answer or director provenance', async (format) => {
+    const directory = getGlobalConfigDir();
+    const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Workspace', repositoryDirectories: [] });
+    const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+    const targetId = conversationId(owner);
+    await fixture.conversations.ensure(owner);
+    await fixture.close();
+    const inquiryAnswer = { questionId: randomUUID(),
+      ...(format === 'legacy-without-question' ? {} : { question: 'Which goal should wait?' }),
+      answer: { text: 'X は待ってください。\nY は進めてください。', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' } };
+    const legacyText = `A person answered a standalone inquiry. ${JSON.stringify(inquiryAnswer)}`;
+    const isAnswer = ['legacy', 'legacy-without-question', 'structured'].includes(format);
+    const event = { kind: 'director_message' as const,
+      directorConversationId: format === 'other-director' ? 'other-director' : conversationId({ kind: 'daemon' }),
+      text: format === 'structured' ? 'A person answered a standalone inquiry.'
+        : format === 'director' ? 'Inspect the current work.' : format === 'quoted' ? `Quoted: ${legacyText}`
+          : format === 'invalid-payload' ? `${legacyText}\nPlease inspect.` : legacyText,
+      ...(format === 'structured' ? { inquiryAnswer } : {}),
+    };
+    const eventId = format === 'unidentified' ? randomUUID()
+      : `workspace-answer-${format === 'other-workspace' ? randomUUID() : workspace.id}-${format === 'question-mismatch' ? randomUUID() : inquiryAnswer.questionId}`;
+    const saved = { ...input(eventId, targetId, 'other'),
+      requestId: format === 'mismatched-request' ? randomUUID() : eventId,
+      source: 'director', occurredAt: format === 'wrong-time' ? '2026-11-04T00:00:00Z' : inquiryAnswer.answer.answeredAt, event,
+      operationId: randomUUID(), acceptedSequence: 1, lane: 'other' };
+    const eventsDirectory = join(directory, 'daemon-events');
+    await mkdir(eventsDirectory, { recursive: true, mode: 0o700 });
+    const eventPath = join(eventsDirectory, `${createHash('sha256').update(eventId).digest('hex')}.json`);
+    await writeFile(eventPath,
+      JSON.stringify({ state: 'queued', event: saved }), { mode: 0o600 });
+    fixture = await conversationDaemon(directory, { resolve: resolveRuntime, async close() {} });
+    await fixture.settled();
+    expect(execute).toHaveBeenCalledOnce();
+    const prompt = execute.mock.calls[0]![0].prompt;
+    const body = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
+    expect(body).toEqual(isAnswer ? { goalId: null, ...inquiryAnswer }
+      : { text: event.text, origin: 'unknown', directorConversationId: event.directorConversationId });
+    const stored = EventRecordSchema.parse(JSON.parse(await readFile(eventPath, 'utf8')));
+    expect(stored.state).toBe('settled');
+    expect(stored.event.event).toEqual(isAnswer ? { ...event, inquiryAnswer } : event);
+  },
+);
+
+it('preserves a newly accepted director message matching the legacy answer text through saving and restart', async () => {
+  const directory = getGlobalConfigDir();
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const targetId = conversationId(owner);
+  await fixture.conversations.ensure(owner);
+  const inquiryAnswer = { questionId: randomUUID(), question: 'Which goal should wait?',
+    answer: { text: 'Wait for X.', source: 'tui', answeredAt: '2026-11-03T00:00:00Z' } };
+  const event = { kind: 'director_message' as const, origin: 'director' as const, directorConversationId: conversationId({ kind: 'daemon' }),
+    text: `A person answered a standalone inquiry. ${JSON.stringify(inquiryAnswer)}` };
+  const eventId = randomUUID();
+  accepted(await fixture.dispatcher.accept({ ...input(eventId, targetId, 'other'), source: 'director', event }));
+  await fixture.settled();
+  expect(execute).toHaveBeenCalledOnce();
+  const prompt = execute.mock.calls[0]![0].prompt;
+  expect(JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2)))
+    .toEqual({ text: event.text, origin: event.origin, directorConversationId: event.directorConversationId });
+  const eventPath = join(directory, 'daemon-events', `${createHash('sha256').update(eventId).digest('hex')}.json`);
+  const saved = JSON.parse(await readFile(eventPath, 'utf8'));
+  expect(saved.state).toBe('settled');
+  expect(saved.event.event).toEqual(event);
+  expect(saved.result.event.event).toEqual(event);
+  await fixture.close();
+  fixture = await conversationDaemon(directory, { resolve: resolveRuntime, async close() {} });
+  const duplicate = await fixture.events.accept(saved.event);
+  expect(duplicate).toEqual({ kind: 'duplicate', state: 'settled', event: saved.event });
+});
+
+it.each(['legacy', 'without-question', 'workspace', 'reassigned-to-workspace', 'route-removed', 'wrong-hash', 'other-repository', 'other-workspace', 'question-mismatch', 'other-inbox-root', 'other-source', 'unidentified', 'mismatched-request', 'director-origin', 'other-director', 'invalid-payload'] as const)(
+  'restores an old standalone inbox answer through storage and restart (%s)', async (format) => {
+    const directory = getGlobalConfigDir();
+    const registration = await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+    const files = new DaemonPersistedFiles(directory);
+    const questionId = randomUUID();
+    const answer = { text: 'X は待ってください。\nY は進めてください。', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' };
+    await files.saveStandaloneInquiryAnswer(repository, questionId, 'Which goal should wait?', answer);
+    const inboxDirectory = await files.inboxDirectory(repository);
+    const [name] = await readdir(inboxDirectory);
+    const inbox = (await files.readInboxEvent(repository, name!))!;
+    expect(inbox).toMatchObject({ kind: 'answer', goalId: null, questionId, answer });
+    let targetId = id;
+    const targetRepository = format === 'other-repository' || format === 'other-workspace' ? join(directory, 'other-repository') : repository;
+    if (targetRepository !== repository) {
+      await mkdir(join(targetRepository, '.takt'), { recursive: true });
+      await writeFile(join(targetRepository, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
+      await registerProject({ globalConfigDirectory: directory, projectDirectory: targetRepository, command: 'manager', managerUsed: true });
+    }
+    if (format === 'other-repository') {
+      const record = conversationRecord(targetRepository);
+      await fixture.store.create(record);
+      targetId = record.id;
+    } else if (format === 'workspace' || format === 'other-workspace') {
+      const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Inbox destination', repositoryDirectories: [] });
+      await writeFile(join(directory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({
+        ...workspace, repositoryDirectories: [targetRepository],
+      }));
+      const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+      await fixture.conversations.ensure(owner);
+      targetId = conversationId(owner);
+    }
+    const otherInboxDirectory = format === 'other-inbox-root'
+      ? await new DaemonPersistedFiles(join(directory, 'other-config')).inboxDirectory(repository) : undefined;
+    const inquiryAnswer = { questionId: format === 'question-mismatch' ? randomUUID() : questionId,
+      ...(format === 'without-question' ? {} : { question: 'Which goal should wait?' }), answer };
+    const legacyEvent = { kind: 'director_message' as const,
+      directorConversationId: format === 'other-director' ? 'other-director' : conversationId({ kind: 'daemon' }),
+      text: `A person answered a standalone inquiry. ${JSON.stringify(inquiryAnswer)}${format === 'invalid-payload' ? '\nInspect this.' : ''}`,
+      ...(format === 'director-origin' ? { origin: 'director' as const } : {}),
+    };
+    await receiveInboxChange({ path: join(inboxDirectory, name!), removed: false, generation: 'answer', value: inbox,
+      target: { kind: 'inbox', targetId: repository, directory: inboxDirectory, generation: 'repository', conversationId: id } }, files, fixture.conversations, {
+      async accept(input) {
+        expect(input).toMatchObject({ source: 'run', requestId: input.eventId, conversationId: id, occurredAt: inbox.createdAt });
+        expect(input.eventId).toBe(`standalone-answer-${createHash('sha256').update(JSON.stringify([inboxDirectory, questionId])).digest('hex')}`);
+        // 旧 producer が保存した本文だけのイベントを、未処理のまま残す。
+        const eventId = format === 'unidentified' ? randomUUID() : format === 'wrong-hash' ? `standalone-answer-${'0'.repeat(64)}`
+          : otherInboxDirectory === undefined ? input.eventId
+            : `standalone-answer-${createHash('sha256').update(JSON.stringify([otherInboxDirectory, questionId])).digest('hex')}`;
+        const saved = { ...input, eventId, conversationId: targetId,
+          requestId: format === 'mismatched-request' ? randomUUID() : eventId,
+          source: format === 'other-source' ? 'director' as const : input.source,
+          event: legacyEvent, operationId: randomUUID(), acceptedSequence: 1, lane: 'other' as const };
+        expect(await fixture.events.accept(saved)).toEqual({ kind: 'stored' });
+        return { kind: 'accepted', eventId: saved.eventId, operationId: saved.operationId, acceptedSequence: saved.acceptedSequence };
+      },
+    });
+    const [eventName] = (await readdir(join(directory, 'daemon-events'))).filter((entry) => entry.endsWith('.json'));
+    const eventPath = join(directory, 'daemon-events', eventName!);
+    expect(JSON.parse(await readFile(eventPath, 'utf8'))).toMatchObject({ state: 'queued', event: { event: legacyEvent } });
+    await fixture.close();
+    if (format === 'reassigned-to-workspace') {
+      const owner = { kind: 'repository' as const, repositoryDirectory: repository };
+      expect(await new DaemonRouting(directory).resolve(owner)).toEqual(owner);
+      const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Reassigned destination', repositoryDirectories: [] });
+      await writeFile(join(directory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({
+        ...workspace, repositoryDirectories: [repository],
+      }));
+      expect(await new DaemonRouting(directory).resolve(owner)).toEqual({ kind: 'workspace', workspaceId: workspace.id });
+      expect((await fixture.store.read(id))!.state.assignment).toEqual(owner);
+    } else if (format === 'route-removed') {
+      await unlink(join(directory, 'projects', `${registration.locationId}.json`));
+      expect(await new DaemonRouting(directory).permits({ kind: 'repository', repositoryDirectory: repository }, id)).toBe(false);
+    }
+    fixture = await conversationDaemon(directory, { resolve: resolveRuntime, async close() {} });
+    await fixture.settled();
+    expect(execute).toHaveBeenCalledOnce();
+    const prompt = execute.mock.calls[0]![0].prompt;
+    const isAnswer = format === 'legacy' || format === 'without-question' || format === 'workspace';
+    expect(JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2))).toEqual(isAnswer ? { goalId: null, ...inquiryAnswer }
+      : { text: legacyEvent.text, origin: legacyEvent.origin ?? 'unknown', directorConversationId: legacyEvent.directorConversationId });
+    const settled = JSON.parse(await readFile(eventPath, 'utf8'));
+    expect(settled.state).toBe('settled');
+    expect(settled.event.event).toEqual(isAnswer ? { ...legacyEvent, inquiryAnswer } : legacyEvent);
+    expect(settled.result.event.event).toEqual(settled.event.event);
+    await fixture.close();
+    // 旧版で結果まで保存された本文も、同じ同一性検証を通して再読込する。
+    await writeFile(eventPath, JSON.stringify({ ...settled, event: { ...settled.event, event: legacyEvent },
+      result: { ...settled.result, event: { ...settled.result.event, event: legacyEvent } } }), { mode: 0o600 });
+    fixture = await conversationDaemon(directory, { resolve: resolveRuntime, async close() {} });
+    await fixture.settled();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(await fixture.events.accept(settled.event)).toEqual({ kind: 'duplicate', state: 'settled', event: settled.event });
+  },
+);
 
 it('returns acceptance for a second screen while the same conversation turn is paused', async () => {
   const entered = deferred<void>(); const release = deferred<void>();
@@ -116,7 +685,7 @@ it('starts each patrol with business context in a disposable session and then re
   await port.submit('continue the conversation');
   await fixture.settled();
   expect(call).toHaveBeenCalledTimes(3);
-  expect(call.mock.calls[2]![0]).toBe('continue the conversation');
+  expect(humanTurnText(call.mock.calls[2]![0])).toBe('continue the conversation');
   expect(call.mock.calls[2]![1].sessionId).toBe(before.session.sessionId);
 });
 

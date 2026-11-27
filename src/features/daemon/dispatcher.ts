@@ -9,6 +9,7 @@ import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/pro
 import { effect, reply, type DispatcherEffect, type DispatcherNotice, type Reply } from './dispatcherMailbox.js';
 import { createTurnQueues } from './turnQueues.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 export interface DispatcherDependencies {
   store: EventStore;
@@ -34,7 +35,7 @@ interface ActiveTurn {
   interruption: 'requested' | 'shutdown' | 'restart' | undefined;
   launchPending: boolean;
   requests: Map<number, Reply<DaemonStateReply>>;
-  progress: Map<number, Reply<void>>;
+  progress: Map<number, { reply: Reply<void>; message: ConversationProgress }>;
   phase: 'starting' | 'reading' | 'running' | 'settling';
   result?: TurnResult;
   save: 'waiting' | 'saving' | 'failed';
@@ -110,9 +111,9 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     return response.promise;
   }
 
-  snapshot(conversationId: string): Promise<ConversationSnapshot> {
+  snapshot(conversationId: string, request?: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot> {
     const response = reply<ConversationSnapshot>();
-    this.send({ kind: 'snapshot', conversationId, reply: response });
+    this.send({ kind: 'snapshot', conversationId, toolHistory: request?.toolHistory === true, capture: request?.capture, reply: response });
     return response.promise;
   }
 
@@ -173,8 +174,12 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         const response = active?.progress.get(notice.id);
         if (active === undefined || response === undefined) break;
         active.progress.delete(notice.id);
-        if (!notice.result.ok) this.failure('progress', active.event, notice.result.error, effects);
-        response.resolve();
+        if (!notice.result.ok) {
+          this.failure('progress', active.event, notice.result.error, effects);
+        }
+        response.reply.resolve();
+        const next = active.progress.keys().next().value;
+        if (next !== undefined) this.deliverProgress(active, effects, next);
         break;
       }
       case 'request': this.handleRequest(notice, effects); break;
@@ -195,18 +200,17 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         const { conversationId, reply: response } = notice;
         const id = ++this.nextId;
         this.ancillaryEffects.add(id);
-        effects.push(effect(() => this.dependencies.conversations.snapshot(conversationId),
-          (result) => ({ kind: 'snapshot_read', id, conversationId, reply: response, result })));
+        effects.push(effect(() => this.dependencies.conversations.snapshot(conversationId, { toolHistory: notice.toolHistory, capture: (snapshot) => {
+          snapshot.queuedMessageCount = this.queues.pending(conversationId).filter((event) => event.lane === 'human' && event.operationId !== snapshot.operationId).length;
+          notice.capture?.(snapshot);
+        } }), (result) => ({ kind: 'snapshot_read', id, conversationId, reply: response, result })));
         break;
       }
       case 'snapshot_read': {
         this.ancillaryEffects.delete(notice.id);
         if (!notice.result.ok) notice.reply.reject(notice.result.error);
         else {
-          const active = this.active.get(notice.conversationId);
-          const running = active?.phase === 'settling' ? undefined : active;
-          notice.reply.resolve({ ...notice.result.value, operationId: running?.turn.operationId ?? null, generation: running?.turn.generation ?? null,
-            queuedMessageCount: this.queues.pending(notice.conversationId).filter((event) => event.lane === 'human' && event.operationId !== active?.turn.operationId).length });
+          notice.reply.resolve(notice.result.value);
         }
         break;
       }
@@ -379,7 +383,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       const turn = { conversationId: event.conversationId, operationId: event.operationId, generation: ++this.generation };
       this.active.set(event.conversationId, this.newTurn(event, turn));
       this.queues.markStarted(event.eventId);
-      effects.push(effect(() => this.dependencies.store.markStarted(event.eventId, turn), (result) => ({ kind: 'start_saved', turn, result })));
+      effects.push(effect(async () => { await this.dependencies.conversations.begin(turn); await this.dependencies.store.markStarted(event.eventId, turn); }, (result) => ({ kind: 'start_saved', turn, result })));
     }
   }
 
@@ -404,7 +408,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     if (notice.kind === 'start_saved') {
       active.phase = 'reading';
       effects.push(effect(async () => {
-        const snapshot = await this.dependencies.conversations.snapshot(event.conversationId);
+        const snapshot = await this.dependencies.conversations.snapshot(event.conversationId, { toolHistory: false });
         try { return snapshot.turnState; } finally { snapshot.cancel(); }
       }, (result) => ({ kind: 'turn_state_read', turn, result })));
     } else if (notice.kind === 'turn_state_read') {
@@ -423,15 +427,24 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       const outcome = active.interruption !== undefined && message.outcome.kind !== 'interrupted' ? { kind: 'interrupted' as const } : message.outcome;
       active.finishReply = response;
       this.finish(active, outcome, effects);
-    } else if (active.interruption !== undefined || active.event.event.kind === 'patrol' && typeof message.message === 'string') {
+    } else if (active.interruption !== undefined || active.event.event.kind === 'patrol'
+      && (typeof message.message === 'string' || message.message.kind === 'turn_text')) {
       // 見回りは完了結果だけを表示し、後から中断したターンの途中結果を残さない。
       response.resolve();
     } else {
       const id = ++this.nextId;
-      active.progress.set(id, response);
-      const { turn } = active;
-      effects.push(effect(() => this.dependencies.conversations.progress(turn, message.message), (result) => ({ kind: 'progress_delivered', turn, id, result })));
+      const waiting = active.progress.size > 0;
+      active.progress.set(id, { reply: response, message: message.message });
+      if (!waiting) this.deliverProgress(active, effects, id);
     }
+  }
+
+  private deliverProgress(active: ActiveTurn, effects: DispatcherEffect[], id: number): void {
+    const { message } = active.progress.get(id)!;
+    const { turn, abort } = active;
+    effects.push(effect(async () => {
+      if (!abort.signal.aborted) await this.dependencies.conversations.progress(turn, message, abort.signal);
+    }, (result) => ({ kind: 'progress_delivered', turn, id, result })));
   }
 
   private handleRequest(notice: Extract<DispatcherNotice, { kind: 'request' }>, effects: DispatcherEffect[]): void {
@@ -459,9 +472,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       && event.kind === 'human_command' && event.command.kind === 'message'
       && (event.command.text.trim() !== '/verify' || active.turn.conversationId === conversationId({ kind: 'daemon' }))) {
       outcome = { ...outcome, change: {
-        // 子の変更結果がなくても、保存時に最新の版へ載せ直す本文だけの変更を確定する。
+        // 子の変更結果がなくても、本文と画像参照を保存時に最新の版へ載せ直す。
         operationId: active.turn.operationId, expectedVersion: 0, ...outcome.change,
         interruptedMessage: event.command.text,
+        ...(event.command.imageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: event.command.imageAttachmentIds }),
       } };
     }
     active.phase = 'settling';
@@ -472,8 +486,8 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
 
   private beginSettlement(active: ActiveTurn, effects: DispatcherEffect[]): void {
     if (active.phase !== 'settling' || active.save !== 'waiting' || active.requests.size > 0 || active.progress.size > 0) return;
+    if (active.result === undefined) throw new Error('Missing turn result');
     const result = active.result;
-    if (result === undefined) throw new Error('Missing turn result');
     active.save = 'saving';
     const attempt = ++active.saveAttempt;
     const { turn, event } = active;
@@ -531,7 +545,9 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   private handleControl(notice: Extract<DispatcherNotice, { kind: 'control' }>, effects: DispatcherEffect[]): void {
     const { event, response } = notice;
     if (event.kind === 'stop') {
-      if (this.shutdown !== undefined) { response.reply = this.shutdown.reply; return; }
+      if (this.shutdown !== undefined && (this.shutdown.phase !== 'closed' || this.shutdown.errors.length === 0)) {
+        response.reply = this.shutdown.reply; return;
+      }
       this.shutdown = { reply: response.reply, phase: 'runner', errors: [] };
       for (const active of this.active.values()) if (active.phase !== 'settling') this.interrupt(active, 'shutdown', effects);
       effects.push(effect(() => this.dependencies.runner.close(), (result) => ({ kind: 'runner_closed', result })));

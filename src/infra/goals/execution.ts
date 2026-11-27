@@ -1,11 +1,13 @@
 import { GoalStore } from './store.js';
-import { GoalIdSchema, type Goal } from './schema.js';
+import { GoalIdSchema, type Goal, type GoalExecutionOrigin } from './schema.js';
 import { transitionGoalExecution } from './state.js';
 import { withdrawPendingGoalQuestions } from './questions.js';
 import { deleteGoalEvents, saveManagerEvent } from './events.js';
 
 export async function setGoalExecutionStatus(
   cwd: string, goalId: string, executionStatus: Goal['executionStatus'], signal: AbortSignal,
+  // 発信元を持たない呼び出しは、人の操作として扱わない。
+  origin?: GoalExecutionOrigin,
 ): Promise<Goal> {
   GoalIdSchema.parse(goalId);
   const store = new GoalStore(cwd);
@@ -18,7 +20,7 @@ export async function setGoalExecutionStatus(
   });
   if (executionStatus === 'aborted') deleteGoalEvents(cwd, goalId);
   if (executionStatus === 'active' && previous.executionStatus === 'paused') {
-    saveManagerEvent(cwd, { kind: 'resumed', goalId });
+    saveManagerEvent(cwd, { kind: 'resumed', goalId, ...(origin === undefined ? {} : { origin }) });
   }
   return goal;
 }

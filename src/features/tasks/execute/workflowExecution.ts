@@ -1,3 +1,5 @@
+import { isQuietMode } from '../../../shared/context.js';
+import { registerManagerImageRun } from '../managerImageAttachments.js';
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
@@ -7,6 +9,7 @@ import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-re
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
+import { resolveTaskRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
@@ -77,6 +80,7 @@ import {
   reportWorkflowFailure,
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { stageGoalSpecificationsForExecution } from './goalSpecificationContext.js';
 import { persistDeliveredLiveInstructions } from './liveInterventionPersistence.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
 import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
@@ -91,6 +95,7 @@ import { LiveInterventionFileStore } from '../../../infra/workflow/live-interven
 import { createOutputFns } from './outputFns.js';
 import { validateWorkflowReportReferences } from '../../../core/workflow/instruction/report-reference-validation.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { closeOpenCodeServersForExternalDirectories } from '../../../infra/opencode/server-pool.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -231,17 +236,16 @@ async function executeWorkflowInternal(
     ? { prExecutionContext: options.prExecutionContext, prGitOperations: options.prGitOperations }
     : await resolveTaskPrExecutionContext({ ...options, cwd, prContext, gitProvider: runContext?.gitProvider });
   const parentRunPid = process.pid;
-  const liveWorkflowCallResolver = createWorkflowCallResolver(
-    createWorkflowExecutionContext(
-      workflowConfig,
-      options.projectCwd,
-      options.workflowResourceRoot,
-      options.workflowSystemCommandsPolicy,
-    ),
-  );
-  const preparedBundle = prepareWorkflowExecutionBundle({
+  const preparedBundle = options.preparedWorkflowBundle ?? prepareWorkflowExecutionBundle({
     rootWorkflow: workflowConfig,
-    workflowCallResolver: liveWorkflowCallResolver,
+    workflowCallResolver: createWorkflowCallResolver(
+      createWorkflowExecutionContext(
+        workflowConfig,
+        options.projectCwd,
+        options.workflowResourceRoot,
+        options.workflowSystemCommandsPolicy,
+      ),
+    ),
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
     centralExecution: options.runPathsDirectory !== undefined,
@@ -275,6 +279,7 @@ async function executeWorkflowInternal(
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
+  let goalSpecificationPaths: string[];
   let executionBundle: ReturnType<typeof loadWorkflowExecutionBundle>;
   let runtimeReportDiagnostics: ReturnType<typeof validateWorkflowReportReferences>;
   const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
@@ -297,8 +302,10 @@ async function executeWorkflowInternal(
       throw new Error(errors.map(({ message }) => message).join('\n'));
     }
     if (options.taskSpec !== undefined) {
+      await registerManagerImageRun(options.taskSpec.sourceTaskDir, activeRun.runPaths);
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
+    goalSpecificationPaths = stageGoalSpecificationsForExecution(options.projectCwd, options.goalId, activeRun.runPaths);
     bootstrap = await createWorkflowExecutionBootstrap(
       bundledWorkflowConfig,
       task,
@@ -350,13 +357,19 @@ async function executeWorkflowInternal(
   const terminalPayloads = createWorkflowTerminalPayloadFactory(
     terminalPublicationContext,
   );
-  const liveIntervention = cwd === options.projectCwd
+  const liveIntervention: LiveInterventionFileStore | undefined = cwd === options.projectCwd
     ? undefined
     : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug, (instructions) => {
       persistDeliveredLiveInstructions(options.projectCwd, cwd, options.taskSpec, activeRun.runPaths, instructions);
+      if (options.onLiveInterventionDelivery !== undefined) {
+        const context = liveIntervention!.read().lastDelivery;
+        if (context === undefined) throw new Error('Live intervention delivery has no saved context');
+        options.onLiveInterventionDelivery(instructions.map((instruction) => instruction.instructionId), context);
+      }
     });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
+  let openCodeExternalDirectories: readonly string[] | undefined;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
   let cacciaFailure: { step: string; reason: string } | undefined;
   let activeStep: WorkflowStep;
@@ -437,16 +450,18 @@ async function executeWorkflowInternal(
         internalController: executionControl,
         getEngine: () => engine,
       });
-      const childProcessEnv = resolveNestedChildProcessEnv(
-        bootstrap.observability,
-        buildChildProcessEnv(),
-      );
+      const ambientEnv = buildChildProcessEnv();
+      const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, ambientEnv);
+      // Resolved for the run; each workflow's `repository_identity` decides whether it is passed on.
+      const repositoryIdentityEnv = resolveTaskRepositoryIdentityEnv(cwd, options.projectCwd, ambientEnv);
       const gitSafety = prExecution.prExecutionContext
         ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
         : {};
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
         onStream: handleProviderStream,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        streamQuiet: isQuietMode(),
         onProviderStream: (context, event) => {
           bootstrap.providerEventLogger.logEvent(context, event);
         },
@@ -467,6 +482,7 @@ async function executeWorkflowInternal(
         onAskUserQuestion: options.onAskUserQuestion ?? createDenyAskUserQuestionHandler(),
         ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
         projectCwd: options.projectCwd,
+        goalSpecificationPaths,
         ...(liveIntervention === undefined ? {} : {
           liveIntervention,
           onLiveInterventionWarning: (count: number) => {
@@ -477,6 +493,7 @@ async function executeWorkflowInternal(
         observabilityRunId: bootstrap.runSlug,
         sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
         childProcessEnv,
+        repositoryIdentityEnv,
         language: options.language,
         provider: bootstrap.currentProvider,
         providerSource: bootstrap.currentProviderSource,
@@ -561,6 +578,7 @@ async function executeWorkflowInternal(
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
       });
+      openCodeExternalDirectories = engine.openCodeExternalDirectories;
 
       engine.on('step:start', (startedStep: WorkflowStep, _iteration, _instruction, _provider, _workflowName,
         _resumeStepName, _stepIteration, stack) => {
@@ -605,6 +623,8 @@ async function executeWorkflowInternal(
         out: bootstrap.out,
         prefixWriter: bootstrap.prefixWriter,
         displayRef: bootstrap.displayRef,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        flushStream: bootstrap.flushStream,
         handlerRef: bootstrap.handlerRef,
         usageEventLogger: bootstrap.usageEventLogger,
         analyticsEmitter: bootstrap.analyticsEmitter,
@@ -688,6 +708,7 @@ async function executeWorkflowInternal(
       }
     }
   } finally {
+    captureError(terminalizationErrors, () => bootstrap.providerEventLogger.flush());
     let committedPublication: WorkflowTerminalPublicationPayload | undefined;
     if (runExecution !== undefined || primaryError !== undefined) {
       if (liveIntervention !== undefined && !liveInterventionTerminalizationOwned) {
@@ -747,8 +768,15 @@ async function executeWorkflowInternal(
       finalizationIssues.push(...eventBridge.getFinalizationIssues());
     }
     captureError(cleanupErrors, () => bootstrap.warnIfAutoStrategyUnused());
+    captureError(cleanupErrors, () => bootstrap.flushStream());
     captureError(cleanupErrors, () => bootstrap.prefixWriter?.flush());
     captureError(cleanupErrors, () => abortHandler?.cleanup());
+    const externalDirectories = openCodeExternalDirectories;
+    if (externalDirectories !== undefined) {
+      await captureAsyncError(cleanupErrors, async () => {
+        await closeOpenCodeServersForExternalDirectories(externalDirectories);
+      });
+    }
     await captureAsyncError(
       cleanupErrors,
       () => bootstrap.observabilityHandle.shutdown(),

@@ -33,7 +33,7 @@ function cleanupBranchIfPresent(task: TaskListItem, projectDir: string, options?
     }
     return true;
   }
-  if (!task.branch) {
+  if (task.data?.worktree === false || !task.branch) {
     return true;
   }
   const branchOptions: [] | [DeleteBranchOptions] = options === undefined ? [] : [options];
@@ -42,6 +42,7 @@ function cleanupBranchIfPresent(task: TaskListItem, projectDir: string, options?
 
 export function deleteTaskResources(task: TaskListItem, options?: DeleteBranchOptions): boolean {
   if (task.kind === 'running') throw new Error(`Cannot delete running task "${task.name}"`);
+  if (task.remoteAssignment !== undefined) throw new Error('Remove remote tasks through takt_remove_goal_task to acknowledge workspace cleanup');
   const projectDir = getProjectDir(task);
   return new TaskRunner(projectDir).deleteTaskWithCleanup(task.name, task.kind,
     () => cleanupBranchIfPresent(task, projectDir, options));

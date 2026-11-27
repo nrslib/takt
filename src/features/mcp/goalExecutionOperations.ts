@@ -16,7 +16,7 @@ async function changeGoalExecution(
     const parsed = executionStatus === 'aborted' ? abortGoalInputSchema.parse(input) : goalWriteInputSchema.parse(input);
     assertCwdAllowedByMcpRoot(parsed.cwd, deps.allowedProjectRoot);
     signal.throwIfAborted();
-    const goal = await setGoalExecutionStatus(parsed.cwd, parsed.goalId, executionStatus, signal);
+    const goal = await setGoalExecutionStatus(parsed.cwd, parsed.goalId, executionStatus, signal, 'manager');
     if (executionStatus === 'aborted') new TaskRunner(parsed.cwd).invalidatePendingGoalTasks(goal.id);
     if (executionStatus === 'active') {
       signal.throwIfAborted();

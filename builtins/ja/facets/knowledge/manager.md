@@ -14,7 +14,7 @@
 
 タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
-標準の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.workflow のレビューや CI 待ちは、定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
+既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、CodeRabbit への対応、CI 待ちを担当します。競合のない同期ではフルレビューを呼ばず、AIで競合を解消した場合は初回・再同期ともレビューと修正を経てからpushします。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
 manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 
@@ -25,7 +25,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 ゴール操作は対象の cwd と goalId を使います。各道具の引数と返却値は公開された定義に従います。
 
 - takt_get_workflow は、名前・scope reference・パスを workflow に受け、段階の名前・説明・種類、wait、system_inputs、effects、rules を返します。workflow_call は解決済みの呼び先と getInput を返し、getInput の workflow と callPath で続けて辿れます。応答は 64 KiB 以内で、省略部分は offset / limit で取得できます。
-- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。
+- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。runtimeAssignment は省略でき、そのタスクの runtime assignment を選びます。指定する名前は、takt_list_runtime_assignments が返した名前に限ります。
 - takt_requeue_goal_task は failed / exceeded を保存位置から続けます。failed は startStep も指定でき、exceeded は保存位置からの再開を使います。保存位置の利用可否、理由、開始候補が応答に返ります。
 - takt_retry_goal_task は指示を更新し、同じ failed タスクを pending に戻します。
 - takt_remove_goal_task は理由を受け、pending の取消や停止済み・取り込み済み成果の片付けを行います。一時停止中の pending も取消対象です。未取り込みの完了成果の破棄には discardUnmerged: true を使います。実行中タスクの停止には takt_stop_goal_task を使います。cleanup の失敗は操作結果に現れます。
@@ -38,9 +38,16 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 
 通常タスクの成果はゴールブランチへ集め、そこから取り込み先へ反映します。
 
-takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映の awaiting_merge では、同じ SHA の再申請でも、渡された summary と現在の差分から完成記録を作り直し、既存 PR の本文も更新します。awaiting_merge で humanChecks を省略した場合は、保存済みの完成記録と SHA が同じときに限り保存値を使います。PR を準備できなかった場合は、保存済みの pullRequest が外れるか、エラーが返ります。申請し直すのは、準備の失敗に対応するときか、完成の根拠を訂正するときです。ゴールブランチの現在の先端を確かめて検証し、その SHA を expectedSha に、証拠付きの報告を summary に渡します。既存 PR の本文の読み取りや更新だけが失敗した場合は、保存済みの PR が残り、pullRequestBodyError が返ります。
+takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映なら、PR 保存済みの同じ SHA の再申請で completion の summary と PR 本文を更新できます。PR 未保存で準備を再試行する場合、保存済み humanChecks を優先します。入力した値は未保存欄の補完にだけ使い、その場合は保存済み summary を維持します。humanChecks を省略すれば保存済み値を再利用し、入力 summary を保存できます。保存値も入力値もない場合は、PR 準備前にエラーになります。再申請前にゴールブランチ先端を確認して検証し、保存済み goalSha から進んでいれば新しい先端を確認し直し、その expectedSha、summary、humanChecks で再申請します。既存 PR 本文の読み取りや更新だけが失敗した場合、保存 PR は保持され pullRequestBodyError が返ります。
 
-takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge-prepare、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
+保存済みの完成記録を訂正・確認する方法は、申請済み SHA と現在のゴールブランチ先端に応じて選びます。
+
+- 再申請前にゴールブランチ先端を確認して検証します。先端が申請済み SHA から進んでいれば、新しい先端を確認し直し、新しい expectedSha、summary、humanChecks で takt_complete_goal に再申請します。申請済み SHA が取り込み先に反映済みの場合も同じです。
+- 先端が申請済み SHA のままで、その SHA が取り込み先に未反映の場合は、保存済みの根拠を訂正するために takt_reopen_goal に理由を渡して created へ戻し、確認済み expectedSha、訂正済み summary、humanChecks で takt_complete_goal に再申請します。
+- 申請済み SHA が取り込み先に反映済みで、現在のゴールブランチ先端も同じ SHA の場合は、同じ expectedSha と訂正済み summary で takt_complete_goal を呼び、根拠を訂正します。反映済み SHA に takt_reopen_goal は使いません。
+- 申請済み SHA が取り込み先に反映済みで、根拠の訂正が不要な場合は、takt_check_goal_completion で完成を確認します。
+
+takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge.prepare_workflow（既定は merge-prepare）、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
 
 マージ用タスクは PR ブランチへ直接 push します。手元のゴールブランチが祖先なら fast-forward し、分岐やチェックアウト中の作業コピーは元の内容を保持して結果に記録します。workflow が COMPLETE で終わり、PR が準備段階にある場合は、成功・prepared として届きます。
 
@@ -54,16 +61,16 @@ takt_check_goal_completion は保存 PR の head/base とマージ状態を照�
 
 人は TUI の Ctrl+R や Slack の問い合わせスレッドで回答し、回答の出所と型が保存されます。旧承認記録は過去の記録の参照・取り下げに使われます。完成・中止時は問い合わせが閉じ、一時停止時は保持されます。
 
-TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。summary を持つ応答から登録案が表示されます。
+TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。通常の相談では登録案を自動生成せず、合意が整ったら /make-goal を案内します。/make-goal を明示実行した応答の summary だけが承認待ちの登録案になります。
 
 manager.notifications は question / awaiting_merge / completed / progress / blocked / custom を種類ごとに切り替えます。問い合わせの回答画面は保存済みの質問から利用できます。通常画面は起動後の通知の冒頭を表示し、全文や過去の通知はゴール記録から参照できます。通知の配送結果はログに保存されます。
 
 ## 見張りと仕様の検証
 
-見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。
+見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、currentStepPath、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。currentStep は run の記録上の現在 step で、通常はトップレベルの step です。ただし、トップレベルの parallel の step の分岐が子の workflow の step を開始すると、その分岐の step の名前になります。currentStepPath はトップレベルの workflow から実行中の末端の step までの workflow と step を順に並べ、最後の要素だけが startedAt と executionCount を持ちます。子の workflow を呼ぶ step の実行中は、その step が途中の要素になり、子の workflow の step が末端になります。parallel の step の実行中は parallel の step 自体が末端で、分岐の step は含みません。例外として、currentStep がトップレベルの parallel の step の分岐を指し、その parallel の step の今回の実行で分岐が最後に開始した step が実行中のときは、parallel の step、その分岐の step、分岐が呼んだ子の workflow の step の順に並び、ほかの分岐は含みません。分岐のその step が完了した後や分岐の子の workflow が終わった後は、分岐が次の step を開始するまで parallel の step 自体が今回の実行の開始の値を持って末端になります。完了した step を実行中とは説明しません。loop monitor の判定中は、判定の step（`_loop_judge_` で始まる名前）が判定を起こした step（parallel の step を含む）に代わって同じ workflow の末端になり、トップレベルでの判定中も currentStep は判定を起こした step のままです。currentStepStartedAt と currentStepExecutionCount はこの末端の step の値で、currentStep の値ではありません。executionCount は、最新のログで同じ呼出箇所の末端の step が開始された回数です。進捗は「takt-default の develop の中で、development-core の write_tests を2回目として実行中」のように、末端の workflow と step に実行回数を対応させて説明します。executionCount が 0 のときは、ログはあるものの現在の step の開始がまだ記録されていない状態で、currentStepPath は currentStep だけを持ちます。これを0回目とは説明せず、開始の記録待ちとして扱います。executionCount が null のときはログに開始記録がなく不明で、currentStepPath が null なのは run metadata に currentStep の記録がないことを意味し、run で step が一度も開始されていないことを意味するわけではありません。
 
 取り込み先との衝突は pr_conflicting で届きます。同じ衝突の通知は状態の変化に対応し、解消後の再発も通知対象です。mergeable の UNKNOWN は判定保留の状態です。
 
-specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。PR の最終レビュー用タスクには保存仕様が自動で渡ります。
+specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。保存仕様は PR の最終レビューを含むゴールの各タスクの run に TAKT がファイルで自動的に渡し、各ステップの指示にパスを知らせます。指示書には仕様の全文を貼らず、そのタスクが担当する要件の識別子（受け入れ条件の ID など）を書きます。
 
 形式仕様が有効な場合、人が TUI または Slack の会話で /verify を送ると、現在の合意から仕様を生成して検査し、結果を同じ会話へ返します。保存済みのゴールと仕様は検証前の内容で保持されます。形式仕様の設定に応じて、検証の利用可否が応答に返ります。

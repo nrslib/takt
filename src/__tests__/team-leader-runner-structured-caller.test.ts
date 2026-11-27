@@ -127,6 +127,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
   });
 
   it('should delegate decomposition and route provider tool activity through the leader deadline', async () => {
+    const openCodeExternalDirectories = ['/tmp/project/.takt/runs/sample/context'];
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
       status: 'done',
@@ -208,9 +209,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => '/tmp/project/.takt/runs/sample/reports',
       () => 'ja',
       () => 'workflow',
-      undefined,
-      undefined,
-      undefined,
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
       undefined,
       deadlineContext.getAbortSignal,
       deadlineContext.recordActivity,
@@ -220,6 +221,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({
           cwd: '/tmp/project',
           failureDir: '/tmp/project/.takt/runs/sample/failures',
@@ -233,6 +235,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           );
           return {
             failureDir: '/tmp/project/.takt/runs/sample/failures',
+            openCodeExternalDirectories,
             onStream: leaderProviderStream,
             onActivity: leaderOnActivity,
           };
@@ -343,6 +346,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
+        openCodeExternalDirectories,
         inspectTools: ['read', 'glob'],
         abortSignal: leaderAbortController.signal,
         onStream: leaderProviderStream,
@@ -368,6 +372,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
+        openCodeExternalDirectories,
         onStream: leaderProviderStream,
         onActivity: leaderOnActivity,
       }),
@@ -584,6 +589,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     };
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({ failureDir: '/tmp/project/failures' }),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -695,6 +701,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     };
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -921,6 +928,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const createCompanionDiffBaseline = vi.fn().mockReturnValue(undefined);
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -1072,6 +1080,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -1172,6 +1181,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -1300,6 +1310,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     };
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -1384,6 +1395,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => '.takt/runs/sample/reports',
       () => 'ja',
       () => 'workflow',
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
     const runner = new TeamLeaderRunner({
       optionsBuilder,
@@ -1483,6 +1497,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => '.takt/runs/sample/reports',
       () => 'ja',
       () => 'workflow',
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
     const runner = new TeamLeaderRunner({
       optionsBuilder,
@@ -1572,6 +1589,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         provider: 'opencode',
         model: 'opencode/zai-coding-plan/glm-5.1',
       }),
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
     } as unknown as OptionsBuilder;
     const step: WorkflowStep = {
@@ -1601,7 +1619,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         workflowName: 'workflow',
         iteration: 1,
       },
-      () => 'member instruction',
+      () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction', reviewScope: { kind: 'not_a_git_repository' } }),
     );
 
     expect(updatePersonaSession).not.toHaveBeenCalled();
@@ -1629,6 +1647,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       const updatePersonaSession = vi.fn();
       const optionsBuilder = {
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
       } as unknown as OptionsBuilder;
       const step: WorkflowStep = {
@@ -1654,7 +1673,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         updatePersonaSession,
         undefined,
         { enabled: false, workflowName: 'workflow', iteration: 1 },
-        () => 'member instruction',
+        () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction', reviewScope: { kind: 'not_a_git_repository' } }),
         undefined,
         controller.signal,
       )).rejects.toBe(cancellation);
@@ -1680,6 +1699,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
     const optionsBuilder = {
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
     } as unknown as OptionsBuilder;
     const step: WorkflowStep = {
@@ -1701,7 +1721,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       vi.fn(),
       undefined,
       { enabled: true, workflowName: 'workflow', iteration: 1 },
-      () => 'member instruction',
+      () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction', reviewScope: { kind: 'not_a_git_repository' } }),
       undefined,
       controller.signal,
     )).rejects.toBe(cancellation);
@@ -1714,6 +1734,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const removeEventListener = vi.spyOn(controller.signal, 'removeEventListener');
     const optionsBuilder = {
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
     } as unknown as OptionsBuilder;
     const step: WorkflowStep = {
@@ -1736,7 +1757,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       vi.fn(),
       undefined,
       { enabled: false, workflowName: 'workflow', iteration: 1 },
-      () => 'member instruction',
+      () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction', reviewScope: { kind: 'not_a_git_repository' } }),
       undefined,
       controller.signal,
       {
@@ -1768,6 +1789,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       mockExecuteAgent.mockResolvedValue(initialResponse);
       const optionsBuilder = {
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
       } as unknown as OptionsBuilder;
       const step: WorkflowStep = {
@@ -1797,7 +1819,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         vi.fn(),
         undefined,
         { enabled: false, workflowName: 'workflow', iteration: 1 },
-        () => 'member instruction',
+        () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction', reviewScope: { kind: 'not_a_git_repository' } }),
         undefined,
         undefined,
         {
@@ -1868,6 +1890,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const buildAgentOptions = vi.fn().mockReturnValue({ cwd: '/tmp/project' });
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -1998,6 +2021,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({
           workflowMeta: {
@@ -2128,6 +2152,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => '.takt/runs/sample/reports',
       () => 'ja',
       () => 'takt-default',
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
 
     const runner = new TeamLeaderRunner({
@@ -2245,6 +2272,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
@@ -2395,6 +2423,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     }));
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -2515,6 +2544,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     }));
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -2634,6 +2664,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     }));
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -2749,6 +2780,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       const runner = new TeamLeaderRunner({
         optionsBuilder: {
+          buildProgressNotesRequest: vi.fn(),
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: worktreeDir }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -2867,6 +2899,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: projectDir }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -2987,6 +3020,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: projectDir }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -3101,6 +3135,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -3228,6 +3263,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const updatePersonaSession = vi.fn();
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -3350,6 +3386,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
+        buildProgressNotesRequest: vi.fn(),
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -3443,6 +3480,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     ) {
       return new TeamLeaderRunner({
         optionsBuilder: {
+          buildProgressNotesRequest: vi.fn(),
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
@@ -3629,6 +3667,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     } = {}): TeamLeaderRunner {
       return new TeamLeaderRunner({
         optionsBuilder: {
+          buildProgressNotesRequest: vi.fn(),
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project', language: 'en' }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),

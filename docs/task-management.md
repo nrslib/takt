@@ -164,6 +164,8 @@ MCP clients can enqueue tasks, inspect task/run state, and send additional instr
 
 ### Parallel Execution (Concurrency)
 
+This section covers parallel execution on one machine. To distribute manager goal tasks automatically executed by the daemon across machines, see the [worker pool deployment guide](./worker-pool.md). `takt run`, `takt watch`, and interactive mode do not require worker registration or a resident daemon.
+
 Both `takt run` and `takt watch` use the same worker pool and run sequentially by default (`concurrency: 1`). Configure parallel execution in `~/.takt/config.yaml`:
 
 ```yaml
@@ -177,7 +179,7 @@ When concurrency is greater than 1, TAKT uses a worker pool that:
 - Polls for newly added tasks at the configured interval
 - Picks up new tasks as workers become available
 - Displays color-coded prefixed output per task for readability
-- Supports graceful shutdown on Ctrl+C (waits for in-flight tasks to complete)
+- Stops claiming new tasks on Ctrl+C. `takt run` interrupts in-flight tasks and waits for execution and cleanup to finish; `takt watch` waits for them to finish without interruption
 
 ### Interrupted Task Cleanup
 
@@ -231,7 +233,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | **Pull from remote** | Pull the latest changes from remote origin (fast-forward only) |
 | **Try merge** | Squash merge (stages changes without committing, for manual review) |
 | **Merge & cleanup** | Squash merge and delete the branch |
-| **Delete** | Discard all changes and delete the branch |
+| **Delete** | Remove the task and its worktree and delete the branch; uncommitted changes in a removed worktree or clone are discarded. Tasks with `worktree: false`, and tasks with `worktree` set to `true` or a path string but no recorded `worktree_path`, keep their branch |
 
 ### Actions for Failed Tasks
 
@@ -315,7 +317,11 @@ When you select **Retry** on a failed task, TAKT:
 
 The Resume row uses a short label such as `Resume failed position: "review" (default)` with a dimmed path description directly below it. The path starts with the root workflow, groups each call as `"call step" → "child workflow"`, and ends with the failed step, for example `"takt-default" > "develop" → "development-core" > "review"`. At 80 columns or wider, the description wraps to show the full path. At 60 columns, only the description is truncated from the end, preserving the root side, while the failed step and default marker remain visible in the label. The Web UI dropdown and the `Selected start position: …` confirmation log include both the label and the full path.
 
-After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
+When Retry, Requeue, or Instruct starts at a later step (`start_step` or a saved resume point), TAKT restores the complete system contexts, effect results, and AI structured outputs from immediately before that occurrence of the step started in the source run. Saved resume points identify the occurrence; selections such as `start_step` without an occurrence use the latest start of that step. If the selected occurrence has not started, TAKT uses the last saved state. In loops, this includes previous-iteration results that existed at that moment; TAKT does not infer dependencies to discard results. A new run saves the state restored for this resume before its first step, then saves only the pre-start and post-step states of occurrences it starts itself. It does not copy occurrence snapshots from the source run. A later resume pointing to an occurrence not yet started in the new run uses that run’s last saved state. The latest state is stored in `workflow-results.json`, and each occurrence’s pre-start state is stored in a separate file under `workflow-results/`, without rewriting the full history. An artifact is created even when the results are empty. Save or inheritance failures emit warnings and execution continues. Failed occurrences remain recorded in subsequent saves, distinguishing them from occurrences that have not started. Resuming a failed occurrence warns and starts with empty results instead of substituting results from another point in time. After a failed save, TAKT attempts to write an invalid state and, if that fails, to remove the old artifact. When invalidation or removal succeeds, resuming from that state warns and starts with empty results instead of substituting older saved values. If both invalidation and removal fail, TAKT also warns about that failure, but an old artifact may remain. Earlier input collection, effects, and AI steps are not replayed automatically. Later steps still fetch current state as usual. When the parent workflow name matches and the same call instance continues, only the child state restored for the selected resume position is inherited as that child’s initial snapshot. Another retry can use this state even if execution fails before entering the child. The child’s past occurrence snapshots are not copied. New calls and loop iterations do not copy a previous child's results. Changing the parent workflow name also prevents inheriting child results. Older runs without this snapshot format emit a warning and resume with empty results as before. A step that references an unavailable earlier result fails with a reference error at that step.
+
+Report participation records and call records inherited on resume are matched by workflow name, step name, and call position. Records at the same position can be used even when the definition's content hash has changed. Unmatched or conflicting records and inputs from incomplete calls are excluded with warnings, and execution continues from the specified position. When resuming partway through a child workflow, reports from earlier steps that were not re-executed can also be passed to subsequent steps after the child completes. If the corresponding body cannot be found, TAKT warns and omits that input; it does not substitute a report with the same name from another call position. After the producer step is re-executed in the current run, the usual conditions that check that execution's completion and output apply.
+
+Saved report references also match the execution instance of every workflow_call in the call path. References from the same call instance remain available after a definition's content hash changes; references from a different instance are not used. Older references whose call instances cannot be identified are excluded with a warning, and execution continues from the specified position.
 
 After `/go`, the retry conversation shows the revised instruction and offers **Save as Task** first (the default) or **Continue editing**. Saving updates the existing task and returns it to `pending`; it does not start a worker immediately. `/retry`, `/replay`, and immediate execution choices are unavailable in this Retry conversation. Use `/cancel` to abort without changing the task.
 
@@ -349,7 +355,7 @@ Available actions: `diff`, `sync`, `try`, `merge`, `delete`.
 
 At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
 
-Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
+Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. A task configured with `worktree: false` is deleted without touching its recorded branch or uncommitted changes. A task with `worktree` set to `true` or a path string and no recorded `worktree_path` keeps its recorded branch regardless of task status or whether the branch is merged. If clone metadata exists for that recorded branch, its clone and metadata are still cleaned up. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
 
 ```bash
 # Preview matching tasks, then delete them after checking the list
@@ -372,11 +378,11 @@ The recommended end-to-end workflow:
 
 ## CodeRabbit review loop (`caccia`)
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Worktree tasks with `auto_pr` and Pipeline with `--auto-pr` run Caccia after successful PR creation or update when `caccia.enabled: true`. Post-processing skips failed publication, missing PRs, goal-managed tasks, and non-GitHub providers. It also skips Caccia when the executed workflow or the merge workflow selected by `merge.auto_start: true` contains an explicit `caccia` system effect, including in a called workflow. Otherwise Caccia completes before the linked merge workflow starts. Step names and instruction text do not count as effects. Git push itself does not start Caccia; `takt merge` continues to use explicit effects.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Worktree tasks with `auto_pr` and Pipeline with `--auto-pr` run Caccia after successful PR creation or update when `caccia.enabled: true`. Post-processing skips failed publication, missing PRs, goal-managed tasks, and non-GitHub providers. It also skips Caccia when the executed workflow or the merge workflow selected by `merge.auto_start: true` contains an explicit `caccia` system effect, including in a called workflow. Otherwise Caccia completes before the linked merge workflow starts. Step names and instruction text do not count as effects. Git push itself does not start Caccia; `takt merge` continues to use explicit effects.
 
-`merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. Initial success behavior is unchanged; CI timeout ends ABORT with unresolved work, and `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.
+`merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. No CI recovery runs when CI succeeds on the first attempt; CI timeout ends ABORT with unresolved work, and `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.
 
-Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not reply to reviews. Successes and iteration-limit results are logged and sent through the configured notification path.
+The `caccia` system effect returns `skipped` with `skipReason: config_disabled` when Caccia is disabled in configuration. When Caccia is enabled with a non-GitHub provider, it returns `skipped` with `skipReason: github_unavailable`. When Caccia is enabled on GitHub, the effect checks unresolved threads started by `coderabbitai` and returns `skipped` with `skipReason: no_review_threads` without waiting for a CodeRabbit review if no matching threads exist. The merge workflow continues to `wait_ci`, which waits for CI on the returned head. With matching threads, the existing review loop runs. Standalone `takt caccia` and automatic post-PR Caccia retain their initial review waits. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not reply to reviews. Successes and iteration-limit results are logged and sent through the configured notification path.
 
 `wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia posts one `@coderabbitai review` request when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout returns skipped and a pushed-commit timeout returns an effect error; standalone `takt caccia` exits non-zero on a skip or error.
 
@@ -406,9 +412,9 @@ TAKT uses `git clone --reference <main-repo> --dissociate` instead of `git workt
 
 > **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone` instead of `git worktree`.
 
-### Ephemeral Lifecycle
+### Clone Creation and Cleanup
 
-Clones follow an ephemeral lifecycle:
+Clones provide temporary workspaces for tasks and are created, used, and removed as follows:
 
 1. **Create** -- Clone is created before task execution
 2. **Execute** -- Task runs inside the clone directory
@@ -416,7 +422,7 @@ Clones follow an ephemeral lifecycle:
 4. **Preserve** -- Clone is preserved after execution (for instruct/retry operations)
 5. **Cleanup** -- Branches are the persistent artifacts; use `takt list` to merge or delete
 
-### Dual Working Directory
+### Execution and Storage Directories
 
 During worktree execution, TAKT maintains two directory references:
 

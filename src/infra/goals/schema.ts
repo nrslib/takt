@@ -3,6 +3,9 @@ import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
 
+export const GoalExecutionOriginSchema = z.enum(['human', 'manager']);
+export type GoalExecutionOrigin = z.infer<typeof GoalExecutionOriginSchema>;
+
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
 const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
@@ -31,9 +34,10 @@ const goalAnswerFields = {
   report: z.enum(['completed', 'unable']).optional(),
   scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional(),
 };
-export const GoalAnswerSchema = z.object({
-  ...goalAnswerFields, source: z.enum(['tui', 'slack']), answeredAt: z.iso.datetime(),
-}).strict().superRefine((answer, ctx) => {
+export const GoalAnswerInputSchema = z.object(goalAnswerFields).strict();
+export const GoalAnswerSchema = GoalAnswerInputSchema.extend({
+  source: z.enum(['tui', 'slack', 'mcp']), answeredAt: z.iso.datetime(),
+}).superRefine((answer, ctx) => {
   if (answer.text.trim().length === 0 && answer.decision === undefined && answer.report === undefined) {
     ctx.addIssue({ code: 'custom', path: ['text'], message: 'An answer requires text or a structured response' });
   }
@@ -41,7 +45,7 @@ export const GoalAnswerSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['scope'], message: 'Only allowed approvals have a scope' });
   }
 }).transform((answer) => answer.decision === 'allow' ? { ...answer, scope: answer.scope ?? 'once' as const } : answer);
-export type GoalAnswerInput = z.input<z.ZodObject<typeof goalAnswerFields>>;
+export type GoalAnswerInput = z.input<typeof GoalAnswerInputSchema>;
 export const GoalQuestionSchema = GoalInquiryInputSchema.extend({
   operation: GoalOperationInputSchema.extend({ argsDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
@@ -81,6 +85,7 @@ export const GoalNotificationInputSchema = z.object({
   kind: z.enum(MANAGER_NOTIFICATION_KINDS),
   body: z.string().refine((value) => value.trim().length > 0),
   severity: z.enum(['info', 'warning', 'error']).optional(),
+  source: z.literal('manager_turn_failure').optional(),
 }).strict();
 // Existing callers may construct questions without kind; parsing always supplies it.
 export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {

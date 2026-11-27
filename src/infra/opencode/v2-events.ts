@@ -68,6 +68,10 @@ export function v2EventTranslator(): (event: V2Event) => OpenCodeStreamEvent | u
         else tools.delete(id);
         return { type: 'message.part.updated', properties: { part } };
       }
+      case 'session.compaction.ended':
+        return event.data.reason === 'auto'
+          ? { type: 'session.compacted', properties: { sessionID: event.data.sessionID, reason: 'auto' } }
+          : undefined;
       case 'session.step.ended':
         return { type: 'message.part.updated', properties: { part: {
           id: `${event.data.assistantMessageID}:finish`, type: 'step-finish', sessionID: event.data.sessionID,

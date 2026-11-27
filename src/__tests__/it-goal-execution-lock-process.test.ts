@@ -12,9 +12,7 @@ import { transitionGoalExecution } from '../infra/goals/state.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { captureOwnedChild, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
 
-it.each((['claim', 'spawn'] as const).flatMap((operation) =>
-  (['paused', 'aborted'] as const).map((status) => ({ operation, status })),
-))('serializes $status publication with $operation in both orders across processes', async ({ operation, status }) => {
+it.each(['paused', 'aborted'] as const)('serializes %s publication with claim in both orders across processes', async (status) => {
   for (let trial = 0; trial < 2; trial++) {
     for (const pauseFirst of [false, true]) {
       const root = join(process.cwd(), '.tmp');
@@ -29,9 +27,7 @@ it.each((['claim', 'spawn'] as const).flatMap((operation) =>
         writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: true\n');
         const common = `
 import fs from 'node:fs';
-import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 const cwd = process.cwd();
 const mark = name => fs.writeFileSync(join(cwd, name), 'ready');
@@ -82,10 +78,9 @@ const get = GoalStore.prototype.getSync;
 GoalStore.prototype.getSync = function(id) {
   const goal = get.call(this, id);
   record('read-' + goal.executionStatus);
-  ${operation === 'claim' && !pauseFirst ? "mark('execute-held'); wait('release-execute');" : ''}
+  ${!pauseFirst ? "mark('execute-held'); wait('release-execute');" : ''}
   return goal;
 };
-${operation === 'claim' ? `
 const update = TaskStore.prototype.update;
 TaskStore.prototype.update = function(action, options) {
   const saved = update.call(this, action, options);
@@ -99,26 +94,6 @@ for (const task of claimed) {
   record('worker-called');
   runner.completeTask({ task, success: true, response: 'done', executionLog: [], startedAt: task.createdAt, completedAt: new Date().toISOString() });
 }
-` : `
-childProcess.spawn = () => {
-  ${!pauseFirst ? "mark('execute-held'); wait('release-execute');" : ''}
-  record('spawn');
-  const child = Object.assign(new EventEmitter(), { unref() {} });
-  const deadline = Date.now() + 15000;
-  const reportSpawn = () => {
-    if (fs.existsSync(join(cwd, 'pause-saved'))) {
-      record('spawn-event');
-      child.emit('spawn');
-    } else if (Date.now() >= deadline) child.emit('error', new Error('Pause did not complete before spawn event'));
-    else setTimeout(reportSpawn, 10);
-  };
-  setImmediate(reportSpawn);
-  return child;
-};
-syncBuiltinESMExports();
-const { ensureManagerRun } = await import(${JSON.stringify(sourceUrl('features/manager/autoRun.ts'))});
-await ensureManagerRun(cwd);
-`}
 `;
         if (pauseFirst) {
           await start(pauser);
@@ -132,18 +107,12 @@ await ensureManagerRun(cwd);
           await Promise.all([execution, pause]);
         }
         const events = readFileSync(join(cwd, 'events'), 'utf8').trim().split('\n');
-        console.info(JSON.stringify({ operation, status, trial, pauseFirst, events }));
+        console.info(JSON.stringify({ status, trial, pauseFirst, events }));
         expect((await new GoalStore(cwd).get(goal.id)).executionStatus).toBe(status);
-        if (operation === 'claim') {
-          expect(JSON.parse(readFileSync(join(cwd, 'claimed'), 'utf8'))).toEqual(pauseFirst ? [] : [task.name]);
-          expect(runner.listTaskStateItems()[0]!.status).toBe(pauseFirst ? 'pending' : 'completed');
-          expect(events.filter((event) => event === 'worker-called')).toHaveLength(pauseFirst ? 0 : 1);
-          if (!pauseFirst) expect.soft(events.indexOf('task-saved')).toBeLessThan(events.indexOf('pause-saved'));
-        } else {
-          expect(events.filter((event) => event === 'spawn')).toHaveLength(pauseFirst ? 0 : 1);
-          if (!pauseFirst) expect.soft(events.indexOf('spawn')).toBeLessThan(events.indexOf('pause-saved'));
-          if (!pauseFirst) expect(events.indexOf('pause-saved')).toBeLessThan(events.indexOf('spawn-event'));
-        }
+        expect(JSON.parse(readFileSync(join(cwd, 'claimed'), 'utf8'))).toEqual(pauseFirst ? [] : [task.name]);
+        expect(runner.listTaskStateItems()[0]!.status).toBe(pauseFirst ? 'pending' : 'completed');
+        expect(events.filter((event) => event === 'worker-called')).toHaveLength(pauseFirst ? 0 : 1);
+        if (!pauseFirst) expect.soft(events.indexOf('task-saved')).toBeLessThan(events.indexOf('pause-saved'));
       } finally {
         writeFileSync(join(cwd, 'release-execute'), 'cleanup');
         await Promise.all(children.map(async ({ child, owned }) => {

@@ -26,6 +26,7 @@ export interface InstructionContext {
   workflowAssignment?: import('../workflow-prompt-context.js').WorkflowAssignment;
   /** The main task/prompt */
   task: string;
+  goalSpecificationPaths?: readonly string[];
   /** Current iteration number (workflow-wide turn count) */
   iteration: number;
   /** Maximum steps allowed */

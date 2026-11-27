@@ -23,11 +23,10 @@ import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
-import { claimTasksWithGoalCompletions, TaskClaimLockUnavailableError } from './claimTasks.js';
+import { CLAIM_RETRY_INTERVAL_MS, claimTasksWithGoalCompletions, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
-const CLAIM_RETRY_INTERVAL_MS = 5_000;
 
 export interface WorkerPoolResult {
   success: number;
@@ -116,7 +115,6 @@ export async function runWithWorkerPool(
   pollIntervalMs: number,
   mode: 'run' | 'watch' = 'run',
   shutdownSignals?: WorkerPoolShutdownSignals,
-  goalTasksOnly = false,
 ): Promise<WorkerPoolResult> {
   const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
   const taskAbortController = shutdownSignals === undefined ? new AbortController() : undefined;
@@ -157,8 +155,14 @@ export async function runWithWorkerPool(
     if (schedulingSignal.aborted || preparationFailure !== undefined
       || (claimRetryAt !== undefined && Date.now() < claimRetryAt)) return;
     try {
-      const attempted = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
-        cwd, taskExecutionOptions, goalTasksOnly);
+      const { attempted, setupFailedTaskNames } = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
+        cwd, taskExecutionOptions);
+      if (mode === 'run') {
+        for (const taskName of setupFailedTaskNames) {
+          failCount++;
+          executedTaskNames.push(taskName);
+        }
+      }
       if (claimRetryAt !== undefined) {
         if (attempted) {
           claimRetryAt = undefined;
@@ -173,7 +177,7 @@ export async function runWithWorkerPool(
       if (error instanceof TaskClaimLockUnavailableError) {
         if (claimRetryAt === undefined) {
           warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
-          log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
+          log.warn('Task claim lock creation failed with ENOSPC; waiting to retry', { error: sanitizeSensitiveText(getErrorMessage(error)) });
         }
         claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
       } else {
@@ -308,15 +312,14 @@ async function claimAvailableTasks(
   signal: AbortSignal,
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
-  goalTasksOnly: boolean,
-): Promise<boolean> {
-  if (signal.aborted || isInputWaiting()) return false;
+): Promise<{ attempted: boolean; setupFailedTaskNames: string[] }> {
+  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTaskNames: [] };
   const freeSlots = concurrency - activeCount - queue.length;
-  if (freeSlots <= 0) return false;
-  await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
-  if (signal.aborted || isInputWaiting()) return false;
-  const { tasks: newTasks } = claimTasksWithGoalCompletions(
-    taskRunner, freeSlots, cwd, signal, goalTasksOnly,
+  if (freeSlots <= 0) return { attempted: false, setupFailedTaskNames: [] };
+  await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal);
+  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTaskNames: [] };
+  const { tasks: newTasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(
+    taskRunner, freeSlots, cwd, signal,
   );
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
@@ -325,7 +328,7 @@ async function claimAvailableTasks(
   } else {
     log.trace('no_new_tasks');
   }
-  return true;
+  return { attempted: true, setupFailedTaskNames };
 }
 
 export function requeueExistingFailedTasks(

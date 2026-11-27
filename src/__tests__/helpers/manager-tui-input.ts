@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { mount, promptFrame, waitFor, typeAndSubmit, showProposal, summaryA, ENTER, ESC, approveSummary } from './manager-tui-fixtures.js';
+import { mount, promptFrame, waitFor, typeAndSubmit, showProposal, summaryA, managerConversationId, ENTER, ESC, approveSummary } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
 
 it.each(['/help', '/make-goal extra', '説明 /make-goal', '> /make-goal', '`/make-goal`', '~~~\n/make-goal\n~~~', '```\n/make-goal\n```', '```\n/make-goal', '````\n```\n/make-goal\n```\n````', '/go', '  /go  ', '/go extra', '/answer ID', '/pause ID', '/resume ID', '/abort ID', '/goal', '> /go', '説明 /go', '\x60\x60\x60\n/go\n\x60\x60\x60'])(
@@ -41,7 +41,7 @@ it.each(['\n', '\r'])('keeps a bracketed paste containing %j as an unsent draft 
   await waitFor(() => expect(promptFrame(context)).toContain('second'));
   expect(context.client.submit).not.toHaveBeenCalled();
   context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: separator === '\r' ? 'firstsecond' : 'first\nsecond' }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: 'first\nsecond' }]));
 });
 
 it('keeps Ctrl+A, Ctrl+E, Ctrl+K and cursor editing in the conversation draft', async () => {
@@ -122,10 +122,10 @@ it('does not queue a summary instruction rejected by queue capacity or approve a
   await waitFor(() => expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, '')));
   await showProposal(context, summaryA, 5);
   await waitFor(() => expect(context.client.refresh).toHaveBeenCalled());
-  expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false }]);
+  expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true }]);
   approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
-    { kind: 'approve_summary', revision: 5 },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true },
+    { kind: 'approve_summary', revision: 5, conversationId: managerConversationId },
   ]));
 });

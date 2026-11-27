@@ -120,10 +120,13 @@ export function parseNdjsonLogContent(content: string, sourcePath: string): Sess
             step: record.step, iteration: record.iteration, timestamp: record.timestamp,
             ...(record.workflow === undefined ? {} : { workflow: record.workflow }),
             ...(record.stack === undefined ? {} : { stack: record.stack }),
-            ...(record.parallel === undefined ? {} : { parallel: record.parallel }),
           };
           (sessionLog.stepStarts ??= []).push(start);
         }
+        break;
+
+      case 'workflow_call_complete':
+        if (sessionLog) (sessionLog.workflowCallCompletions ??= []).push({ stack: record.stack });
         break;
 
       case 'workflow_complete':

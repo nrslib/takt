@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import type { ThreadOptions, TurnOptions } from '@openai/codex-sdk';
+import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { ClaudeCallOptions } from '../infra/claude/types.js';
 import type { OpenCodeCallOptions } from '../infra/opencode/types.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
@@ -17,13 +17,15 @@ import type { AgentResponse, NormalAgentWorkflowStep, WorkflowConfig } from '../
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { cleanupWorkflowEngine } from './engine-test-helpers.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: () => ({}) }));
 
-const { threads, turns } = vi.hoisted(() => ({
+const { threads, turns, configs } = vi.hoisted(() => ({
   threads: [] as ThreadOptions[],
-  turns: [] as Array<{ threadOptions: ThreadOptions; schemaProperties: Record<string, unknown>; resumed: boolean }>,
+  configs: [] as CodexOptions[],
+  turns: [] as Array<{ threadOptions: ThreadOptions; schemaProperties: Record<string, unknown>; resumed: boolean; input: unknown }>,
 }));
 const { claudeCall, openCodeCall, spawnProcess } = vi.hoisted(() => ({
   claudeCall: vi.fn<(_name: string, _prompt: string, options: ClaudeCallOptions) => Promise<AgentResponse>>(),
@@ -48,9 +50,9 @@ vi.mock('@openai/codex-sdk', () => {
     const id = sessionId ?? `thread-${threads.length}`;
     return {
       id,
-      runStreamed: async (_input: unknown, turnOptions?: TurnOptions) => {
+      runStreamed: async (input: unknown, turnOptions?: TurnOptions) => {
         const properties = (turnOptions?.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
-        turns.push({ threadOptions: options, schemaProperties: properties, resumed: sessionId !== undefined });
+        turns.push({ threadOptions: options, schemaProperties: properties, resumed: sessionId !== undefined, input });
         const text = Object.hasOwn(properties, 'done')
           ? JSON.stringify({ done: true, reasoning: 'finished', cancelPartIds: [], parts: [] })
           : Object.hasOwn(properties, 'parts')
@@ -70,6 +72,9 @@ vi.mock('@openai/codex-sdk', () => {
   }
   return {
     Codex: class {
+      constructor(options: CodexOptions) {
+        configs.push(options);
+      }
       startThread(options: ThreadOptions) {
         return createThread(options);
       }
@@ -87,6 +92,7 @@ describe('edit=false Phase 1 permission wiring', () => {
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), 'takt-edit-false-'));
     threads.length = 0;
+    configs.length = 0;
     turns.length = 0;
     vi.clearAllMocks();
     claudeCall.mockResolvedValue({ status: 'done', content: 'Reviewed', persona: 'reviewer', timestamp: new Date() });
@@ -113,6 +119,9 @@ describe('edit=false Phase 1 permission wiring', () => {
     return new OptionsBuilder(
       { projectCwd: cwd, provider: 'codex', ...engineOptions },
       () => cwd, () => cwd, () => undefined, () => '.takt/reports', () => 'ja', () => 'test',
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
   }
 
@@ -120,10 +129,28 @@ describe('edit=false Phase 1 permission wiring', () => {
     name: 'review', personaDisplayName: 'reviewer', instruction: 'Review', passPreviousResponse: false, edit: false,
   };
 
-  it.each(['takt', 'codex'] as const)('passes read-only to the SDK with permission_control=%s', async (permissionControl) => {
+  it.each(['takt', 'codex'] as const)('respects edit=false permission control at the SDK (control=%s)', async (permissionControl) => {
     const options = builder({ providerOptions: { codex: { permissionControl } } }).buildAgentOptions(reviewStep);
     expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
-    expect(threads).toEqual([expect.objectContaining({ sandboxMode: 'read-only' })]);
+    expect(threads).toHaveLength(1);
+    expect(threads[0]?.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
+  });
+
+  it.each(['takt', 'codex'] as const)('passes edit=false with network access through the engine options (control=%s)', async (permissionControl) => {
+    const options = builder({ providerOptions: { codex: { permissionControl, networkAccess: true } } }).buildAgentOptions(reviewStep);
+    expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).not.toHaveProperty('sandboxMode');
+    expect(threads[0]).not.toHaveProperty('networkAccessEnabled');
+    if (permissionControl === 'takt') {
+      expect(configs[0]?.config).toMatchObject({
+        default_permissions: 'takt-readonly-network',
+        permissions: { 'takt-readonly-network': { extends: ':read-only', network: { enabled: true } } },
+      });
+    } else {
+      expect(configs[0]?.config).not.toHaveProperty('default_permissions');
+      expect(configs[0]?.config).not.toHaveProperty('permissions');
+    }
   });
 
   it.each([
@@ -151,17 +178,17 @@ describe('edit=false Phase 1 permission wiring', () => {
   it.each([
     { edit: false, partEdit: undefined },
     { edit: true, partEdit: false },
-  ])('keeps team leader parts readonly (edit=$edit, partEdit=$partEdit)', async ({ edit, partEdit }) => {
+  ])('delegates team leader part permissions (edit=$edit, partEdit=$partEdit)', async ({ edit, partEdit }) => {
     const partStep = createPartStep({
       name: 'review', personaDisplayName: 'reviewer', instruction: 'Review', passPreviousResponse: false, edit,
       teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partEdit },
     }, { id: 'p1', title: 'Review', instruction: 'Review' });
     const options = builder({ providerOptions: { codex: { permissionControl: 'codex' } } }).buildAgentOptions(partStep);
     await runAgent(undefined, 'Review', options);
-    expect(threads[0]?.sandboxMode).toBe('read-only');
+    expect(threads[0]).not.toHaveProperty('sandboxMode');
   });
 
-  it.each(['takt', 'codex'] as const)('keeps the loop monitor judge readonly with permission_control=%s', async (permissionControl) => {
+  it.each(['takt', 'codex'] as const)('respects loop monitor permission_control=%s', async (permissionControl) => {
     const workflow = normalizeWorkflowConfig({
       name: 'monitor', max_steps: 5, initial_step: 'review',
       steps: [
@@ -182,12 +209,53 @@ describe('edit=false Phase 1 permission wiring', () => {
     const judgeTurns = turns.filter((turn) => Object.hasOwn(turn.schemaProperties, 'content'));
     expect(judgeTurns).toHaveLength(1);
     expect(judgeTurns[0]?.resumed).toBe(false);
-    expect(judgeTurns[0]?.threadOptions.sandboxMode).toBe('read-only');
+    expect(judgeTurns[0]?.threadOptions.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
+  });
+
+  it('gives the fresh-session loop judge the progress notes guidance but no notes location', async () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'monitor', max_steps: 5, initial_step: 'review',
+      steps: [
+        { name: 'review', edit: false, instruction: 'Review', rules: [{ condition: 'done', next: 'fix' }] },
+        { name: 'fix', instruction: 'Fix', rules: [{ condition: 'done', next: 'review' }] },
+      ],
+      loop_monitors: [{ cycle: ['review', 'fix'], threshold: 1, judge: {
+        instruction: 'Decide whether to stop', rules: [{ condition: 'stop', next: 'COMPLETE' }],
+      } }],
+    }, cwd);
+    engine = new WorkflowEngine(workflow, cwd, 'Review', {
+      projectCwd: cwd, provider: 'codex', language: 'en', structuredCaller: new ProviderNeutralStructuredCaller(),
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason: string) => abortReasons.push(reason));
+    expect((await engine.run()).status, abortReasons.join('\n')).toBe('completed');
+
+    const guidance = loadTemplate('progress_notes', 'en');
+    const notesLocation = /progress-notes\/[0-9a-f]{64}\.log/;
+    const inputs = turns.map((turn) => {
+      expect(turn.input).toEqual(expect.any(String));
+      const envelope: unknown = JSON.parse(turn.input as string);
+      expect(envelope).toEqual({
+        taktCurrentInstructions: expect.any(String),
+        userInstruction: expect.any(String),
+      });
+      return {
+        judge: Object.hasOwn(turn.schemaProperties, 'content'),
+        ...(envelope as { taktCurrentInstructions: string; userInstruction: string }),
+      };
+    });
+    const judgeInputs = inputs.filter(({ judge }) => judge);
+    const stepInputs = inputs.filter(({ judge }) => !judge);
+    expect(judgeInputs).toHaveLength(1);
+    expect(judgeInputs[0]?.taktCurrentInstructions).toContain(guidance);
+    expect(judgeInputs[0]?.taktCurrentInstructions).not.toMatch(notesLocation);
+    expect(judgeInputs[0]?.userInstruction).not.toMatch(notesLocation);
+    expect(stepInputs.some(({ userInstruction }) => notesLocation.test(userInstruction))).toBe(true);
   });
 
   it.each([
     { edit: false, permissionControl: 'takt', sandbox: 'read-only' },
-    { edit: false, permissionControl: 'codex', sandbox: 'read-only' },
+    { edit: false, permissionControl: 'codex', sandbox: undefined },
     { edit: true, permissionControl: 'takt', sandbox: 'workspace-write' },
     { edit: true, permissionControl: 'codex', sandbox: undefined },
     { edit: undefined, permissionControl: 'takt', sandbox: 'workspace-write' },
@@ -217,17 +285,17 @@ describe('edit=false Phase 1 permission wiring', () => {
     expect(partTurns[0]?.threadOptions.sandboxMode).toBe(permissionControl === 'takt' ? 'workspace-write' : undefined);
   });
 
-  it.each(['claude', 'claude-sdk'] as const)('preserves %s permission mode and tool filter for edit=false', async (provider) => {
+  it.each(['claude', 'claude-sdk'] as const)('preserves %s permission mode and Bash while filtering edit tools for edit=false', async (provider) => {
     const options = builder({
       provider,
       providerOptions: { claude: { allowedTools: ['Read', 'Grep', 'Write', 'Edit', 'Bash'] } },
     }).buildAgentOptions(reviewStep);
-    expect(options.allowedTools).toEqual(['Read', 'Grep']);
+    expect(options.allowedTools).toEqual(['Read', 'Grep', 'Bash']);
     expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
     const callOptions = claudeCall.mock.calls[0]![2];
     expect(callOptions.permissionMode).toBe('edit');
     expect(buildSdkOptions(callOptions)).toMatchObject({
-      permissionMode: 'acceptEdits', allowedTools: ['Read', 'Grep'],
+      permissionMode: 'acceptEdits', allowedTools: ['Read', 'Grep', 'Bash'],
     });
   });
 
@@ -256,7 +324,7 @@ describe('edit=false Phase 1 permission wiring', () => {
     expect(args.some((arg) => arg.startsWith('--additional-mcp-config=@'))).toBe(withMcp);
   });
 
-  it('keeps parallel sub-steps and workflow_call child steps readonly', async () => {
+  it('delegates parallel sub-step and workflow_call child step permissions', async () => {
     const child: WorkflowConfig = normalizeWorkflowConfig({
       name: 'child', subworkflow: { callable: true }, initial_step: 'child-review',
       steps: [{ name: 'child-review', edit: false, instruction: 'Review', rules: [{ condition: 'done', next: 'COMPLETE' }] }],
@@ -277,6 +345,6 @@ describe('edit=false Phase 1 permission wiring', () => {
     const state = await engine.run();
     expect(state.status, abortReasons.join('\n')).toBe('completed');
     expect(threads).toHaveLength(2);
-    expect(threads.every((thread) => thread.sandboxMode === 'read-only')).toBe(true);
+    for (const thread of threads) expect(thread).not.toHaveProperty('sandboxMode');
   });
 });

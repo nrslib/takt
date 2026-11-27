@@ -78,7 +78,17 @@ async function recover(path: string, selfStartTime: string | undefined, options:
 }
 
 export class FileAsyncLock implements AsyncLock {
-  async exclusive<T>(path: string, action: () => Promise<T>, options: IoOptions): Promise<T> {
+  exclusive<T>(path: string, action: () => Promise<T>, options: IoOptions): Promise<T> {
+    return this.runExclusive(path, action, options, 'operation');
+  }
+
+  exclusiveWithAcquisitionTimeout<T>(path: string, action: () => Promise<T>, options: IoOptions): Promise<T> {
+    return this.runExclusive(path, action, options, 'acquisition');
+  }
+
+  private async runExclusive<T>(
+    path: string, action: () => Promise<T>, options: IoOptions, timeoutScope: 'operation' | 'acquisition',
+  ): Promise<T> {
     const scope = ioScope(options);
     const absolute = resolve(path);
     let content: Buffer | undefined;
@@ -120,7 +130,12 @@ export class FileAsyncLock implements AsyncLock {
       let value!: T;
       let failure: unknown;
       let failed = false;
-      try { scope.signal.throwIfAborted(); value = await action(); scope.signal.throwIfAborted(); } catch (error) { failed = true; failure = error; }
+      try {
+        scope.signal.throwIfAborted();
+        if (timeoutScope === 'acquisition') scope.close();
+        value = await action();
+        if (timeoutScope === 'operation') scope.signal.throwIfAborted();
+      } catch (error) { failed = true; failure = error; }
       try {
         if (!await removeUnchanged(absolute, content)) throw new Error(`Lock ownership changed: ${absolute}`);
       } catch (error) {

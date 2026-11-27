@@ -30,6 +30,7 @@ import type {
 } from '../../core/workflow/provider-options-trace.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
+import { getConfigSnapshot, getProjectConfigSnapshot } from './configSnapshot.js';
 
 export type { ConfigParameterKey } from './resolvedConfig.js';
 export { invalidateResolvedConfigCache, invalidateAllResolvedConfigCache } from './resolutionCache.js';
@@ -128,6 +129,8 @@ const PROJECT_LOCAL_DEFAULTS: Partial<Record<ConfigParameterKey, unknown>> = {
 };
 
 function loadProjectConfigCached(projectDir: string) {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.project;
   const cached = getCachedProjectConfig(projectDir);
   if (cached !== undefined) {
     return cached;
@@ -400,7 +403,7 @@ export function resolveConfigValueWithSource<K extends ConfigParameterKey>(
   options?: ResolveConfigOptions,
 ): ResolvedConfigValue<K> {
   const resolved = resolveUncachedConfigValue(projectDir, key, options);
-  if (!options?.workflowContext) {
+  if (!options?.workflowContext && getConfigSnapshot() === undefined) {
     setCachedResolvedValue(projectDir, key, resolved.value);
   }
   return resolved;
@@ -411,7 +414,7 @@ export function resolveConfigValue<K extends ConfigParameterKey>(
   key: K,
   options?: ResolveConfigOptions,
 ): LoadedConfig[K] {
-  if (!options?.workflowContext && hasCachedResolvedValue(projectDir, key)) {
+  if (!options?.workflowContext && getConfigSnapshot() === undefined && hasCachedResolvedValue(projectDir, key)) {
     return getCachedResolvedValue(projectDir, key) as LoadedConfig[K];
   }
   return resolveConfigValueWithSource(projectDir, key, options).value;

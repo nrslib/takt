@@ -4,6 +4,8 @@ import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision
 import type { FailedTaskRetryPersistenceOptions } from '../features/tasks/taskRetryPersistence.js';
 import type { TaskListItem } from '../infra/task/index.js';
 import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
+import { randomUUID } from 'node:crypto';
 
 const {
   persistenceOrder,
@@ -91,8 +93,31 @@ describe('appendRetryNote', () => {
 describe('persistFailedTaskRetry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(checkQueuedTaskProviders).mockReset().mockResolvedValue(undefined);
     persistenceOrder.length = 0;
-    mockPersistRevision.mockReturnValue(createRevision());
+    mockPersistRevision.mockReset().mockReturnValue(createRevision());
+  });
+
+  it('queues a remote order revision without requiring local worker paths or daemon provider credentials', async () => {
+    const assignment = RemoteAssignmentSchema.parse({ projectId: '/project', taskName: failedTask.name,
+      workerId: 'w1', workerName: 'w1', registrationGeneration: randomUUID(), executionId: randomUUID(),
+      assignmentGeneration: 1, requestId: 'pull', originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git',
+      branch: 'result', leaseExpiresAt: 60_000, lastAcknowledgedLogSequence: 0, controlSequence: 0,
+      workLocation: '/worker-only/clone', retryReservation: true });
+    mockAssertReusableWorktreePath.mockImplementationOnce(() => { throw new Error('Worker path is not local'); });
+    vi.mocked(checkQueuedTaskProviders).mockRejectedValueOnce(new Error('Daemon has no provider credentials'));
+    const revision = createRevision();
+    mockPersistRevision.mockReturnValueOnce(revision);
+    try {
+      await persistFailedTaskRetry({ ...retryOptions, task: { ...failedTask, remoteAssignment: assignment },
+        worktreePath: '/worker-only/clone', revisedOrder: { content: 'Corrected remote order', lang: 'ja' } });
+      expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+      expect(checkQueuedTaskProviders).not.toHaveBeenCalled();
+      expect(mockPersistRevision).toHaveBeenCalledWith('/project', failedTask.taskDir, 'Corrected remote order', 'ja', undefined);
+      expect(mockRequeueTask).toHaveBeenCalledWith(failedTask.name, ['failed'], expect.objectContaining({
+        sourceRunSlug: 'run-a', taskDir: revision.taskDirRelative, restartPoint: retryOptions.restartPoint,
+      }));
+    } finally { mockAssertReusableWorktreePath.mockReset(); }
   });
 
   it('requeues failed task with the selected start and ownership values without changing the order', async () => {
@@ -115,6 +140,23 @@ describe('persistFailedTaskRetry', () => {
       },
     });
     expect(mockPersistRevision).not.toHaveBeenCalled();
+  });
+
+  it('checks providers with the replacement runtime assignment instead of the saved one', async () => {
+    const taskWithSavedAssignment: TaskListItem = {
+      ...failedTask,
+      data: { task: 'old order', runtime_assignment: 'local-slow' },
+    };
+    await persistFailedTaskRetry({ ...retryOptions, task: taskWithSavedAssignment, runtimeAssignment: 'local-fast' });
+
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project',
+      { ...taskWithSavedAssignment, data: { task: 'old order', runtime_assignment: 'local-fast' } },
+      {}, undefined, undefined,
+      { workflow: undefined, worktreePath: '/project/.worktrees/task-a' },
+    );
+    expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'],
+      expect.objectContaining({ runtimeAssignment: 'local-fast' }));
   });
 
   it('preserves an explicit absent source when restarting in the existing worktree', async () => {

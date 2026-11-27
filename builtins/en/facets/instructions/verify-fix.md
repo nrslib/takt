@@ -18,6 +18,8 @@ Record the results in the report before deciding.
 
 Inspect independently needed reports, sources of truth, and direct call paths together in the same evidence pass where possible. This sets only the inspection order and is not a reason to broaden the scope. Do not serialize reads or searches that are independent of one another behind progress updates, and do not continue checking for absent optional history or tests that are unnecessary for the decision. Once the required evidence is available, return the output-contract result; do not end the response with progress updates only.
 
+Reconcile the selected and implemented methods. Record the treatment of the shared cause, required success and failure outcomes, and corresponding current evidence. Distinguish old-plan verification approaches superseded by the latest instructions from the original acceptance criteria.
+
 **Verification procedure:**
 1. Use the supplied review decision to confirm the problems, invariants, acceptance criteria, and boundaries from adjacent problems covered by the plan
 2. Do not use the fix report as an answer key. Follow the repair-path verification above and finalize the comparison between the authoritative-source-derived states and paths and the plan

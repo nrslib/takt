@@ -29,7 +29,9 @@ import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
-import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../tasks/execute/goalAbortMonitor.js';
+import {
+  GoalAbortMonitor, GoalAbortedError, GoalPausedError, GoalNotAwaitingMergeError,
+} from '../tasks/execute/goalAbortMonitor.js';
 import type { GoalBranchSync, GoalTaskResult } from '../../infra/goals/schema.js';
 import { TaskStoppedError } from '../../infra/task/taskStop.js';
 import { GoalBranchSyncError, synchronizeGoalBranch } from '../../infra/goals/branch-sync.js';
@@ -155,7 +157,7 @@ export async function executePersistedPrMergeTask(
   const monitor = runningTask.executionId === undefined ? undefined
     : new GoalAbortMonitor(projectCwd, data.goal_id, controller, {
       taskName: task.name, executionId: runningTask.executionId,
-    });
+    }, { requireAwaitingMerge: true });
   let branchSynchronization: GoalBranchSync | undefined;
   let mergeOutcome: PrMergeResult['outcome'] = 'unresolved';
   let workflowFailure: string | undefined;
@@ -237,7 +239,7 @@ export async function executePersistedPrMergeTask(
           success: false,
           interrupted: failure instanceof TaskStoppedError || failure instanceof GoalPausedError,
           workflowResult: failure instanceof TaskStoppedError || failure instanceof GoalPausedError || failure instanceof GoalAbortedError
-            || mergeOutcome === 'unresolved' ? 'aborted' : 'completed', failureReason: reason, mergeOutcome,
+            || failure instanceof GoalNotAwaitingMergeError || mergeOutcome === 'unresolved' ? 'aborted' : 'completed', failureReason: reason, mergeOutcome,
           ...(failure instanceof GoalBranchSyncError ? { branchSynchronization: failure.result }
             : branchSynchronization === undefined ? {} : { branchSynchronization }),
         };

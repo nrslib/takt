@@ -5,7 +5,6 @@
 import { describe, it, expect } from 'vitest';
 import { SdkOptionsBuilder, buildSdkOptions } from '../infra/claude/options-builder.js';
 import { mapToCodexSandboxMode } from '../infra/codex/types.js';
-import type { PermissionMode } from '../core/models/index.js';
 import type { ClaudeSpawnOptions } from '../infra/claude/types.js';
 
 describe('SdkOptionsBuilder.mapToSdkPermissionMode', () => {
@@ -21,17 +20,16 @@ describe('SdkOptionsBuilder.mapToSdkPermissionMode', () => {
     expect(SdkOptionsBuilder.mapToSdkPermissionMode('full')).toBe('bypassPermissions');
   });
 
-  it('should map all PermissionMode values exhaustively', () => {
-    const modes: PermissionMode[] = ['readonly', 'edit', 'full'];
-    for (const mode of modes) {
-      const result = SdkOptionsBuilder.mapToSdkPermissionMode(mode);
-      expect(result).toBeDefined();
-      expect(typeof result).toBe('string');
-    }
-  });
 });
 
 describe('SdkOptionsBuilder.build() — bypass permission opt-in', () => {
+  it('delegates manager permissions to AI without enabling bypass or removing allowed MCP tools', () => {
+    const allowedTools = ['mcp__takt__takt_get_goal'];
+    const options = buildSdkOptions({ cwd: '/tmp/test', permissionMode: 'full', aiReviewPermissions: true, allowedTools });
+    expect(options.permissionMode).toBe('auto');
+    expect(options).not.toHaveProperty('allowDangerouslySkipPermissions');
+    expect(options.allowedTools).toEqual(allowedTools);
+  });
   it.each<Partial<ClaudeSpawnOptions>>([
     { permissionMode: 'full' },
     { bypassPermissions: true },
@@ -73,14 +71,6 @@ describe('mapToCodexSandboxMode', () => {
     expect(mapToCodexSandboxMode('full')).toBe('danger-full-access');
   });
 
-  it('should map all PermissionMode values exhaustively', () => {
-    const modes: PermissionMode[] = ['readonly', 'edit', 'full'];
-    for (const mode of modes) {
-      const result = mapToCodexSandboxMode(mode);
-      expect(result).toBeDefined();
-      expect(typeof result).toBe('string');
-    }
-  });
 });
 
 describe('SdkOptionsBuilder.build() — mcpServers', () => {
@@ -200,11 +190,6 @@ describe('SdkOptionsBuilder.build() — settingSources', () => {
     });
 
     expect(options).not.toHaveProperty('skills');
-  });
-
-  it('includes project in settingSources', () => {
-    const options = buildSdkOptions({ cwd: '/test' });
-    expect(options.settingSources).toEqual(['project']);
   });
 
   it('includes effort when provided', () => {

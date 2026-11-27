@@ -25,6 +25,7 @@ import {
 } from '../core/models/index.js';
 
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
+import * as resources from '../infra/resources/index.js';
 import {
   isWorkflowPath,
   loadAllWorkflowDiscovery,
@@ -280,6 +281,23 @@ describe('loadWorkflowByIdentifier', () => {
     const workflow = loadWorkflowByIdentifier(filePath, tempDir);
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('test-workflow');
+  });
+
+  it('should load repository_identity and leave it unset by default', () => {
+    const defaultPath = join(tempDir, 'identity-default.yaml');
+    writeFileSync(defaultPath, SAMPLE_WORKFLOW);
+    const optInPath = join(tempDir, 'identity-opt-in.yaml');
+    writeFileSync(optInPath, `${SAMPLE_WORKFLOW}repository_identity: true\n`);
+
+    expect(loadWorkflowByIdentifier(defaultPath, tempDir)!.repositoryIdentity).toBeUndefined();
+    expect(loadWorkflowByIdentifier(optInPath, tempDir)!.repositoryIdentity).toBe(true);
+  });
+
+  it('should reject a non-boolean repository_identity', () => {
+    const filePath = join(tempDir, 'identity-invalid.yaml');
+    writeFileSync(filePath, `${SAMPLE_WORKFLOW}repository_identity: yes-please\n`);
+
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(/repository_identity/);
   });
 
   it('should reject workflow provider/model settings and point to runtime.yaml', () => {
@@ -1823,8 +1841,8 @@ describe('Workflow Maker artifact isolation', () => {
   const fixedTime = new Date(2026, 0, 2, 3, 4, 5, 6);
   let projectDir: string;
   let configDir: string;
+  let builtinDir: string;
   let previousConfigDir: string | undefined;
-  const repositoryFixturePaths: string[] = [];
 
   function writeFixture(relativePath: string, content: string): string {
     const filePath = join(projectDir, relativePath);
@@ -1867,6 +1885,7 @@ describe('Workflow Maker artifact isolation', () => {
     previousConfigDir = process.env.TAKT_CONFIG_DIR;
     projectDir = mkdtempSync(join(tmpdir(), 'takt-maker-project-'));
     configDir = mkdtempSync(join(tmpdir(), 'takt-maker-config-'));
+    builtinDir = mkdtempSync(join(tmpdir(), 'takt-maker-builtins-'));
     process.env.TAKT_CONFIG_DIR = configDir;
     writeFileSync(join(configDir, 'config.yaml'), [
       'enable_builtin_workflows: false',
@@ -1878,11 +1897,10 @@ describe('Workflow Maker artifact isolation', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(configDir, { recursive: true, force: true });
-    for (const fixturePath of repositoryFixturePaths.splice(0)) {
-      rmSync(fixturePath, { recursive: true, force: true });
-    }
+    rmSync(builtinDir, { recursive: true, force: true });
     if (previousConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
     } else {
@@ -1957,27 +1975,19 @@ instruction: ${personaName}
           writeConfigFixture(`assets/${name}.cjs`, 'export default (items) => items.join("\\n");\n'),
         ];
       } else if (source === 'builtin') {
-        rootPath = join(process.cwd(), 'builtins', 'en', 'workflows', `${name}.yaml`);
-        personaPath = join(process.cwd(), 'builtins', 'en', 'facets', 'personas', `${personaName}.md`);
-        companionInstructionPath = join(process.cwd(), 'builtins', 'en', 'facets', 'instructions', `${personaName}.md`);
-        companionPath = join(process.cwd(), 'builtins', 'en', 'companions', `${companionName}.yaml`);
-        capabilityPath = join(process.cwd(), 'builtins', 'en', 'provider-options', `${capabilityName}.yaml`);
+        vi.spyOn(resources, 'getResourcesDir').mockReturnValue(builtinDir);
+        vi.spyOn(resources, 'getLanguageResourcesDir').mockImplementation((lang) => join(builtinDir, lang));
+        rootPath = join(builtinDir, 'en', 'workflows', `${name}.yaml`);
+        personaPath = join(builtinDir, 'en', 'facets', 'personas', `${personaName}.md`);
+        companionInstructionPath = join(builtinDir, 'en', 'facets', 'instructions', `${personaName}.md`);
+        companionPath = join(builtinDir, 'en', 'companions', `${companionName}.yaml`);
+        capabilityPath = join(builtinDir, 'en', 'provider-options', `${capabilityName}.yaml`);
         assetPaths = [
-          join(process.cwd(), 'builtins', 'en', 'assets', `${name}.csv`),
-          join(process.cwd(), 'builtins', 'en', 'assets', `${name}.md`),
-          join(process.cwd(), 'builtins', 'en', 'assets', `${name}.cjs`),
+          join(builtinDir, 'en', 'assets', `${name}.csv`),
+          join(builtinDir, 'en', 'assets', `${name}.md`),
+          join(builtinDir, 'en', 'assets', `${name}.cjs`),
         ];
-        const builtinAssetsDir = dirname(assetPaths[0]);
-        const builtinAssetsDirExisted = existsSync(builtinAssetsDir);
-        repositoryFixturePaths.push(
-          rootPath,
-          personaPath,
-          companionInstructionPath,
-          companionPath,
-          capabilityPath,
-          ...assetPaths,
-          ...(builtinAssetsDirExisted ? [] : [builtinAssetsDir]),
-        );
+        mkdirSync(dirname(rootPath), { recursive: true });
         mkdirSync(dirname(personaPath), { recursive: true });
         mkdirSync(dirname(companionInstructionPath), { recursive: true });
         mkdirSync(dirname(companionPath), { recursive: true });

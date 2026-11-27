@@ -5,6 +5,10 @@ import type { StreamEvent } from '../shared/types/provider.js';
 import { makeProvider } from './test-helpers.js';
 import { diagnosticLoggingSuppressed, withoutDiagnosticLogging } from '../shared/utils/diagnostic-context.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
+import { MAX_PROCESS_PROGRESS_BYTES } from '../core/daemon/processProtocol.js';
+import type { Provider } from '../infra/providers/types.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
+import { expandImageAttachmentPlaceholders } from '../infra/providers/imageAttachmentPrompt.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -19,6 +23,100 @@ function fixture() {
 }
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
+
+it.each([true, false])('delivers manager images according to native capability %s', async (supportsNativeImageInput) => {
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(success);
+  const executor = createManagerTurnExecutor('/repository', {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined,
+      provider: makeProvider({ supportsNativeImageInput, setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const imageAttachments = [{ placeholder: '[Image #2]', path: '/repository/.takt/manager-images/conversation/image-2.png' }];
+  const input = { ...fixture().input, prompt: 'Inspect [Image #2]', imageAttachments };
+
+  await executor.execute(input);
+
+  expect(call).toHaveBeenCalledOnce();
+  const [prompt, options] = call.mock.calls[0]!;
+  if (supportsNativeImageInput) {
+    expect(options.imageAttachments).toEqual(imageAttachments);
+  } else {
+    expect(options.imageAttachments ?? []).toEqual([]);
+    expect(prompt).toBe(expandImageAttachmentPlaceholders(input.prompt, imageAttachments));
+  }
+  expect(options.cwd).toBe('/repository');
+});
+
+it.each([true, false])('retains the same manager images during session recovery with native capability %s', async (supportsNativeImageInput) => {
+  const call = vi.fn<ProviderAgent['call']>()
+    .mockRejectedValueOnce(new Error('Prompt is too long')).mockResolvedValueOnce(success);
+  const executor = createManagerTurnExecutor('/repository', {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined,
+      provider: makeProvider({ supportsNativeImageInput, setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const imageAttachments = [{ placeholder: '[Image #1]', path: '/repository/.takt/manager-images/conversation/image-1.png' }];
+  const invalidateSession = vi.fn(async () => {});
+  const input = { ...fixture().input, prompt: 'Inspect [Image #1]', imageAttachments,
+    recovery: { context: 'Saved business context', invalidateSession } };
+
+  await executor.execute(input);
+
+  expect(call).toHaveBeenCalledTimes(2);
+  expect(invalidateSession).toHaveBeenCalledOnce();
+  expect(call.mock.calls.map(([, options]) => options.sessionId)).toEqual(['prior-session', undefined]);
+  for (const [prompt, options] of call.mock.calls) {
+    if (supportsNativeImageInput) expect(options.imageAttachments).toEqual(imageAttachments);
+    else {
+      expect(options.imageAttachments ?? []).toEqual([]);
+      expect(prompt).toContain(expandImageAttachmentPlaceholders(input.prompt, imageAttachments));
+    }
+  }
+});
+
+it('adds the progress notes guidance without changing the manager prompt that requires goal work-log records', () => {
+  const setup = vi.fn<Provider['setup']>(() => ({ call: vi.fn<ProviderAgent['call']>() }));
+  const managerPrompt = 'Record each operation and its evidence with takt_record_goal_work_log in the same turn.';
+
+  createManagerTurnExecutor('/repository', { ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup }) },
+    strategy: { systemPrompt: managerPrompt } });
+
+  expect(setup).toHaveBeenCalledWith({ name: 'manager', systemPrompt: withProgressNotesGuidance(managerPrompt, 'en') });
+});
+
+it('forwards tool identities and batched results with a separate call identity for each provider call', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementation(async (_prompt, options) => {
+    options.onStream!({ type: 'thinking', data: { thinking: 'hidden' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'reused', tool: 'Read', input: { file_path: '日本語.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { completedToolIds: ['reused'], content: 'failed', isError: true } });
+    return success;
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(onToolEvent.mock.calls.map(([event]) => event.type)).toEqual(['tool_use', 'tool_result', 'tool_use', 'tool_result']);
+  const events = onToolEvent.mock.calls.map(([event]) => event);
+  expect(events[0]).toMatchObject({ data: { id: 'reused', input: { file_path: '日本語.ts' } } });
+  expect(events[1]).toMatchObject({ data: { completedToolIds: ['reused'], isError: true } });
+  expect(events[0].toolActivity.callId).toBe(events[1].toolActivity.callId);
+  expect(events[0].toolActivity.callId).not.toBe(events[2].toolActivity.callId);
+});
+
+it('assigns an unidentified result to the tool started after a batch that completed both its own and listed tools', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'a', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_use', data: { id: 'b', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_result', data: { id: 'a', completedToolIds: ['b'], content: 'batch', isError: false } });
+    options.onStream!({ type: 'tool_use', data: { id: 'c', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_result', data: { content: 'c result', isError: false } });
+    return success;
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(onToolEvent.mock.calls.at(-1)![0]).toMatchObject({ type: 'tool_result', data: { id: 'c', content: 'c result' } });
+});
 
 it.each([true, false, undefined])('uses fresh business context only for patrols when patrol=%s', async (patrol) => {
   const { call, executor, input, invalidateSession } = fixture();
@@ -50,14 +148,14 @@ it('does not invalidate the conversation session when a patrol retries an overfl
   expect(invalidateSession).not.toHaveBeenCalled();
 });
 
-it('reports only activity changes and tool names without stream bodies or tool inputs', async () => {
+it('reports activity changes and Bash descriptions without commands or other tool inputs', async () => {
   const { call, executor, input } = fixture();
   const onActivity = vi.fn();
   const events: StreamEvent[] = [
     { type: 'thinking', data: { thinking: 'private reasoning' } },
     { type: 'thinking', data: { thinking: 'more private reasoning' } },
-    { type: 'tool_use', data: { id: 'first', tool: 'Bash', input: { command: 'private command' } } },
-    { type: 'tool_use', data: { id: 'second', tool: 'Bash', input: { command: 'another private command' } } },
+    { type: 'tool_use', data: { id: 'first', tool: 'Bash', input: { description: 'コードを\n読む\u001b[31m', command: 'grep patrol source.ts', timeout: 1000 } } },
+    { type: 'tool_use', data: { id: 'second', tool: 'Bash', input: { description: 'コードを 読む', command: 'another private command' } } },
     { type: 'tool_output', data: { tool: 'Bash', output: 'private output' } },
     { type: 'tool_use', data: { id: 'third', tool: 'Read', input: { file: 'private path' } } },
     { type: 'tool_result', data: { id: 'third', content: 'private file', isError: false } },
@@ -70,12 +168,172 @@ it('reports only activity changes and tool names without stream bodies or tool i
     return success;
   });
   await executor.execute({ ...input, onActivity });
-  const expected = [{ kind: 'thinking' }, { kind: 'tool', tool: 'Bash' }, { kind: 'tool', tool: 'Read' },
-    { kind: 'tool', tool: 'Bash' }, { kind: 'waiting' }, { kind: 'responding' }];
+  const expected = [{ kind: 'thinking' }, { kind: 'tool', tool: 'Bash', description: 'コードを 読む' }, { kind: 'tool', tool: 'Read' },
+    { kind: 'tool', tool: 'Bash', description: 'コードを 読む' }, { kind: 'waiting' }, { kind: 'responding' }];
   expect(onActivity.mock.calls.map(([value]) => value)).toEqual(expected);
   onActivity.mockClear();
   await executor.execute({ ...input, onActivity });
   expect(onActivity.mock.calls.map(([value]) => value)).toEqual(expected);
+});
+
+it.each([undefined, '', ' \t\n ', 42, null, { text: '説明' }])('uses the Bash name when its description is unusable: %j', async (description) => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: { description, command: 'private command' } } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity.mock.calls.map(([value]) => value)).toEqual([{ kind: 'tool', tool: 'Bash' }]);
+});
+
+it('does not extract descriptions from commands, nested inputs, or non-Bash tools', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {
+      command: 'コードを読む', nested: { description: 'コードを読む' },
+    } } });
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: { description: 'コードを読む' } } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity.mock.calls.map(([value]) => value)).toEqual([{ kind: 'tool', tool: 'Bash' }, { kind: 'tool', tool: 'Read' }]);
+});
+
+it('bounds Bash descriptions and removes terminal controls and Unicode line separators', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {
+      description: '\u001b[31mコード\r\nを\t読む\u2028次\u2029行\u0000' + 'あ'.repeat(300), command: 'private command',
+    } } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity).toHaveBeenCalledExactlyOnceWith({ kind: 'tool', tool: 'Bash',
+    description: ('コード を 読む 次 行' + 'あ'.repeat(300)).slice(0, 256) });
+});
+
+it('redacts sensitive values in Bash descriptions before truncating them', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {
+      description: `${'a'.repeat(245)} sk-abcdefgh1234`,
+    } } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity).toHaveBeenCalledExactlyOnceWith({ kind: 'tool', tool: 'Bash',
+    description: `${'a'.repeat(245)} [REDACTED]` });
+});
+
+it('updates same-name Bash descriptions and restores the remaining parallel tool description', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'first', tool: 'Bash', input: { description: '最初の調査' } } });
+    options.onStream!({ type: 'tool_use', data: { id: 'second', tool: 'Bash', input: { description: '次の調査' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'second', content: 'private result', isError: false } });
+    options.onStream!({ type: 'tool_result', data: { id: 'first', content: 'private result', isError: false } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity.mock.calls.map(([value]) => value)).toEqual([
+    { kind: 'tool', tool: 'Bash', description: '最初の調査' },
+    { kind: 'tool', tool: 'Bash', description: '次の調査' },
+    { kind: 'tool', tool: 'Bash', description: '最初の調査' }, { kind: 'waiting' },
+  ]);
+});
+
+it('does not split a surrogate pair when bounding a Bash description', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: { description: 'a'.repeat(255) + '🙂' } } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity).toHaveBeenCalledExactlyOnceWith({ kind: 'tool', tool: 'Bash', description: 'a'.repeat(255) });
+});
+
+it.each(['Bash', 'StructuredOutput'])('publishes text closed by %s and discards the final block', async (tool) => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: 'コードを' } });
+    options.onStream!({ type: 'text', data: { text: '読みます。' } });
+    expect(onText).not.toHaveBeenCalled();
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool, input: {} } });
+    expect(onText).toHaveBeenCalledExactlyOnceWith('コードを読みます。');
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: '', isError: false } });
+    options.onStream!({ type: 'text', data: { text: '調べがつきました。' } });
+    options.onStream!({ type: 'text', data: { text: JSON.stringify(success.structuredOutput) } });
+    return success;
+  });
+  expect(await executor.execute({ ...input, onText })).toMatchObject({ message: 'reply', summary: null,
+    sessionId: success.sessionId, assignment: input.assignment });
+  expect(onText).toHaveBeenCalledExactlyOnceWith('コードを読みます。');
+});
+
+it('discards all streamed text when no tool closes a block', async () => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '最終返答の前置きです。' } });
+    options.onStream!({ type: 'text', data: { text: JSON.stringify(success.structuredOutput) } });
+    return success;
+  });
+  expect(await executor.execute({ ...input, onText })).toMatchObject({ message: 'reply' });
+  expect(onText).not.toHaveBeenCalled();
+});
+
+it('does not publish whitespace-only text blocks', async () => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: ' \t\n ' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {} } });
+    options.onStream!({ type: 'text', data: { text: '\n ' } });
+    return success;
+  });
+  const turnInput = { ...input, onText };
+  await executor.execute(turnInput);
+  expect(onText).not.toHaveBeenCalled();
+});
+
+it('truncates a text block at the progress byte limit without breaking UTF-8', async () => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: 'あ'.repeat(6000) } });
+    options.onStream!({ type: 'text', data: { text: '後続' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'bounded', tool: 'Read', input: {} } });
+    return success;
+  });
+  const turnInput = { ...input, onText };
+  await executor.execute(turnInput);
+  expect(onText).toHaveBeenCalledExactlyOnceWith('あ'.repeat(Math.floor(MAX_PROCESS_PROGRESS_BYTES / 3)));
+});
+
+it('discards unflushed and late text after the same turn is cancelled', async () => {
+  const { call, executor, input } = fixture();
+  const controller = new AbortController();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '表示済み' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {} } });
+    expect(onText).toHaveBeenCalledExactlyOnceWith('表示済み');
+    options.onStream!({ type: 'text', data: { text: '未確定' } });
+    controller.abort();
+    options.onStream!({ type: 'text', data: { text: '遅延' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'late', tool: 'Read', input: {} } });
+    return success;
+  });
+  const turnInput = { ...input, onText, abortSignal: controller.signal };
+  await expect(executor.execute(turnInput)).rejects.toThrow();
+  expect(onText).toHaveBeenCalledExactlyOnceWith('表示済み');
 });
 
 it('does not forward invalid tool labels or activity after cancellation', async () => {
@@ -129,6 +387,23 @@ it('reports provider output on both the initial call and the overflow retry', as
   const turnInput = { ...input, onProviderOutput };
   expect(await executor.execute(turnInput)).toMatchObject({ message: 'reply' });
   expect(onProviderOutput).toHaveBeenCalledTimes(2);
+});
+
+it('discards text from a failed attempt before publishing text from the retry', async () => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '初回の文' } });
+    throw new Error('Prompt is too long');
+  });
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '再試行の文' } });
+    expect(onText).not.toHaveBeenCalled();
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: {} } });
+    return success;
+  });
+  expect(await executor.execute({ ...input, onText })).toMatchObject({ message: 'reply' });
+  expect(onText).toHaveBeenCalledExactlyOnceWith('再試行の文');
 });
 
 it('propagates cancellation to the provider without retrying the aborted turn', async () => {
@@ -285,6 +560,17 @@ function mcpFixture() {
   };
   return { call, input, invalidateSession, executor, prepared, prepare, checkCall };
 }
+
+it('releases prepared MCP when a tool text observer throws', async () => {
+  const { call, input, executor, prepared } = mcpFixture();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '終了前の本文' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: {} } });
+    return success;
+  });
+  await expect(executor.execute({ ...input, onText() { throw new Error('observer failed'); } })).rejects.toThrow('observer failed');
+  expect(prepared.dispose).toHaveBeenCalledOnce();
+});
 
 it.each(['success', 'generic', 'second-failure', 'running-abort', 'between-attempt-abort'] as const)(
   'retains MCP through its last consumer and releases it after %s', async (outcome) => {

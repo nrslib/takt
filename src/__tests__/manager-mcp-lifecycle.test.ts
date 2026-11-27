@@ -40,7 +40,7 @@ describe('manager MCP resources', () => {
 
   it('shares the owned HTTP address and headers between the internal client and provider', async () => {
     const connection = await connectManagerMcp('/repository', assignment, undefined, { turnScope });
-    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, turnScope, undefined);
+    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, turnScope, undefined, undefined);
     expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
     expect(doubles.httpTransport).toHaveBeenCalledWith(new URL(config.url), { requestInit: { headers: config.headers } });
     expect(doubles.transport).not.toHaveBeenCalled();
@@ -69,7 +69,7 @@ describe('manager MCP resources', () => {
   it('retains turn lifetime checks over HTTP for goal execution tools', async () => {
     const connection = await connectManagerMcp('/repository', assignment, undefined,
       { turnScope });
-    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, turnScope, undefined);
+    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, turnScope, undefined, undefined);
     expect(doubles.transport).not.toHaveBeenCalled();
     expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
     await connection.dispose();

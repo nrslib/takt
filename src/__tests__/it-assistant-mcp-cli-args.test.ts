@@ -42,7 +42,7 @@ vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
-const TAKT_READ_TOOLS = ['takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks'] as const;
+const TAKT_READ_TOOLS = ['takt_get_goal', 'takt_get_goal_proposal', 'takt_get_run', 'takt_list_goal_proposals', 'takt_list_goals', 'takt_list_tasks'] as const;
 const TAKT_COPILOT_ALLOWANCES = TAKT_READ_TOOLS.map((tool) => `takt(${tool})`);
 const ISOLATED_CALLS = ['strict-readonly', 'retry-agreement', 'tell'] as const;
 type IsolatedCall = typeof ISOLATED_CALLS[number];
@@ -331,8 +331,7 @@ describe('assistant MCP tool permissions in Cursor and Copilot CLI arguments', (
       const cwd = writeRuntime(undefined);
       const options = new OptionsBuilder(
         { projectCwd: cwd, provider, model: `${provider}-model`, mcpAssignment },
-        () => cwd, () => cwd, () => undefined, () => join(cwd, 'reports'), () => 'en', () => 'workflow',
-      ).buildAgentOptions(workflowStepOf(requiredPermissionMode));
+        () => cwd, () => cwd, () => undefined, () => join(cwd, 'reports'), () => 'en', () => 'workflow', () => undefined, () => 'task', () => ({ kind: 'not_a_git_repository' as const }),).buildAgentOptions(workflowStepOf(requiredPermissionMode));
       return { cwd, options };
     }
 

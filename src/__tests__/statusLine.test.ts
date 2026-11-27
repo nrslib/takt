@@ -306,22 +306,35 @@ describe('StatusLine', () => {
     expect(screen).toContain(chunks.join(''));
   });
 
-  it('preserves split thinking across spinner timer ticks in the rendered terminal', async () => {
+  it('shows thinking progress without exposing split thinking across spinner timer ticks', async () => {
     vi.useFakeTimers();
     const display = new StreamDisplay('test-agent', false);
-    statusLine.start('Thinking...');
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      process.stdout.write(`${format(...args)}\n`);
+    });
     const chunks = ['思考 ', 'の断片\n続き ', 'です\n'];
+    try {
+      statusLine.start('Thinking...');
+      for (const chunk of chunks) {
+        display.showThinking(chunk);
+        vi.advanceTimersByTime(80);
+      }
+      display.showText('公開する応答本文\n');
+      display.flush();
+      statusLine.stop();
+      vi.useRealTimers();
 
-    for (const chunk of chunks) {
-      display.showThinking(chunk);
-      vi.advanceTimersByTime(80);
+      const output = stdoutChunks.join('');
+      const screen = await readTerminalText(output);
+      expect(screen).toContain('[test-agent] thinking:');
+      expect(screen).toContain('公開する応答本文');
+      for (const chunk of chunks) expect(output).not.toContain(chunk);
+    } finally {
+      display.reset();
+      statusLine.stop();
+      consoleLog.mockRestore();
+      vi.useRealTimers();
     }
-    display.flushThinking();
-    statusLine.stop();
-    vi.useRealTimers();
-
-    const screen = await readTerminalText(stdoutChunks.join(''));
-    expect(screen).toContain(chunks.join(''));
   });
 
   it('preserves tool output while the status line spinner is active', async () => {

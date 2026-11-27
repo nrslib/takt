@@ -10,13 +10,13 @@
  * - project partial overrides builtin partial
  */
 
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { makeInstructionContext, makeStep } from './test-helpers.js';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
-  statSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -42,25 +42,6 @@ describe('facet include expansion', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it.each(['ja', 'en'] as const)('%s: builtin instruction includes reference existing partials', (language) => {
-    const facetsRoot = fileURLToPath(new URL(`../../builtins/${language}/facets/`, import.meta.url));
-    let references = 0;
-    for (const directory of ['instructions', 'partials/instructions']) {
-      const root = join(facetsRoot, directory);
-      const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter(name => name.endsWith('.md'));
-      expect(files.length).toBeGreaterThan(0);
-      for (const file of files) {
-        const body = readFileSync(join(root, file), 'utf8');
-        for (const match of body.matchAll(/\{\{include:instructions\/([^}]+)\}\}/g)) {
-          const target = join(facetsRoot, 'partials', 'instructions', `${match[1]}.md`);
-          expect(statSync(target, { throwIfNoEntry: false })?.isFile(), `${language}/${directory}/${file}: ${match[0]}`).toBe(true);
-          references += 1;
-        }
-      }
-    }
-    expect(references).toBeGreaterThan(0);
-  });
-
   it.each(['ja', 'en'] as const)('%s: grill-me expands interview partials while the assistant omits them', (lang) => {
     const grill = loadTemplate('score_interactive_system_prompt', lang, { grillMe: true });
     const assistant = loadTemplate('score_interactive_system_prompt', lang, { grillMe: false });
@@ -72,26 +53,32 @@ describe('facet include expansion', () => {
     expect(grill).not.toContain('{{include:');
   });
 
-  it.each(['ja', 'en'] as const)('%s: manager excludes shared interview partials and ignores their project overrides', (lang) => {
-    const managerContext = { projectDir: tempDir, lang };
-    const managerFacets = (['policies', 'instructions'] as const).map(kind =>
-      resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
-    for (const facet of managerFacets) {
-      expect(facet).toBeDefined();
-    }
-    const manager = managerFacets.join('\n\n');
-    const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'instructions');
+  it.each(['ja', 'en'] as const)('%s: keeps included policies in the full snapshot and matches direct array injection', (lang) => {
+    const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
+    const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'policies');
+    mkdirSync(policiesDir, { recursive: true });
     mkdirSync(partialsDir, { recursive: true });
+    writeFileSync(join(partialsDir, 'shared.md'), 'SHARED-RULE');
+    writeFileSync(join(policiesDir, 'first.md'), 'FIRST-RULE\n{{include:policies/shared}}\n{{include:policies/shared}}\n' + 'a'.repeat(2_100));
+    writeFileSync(join(policiesDir, 'last.md'), 'LAST-RULE');
+    const policyContents = ['first', 'last'].map(name => ({
+      content: resolveRefToContent(name, undefined, tempDir, 'policies', { projectDir: tempDir, lang })!,
+    }));
+    const combined = policyContents.map(entry => entry.content).join('\n\n---\n\n');
+    const policyPath = join(tempDir, 'policies.md');
+    writeFileSync(policyPath, combined);
+    const step = makeStep({ policyContents });
+    const instructionContext = makeInstructionContext({ language: lang, policySourcePath: policyPath });
+    const direct = new InstructionBuilder(step, instructionContext).build();
+    const runtime = new InstructionBuilder(step, {
+      ...instructionContext,
+      policyContents: [{ content: readFileSync(policyPath, 'utf8'), sourcePath: policyPath }],
+    }).build();
 
-    for (const name of ['decision-question-priority', 'one-question-interview']) {
-      const partial = readFileSync(fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/instructions/${name}.md`, import.meta.url)), 'utf8').trim();
-      expect(manager).not.toContain(partial);
-      writeFileSync(join(partialsDir, `${name}.md`), `Project override for ${name}`);
-    }
-    const managerWithOverrides = (['policies', 'instructions'] as const).map(kind =>
-      resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
-    expect(managerWithOverrides).toEqual(managerFacets);
-    expect(manager).not.toContain('{{include:');
+    expect(runtime).toBe(direct);
+    expect(runtime).toContain(policyPath);
+    expect(readFileSync(policyPath, 'utf8')).toBe(combined);
+    expect(combined).not.toContain('{{include:');
   });
 
   it('should expand {{include:instructions/<name>}} in an instruction facet', () => {

@@ -31,7 +31,7 @@ TAKT has two MCP configuration modes:
 
 The two modes must not be mixed. When an active `mcp` section in `runtime.yaml` coexists with a workflow `mcp_servers` declaration or the `workflow_mcp_servers` policy, TAKT fails fast before any agent runs and reports the workflow/step and the migration target:
 
-- workflow `mcp_servers` policy → `mcp.targets`
-- step `mcp_servers` map → `mcp.targets.steps`
+- The config `workflow_mcp_servers` is a transport permission policy; its values cannot be copied directly into runtime assignments. Remove the legacy policy during migration.
+- Move server definitions from the step's `mcp_servers` to `mcp.servers`, then manually assign their names through `mcp.targets.steps`.
 
-In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env. Define them in the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.

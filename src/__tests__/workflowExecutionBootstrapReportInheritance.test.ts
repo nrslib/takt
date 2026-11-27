@@ -23,7 +23,7 @@ vi.mock('../core/workflow/run/resume-report-reference-snapshot.js', () => ({
 }));
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createOutputFns: () => mocks.out,
-  createPrefixedStreamHandler: vi.fn(),
+  createPrefixedStreamHandler: vi.fn(() => Object.assign(vi.fn(), { flush: vi.fn() })),
 }));
 vi.mock('../infra/config/index.js', () => ({
   loadGlobalConfig: () => ({}), loadProjectConfig: () => ({}),
@@ -58,7 +58,7 @@ vi.mock('../infra/observability/otelFoundation.js', () => ({
   initializeOtelFoundation: async () => ({ shutdown: vi.fn() }),
 }));
 vi.mock('../core/logging/providerEventLogger.js', () => ({
-  createProviderEventLogger: () => ({}), isProviderEventsEnabled: () => false,
+  createProviderEventLogger: () => ({ flush: vi.fn() }), isProviderEventsEnabled: () => false,
 }));
 vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: () => ({}), isUsageEventsEnabled: () => false,

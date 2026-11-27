@@ -15,7 +15,7 @@ it('publishes task setup failures once when claiming changes their state', () =>
   let status = 'pending';
   const record = () => ({ name: 'task-a', goalId: goalRecord().id, status, runSlug: 'setup-run', completion: { success: false, interrupted: false } });
   const runner = { listTaskStateItems: () => [record()], claimNextTasks: () => { status = 'failed'; return []; } } as unknown as TaskRunner;
-  expect(claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal)).toEqual({ tasks: [] });
+  expect(claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal)).toEqual({ tasks: [], setupFailedTaskNames: ['task-a'] });
   expect(save).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'setup-run', result: { success: false, interrupted: false } });
   claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
 });
@@ -125,11 +125,10 @@ it.each(['goalId', 'completion', 'runSlug'] as const)('does not publish a recove
 
 describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s acquisition failures', (source) => {
   it.each([
-    { goalTasksOnly: false, goalId: undefined, status: 'pending', retry: true },
-    { goalTasksOnly: true, goalId: undefined, status: 'pending', retry: false },
-    { goalTasksOnly: true, goalId: goalRecord().id, status: 'pending', retry: true },
-    { goalTasksOnly: false, goalId: goalRecord().id, status: 'failed', retry: false },
-  ])('wraps claim ENOSPC only for eligible pending tasks: %j', ({ goalTasksOnly, goalId, status, retry }) => {
+    { goalId: undefined, status: 'pending', retry: true },
+    { goalId: goalRecord().id, status: 'pending', retry: true },
+    { goalId: goalRecord().id, status: 'failed', retry: false },
+  ])('wraps claim ENOSPC only for eligible pending tasks: %j', ({ goalId, status, retry }) => {
     const failure = source === 'private'
       ? new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {})
       : new TaskClaimLockAcquisitionError('disk full', { cause: new Error('disk full') });
@@ -137,7 +136,7 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
       listTaskStateItems: () => [{ name: 'task-a', goalId, status }],
       claimNextTasks: () => { throw failure; },
     } as unknown as TaskRunner;
-    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
+    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal);
     if (retry) {
       expect(claim).toThrow(TaskClaimLockUnavailableError);
       expect(claim).toThrow(expect.objectContaining({ cause: failure }));

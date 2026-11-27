@@ -61,6 +61,14 @@ function saveTasks(cwd, fixture) {
   return tasks;
 }
 
+// Steps of child workflows are logged under their own names, while run metadata keeps the top-level step,
+// or the branch step when the child workflow runs in a branch of a top-level parallel step.
+const metaStep = (record) => {
+  const [top, branch] = record.stack ?? [];
+  if (top === undefined) return record.step;
+  return top.kind === 'parallel' && branch !== undefined ? branch.step : top.step;
+};
+
 function assertRunTimeline(artifact, task) {
   const { meta, sessionLog } = artifact;
   assert.equal(sessionLog[0].type, 'workflow_start');
@@ -81,6 +89,8 @@ function assertRunTimeline(artifact, task) {
       assert.equal(record.iteration, ++iteration, 'Iteration increments for each step start');
       active = record;
       lastStarted = record;
+    } else if (record.type === 'workflow_call_start') {
+      assert.equal(active, undefined, 'A workflow call starts between sequential steps');
     } else if (record.type === 'step_complete') {
       assert.ok(active, 'A step completion needs a matching start');
       assert.equal(record.step, active.step);
@@ -98,14 +108,47 @@ function assertRunTimeline(artifact, task) {
   assert.equal(ended, meta.status !== 'running');
   if (meta.currentStep !== undefined) {
     assert.ok(lastStarted);
-    assert.equal(meta.currentStep, lastStarted.step);
+    assert.equal(meta.currentStep, metaStep(lastStarted));
     assert.equal(meta.currentIteration, lastStarted.iteration);
   }
   if (meta.status === 'running') {
     assert.ok(active, 'A running fixture must have an unfinished step');
     assert.equal(meta.currentIteration, active.iteration);
-    assert.equal(meta.currentStep, active.step);
+    assert.equal(meta.currentStep, metaStep(active));
     assert.equal(meta.endTime, undefined);
+  }
+}
+
+const builtinWorkflow = (lang, name) => parse(readFileSync(new URL(`../builtins/${lang}/workflows/${name}.yaml`, import.meta.url), 'utf8'));
+const builtinStep = (lang, frame) => builtinWorkflow(lang, frame.workflow).steps.find(({ name }) => name === frame.step);
+
+// Workflow stacks name the builtin workflows the fixture claims to run, so every start must be one the engine can
+// write for those definitions: a workflow call is logged as workflow_call_start rather than step_start, child steps
+// run inside a started call, and each start follows the initial step or a rule of the previous step in its workflow.
+function assertBuiltinWorkflowStarts({ meta, sessionLog }, lang) {
+  const scopes = new Map([[JSON.stringify([]), { previous: undefined, counts: new Map() }]]);
+  for (const record of sessionLog.filter(({ type }) => ['workflow_call_start', 'step_start'].includes(type))) {
+    const leaf = record.stack.at(-1);
+    const parents = record.stack.slice(0, -1);
+    const step = builtinStep(lang, leaf);
+    assert.ok(step, `${leaf.workflow}/${leaf.step} is a builtin step`);
+    assert.equal(step.kind ?? 'agent', leaf.kind);
+    assert.equal(record.type === 'workflow_call_start', leaf.kind === 'workflow_call');
+    assert.equal(leaf.workflow, parents.length === 0 ? meta.workflow : builtinStep(lang, parents.at(-1)).call);
+    const scope = scopes.get(JSON.stringify(parents));
+    assert.ok(scope, `${leaf.workflow}/${leaf.step} runs inside a started workflow call`);
+    if (scope.previous === undefined) assert.equal(leaf.step, builtinWorkflow(lang, leaf.workflow).initial_step);
+    else assert.ok(builtinStep(lang, { workflow: leaf.workflow, step: scope.previous }).rules
+      .some(({ next }) => next === leaf.step), `${scope.previous} -> ${leaf.step}`);
+    const occurrence = (scope.counts.get(leaf.step) ?? 0) + 1;
+    assert.equal(leaf.occurrence, occurrence);
+    scope.counts.set(leaf.step, occurrence);
+    scope.previous = leaf.step;
+    if (record.type === 'workflow_call_start') {
+      assert.equal(record.childWorkflow, step.call);
+      assert.equal(record.callInstance, occurrence);
+      scopes.set(JSON.stringify(record.stack), { previous: undefined, counts: new Map() });
+    }
   }
 }
 
@@ -264,6 +307,7 @@ test('all fixture run reads match the production paged reader over saved artifac
       for (const artifact of fixture.runArtifacts) {
         const task = fixture.tasks.find((task) => task.runSlug === artifact.meta.runSlug);
         assertRunTimeline(artifact, task);
+        if (artifact.sessionLog.some(({ stack }) => stack !== undefined)) assertBuiltinWorkflowStarts(artifact, lang);
         if (task.status === 'failed') {
           const metadata = resolveRetryMetadataFromRunMeta(artifact.meta);
           assert.equal(task.startStep, metadata.startStep);
@@ -318,6 +362,10 @@ test('finished tasks require an explicit completion time and preserve it in save
 test('task completion, integration records and new pause-case run evidence follow execution order', () => {
   for (const { case: caseId, lang, fixture } of fixtures) {
     if (fixture.turn !== 'event') continue;
+    if (caseId === 'self-record-not-human-stop') {
+      const stopRecord = fixture.additionalGoals[0].workLog[0];
+      assert.ok(Date.parse(stopRecord.recordedAt) < Date.parse(fixture.event.createdAt), `${caseId}/${lang}: self-record must precede the next event`);
+    }
     for (const task of fixture.tasks) {
       const label = `${caseId}/${lang}/${task.name}`;
       if (task.startedAt !== undefined) assert.ok(Date.parse(task.createdAt) <= Date.parse(task.startedAt), label);
@@ -391,7 +439,7 @@ function cloneWorkingLocations(cwd, fixture, source) {
   }
 }
 
-test('patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
+test('running patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-tell-contract-'));
   const required = new Set(['local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'verification-once', 'verification-mixed', 'unrelated-history-repair']);
@@ -409,6 +457,7 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
       if (fixture.event?.kind !== 'patrol') continue;
       const cwd = join(root, caseId, lang);
       const task = fixture.tasks.find(({ status }) => status === 'running');
+      if (task === undefined) continue;
       assert.equal(task.worktree, true);
       cloneWorkingLocations(cwd, fixture, source);
       const records = saveTasks(cwd, fixture);
@@ -533,4 +582,12 @@ test('pause fixtures, including before-start interruptions, and first failures a
     invalidateAllResolvedConfigCache();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('normalizing saved state reads preserves a single tasks artifact across replay input kinds', () => {
+  const fixture = fixtures.find(({ case: caseId, lang }) => caseId === 'human-quotes-review-stop' && lang === 'ja').fixture;
+  const first = managerStateReads(fixture);
+  const second = managerStateReads({ ...fixture, readResults: first });
+  assert.deepEqual(second, first);
+  assert.equal(second.filter(({ tool, arguments: args }) => tool === 'Read' && args.file_path === `${fixture.cwd}/.takt/tasks.yaml`).length, 1);
 });

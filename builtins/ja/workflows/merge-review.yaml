@@ -1,5 +1,7 @@
 name: merge-review
 description: PRをレビューし、CIと評価の結果をコメントする
+subworkflow:
+  callable: true
 max_steps: 51
 initial_step: identify
 steps:

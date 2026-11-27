@@ -38,19 +38,19 @@ export function buildTaktManagedPrOptions(body: string): Pick<CreatePrOptions, '
 
 export function parseIssueNumberFromUrl(url: string): number {
   if (url.endsWith('/')) {
-    throw new Error(`Issue URL must end with a positive issue number: ${url}`);
+    throw new Error('Issue URL must end with a positive issue number');
   }
 
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`Issue URL is invalid: ${url}`);
+    throw new Error('Issue URL is invalid');
   }
 
   const lastSegment = parsed.pathname.split('/').pop();
   if (lastSegment === undefined || !/^[1-9]\d*$/u.test(lastSegment)) {
-    throw new Error(`Issue URL must end with a positive issue number: ${url}`);
+    throw new Error('Issue URL must end with a positive issue number');
   }
 
   const issueNumber = Number(lastSegment);

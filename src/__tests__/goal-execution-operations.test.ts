@@ -31,7 +31,7 @@ describe('goal execution MCP operations', () => {
 
     expect(result.isError).not.toBe(true);
     expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goalId, executionStatus: 'paused' });
-    expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'paused', signal);
+    expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'paused', signal, 'manager');
     expect(doubles.boundary).toHaveBeenCalledWith(input.cwd, deps.allowedProjectRoot);
     expect(doubles.daemon).not.toHaveBeenCalled();
     expect(doubles.run).not.toHaveBeenCalled();
@@ -43,7 +43,7 @@ describe('goal execution MCP operations', () => {
 
     expect(result.isError).not.toBe(true);
     expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goalId, executionStatus: 'active' });
-    expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'active', signal);
+    expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'active', signal, 'manager');
     expect(doubles.daemon).toHaveBeenCalledExactlyOnceWith();
     expect(doubles.run).toHaveBeenCalledExactlyOnceWith(input.cwd);
     expect(vi.mocked(setGoalExecutionStatus).mock.invocationCallOrder[0]).toBeLessThan(doubles.daemon.mock.invocationCallOrder[0]!);
@@ -56,7 +56,7 @@ describe('goal execution MCP operations', () => {
 
     expect(result.isError).not.toBe(true);
     expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goalId, executionStatus: 'aborted' });
-    expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'aborted', signal);
+    expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'aborted', signal, 'manager');
     expect(doubles.invalidate).toHaveBeenCalledExactlyOnceWith(goalId);
     expect(vi.mocked(setGoalExecutionStatus).mock.invocationCallOrder[0]).toBeLessThan(doubles.invalidate.mock.invocationCallOrder[0]!);
     expect(doubles.daemon).not.toHaveBeenCalled();

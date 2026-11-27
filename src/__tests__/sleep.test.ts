@@ -49,14 +49,6 @@ describe('preventSleep', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('should do nothing on Windows', () => {
-    vi.mocked(platform).mockReturnValue('win32');
-
-    preventSleep();
-
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
   it('should spawn caffeinate on macOS when available', () => {
     vi.mocked(platform).mockReturnValue('darwin');
     vi.mocked(existsSync).mockReturnValue(true);

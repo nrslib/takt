@@ -2,7 +2,7 @@
  * Tests for runAllTasks concurrency support (worker pool)
  */
 
-vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), runtimeAssignmentUnavailableReason: vi.fn(() => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { beforeEach,describe,expect,it,vi } from 'vitest';
 import type { TaskInfo,TaskListItem } from '../infra/task/index.js';
 
@@ -73,6 +73,7 @@ vi.mock('../infra/config/index.js', () => ({
 
 const mockLoadConfig = mockLoadConfigRaw;
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: [] }; } } }));
 vi.mock('../infra/task/project-execution-lock.js', () => ({
   acquireProjectExecutionLock: vi.fn(() => ({
     owner: { ownerId: 'run-test-owner', pid: process.pid, kind: 'run', state: 'starting',

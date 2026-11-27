@@ -191,6 +191,10 @@ export class SdkOptionsBuilder {
       sdkOptions.sandbox = this.options.sandbox;
     }
 
+    if (this.options.denyRules !== undefined) {
+      sdkOptions.settings = { permissions: { deny: this.options.denyRules } };
+    }
+
     if (this.options.pathToClaudeCodeExecutable) {
       sdkOptions.pathToClaudeCodeExecutable = this.options.pathToClaudeCodeExecutable;
     }
@@ -238,6 +242,9 @@ export class SdkOptionsBuilder {
   }
 
   private resolvePermissionMode(): SdkPermissionMode {
+    if (this.options.aiReviewPermissions) {
+      return 'auto';
+    }
     if (this.options.bypassPermissions) {
       return 'bypassPermissions';
     }

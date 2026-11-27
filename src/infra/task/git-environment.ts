@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { devNull } from 'node:os';
-import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { configureSafeGitEnvironment, createGitEnvironment, FILTER_CONFIG_ARGS, parseFilterConfigNames } from './git-environment-settings.js';
+import { remoteGitCredentialHelper } from './git-credential-helper.js';
 
 interface SafeGitEnvironmentOptions {
   readonly allowGitHooks?: boolean;
@@ -12,52 +12,25 @@ export async function buildSafeGitEnvironment(
   options: SafeGitEnvironmentOptions,
   signal?: AbortSignal,
 ): Promise<NodeJS.ProcessEnv> {
-  const environment: NodeJS.ProcessEnv = {
-    ...buildChildProcessEnv(),
-    GIT_LITERAL_PATHSPECS: '1',
-  };
-  removeInheritedGitCommandConfig(environment);
-  delete environment.GIT_GLOB_PATHSPECS;
-  delete environment.GIT_NOGLOB_PATHSPECS;
-  delete environment.GIT_ICASE_PATHSPECS;
-  delete environment.GIT_DIR;
-  delete environment.GIT_WORK_TREE;
-  delete environment.GIT_COMMON_DIR;
-  delete environment.GIT_INDEX_FILE;
-  const configEntries: Array<readonly [string, string]> = [];
+  const environment = createGitEnvironment(false);
+  const filterNames = options.allowGitFilters ? [] : await getFilterConfigNames(cwd, environment, signal);
+  configureSafeGitEnvironment(environment, { allowGitHooks: options.allowGitHooks, filterNames, review: false });
 
-  if (!options.allowGitHooks) {
-    configEntries.push(['core.hooksPath', devNull]);
+  if (environment.TAKT_REMOTE_GIT_TOKEN !== undefined && environment.TAKT_REMOTE_GIT_ORIGIN !== undefined) {
+    const configCount = Number(environment.GIT_CONFIG_COUNT ?? '0');
+    const credentialConfig: Array<readonly [string, string]> = [
+      ['credential.helper', ''],
+      ['credential.helper', remoteGitCredentialHelper()],
+    ];
+    environment.GIT_TERMINAL_PROMPT = '0';
+    environment.GIT_CONFIG_COUNT = String(configCount + credentialConfig.length);
+    credentialConfig.forEach(([key, value], index) => {
+      const entryIndex = configCount + index;
+      environment[`GIT_CONFIG_KEY_${entryIndex}`] = key;
+      environment[`GIT_CONFIG_VALUE_${entryIndex}`] = value;
+    });
   }
-
-  if (!options.allowGitFilters) {
-    configEntries.push(...(await getFilterConfigNames(cwd, environment, signal)).map((configName) => [
-      configName,
-      configName.toLowerCase().endsWith('.required') ? 'false' : '',
-    ] as const));
-  }
-
-  if (configEntries.length === 0) return environment;
-
-  environment.GIT_CONFIG_COUNT = String(configEntries.length);
-  configEntries.forEach(([key, value], index) => {
-    environment[`GIT_CONFIG_KEY_${index}`] = key;
-    environment[`GIT_CONFIG_VALUE_${index}`] = value;
-  });
   return environment;
-}
-
-function removeInheritedGitCommandConfig(environment: NodeJS.ProcessEnv): void {
-  for (const key of Object.keys(environment)) {
-    const normalizedKey = key.toUpperCase();
-    if (normalizedKey === 'GIT_CONFIG'
-      || normalizedKey === 'GIT_CONFIG_COUNT'
-      || normalizedKey === 'GIT_CONFIG_PARAMETERS'
-      || normalizedKey.startsWith('GIT_CONFIG_KEY_')
-      || normalizedKey.startsWith('GIT_CONFIG_VALUE_')) {
-      delete environment[key];
-    }
-  }
 }
 
 async function getFilterConfigNames(
@@ -67,8 +40,7 @@ async function getFilterConfigNames(
 ): Promise<string[]> {
   try {
     const stdout = await readGitConfigNames(cwd, environment, signal);
-    const names = stdout.trim().split('\n').filter(Boolean);
-    return [...new Map(names.map((name) => [name.toLowerCase(), name])).values()];
+    return parseFilterConfigNames(stdout);
   } catch (error) {
     if (isNoMatchingGitConfig(error)) return [];
     throw error;
@@ -79,7 +51,7 @@ function readGitConfigNames(cwd: string, environment: NodeJS.ProcessEnv, signal?
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'],
+      FILTER_CONFIG_ARGS,
       { cwd, encoding: 'utf-8', env: environment, signal },
       (error, stdout) => {
         if (error !== null) reject(error);

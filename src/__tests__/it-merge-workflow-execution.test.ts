@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../core/models/types.js';
+import type { WorkflowConfig, WorkflowEffect, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import type { WorkflowCallResolutionRequest } from '../core/workflow/types.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
@@ -19,6 +19,9 @@ import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workf
 import { executeTaskWorkflow } from '../features/tasks/execute/taskWorkflowExecution.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { isRealPathInside } from '../shared/utils/pathBoundary.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { GoalAbortMonitor } from '../features/tasks/execute/goalAbortMonitor.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
 vi.mock('../infra/workflow/system/system-sync-effects.js', () => ({
   syncWithRootEffect: vi.fn(), resolveConflictsWithAiEffect: vi.fn(),
@@ -67,7 +70,16 @@ vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => ({
 import { runAgent } from '../agents/runner.js';
 import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
+// モデルの判断結果を固定し、裁定後のレポート伝搬と遷移を検証する。
+interface SyncReviewFinding {
+  id: string;
+  problem: string;
+  evidence: string;
+  shouldFix: boolean;
+}
+
 interface Scenario {
+  syncReviewFindings?: readonly SyncReviewFinding[];
   headChangesDuringCi?: boolean;
   concurrency?: number;
   lateConflicts?: number;
@@ -106,6 +118,8 @@ interface Scenario {
   recoveryPushFails?: boolean;
   ciName?: { field: 'check' | 'job' | 'unavailable'; value: string };
   largeCiLogs?: boolean;
+  /** Adds a failed external status beside the diagnosable check. */
+  externalCiCheck?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -156,7 +170,7 @@ describe('Builtin PR merge workflow execution', () => {
     expect(review.parallel).toBeUndefined();
   });
 
-  function harness(name: string, scenario: Scenario = {}, language = 'ja') {
+  function harness(name: string, scenario: Scenario = {}, language = 'ja', abortSignal?: AbortSignal) {
     if (language !== 'ja' && language !== 'en') throw new Error(`Unsupported test language: ${language}`);
     const simple = name === 'merge-review-fix-simple' || name === 'merge-prepare';
     const actualReview = simple || scenario.fullInitialReview === true;
@@ -184,14 +198,51 @@ describe('Builtin PR merge workflow execution', () => {
     const observedStatuses: Array<{ headSha: string; finished: boolean; mergeable: string }> = [];
     const childContexts: Array<{ cwd: string; projectCwd: string; prNumber: number | undefined }> = [];
     const simpleReviewPrompts: string[] = [];
+    const agentPrompts: Array<{ workflow: string | undefined; step: string | undefined; prompt: string }> = [];
     const recoveryPrompts: Array<{ step: string; prompt: string; requiredPermissionMode: string | undefined; cwd: string | undefined }> = [];
     const cloneCwd = join(project, 'clone');
     mkdirSync(cloneCwd);
-    if (scenario.largeCiLogs) execFileSync('git', ['init', '-q'], { cwd: cloneCwd });
+    if (scenario.largeCiLogs) {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: cloneCwd, stdio: 'pipe',
+        env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull,
+          GIT_AUTHOR_NAME: 'TAKT test', GIT_AUTHOR_EMAIL: 'takt-test@example.invalid',
+          GIT_COMMITTER_NAME: 'TAKT test', GIT_COMMITTER_EMAIL: 'takt-test@example.invalid' } });
+      // A PR clone has a committed HEAD on its head branch, not an unborn repository.
+      git('init', '--quiet', '--initial-branch=main');
+      writeFileSync(join(cloneCwd, 'pr-change.ts'), 'export const value = 1;\n');
+      git('add', '--', 'pr-change.ts');
+      git('commit', '--quiet', '-m', 'base');
+      git('checkout', '--quiet', '-b', 'feature/pr');
+      writeFileSync(join(cloneCwd, 'pr-change.ts'), 'export const value = 2;\n');
+      git('commit', '--quiet', '-am', 'PR change');
+    }
     const reportDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'reports');
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };
     let reviewCount = 0;
+    const syncReviewContext = [
+      'PR cumulative diff: src/shared.ts, src/consumer.ts, tests/consumer.test.ts, src/worker.ts.',
+      'Local synchronization merge: local-merge; parents: pr-before-sync, main-after-change; merge base: common-base.',
+      'Remote PR head: pr-before-sync. The local merge has not been pushed.',
+      'Conflicted file: src/shared.ts. Main added a required argument consumed in src/consumer.ts.',
+      'PR added a consumer and tests in files without conflicts. tests/consumer.test.ts fails only in local-merge.',
+      'The worker shutdown issue was present in pr-before-sync and is independent of the main changes.',
+    ].join('\n');
+    const syncReviewResolution = (afterFix: boolean) => {
+      const findings = scenario.syncReviewFindings;
+      if (!findings) throw new Error('Missing synchronization review findings');
+      const accepted = afterFix ? [] : findings.filter((finding) => finding.shouldFix);
+      return [
+        '# レビュー指摘の裁定',
+        `## 結果: ${accepted.length > 0 ? '修正対象あり' : '修正対象なし'}`,
+        ...(accepted.length === 0 ? [] : ['## 修正する問題',
+          ...accepted.map((finding) => `| ${finding.id} | ${finding.problem} | ${finding.evidence} |`)]),
+        '## 指摘ごとの判断',
+        ...findings.map((finding) => `| ${finding.id} | ${finding.shouldFix
+          ? afterFix ? '確認後は問題なし' : '修正する'
+          : '持ち越す'} | ${finding.evidence} |`),
+      ].join('\n');
+    };
     const currentFailure = () => reruns > 0 && scenario.rerunFailure !== undefined
       ? scenario.rerunFailure
       : scenario.ciFailures?.[Math.min(Math.max(pushes - 1, 0), scenario.ciFailures.length - 1)];
@@ -202,6 +253,10 @@ describe('Builtin PR merge workflow execution', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'supervisor', userInstruction: prompt });
       const step = options?.workflowMeta?.currentStep;
+      if (options?.executionPhase === 1) {
+        agentPrompts.push({ workflow: options.workflowMeta?.workflowName, step, prompt });
+        if (scenario.syncReviewFindings) calls.push(`agent:${options.workflowMeta?.workflowName}/${step}`);
+      }
       if (['investigate_ci', 'fix_ci', 'review_ci_fix'].includes(step ?? '')) {
         if (options?.executionPhase === 1) {
           calls.push(`agent:${step}`);
@@ -219,7 +274,8 @@ describe('Builtin PR merge workflow execution', () => {
         };
       }
       if (actualReview && options?.workflowMeta?.currentStep === 'gather') {
-        return { persona: persona ?? 'planner', status: 'done', content: 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
+        return { persona: persona ?? 'planner', status: 'done',
+          content: scenario.syncReviewFindings ? syncReviewContext : 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
       }
       if (scenario.fullInitialReview && options?.workflowMeta?.workflowName === 'development-review') {
         return { persona: persona ?? 'reviewer', status: 'done', timestamp: new Date(),
@@ -227,21 +283,26 @@ describe('Builtin PR merge workflow execution', () => {
       }
       if ((simple && options?.workflowMeta?.workflowName === 'single-review-suite') || (!simple && options?.workflowMeta?.currentStep === 'write_report')) {
         if (simple && options?.executionPhase === 1) simpleReviewPrompts.push(prompt);
-        const reviewResult = simple && scenario.qualityFailed && reviewCount === 0 ? 'REJECT' : 'APPROVE';
+        const reviewResult = simple && (scenario.qualityFailed || scenario.syncReviewFindings) && reviewCount === 0 ? 'REJECT' : 'APPROVE';
         if (simple && options?.executionPhase === 1) reviewCount++;
         const reviewReason = reviewResult === 'REJECT' ? 'Concrete code defect' : 'No unresolved issues';
         return { persona: 'reviewer', status: 'done',
-          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${reviewResult}. ${reviewReason}.`,
+          content: `CHILD_REVIEW_REPORT: PR ${prNumber} result=${reviewResult}. ${reviewReason}.\n${
+            scenario.syncReviewFindings?.map((finding) => `${finding.id}: ${finding.problem}. ${finding.evidence}`).join('\n') ?? ''}`,
           ...(simple ? { structuredOutput: { result: reviewResult } } : {}),
           timestamp: new Date() };
       }
       if (actualReview && options?.workflowMeta?.workflowName === 'peer-review') {
         return { persona: persona ?? 'review-adjudicator', status: 'done',
-          content: 'Review resolution: one actionable finding.', timestamp: new Date() };
+          content: scenario.syncReviewFindings ? syncReviewResolution(reviewCount > 1)
+            : 'Review resolution: one actionable finding.', timestamp: new Date() };
       }
       if (simple && options?.workflowMeta?.workflowName === 'development-remediation-dynamic') {
         return { persona: persona ?? 'developer', status: 'done',
-          content: 'Fix plan, implementation, and validation evidence.', timestamp: new Date() };
+          content: ['Fix plan, implementation, and validation evidence.',
+            ...(scenario.syncReviewFindings?.filter((finding) => finding.shouldFix)
+              .map((finding) => `${finding.id}: ${finding.problem}. ${finding.evidence}`) ?? [])].join('\n'),
+          timestamp: new Date() };
       }
       expect(prompt).toContain('CHILD_REVIEW_REPORT');
       if (name === 'merge-review') {
@@ -374,6 +435,7 @@ describe('Builtin PR merge workflow execution', () => {
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
+        ...(scenario.externalCiCheck ? { external: [{ name: 'third-party', url: 'https://ci.example.test/builds/1' }] } : {}),
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
     const githubProvider = new GitHubProvider();
@@ -394,6 +456,7 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const engineOptions: ConstructorParameters<typeof WorkflowEngine>[3] = {
       provider: 'mock', language, projectCwd: project, reportDirName: 'merge-workflow-report',
+      abortSignal,
       selectorProvider: { provider: 'mock', model: 'mock' },
       selectorGitCommandRunner: { isInsideWorkTree: async () => false,
         run: async () => ({ output: Buffer.from(''), bytes: 0 }) },
@@ -408,7 +471,8 @@ describe('Builtin PR merge workflow execution', () => {
         options.onStructuredPromptResolved?.({ systemPrompt: 'conductor', userInstruction: instruction });
         if (actualReview) {
           const candidateIndex = options.stepName === 'gather' && scenario.gatherFailed ? 1
-            : options.stepName === 'review-adjudication' && scenario.qualityFailed && reviewCount === 1 ? 0
+            : options.stepName === 'review-adjudication' && reviewCount === 1
+              && (scenario.qualityFailed || scenario.syncReviewFindings?.some((finding) => finding.shouldFix)) ? 0
               : options.stepName === 'review-adjudication' ? 1
                 : options.stepName === 'fix-plan' && scenario.cannotRemediate ? 2
                   : 0;
@@ -444,7 +508,7 @@ describe('Builtin PR merge workflow execution', () => {
     const engine = new WorkflowEngine(workflow, cloneCwd, `Review PR ${prNumber}`, engineOptions);
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
     return { engine, workflow, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd,
-      executeEffect, simpleReviewPrompts, recoveryPrompts, reportDirectory, fetchPrCiFailure, rerunPrCi,
+      executeEffect, simpleReviewPrompts, agentPrompts, syncReviewContext, recoveryPrompts, reportDirectory, fetchPrCiFailure, rerunPrCi,
       taskEntryStates,
       runFromTaskEntry: (workflowIdentifier: string) => executeTaskWorkflow({
         cwd: cloneCwd, projectCwd: project, workflowIdentifier, task: 'Review PR', outputMode: 'silent',
@@ -466,12 +530,268 @@ describe('Builtin PR merge workflow execution', () => {
       finishCi: () => { ciFinished = true; } };
   }
 
+  const syncDefects: readonly SyncReviewFinding[] = [
+    { id: 'coding-001', problem: '衝突解消でPR側の変更が消失した', shouldFix: true,
+      evidence: 'src/shared.ts:10: pr-before-syncにある分岐がlocal-mergeで消失し、main側の追加だけが残る。' },
+    { id: 'coding-002', problem: '非競合ファイルのテストがmainとの組み合わせで失敗する', shouldFix: true,
+      evidence: 'tests/consumer.test.ts:20: pr-before-syncとmain-after-changeでは成功するが、local-mergeではmainが追加した必須引数をPRのconsumerが渡さず失敗する。競合はsrc/shared.tsだけ。' },
+  ];
+  const preexistingFinding: SyncReviewFinding = {
+    id: 'coding-003', problem: 'worker停止時の既存の設計問題', shouldFix: false,
+    evidence: 'src/worker.ts:30: pr-before-syncでも再現する。mainの追加変更はこの経路に影響せず、同期と無関係なので持ち越す。',
+  };
+
+  function phase1Prompt(h: ReturnType<typeof harness>, workflow: string, step: string): string {
+    const entries = h.agentPrompts.filter((entry) => entry.workflow === workflow && entry.step === step);
+    expect(entries).toHaveLength(1);
+    return entries[0]!.prompt;
+  }
+
+  function expectSyncPolicyTransfer(h: ReturnType<typeof harness>, language: string) {
+    const policy = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'policies', 'merge-sync-review.md'), 'utf8').trim();
+    const contextDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'context');
+    const policyFiles = readdirSync(contextDirectory, { recursive: true, encoding: 'utf8' })
+      .filter((path) => /[\\/]policy[\\/]/.test(path))
+      .map((path) => join(contextDirectory, path));
+    const consumers = h.agentPrompts.filter(({ workflow, step }) => workflow === 'single-review-suite'
+      || workflow === 'peer-review' && (step === 'review-adjudication' || step === 'final-gate'));
+    expect(consumers.length).toBeGreaterThan(0);
+    for (const consumer of consumers) {
+      const referencedPolicies = policyFiles.filter((path) => consumer.prompt.includes(path));
+      expect(referencedPolicies, `${consumer.workflow}/${consumer.step}`).toHaveLength(1);
+      expect(readFileSync(referencedPolicies[0]!, 'utf8'), `${consumer.workflow}/${consumer.step}`).toContain(policy);
+    }
+  }
+
   describe.each((['ja', 'en'] as const).flatMap((language) =>
-    ['merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),
+    ['merge-prepare', 'merge-review-fix-simple'].map((name) => ({ language, name })),
+  ))('$languageの$nameの同期後レビュー範囲', ({ language, name }) => {
+    it.each(syncDefects)('$problemの裁定から修正と再レビューを経てpushする', async (finding) => {
+      const h = harness(name, { syncFailed: true, syncReviewFindings: [finding] }, language);
+      expect((await h.engine.run()).status, h.failures.join('; ')).toBe('completed');
+      expect(h.simpleReviewPrompts).toHaveLength(2);
+      expect(h.judgedSteps.filter((step) => step === 'review-adjudication')).toHaveLength(2);
+      expect(h.calls.indexOf('agent:development-remediation-dynamic/fix-plan')).toBeLessThan(h.calls.indexOf('commit_and_push'));
+      const fixPlan = phase1Prompt(h, 'development-remediation-dynamic', 'fix-plan');
+      expect(fixPlan).toContain(finding.id);
+      expect(fixPlan).toContain(finding.evidence);
+      expectSyncPolicyTransfer(h, language);
+      const gather = phase1Prompt(h, 'review-fix-simple', 'gather');
+      const gatherInstruction = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'instructions', 'gather-sync-review.md'), 'utf8').trim();
+      expect(gather).toContain(gatherInstruction);
+      expect(h.simpleReviewPrompts[0]).toContain(h.syncReviewContext);
+      expect(h.simpleReviewPrompts[1]).toContain(finding.id);
+      expect(h.simpleReviewPrompts[1]).toContain(finding.evidence);
+    });
+
+    it('既存問題だけのREJECTを理由付きで持ち越し、修正せず最終確認からpushへ進む', async () => {
+      const h = harness(name, { syncFailed: true, syncReviewFindings: [preexistingFinding] }, language);
+      expect((await h.engine.run()).status, h.failures.join('; ')).toBe('completed');
+      expect(h.simpleReviewPrompts).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'call:development-remediation-dynamic')).toEqual([]);
+      expect(h.agentPrompts.filter(({ step }) => ['fix-plan', 'fix', 'fix-verifier'].includes(step ?? ''))).toEqual([]);
+      const resolutionPaths = readdirSync(h.reportDirectory, { recursive: true, encoding: 'utf8' })
+        .filter((path) => path.endsWith('review-resolution.md'));
+      const resolutions = resolutionPaths.map((path) => readFileSync(join(h.reportDirectory, path), 'utf8'));
+      expect(resolutions.some((report) => report.includes(`| ${preexistingFinding.id} | 持ち越す | ${preexistingFinding.evidence} |`))).toBe(true);
+      const finalGate = phase1Prompt(h, 'peer-review', 'final-gate');
+      expect(finalGate).toContain(`| ${preexistingFinding.id} | 持ち越す | ${preexistingFinding.evidence} |`);
+      expect(h.judgedSteps.filter((step) => step === 'final-gate')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
+      expect(h.comments[0]).toMatch(name === 'merge-prepare' ? /\bprepared\b/ : /\bmerged\b/);
+    });
+
+    it('同期不具合と既存問題の混在時も採用欄と持ち越し理由を修正計画へ伝える', async () => {
+      const finding = syncDefects[1]!;
+      const h = harness(name, { syncFailed: true, syncReviewFindings: [finding, preexistingFinding] }, language);
+      expect((await h.engine.run()).status, h.failures.join('; ')).toBe('completed');
+      const fixPlan = phase1Prompt(h, 'development-remediation-dynamic', 'fix-plan');
+      const acceptedSection = fixPlan.match(/## 修正する問題\n([\s\S]*?)\n## 指摘ごとの判断/u)?.[1];
+      expect(acceptedSection).toBeDefined();
+      expect(acceptedSection).toContain(finding.id);
+      expect(acceptedSection).not.toContain(preexistingFinding.id);
+      expect(fixPlan).toContain(`| ${preexistingFinding.id} | 持ち越す | ${preexistingFinding.evidence} |`);
+      expect(phase1Prompt(h, 'peer-review', 'final-gate')).toContain(preexistingFinding.evidence);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
+    });
+  });
+
+  it.each((['ja', 'en'] as const).flatMap((language) =>
+    ['takt-default', 'review-fix-simple', 'review-fix'].map((name) => ({ language, name })),
+  ))('$languageの$nameは同期用引数を指定しなければ通常のレビュー・裁定基準を保つ', ({ language, name }) => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
+    const root = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
+    if (!root) throw new Error(`Missing builtin workflow: ${name}`);
+    const resolveCall = (parent: WorkflowConfig, stepName: string): WorkflowConfig => {
+      const step = parent.steps.find((step) => step.name === stepName);
+      if (step?.kind !== 'workflow_call') throw new Error(`Missing workflow call: ${parent.name}/${stepName}`);
+      const child = resolveWorkflowCallTarget(parent, step, project);
+      if (!child) throw new Error(`Missing child workflow: ${step.call}`);
+      return child;
+    };
+    const peerReview = name === 'takt-default'
+      ? resolveCall(resolveCall(root, 'develop'), 'peer-review')
+      : resolveCall(root, 'reviewers');
+    const policySourceStep = root.steps.find((step) => step.name === (name === 'takt-default' ? 'develop' : 'reviewers'));
+    if (policySourceStep?.kind !== 'workflow_call') throw new Error(`Missing policy source: ${name}`);
+    const expectedPolicyRefs = name === 'review-fix-simple'
+      ? root.subworkflow?.params?.final_gate_policy?.default
+      : policySourceStep.args?.[name === 'takt-default' ? 'review_policy' : 'final_gate_policy'];
+    if (!Array.isArray(expectedPolicyRefs)) throw new Error(`Expected policy references: ${name}`);
+    expect(expectedPolicyRefs.length).toBeGreaterThan(0);
+    for (const ref of expectedPolicyRefs) {
+      expect(typeof ref).toBe('string');
+      expect(ref.trim().length).toBeGreaterThan(0);
+    }
+    const finalGate = peerReview.steps.find((step) => step.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    const expectFinalGatePolicies = (policies: WorkflowStep['policyContents']): void => {
+      expect(policies).toEqual(expect.arrayContaining(expectedPolicyRefs.map((ref) => expect.objectContaining({
+        refName: ref,
+        sourcePath: join(process.cwd(), 'builtins', language, 'facets', 'policies', `${ref}.md`),
+        content: expect.any(String),
+      }))));
+      for (const ref of expectedPolicyRefs) {
+        const policy = policies!.find((entry) => entry.refName === ref);
+        expect(policy!.content.trim().length).toBeGreaterThan(0);
+      }
+    };
+    expectFinalGatePolicies(finalGate!.policyContents);
+    const omittedPolicyRef = name === 'takt-default' ? 'takt-testing-review' : 'coding';
+    expect(expectedPolicyRefs).toContain(omittedPolicyRef);
+    expect(() => expectFinalGatePolicies(finalGate!.policyContents!
+      .filter((policy) => policy.refName !== omittedPolicyRef))).toThrow();
+    expect(() => expectFinalGatePolicies([])).toThrow();
+    const adjudication = peerReview.steps.find((step) => step.name === 'review-adjudication');
+    expect(adjudication?.policyContents?.map((policy) => policy.refName)).toContain('review-adjudication');
+    const reviewSteps = ['initial-reviewers', 'reviewers'].flatMap((stepName) =>
+      resolveCall(peerReview, stepName).steps.flatMap((step) => {
+        const parallel = step.parallel;
+        const reviewers = Array.isArray(parallel) ? parallel : [...(parallel?.fixed ?? []), ...(parallel?.pool ?? [])];
+        return [step, ...reviewers];
+      }),
+    );
+    const consumers = [adjudication, finalGate, ...reviewSteps];
+    for (const consumer of consumers) {
+      expect(consumer).toBeDefined();
+      for (const policy of consumer!.policyContents ?? []) {
+        expect(policy.refName).not.toBe('merge-sync-review');
+        expect(policy.sourcePath).not.toMatch(/[/\\]merge-sync-review\.md$/u);
+      }
+    }
+    const ordinaryReviewer = reviewSteps.flatMap((step) => step.policyContents ?? [])
+      .find((policy) => policy.refName === 'review');
+    expect(ordinaryReviewer?.sourcePath).toBe(join(process.cwd(), 'builtins', language, 'facets', 'policies', 'review.md'));
+    if (name !== 'takt-default') {
+      const gather = root.steps.find((step) => step.name === 'gather');
+      expect(gather?.instruction).toContain(readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'instructions', 'gather-review.md'), 'utf8').trim());
+    }
+  });
+
+  it.each(['created', 'awaiting_merge'] as const)('同じマージ実行のCI待機中にゴールが %s なら最新状態に従って停止または続行する', async (status) => {
+    const controller = new AbortController();
+    const h = harness('merge-review-fix-simple', { ciRunning: true }, 'ja', controller.signal);
+    const goals = new GoalStore(project);
+    await goals.create({ ...goalRecord(), status: 'awaiting_merge',
+      completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main',
+        summary: 'verified', instructions: [], humanChecks: 'Read the result',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+          files: [], truncated: false, totalsTruncated: false } } });
+    const monitor = new GoalAbortMonitor(project, goalId, controller,
+      { taskName: 'merge-pr-123', executionId: 'merge-execution' }, { requireAwaitingMerge: true });
+    const started: string[] = [];
+    h.engine.on('step:start', (step: WorkflowStep) => started.push(step.name));
+    const ciWait = nextStepStart(h.engine, 'wait_ci');
+    const running = h.engine.run();
+    try {
+      await ciWait;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.engine.getState().status).toBe('running');
+      expect(h.engine.getState().systemContexts.get('wait_ci')?.status)
+        .toMatchObject({ ci: { finished: false } });
+      expect(controller.signal.aborted).toBe(false);
+      const stepsBeforeChange = [...started];
+      const effectsBeforeChange = [...h.calls];
+
+      if (status === 'created') await goals.update(goalId, (goal) => ({ ...goal, status }));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(controller.signal.aborted).toBe(status === 'created');
+      if (status === 'created') {
+        expect((await running).status).toBe('aborted');
+        expect(controller.signal.reason.message).toContain('awaiting_merge');
+        h.finishCi();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(started).toEqual(stepsBeforeChange);
+        expect(h.calls).toEqual(effectsBeforeChange);
+        expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'merge_pr')).toEqual([]);
+        expect(h.comments).toEqual([]);
+      } else {
+        expect(h.engine.getState().status).toBe('running');
+        h.finishCi();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect((await running).status).toBe('completed');
+        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+        expect(h.failures).toEqual([]);
+      }
+    } finally {
+      controller.abort(new Error('Test cleanup'));
+      monitor.stop();
+      await running;
+    }
+  });
+
+  describe.each((['ja', 'en'] as const).flatMap((language) =>
+    ['merge-prepare', 'merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),
+  ))('$languageの$nameの初回同期', ({ language, name }) => {
+    it.each([false, true])('初回競合=%sに応じてレビューの要否を決めCI通過後に完了する', async (syncFailed) => {
+      const h = harness(name, { syncFailed, ciRunning: true, fullInitialReview: true }, language);
+      const started: string[] = [];
+      h.engine.on('step:start', (step: WorkflowStep) => started.push(step.name));
+      const ciWait = nextStepStart(h.engine, 'wait_ci');
+      const running = h.engine.run();
+      await ciWait;
+      await vi.advanceTimersByTimeAsync(0);
+      const reviewCall = `call:${name === 'merge-review-fix' ? 'review-fix' : 'review-fix-simple'}`;
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(Number(syncFailed));
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'resolve_conflicts_with_ai')).toHaveLength(Number(syncFailed));
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+      expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('caccia'));
+      expect(h.engine.getState().systemContexts.get('wait_ci')?.status)
+        .toMatchObject({ headSha: 'b'.repeat(40), ci: { finished: false } });
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.comments).toEqual([]);
+      if (syncFailed) {
+        expect(h.calls.indexOf('resolve_conflicts_with_ai')).toBeLessThan(h.calls.indexOf(reviewCall));
+        expect(h.calls.indexOf(reviewCall)).toBeLessThan(h.calls.indexOf('commit_and_push'));
+      } else {
+        expect(h.calls.filter((call) => call.startsWith('call:'))).toHaveLength(0);
+        expect(runAgent).not.toHaveBeenCalled();
+      }
+
+      h.finishCi();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect((await running).status).toBe('completed');
+      expect(h.failures).toEqual([]);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(Number(syncFailed));
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(name === 'merge-prepare' ? 0 : 1);
+      expect(started.filter((step) => step === 'wait_ci')).toHaveLength(1);
+      expect(started.at(-1)).toBe(name === 'merge-prepare' ? 'prepared' : 'merged');
+      expect(h.comments).toHaveLength(1);
+      expect(h.comments[0]).toContain('b'.repeat(40));
+    });
+  });
+
+  describe.each((['ja', 'en'] as const).flatMap((language) =>
+    ['merge-prepare', 'merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),
   ))('$languageの$nameの後発競合', ({ language, name }) => {
+    const mergesOnSuccess = name === 'merge-prepare' ? 0 : 1;
     const reviewCall = `call:${name === 'merge-review-fix' ? 'review-fix' : 'review-fix-simple'}`;
 
-    it.each([false, true])('取り込み直しの競合=%sでもレビューを繰り返さずpush後の新HEADのCIを待ってマージする', async (resyncConflicted) => {
+    it.each([false, true])('取り込み直しの競合=%sに応じてレビューしpush後の新HEADのCIを待って完了する', async (resyncConflicted) => {
       const h = harness(name, { lateConflicts: 1, resyncConflicted, ciRunning: true }, language);
       const firstCiWait = nextStepStart(h.engine, 'wait_ci');
       const running = h.engine.run();
@@ -481,6 +801,7 @@ describe('Builtin PR merge workflow execution', () => {
         .toMatchObject({ headSha: 'b'.repeat(40), ci: { finished: false } });
       expect(vi.getTimerCount()).toBeGreaterThan(0);
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1);
+      expect(h.calls.filter((call) => call.startsWith('call:'))).toHaveLength(0);
       expect(h.calls).not.toContain('merge_pr');
       const secondCiWait = nextStepStart(h.engine, 'wait_ci');
       h.finishCi();
@@ -491,10 +812,14 @@ describe('Builtin PR merge workflow execution', () => {
         .toMatchObject({ headSha: 'c'.repeat(40), ci: { finished: false } });
       expect(vi.getTimerCount()).toBeGreaterThan(0);
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(2);
-      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(Number(resyncConflicted));
       expect(h.calls.filter((call) => call === 'resolve_conflicts_with_ai')).toHaveLength(resyncConflicted ? 1 : 0);
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(2);
       expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(2);
+      if (resyncConflicted) {
+        expect(h.calls.lastIndexOf('resolve_conflicts_with_ai')).toBeLessThan(h.calls.indexOf(reviewCall));
+        expect(h.calls.indexOf(reviewCall)).toBeLessThan(h.calls.lastIndexOf('commit_and_push'));
+      }
       expect(h.calls.lastIndexOf('sync_with_root')).toBeLessThan(h.calls.lastIndexOf('commit_and_push'));
       expect(h.calls.lastIndexOf('commit_and_push')).toBeLessThan(h.calls.lastIndexOf('caccia'));
       expect(h.observedStatuses.at(-1)).toMatchObject({ headSha: 'c'.repeat(40), finished: false });
@@ -505,8 +830,8 @@ describe('Builtin PR merge workflow execution', () => {
       const state = await running;
       expect(state.status).toBe('completed');
       expect(h.failures).toEqual([]);
-      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
-      expect(h.calls.lastIndexOf('caccia')).toBeLessThan(h.calls.indexOf('merge_pr'));
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(mergesOnSuccess);
+      expect(h.calls.lastIndexOf('caccia')).toBeLessThan(h.calls.indexOf(name === 'merge-prepare' ? 'comment_pr' : 'merge_pr'));
       expect(h.comments[0]).toContain('c'.repeat(40));
     });
 
@@ -524,21 +849,21 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.filter((call) => call === 'resolve_conflicts_with_ai')).toHaveLength(limit + Number(syncFailed));
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1 + limit);
       expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1 + limit);
-      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(limit + Number(syncFailed));
       expect(h.calls).not.toContain('merge_pr');
       expect(h.comments).toHaveLength(1);
       expect(h.comments[0]).toContain('CONFLICTING');
     });
 
     it.each([{ concurrency: 2, limit: 2 }, { concurrency: 3, limit: 2 }, { concurrency: 4, limit: 3 }])(
-      '並列数$concurrencyで最後の取り込み直し$limit回目に競合がなくなればマージする', async ({ concurrency, limit }) => {
+      '並列数$concurrencyで最後の取り込み直し$limit回目に競合がなくなれば完了する', async ({ concurrency, limit }) => {
         const h = harness(name, { concurrency, lateConflicts: limit, resyncConflicted: true }, language);
         expect((await h.engine.run()).status).toBe('completed');
         expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1 + limit);
-        expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
-        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+        expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(limit);
+        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(mergesOnSuccess);
         expect(h.comments).toHaveLength(1);
-        expect(h.comments[0]).toMatch(/\bmerged\b/);
+        expect(h.comments[0]).toMatch(name === 'merge-prepare' ? /\bprepared\b/ : /\bmerged\b/);
       },
     );
 
@@ -553,7 +878,7 @@ describe('Builtin PR merge workflow execution', () => {
       const h = harness(name, { mergeable, mergeStateStatus, reviewDecision }, language);
       expect((await h.engine.run()).status).toBe(merges === 1 ? 'completed' : 'aborted');
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1);
-      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(merges);
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(merges * mergesOnSuccess);
     });
 
     it.each(['sync', 'resolve', 'push'] as const)('取り込み直しの%s失敗は理由をコメントしてマージしない', async (resyncFailure) => {
@@ -561,7 +886,7 @@ describe('Builtin PR merge workflow execution', () => {
       const state = await h.engine.run();
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(2);
       expect(state.status).toBe('aborted');
-      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(Number(resyncFailure === 'push'));
       expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
       expect(h.calls).not.toContain('merge_pr');
       expect(h.comments).toHaveLength(1);
@@ -585,7 +910,7 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.fetchPrCiFailure.mock.calls.map(([, head]) => head))
         .toEqual((ciFailsAfterResync ? ['b', 'c'] : ['b']).map((char) => char.repeat(40)));
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
-      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(ciFailsAfterResync ? 0 : 1);
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(ciFailsAfterResync ? 0 : mergesOnSuccess);
       expect(h.comments).toHaveLength(1);
       expect(h.comments[0]).toContain(ciFailsAfterResync ? 'unit-round-2' : 'c'.repeat(40));
     });
@@ -595,7 +920,7 @@ describe('Builtin PR merge workflow execution', () => {
       const result = await h.runFromTaskEntry(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`));
       expect(result.success).toBe(false);
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(20);
-      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(19);
       expect(h.comments).toHaveLength(1);
       expect(h.comments[0]).toContain('CONFLICTING');
       expect(h.calls).not.toContain('merge_pr');
@@ -708,7 +1033,7 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls).toContain('call:peer-review');
     expect(h.calls).toContain('call:single-review-suite');
     expect(h.calls).not.toContain('call:development-remediation-dynamic');
-    expect(h.calls.filter((call) => call === 'call:single-review-suite')).toHaveLength(1);
+    expect(h.simpleReviewPrompts).toHaveLength(1);
     expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
       options?.workflowMeta?.workflowName === 'single-review-suite' && options.executionPhase === 1)).toHaveLength(1);
     expect(new Set(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)))
@@ -731,6 +1056,7 @@ describe('Builtin PR merge workflow execution', () => {
 
   it.each(['ja', 'en'] as const)('%sのsimpleはpush前のリモート競合とhead相違で品質承認を覆さない', async (language) => {
     const h = harness('merge-review-fix-simple', {
+      syncFailed: true,
       prePushRemoteConflicting: true,
       prePushRemoteHeadDiffers: true,
     }, language);
@@ -745,7 +1071,7 @@ describe('Builtin PR merge workflow execution', () => {
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleはレビュー対象を収集できない場合pushもmergeもしない', async (language) => {
-    const h = harness('merge-review-fix-simple', { gatherFailed: true }, language);
+    const h = harness('merge-review-fix-simple', { syncFailed: true, gatherFailed: true }, language);
     expect((await h.engine.run()).status).toBe('aborted');
     expect(h.failures).toEqual([expect.any(String)]);
     expect(h.calls).not.toContain('commit_and_push');
@@ -756,11 +1082,12 @@ describe('Builtin PR merge workflow execution', () => {
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは指摘を裁定・修正・再レビューしてからpushする', async (language) => {
-    const h = harness('merge-review-fix-simple', { qualityFailed: true }, language);
+    const h = harness('merge-review-fix-simple', { syncFailed: true, qualityFailed: true }, language);
     const result = await h.engine.run();
     expect(result.status).toBe('completed');
     expect(h.failures).toEqual([]);
-    expect(h.calls.filter((call) => call === 'call:single-review-suite')).toHaveLength(2);
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
+      options?.workflowMeta?.workflowName === 'single-review-suite' && options.executionPhase === 1)).toHaveLength(2);
     expect(h.calls).toContain('call:development-remediation-dynamic');
     expect(h.calls.indexOf('call:development-remediation-dynamic')).toBeLessThan(h.calls.indexOf('commit_and_push'));
     const simpleSteps = vi.mocked(runAgent).mock.calls
@@ -840,7 +1167,7 @@ describe('Builtin PR merge workflow execution', () => {
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは修正計画で対応不能ならpushしない', async (language) => {
-    const h = harness('merge-review-fix-simple', { qualityFailed: true, cannotRemediate: true }, language);
+    const h = harness('merge-review-fix-simple', { syncFailed: true, qualityFailed: true, cannotRemediate: true }, language);
     await h.engine.run();
     expect(h.judgedSteps).toContain('fix-plan');
     expect(h.calls).toContain('call:development-remediation-dynamic');
@@ -892,7 +1219,7 @@ describe('Builtin PR merge workflow execution', () => {
   });
 
   it.each(['ja', 'en'])('%sの修正builtinは子レビュー完了とpush後のCI通過後に追加AI判定なしでmergeする', async (language) => {
-    const h = harness('merge-review-fix', { ciRunning: true }, language);
+    const h = harness('merge-review-fix', { ciRunning: true, syncFailed: true }, language);
     const ciWait = nextStepStart(h.engine, 'wait_ci');
     const running = h.engine.run();
     await ciWait;
@@ -911,7 +1238,7 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls.indexOf('call:review-fix')).toBeLessThan(h.calls.indexOf('commit_and_push'));
     expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('merge_pr'));
     expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
-    expect(h.observedStatuses).toContainEqual({ headSha: 'a'.repeat(40), finished: true, mergeable: 'MERGEABLE' });
+    expect(h.observedStatuses).toContainEqual({ headSha: 'a'.repeat(40), finished: true, mergeable: 'CONFLICTING' });
     expect(h.observedStatuses).toContainEqual({ headSha: 'b'.repeat(40), finished: false, mergeable: 'MERGEABLE' });
     expect(h.observedStatuses.at(-1)).toEqual({ headSha: 'b'.repeat(40), finished: true, mergeable: 'MERGEABLE' });
     expect(h.comments).toHaveLength(1);
@@ -990,8 +1317,10 @@ describe('Builtin PR merge workflow execution', () => {
   });
 
   describe.each((['ja', 'en'] as const).flatMap((language) =>
-    ['merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),
+    ['merge-prepare', 'merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),
   ))('$languageの$nameのCI回復', ({ language, name }) => {
+    const mergesOnSuccess = name === 'merge-prepare' ? 0 : 1;
+    const completionEffect = name === 'merge-prepare' ? 'comment_pr' : 'merge_pr';
     const defect = (summary = 'Clock-dependent assertion fails because elapsed time is not controlled') => ({
       verdict: 'defect' as const, summary,
     });
@@ -1030,6 +1359,7 @@ describe('Builtin PR merge workflow execution', () => {
       return JSON.parse(readFileSync(path!, 'utf8')) as {
         checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
           jobs: Array<{ id: number; logPath: string | null }> }>;
+        external?: Array<{ name: string }>;
         unavailable: Array<{ reason: string }>;
       };
     }
@@ -1047,7 +1377,7 @@ describe('Builtin PR merge workflow execution', () => {
         .toEqual([[expect.anything(), expect.objectContaining({ pr: 123, body: expect.any(String), body_format: 'plain_text' }), expect.anything()]]);
     }
 
-    it('失敗の証拠を調査へ渡し読み取り専用の調査・編集可能な修正・レビューを経て新HEADをマージする', async () => {
+    it('失敗の証拠を調査へ渡し読み取り専用の調査・編集可能な修正・レビューを経て新HEADで完了する', async () => {
       const cause = defect();
       const h = await runRecovery({ ciFailures: [cause] });
       expect(h.state.status).toBe('completed');
@@ -1059,7 +1389,7 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.indexOf('fetch_ci_failure')).toBeLessThan(h.calls.indexOf('agent:investigate_ci'));
       expect(h.calls.indexOf('agent:review_ci_fix')).toBeLessThan(h.calls.lastIndexOf('commit_and_push'));
       expect(h.calls.lastIndexOf('commit_and_push')).toBeLessThan(h.calls.lastIndexOf('caccia'));
-      expect(h.calls.lastIndexOf('caccia')).toBeLessThan(h.calls.indexOf('merge_pr'));
+      expect(h.calls.lastIndexOf('caccia')).toBeLessThan(h.calls.indexOf(completionEffect));
       expect(h.recoveryPrompts.map(({ requiredPermissionMode }) => requiredPermissionMode)).toEqual([undefined, 'edit', undefined]);
       expect(h.recoveryPrompts[0]?.prompt).toContain(buildEditRule(false, language));
       expect(h.recoveryPrompts[1]?.prompt).toContain(buildEditRule(true, language));
@@ -1074,6 +1404,23 @@ describe('Builtin PR merge workflow execution', () => {
       expect(reports(h.reportDirectory).some((report) => report.includes(cause.summary) && report.includes('Location:'))).toBe(true);
       expect(h.comments[0]).toContain('c'.repeat(40));
       expect(h.rerunPrCi).not.toHaveBeenCalled();
+      expect(h.calls.filter((call) => call.startsWith('call:'))).toHaveLength(0);
+    });
+
+    it('外部の失敗チェックが混ざっても診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], externalCiCheck: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual([
+        'agent:investigate_ci', 'agent:fix_ci', 'agent:review_ci_fix',
+      ]);
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      const investigation = h.recoveryPrompts[0]!.prompt;
+      for (const count of ['complete=true', 'unique job logs=1', 'external checks=1', 'unavailable=0']) {
+        expect(investigation).toContain(count);
+      }
+      const index = evidenceIndex(investigation);
+      expect(index.unavailable).toEqual([]);
+      expect(index.external).toEqual([expect.objectContaining({ name: 'third-party' })]);
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {
@@ -1161,7 +1508,7 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1 + fixRounds);
       expect(h.calls.filter((call) => call === 'agent:investigate_ci')).toHaveLength(1 + fixRounds);
       expect(h.calls.indexOf('agent:investigate_ci')).toBeLessThan(h.calls.indexOf('rerun_ci'));
-      expect(h.calls.indexOf('rerun_ci')).toBeLessThan(h.calls.indexOf('merge_pr'));
+      expect(h.calls.indexOf('rerun_ci')).toBeLessThan(h.calls.indexOf(completionEffect));
       expect(h.observedStatuses.length).toBeGreaterThan(3);
       expect(h.comments[0]).toContain(String.fromCharCode('b'.charCodeAt(0) + fixRounds).repeat(40));
     });
@@ -1216,7 +1563,14 @@ describe('Builtin PR merge workflow execution', () => {
       h.setRemoteHead('f'.repeat(40));
       await vi.advanceTimersByTimeAsync(15_000);
       const state = await running;
-      expectStopped({ ...h, state }, 0, 1);
+      if (name === 'merge-prepare') {
+        expect(state.status).toBe('aborted');
+        expect(state.currentStep).toBe('head_changed');
+        expect(h.comments).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+      } else {
+        expectStopped({ ...h, state }, 0, 1);
+      }
       expect(h.fetchPrCiFailure).toHaveBeenCalledOnce();
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
       expect(h.comments[0]).toContain('b'.repeat(40));
@@ -1246,7 +1600,7 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.filter((call) => call === 'agent:investigate_ci')).toHaveLength(1);
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
       expect(h.rerunPrCi).not.toHaveBeenCalled();
-      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(mergesOnSuccess);
     });
 
     it('根本修正のレビューがREJECTならその変更をpushせずマージしない', async () => {
@@ -1308,11 +1662,11 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.recoveryPrompts).toEqual([]);
       expect(h.fetchPrCiFailure).not.toHaveBeenCalled();
       expect(h.rerunPrCi).not.toHaveBeenCalled();
-      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(mergesOnSuccess);
     });
 
-    it('実際の初回子レビューから修正2周と外部再実行後の失敗まで有限予算でコメントへ到達する', async () => {
-      const h = await runRecovery({ fullInitialReview: true, ciFailures: [defect(), defect(), external], rerunFails: true });
+    it('初回競合解消後の実際の子レビューから修正2周と外部再実行後の失敗まで有限予算でコメントへ到達する', async () => {
+      const h = await runRecovery({ syncFailed: true, fullInitialReview: true, ciFailures: [defect(), defect(), external], rerunFails: true });
       expectStopped(h, 2, 1);
       expect(h.calls).toContain('call:peer-review');
       expect(h.calls).toContain(name === 'merge-review-fix' ? 'call:development-review' : 'call:single-review-suite');
@@ -1334,26 +1688,6 @@ describe('Builtin PR merge workflow execution', () => {
         .toEqual([[expect.objectContaining({ type: 'comment_pr' }), expect.objectContaining({ pr: prNumber, body: h.comments[0] }), expect.anything()]]);
       expect(h.calls).not.toContain('close_pr');
     });
-  it.each(['ja', 'en'] as const)('%sのmerge-prepareは同期・レビュー・Caccia・CI待ちを経てマージせず成功する', async (language) => {
-    const h = harness('merge-prepare', { ciRunning: true }, language);
-    const ciWait = nextStepStart(h.engine, 'wait_ci');
-    const running = h.engine.run();
-    await ciWait;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.calls).toContain('sync_with_root');
-    expect(h.calls).toContain('call:review-fix-simple');
-    expect(h.calls).toContain('commit_and_push');
-    expect(h.calls).toContain('caccia');
-    expect(h.comments).toEqual([]);
-    h.finishCi();
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect((await running).status).toBe('completed');
-    expect(h.failures).toEqual([]);
-    expect(h.calls).not.toContain('merge_pr');
-    expect(h.comments).toHaveLength(1);
-    expect(h.comments[0]).toContain('b'.repeat(40));
-  });
-
   it.each(['ja', 'en'] as const)('%sのmerge-prepareは通常のCI待機でも先端の変更を報告して止まる', async (language) => {
     const h = harness('merge-prepare', { headChangesDuringCi: true }, language);
     expect((await h.engine.run()).status).toBe('aborted');
@@ -1373,15 +1707,4 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls).not.toContain('merge_pr');
     expect(h.comments).toHaveLength(1);
   });
-
-  it('merge-prepare uses the same existing resynchronization budget at the task execution boundary', async () => {
-    const h = harness('merge-prepare', { concurrency: 20, lateConflicts: 100, resyncConflicted: true });
-    const result = await h.runFromTaskEntry(join(process.cwd(), 'builtins', 'ja', 'workflows', 'merge-prepare.yaml'));
-    expect(result.success).toBe(false);
-    expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(20);
-    expect(h.comments).toHaveLength(1);
-    expect(h.comments[0]).toContain('CONFLICTING');
-    expect(h.calls).not.toContain('merge_pr');
-  });
-
 });

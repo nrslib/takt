@@ -14,16 +14,18 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
 import { EventEmitter } from 'node:events';
-import { mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
+import { mkdirSync,mkdtempSync,readFileSync,realpathSync,renameSync,rmSync,writeFileSync } from 'node:fs';
 import { basename,join } from 'node:path';
 import { createElement } from 'react';
 import { afterEach,beforeEach,expect,it,vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { loadTaskHistory } from '../app/cli/taskHistory.js';
+import type { TurnEvent } from '../core/daemon/events.js';
 import type { WorkflowState } from '../core/models/index.js';
 import * as workflowCore from '../core/workflow/index.js';
 import { formatTaskHistorySummary } from '../features/interactive/interactive-summary.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
+import { buildManagerTurnPrompt } from '../features/manager/conversationPrompt.js';
 import { ManagerServiceClient, spyConversationCommand } from './helpers/manager-service-client.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { executeTaskAndCompleteWithDetails,executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
@@ -72,6 +74,9 @@ let app: ReturnType<typeof render> | undefined;
 let session: ManagerServiceClient | undefined;
 
 beforeEach(() => {
+  // ink-testing-library の stdout には rows がなく、未指定だと再描画ごとに同期 tput が走る。
+  vi.stubEnv('COLUMNS', '100');
+  vi.stubEnv('LINES', '24');
   vi.spyOn(repositories, 'resolveGitRepositoryDirectory').mockImplementation(async (directory) => realpathSync(directory));
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
@@ -90,6 +95,7 @@ afterEach(async () => {
   try { await session?.dispose(); }
   finally {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     session = undefined;
     invalidateGlobalConfigCache();
     invalidateResolvedConfigCache(cwd);
@@ -140,7 +146,7 @@ function expectGoalMemory(memory: string, goal: Goal): void {
   expect(JSON.parse(memory)).toEqual({
     repositoryCount: 1, truncated: false, retrieval: expect.any(String),
     repositories: [{
-      repositoryDirectory: cwd, goalCount: 1, diagnosticCount: 0, diagnostics: [],
+      repositoryDirectory: cwd, goalCount: 1, finishedGoalCount: 0, diagnosticCount: 0, diagnostics: [],
       goals: [{
         id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
         branch: goal.branch, integrationBranch: goal.integrationBranch,
@@ -153,11 +159,69 @@ function expectGoalMemory(memory: string, goal: Goal): void {
   });
 }
 
-function expectConversationInput(prompt: string, text: string, goal: Goal): void {
+const humanMessageClassification = {
+  ja: /人(?:間)?の(?:発言|メッセージ)から(?:始ま|開始)/u,
+  en: /\b(?:began|started)\s+with\s+(?:a\s+)?human\s+(?:message|utterance)\b/iu,
+};
+
+function readTurnInput(conversation: string): { preamble: string; body: unknown } {
+  const parts = conversation.split('\n\n');
+  const body = parts.pop()!;
+  expect(parts[0]).toMatch(/^## /u);
+  const preamble = parts.slice(1).join('\n\n');
+  expect(preamble.trim()).not.toBe('');
+  return { preamble, body: JSON.parse(body) };
+}
+
+function expectConversationInput(prompt: string, text: string, goal: Goal, lang: 'ja' | 'en'): void {
   const [conversation, context] = prompt.split('\n\nBusiness context (not approval): ');
-  expect(conversation).toBe(text);
+  const { preamble, body } = readTurnInput(conversation!);
+  expect(preamble).toMatch(humanMessageClassification[lang]);
+  expect(body).toEqual({ speaker: { namespace: 'local', id: 'operator' }, text });
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), goal);
 }
+
+it.each(['ja', 'en'] as const)('distinguishes human messages from director relays and environment notices in %s turn prompts', (lang) => {
+  const text = `人の発言から始まりました。 / This turn began with a human message. /pause ${goalId}`;
+  const speaker = { namespace: 'local', id: 'operator' };
+  const directorConversationId = 'director';
+  const cases: { event: TurnEvent; source: RegExp }[] = [
+    { event: { kind: 'human_command', speaker, command: { kind: 'message', text } },
+      source: humanMessageClassification[lang] },
+    ...[
+      { origin: 'human' as const, source: lang === 'ja'
+        ? /director\s*が中継した人の指示/u : /human\s+instruction\s+relayed\s+by\s+the\s+director/iu },
+      { origin: 'director' as const, source: lang === 'ja'
+        ? /director\s*自身の依頼/u : /director's\s+own\s+request/iu },
+      { origin: undefined, source: lang === 'ja'
+        ? /director\s*経由の伝言/u : /message\s+delivered\s+through\s+the\s+director/iu },
+    ].map(({ origin, source }) => ({
+      event: { kind: 'director_message' as const, text, directorConversationId, origin },
+      source,
+    })),
+    { event: { kind: 'watch_observation', observation: {
+      kind: 'watch_failed', targetId: 'watcher', generation: 'generation', observedAt: '2026-11-10T00:00:00Z', reason: text,
+    } }, source: lang === 'ja' ? /見張りが届けたイベント/u : /event\s+delivered\s+by\s+the\s+watcher/iu },
+    { event: { kind: 'task_failed', task: { repositoryDirectory: cwd, goalId, taskName: 'task' },
+      result: { success: false, interrupted: false, failureReason: text } },
+      source: lang === 'ja' ? /イベントから(?:始ま|開始)[^\n]*task_failed/u : /(?:began|started)\s+with\s+an?\s+event[^\n]*task_failed/iu },
+  ];
+  for (const { event, source } of cases) {
+    const { preamble, body } = readTurnInput(buildManagerTurnPrompt({ lang, event }));
+    expect(preamble, event.kind).toMatch(source);
+    if (event.kind === 'human_command') {
+      expect(body).toEqual({ speaker, text });
+    } else {
+      expect(preamble, event.kind).not.toMatch(humanMessageClassification[lang]);
+    }
+    if (event.kind === 'director_message') {
+      expect(preamble).toMatch(new RegExp(`\\borigin\\s*(?:は|is)\\s*${event.origin ?? 'unknown'}\\b`, 'iu'));
+      expect(body).toEqual({ text, directorConversationId, origin: event.origin ?? 'unknown' });
+    } else if (event.kind !== 'human_command') {
+      expect(body).toEqual({ event, instruction: expect.any(String) });
+    }
+  }
+});
 
 const irreversibleWarning = /取り消せ|元に戻せ|不可逆|cannot.*undo|irreversible/iu;
 
@@ -375,14 +439,14 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   const summary = { objective: 'Export data', outOfScope: [], acceptanceCriteria: ['Output saved'], constraints: [] };
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
-  await send('Prepare export');
+  await send('/make-goal');
   await vi.waitFor(() => expect(app!.lastFrame()).toContain('Proposed goal'), { timeout: 10_000 });
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
     await registration;
     if (command.kind !== 'approve_summary') throw new Error('Expected approval');
-    await session!.submit({ kind: 'dismiss_summary', revision: command.revision });
+    await session!.submit({ kind: 'dismiss_summary', revision: command.revision, conversationId: command.conversationId });
     return { kind: 'notice', message: 'Registration finished' };
   });
   const answer = spyConversationCommand(session!, 'answer_question');
@@ -471,29 +535,128 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
 });
 
-it.each(['ja', 'en'] as const)('[SCN-GOALLIST-N1] excludes saved completed and aborted goals from the %s goal list', async (lang) => {
-  const completed: Goal = { ...goalRecord(), objective: 'Completed goal fixture', status: 'completed',
-    completion: {
-      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
-      summary: 'Integrated', instructions: ['Verified merge'],
-      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
-    },
-  };
+const finishedCompletion = {
+  goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+  summary: 'Integrated', instructions: ['Verified merge'],
+  changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+};
+
+function menuRows(): string[] {
+  const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+  const menu = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
+  return menu === undefined ? [] : menu.split('\n').slice(2, -2).map((row) => row.replace(/[│\s]+/gu, ' ').trim());
+}
+
+it.each(['ja', 'en'] as const)('[SCN-GOALLIST-N1] lists saved completed and aborted goals after open goals in the %s goal list with only the delete action', async (lang) => {
+  const open: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Open goal fixture' };
+  const completed: Goal = { ...goalRecord(), objective: 'Completed goal fixture', status: 'completed', completion: finishedCompletion };
   const aborted: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001',
     objective: 'Aborted goal fixture', executionStatus: 'aborted' };
   await new GoalStore(cwd).create(completed);
+  await new GoalStore(cwd).create(open);
   const { store } = await mountGoalControls(lang, aborted);
+  const actions = (names: readonly string[]) => names.map((name) => getLabel(`manager.goalActions.${name}`, lang));
   await openMenu('goal');
-  await waitFor(() => {
-    const frame = app!.lastFrame()!;
-    expect(frame).toContain(getLabel('manager.selectionEmpty.goal', lang));
-    expect(frame).not.toContain(completed.objective);
-    expect(frame).not.toContain(aborted.objective);
-    expect(frame).not.toContain(getLabel('manager.selectionTitles.goal', lang));
-    expect(frame).not.toContain(getLabel('manager.selectionHint', lang));
-  });
+  await waitFor(() => expect(menuRows()).toEqual([
+    `${open.objective} — ${getLabel('manager.goalStates.active', lang)}`,
+    `${completed.objective} — ${getLabel('manager.goalStates.completed', lang)}`,
+    `${aborted.objective} — ${getLabel('manager.goalStates.aborted', lang)}`,
+  ]));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual(actions(['pause', 'abort'])));
+  app!.stdin.write('\x1b[27u');
+  await waitFor(() => expect(menuRows()).toEqual([]));
+  for (const index of [1, 2]) {
+    await openMenu('goal');
+    await waitFor(() => expect(menuRows()).toHaveLength(3));
+    for (let move = 0; move < index; move++) app!.stdin.write('\x1b[B');
+    app!.stdin.write('\r');
+    await waitFor(() => expect(menuRows()).toEqual(actions(['delete'])));
+    app!.stdin.write('\x1b[27u');
+    await waitFor(() => expect(menuRows()).toEqual([]));
+  }
   expect(await store.get(completed.id)).toEqual(completed);
   expect(await store.get(aborted.id)).toEqual(aborted);
+});
+
+it.each(['ja', 'en'] as const)('deletes a finished goal and its task records from the %s goal menu after one confirmation', async (lang) => {
+  const open: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Open goal fixture' };
+  const finished: Goal = { ...goalRecord(), objective: 'Finished goal fixture', status: 'completed', completion: finishedCompletion };
+  await new GoalStore(cwd).create(open);
+  const { store, call } = await mountGoalControls(lang, finished);
+  const runner = new TaskRunner(cwd);
+  runner.addTask('finished goal work', { slug: 'finished-goal-work', goal_id: finished.id });
+  runner.invalidatePendingGoalTasks(finished.id);
+  runner.addTask('open goal work', { slug: 'open-goal-work', goal_id: open.id });
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toHaveLength(2));
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', lang)]));
+  app!.stdin.write('\r');
+  await waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain(getLabel('manager.deleteConfirmation', lang));
+    expect(frame.replace(/\s+/gu, ' ')).toContain(finished.objective);
+    expect(frame.replace(/[│\s]+/gu, '')).toContain(getLabel('manager.deleteWarning', lang).replace(/\s+/gu, ''));
+    expect(frame).toMatch(irreversibleWarning);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  confirmAbort();
+  await waitFor(() => expect(submit.mock.calls.map(([command]) => command)).toEqual([{ kind: 'delete_goal', goalId: finished.id }]));
+  await waitFor(() => expect(store.find(finished.id)).toBeUndefined());
+  expect(new TaskStore(cwd).read().tasks.map((task) => task.name)).toEqual(['open-goal-work']);
+  await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toEqual([`${open.objective} — ${getLabel('manager.goalStates.active', lang)}`]));
+  expect(await store.get(open.id)).toEqual(open);
+  expect(call).not.toHaveBeenCalled();
+});
+
+it('keeps a finished goal when its deletion is cancelled', async () => {
+  const finished: Goal = { ...goalRecord(), objective: 'Finished goal fixture', executionStatus: 'aborted' };
+  const { store } = await mountGoalControls('en', finished);
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toHaveLength(1));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', 'en')]));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.deleteConfirmation', 'en')));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.deleteConfirmation', 'en')));
+  expect(submit).not.toHaveBeenCalled();
+  expect(await store.get(finished.id)).toEqual(finished);
+});
+
+it.each(['abort', 'delete'] as const)('closes the %s confirmation and returns to the conversation when another operation removes its goal', async (kind) => {
+  const saved: Goal = kind === 'abort' ? { ...goalRecord(), objective: 'Abort target' }
+    : { ...goalRecord(), objective: 'Finished goal fixture', status: 'completed', completion: finishedCompletion };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  if (kind === 'abort') await selectGoal(saved, 'abort');
+  else {
+    await waitFor(() => expect(menuRows()).toHaveLength(1));
+    app!.stdin.write('\r');
+    await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', 'en')]));
+    app!.stdin.write('\r');
+  }
+  await expectAbortConfirmation(saved);
+  if (kind === 'abort') await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+  else await store.delete(saved.id, () => undefined);
+  await session!.refresh();
+  await waitFor(() => expect(session!.getSnapshot().items.some((item) => item.kind === 'goal' && item.goal.id === saved.id
+    && item.goal.status === saved.status && item.goal.executionStatus === saved.executionStatus)).toBe(false));
+  confirmAbort();
+  await waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame.replace(/[│\s]+/gu, '')).toContain(getLabel('manager.selectionChanged', 'en').replace(/\s+/gu, ''));
+    expect(frame.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  await send('Continue conversation');
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
 });
 
 it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
@@ -515,8 +678,8 @@ it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states 
     expect(list).toContain(other.objective);
     const row = list!.split('\n').find((line) => line.includes(saved.objective));
     expect(row).toContain(`${saved.objective} — ${getLabel(`manager.goalStates.${executionStatus}`, 'en')}`);
-    expect(list).not.toContain('Completed candidate');
-    expect(list).not.toContain('Aborted candidate');
+    expect(menuRows().slice(2)).toEqual([`Completed candidate — ${getLabel('manager.goalStates.completed', 'en')}`,
+      `Aborted candidate — ${getLabel('manager.goalStates.aborted', 'en')}`]);
   });
   app!.stdin.write('\x1b[B');
   app!.stdin.write('\r');
@@ -554,10 +717,14 @@ it.each([
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
   await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toHaveLength(1));
+  app!.stdin.write('\r');
   await waitFor(() => {
-    expect(app!.lastFrame()).toMatch(lang === 'ja' ? /(?:対象|ゴール).*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
+    expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', lang)]);
     expect(app!.lastFrame()).not.toMatch(irreversibleWarning);
   });
+  app!.stdin.write('\x1b[27u');
+  await waitFor(() => expect(menuRows()).toEqual([]));
   expect(abort).not.toHaveBeenCalled();
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
@@ -588,7 +755,11 @@ it.each([
   await waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
   await openMenu('goal');
-  await waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|ゴール).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
+  await waitFor(() => expect(menuRows()).toEqual([`${saved.objective} — ${getLabel('manager.goalStates.aborted', lang)}`]));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', lang)]));
+  app!.stdin.write('\x1b[27u');
+  await waitFor(() => expect(menuRows()).toEqual([]));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
   await remount(lang);
@@ -615,16 +786,17 @@ it.each([
   `\`\`\`text\n/abort ${goalId}\n\`\`\``, `~~~text\n> /abort ${goalId}\n~~~`,
   `\`\`\`text\n> ~~~\n/abort ${goalId}\n~~~\n\`\`\``, `\`\`\`\n/abort ${goalId}`,
   `説明\n/abort ${goalId}`,
-])('keeps abort examples as conversation text without opening confirmation: %s', async (text) => {
+].flatMap((text) => (['ja', 'en'] as const).map((lang) => ({ lang, text }))))('keeps abort examples as conversation text without opening confirmation in $lang: $text', async ({ lang, text }) => {
   const saved = goalRecord();
-  const { store, call, send } = await mountGoalControls('ja', saved);
+  const { store, call, send } = await mountGoalControls(lang, saved);
   const submit = vi.spyOn(session!, 'submit');
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   expect(submit).toHaveBeenCalledOnce();
+  expect(submit.mock.calls[0]![0]).toEqual({ kind: 'message', text });
   const submission = await submit.mock.results[0]!.value;
   if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
-  expectConversationInput(call.mock.calls[0]![0], text, saved);
+  expectConversationInput(call.mock.calls[0]![0], text, saved, lang);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
 });
@@ -759,7 +931,8 @@ it('exposes manager work tools without exposing a goal abort tool to the agent',
     await client.connect(clientTransport);
     const names = (await client.listTools()).tools.map(({ name }) => name);
     expect(names).toContain('takt_enqueue_goal_task');
-    expect(names.filter((name) => /abort/iu.test(name))).toEqual([]);
+    expect(names).toContain('takt_abort_epic');
+    expect(names).not.toContain('takt_abort_goal');
   } finally { await client.close(); await server.close(); }
 });
 
@@ -852,17 +1025,18 @@ it.each([
   '操作例: /pause', '> /pause', '```\n/pause', '~~~\n/pause',
   '```\n/pause GOAL\n```', '~~~\n/pause GOAL\n~~~', '/paused',
   '説明\n/pause',
-])('keeps command-like conversation text as ordinary input: %s', async (prefix) => {
+].flatMap((prefix) => (['ja', 'en'] as const).map((lang) => ({ lang, prefix }))))('keeps command-like conversation text as ordinary input in $lang: $prefix', async ({ lang, prefix }) => {
   const saved = goalRecord();
-  const { store, call, send } = await mountGoalControls('ja', saved);
+  const { store, call, send } = await mountGoalControls(lang, saved);
   const submit = vi.spyOn(session!, 'submit');
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   expect(submit).toHaveBeenCalledOnce();
+  expect(submit.mock.calls[0]![0]).toEqual({ kind: 'message', text });
   const submission = await submit.mock.results[0]!.value;
   if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
-  expectConversationInput(call.mock.calls[0]![0], text, saved);
+  expectConversationInput(call.mock.calls[0]![0], text, saved, lang);
   expect(await store.get(goalId)).toEqual(saved);
 });
 
@@ -1126,6 +1300,9 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
 });
 
 it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question details while retaining saved notification history', async (lang) => {
+  const repositoryDirectory = `${cwd}-CSV`;
+  renameSync(cwd, repositoryDirectory);
+  cwd = repositoryDirectory;
   writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    question: true\n');
   invalidateResolvedConfigCache(cwd);
   const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
@@ -1135,7 +1312,27 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
     body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call } = await mountGoalControls(lang, saved);
-  await waitFor(() => expect(app!.lastFrame()).toContain('^R'));
+  const withoutAssignment = (frame: string, pending: number): string => {
+    const heading = getLabel('manager.assignmentHeading', lang, { name: basename(cwd) });
+    const counts = getLabel('manager.counts', lang, { goals: '1', awaiting: '0', questions: String(pending) });
+    const assignment = `${heading} | ${counts}`;
+    const rows = frame.split('\n');
+    const assignmentRows = rows.filter((row) => row.trim() === assignment);
+    expect(assignmentRows).toHaveLength(1);
+    expect(assignmentRows[0]).toContain('CSV');
+    return rows.filter((row) => row !== assignmentRows[0]).join('\n');
+  };
+  await openMenu('answer');
+  await waitFor(() => {
+    const content = withoutAssignment(app!.lastFrame()!, 1);
+    expect(content).toContain(getLabel('manager.selectionTitles.answer', lang));
+    expect(content).toContain(question.body);
+  });
+  app!.stdin.write('\r');
+  await waitFor(() => {
+    const content = withoutAssignment(app!.lastFrame()!, 1);
+    for (const value of [question.body, ...question.options]) expect(content).toContain(value);
+  });
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
   expect(withdrawn.questions).toEqual([{
@@ -1147,10 +1344,8 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
   expect(display.events).toEqual([]);
   await remount(lang);
   await waitFor(() => {
-    const frame = app!.lastFrame()!;
-    expect(frame).toContain(lang === 'ja' ? '未回答 0' : 'Pending 0');
-    for (const value of [question.body, ...question.options]) expect(frame).not.toContain(value);
-    expect(frame).not.toContain(question.id);
+    const content = withoutAssignment(app!.lastFrame()!, 0);
+    for (const value of [question.body, ...question.options, question.id]) expect(content).not.toContain(value);
   });
   expect(await store.get(saved.id)).toEqual(withdrawn);
   expect(call).not.toHaveBeenCalled();

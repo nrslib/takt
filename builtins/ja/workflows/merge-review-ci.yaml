@@ -1,0 +1,26 @@
+name: merge-review-ci
+description: CI成功済みのPRだけをレビューし、評価をコメントする
+max_steps: 51
+initial_step: check_ci
+steps:
+  - name: check_ci
+    description: 既存レビューの開始前にCI状態を一度確認する
+    mode: system
+    system_inputs:
+      - type: pr_status
+        source: current_pr
+        as: status
+    rules:
+      - condition: when(context.check_ci.status.ci.finished == true && context.check_ci.status.ci.passed == true)
+        next: merge_review
+      - condition: when(true)
+        next: COMPLETE
+  - name: merge_review
+    description: レビュー・評価・コメントを既存merge-reviewへ委譲する
+    kind: workflow_call
+    call: merge-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

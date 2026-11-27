@@ -10,7 +10,7 @@ export async function mergeGoalPr(cwd: string, goal: Goal, until: 'prepare' | 'm
   const settings = resolveMergeSettings(resolveConfigValue(cwd, 'merge'));
   const task = await enqueuePrMergeTask({
     projectCwd: cwd, prNumber: pullRequest.number, pullRequest,
-    until, workflow: until === 'prepare' ? 'merge-prepare' : settings.workflow,
+    until, workflow: until === 'prepare' ? settings.prepareWorkflow : settings.workflow,
     settings, abortSignal: signal,
   }, goal);
   return { taskName: task.name, status: task.status, goalId: goal.id, prNumber: pullRequest.number,

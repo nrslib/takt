@@ -2,7 +2,7 @@
 
 # CI/CD 連携
 
-TAKT を CI/CD パイプラインから実行する方法を説明します。GitHub Actions の例、非対話モードのオプション、その他の CI システムでの設定を扱います。
+CI/CD パイプラインから TAKT を実行するためのガイドです。GitHub Actions の例、非対話モードのオプション、その他の CI システムでの設定をまとめています。
 
 ## GitHub Actions
 
@@ -51,7 +51,7 @@ jobs:
 
 `--pipeline` を指定すると、ブランチの作成、workflow の実行、コミット、プッシュを非対話で行います。
 
-Pipeline モードにはタスクソースが必須です。`--task`、`--issue`、`--pr` のいずれかを指定してください。いずれも指定しない場合、TAKT は exit code `2` で終了します。
+Pipeline モードではタスクの指定が必須です。`--task`、`--issue`、`--pr` のいずれかを指定してください。指定しない場合、TAKT は終了コード `2` で終了します。
 
 Pipeline モードで PR を作成するには `--auto-pr` を指定します。`--skip-git` と併用すると PR は作成されず、警告が出ます。ワークフローが成功した場合の終了コードは `0` です。
 
@@ -59,7 +59,7 @@ Pipeline モードで PR を作成するには `--auto-pr` を指定します。
 
 | オプション | 説明 |
 |-----------|------|
-| `--pipeline` | **pipeline（非インタラクティブ）モードを有効化** -- CI/自動化に必要 |
+| `--pipeline` | pipeline（非対話）モードを有効化。CI・自動実行時に必要 |
 | `-t, --task <text>` | タスク内容（GitHub Issue の代替） |
 | `-i, --issue <N>` | GitHub Issue 番号（インタラクティブモードでの `#N` と同等） |
 | `--pr <number>` | PR 番号（レビューコメントを取得して修正） |
@@ -136,7 +136,7 @@ Pipeline モードは CI スクリプトで失敗の種類を判別できるよ�
 
 ## Pipeline テンプレート変数
 
-`~/.takt/config.yaml` の pipeline 設定ではコミットメッセージと PR 本文をカスタマイズするためのテンプレート変数をサポートしています。
+`~/.takt/config.yaml` の pipeline 設定ではテンプレート変数でコミットメッセージと PR 本文をカスタマイズできます。
 
 ```yaml
 pipeline:
@@ -170,7 +170,7 @@ takt install claude-sdk
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 ```
 
-このアプローチは Node.js をサポートする任意の CI システムで動作します。GitLab CI、CircleCI、Jenkins、Azure DevOps などが含まれます。
+この方法は GitLab CI、CircleCI、Jenkins、Azure DevOps など、Node.js をサポートする任意の CI システムで使えます。
 
 ## 環境変数
 
@@ -203,19 +203,19 @@ export TAKT_COPILOT_GITHUB_TOKEN=ghp_...
 export TAKT_KIRO_API_KEY=...
 ```
 
-優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
+環境変数は `config.yaml` の設定よりも優先されます。
 
 DeepSeek Harness を使うジョブでは先に `takt install deepseek-harness` を実行します。対応環境は glibc 2.28 以上の Linux x64/arm64 と macOS arm64 14.0 以上です。Cursor、Copilot、Kiro、Devin では各 CLI もインストールしてください。
 
 ## コストに関する注意
 
-TAKT は AI API（Anthropic、OpenAI など）を使用するため、特に CI/CD 環境でタスクが自動実行される場合、大きなコストが発生する可能性があります。次の点に注意してください。
+TAKT は AI API（Anthropic、OpenAI など）を使用します。特に CI/CD でタスクを自動実行する場合は費用が高額になる可能性があるため、次の点に注意してください。
 
-- **API 使用量の監視**: 予期しない請求を避けるため、AI provider で課金アラートを設定してください。
-- **`--quiet` モードの使用**: 出力量は削減されますが、API 呼び出し回数は減りません。
-- **適切な workflow の選択**: シンプルな workflow はマルチステージの workflow（例: 並列レビュー付きの `default`）よりも API 呼び出しが少なくなります。
-- **CI トリガーの制限**: 意図しない実行を防ぐため、条件付きトリガー（例: `if: contains(github.event.comment.body, '@takt')`）を使用してください。
-- **`--provider mock` でのテスト**: CI パイプラインの開発中は mock provider を使用して、実際の API コストを回避してください。
+- API 使用量を監視し、予期しない請求を避けるために AI プロバイダで課金アラートを設定してください。
+- `--quiet` は出力量を減らしますが、API 呼び出し回数は減らしません。
+- ワークフローは用途に合わせて選んでください。シンプルなワークフローは、複数の段階を持つワークフロー（例: 並列レビュー付きの `default`）より API 呼び出しが少なくなります。
+- 意図しない実行を防ぐため、CI では条件付きトリガー（例: `if: contains(github.event.comment.body, '@takt')`）を使用してください。
+- CI パイプラインの開発中は `--provider mock` でテストし、実際の API 費用を避けてください。
 
 ## 管理 SDK の導入と更新
 

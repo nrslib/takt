@@ -8,6 +8,7 @@ import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import type { InteractiveImageAttachment } from '../interactive/imageAttachments.js';
 import { promoteTaskAttachments } from './attachments.js';
 import { readTaskSpecFile } from './taskSpecFile.js';
+import { normalizeManagerImageTaskOrder } from './managerImageAttachments.js';
 
 export interface PersistedTaskOrderRevision {
   readonly taskDirRelative?: string;
@@ -350,7 +351,10 @@ export function persistTaskOrderRevision(
   lang: 'en' | 'ja',
   attachments: readonly InteractiveImageAttachment[] = [],
 ): PersistedTaskOrderRevision {
-  const normalizedContent = ensureOrderAttachmentContent(approvedOrderContent, attachments, lang);
+  const managerContent = normalizeManagerImageTaskOrder(
+    taskDir === undefined ? undefined : resolveTaskDirPath(projectDir, taskDir), approvedOrderContent,
+  );
+  const normalizedContent = ensureOrderAttachmentContent(managerContent, attachments, lang);
   if (normalizedContent.trim().length === 0) {
     throw new Error('Approved task order must not be empty.');
   }

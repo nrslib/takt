@@ -9,6 +9,7 @@ import type { AcceptedEvent, TurnEvent } from '../core/daemon/events.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import type { EventStore } from '../core/daemon/ports.js';
+import type { ConversationProgress } from '../shared/types/conversation-activity.js';
 
 const interrupt = (turn: TurnIdentity) => ({ kind: 'interrupt' as const, ...turn });
 
@@ -34,6 +35,157 @@ const interruptedEvents: TurnEvent[] = [
 ];
 
 describe('event driven daemon dispatcher', () => {
+  it('restores queued image messages in order with their own attachment IDs and does not replay them again', async () => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const first = await storedDispatcher(h, new FileEventStore(directory));
+    const imageA = '11111111-1111-4111-8111-111111111111';
+    const imageB = '22222222-2222-4222-8222-222222222222';
+    const messageA = { kind: 'message' as const, text: 'First image [Image #1]', imageAttachmentIds: [imageA] };
+    const messageB = { kind: 'message' as const, text: 'Second image [Image #2]', imageAttachmentIds: [imageB] };
+    const queued = [messageA, messageB].map((command, index) => ({ ...input(`image-${index}`), event: {
+      kind: 'human_command' as const, command, speaker: { namespace: 'test', id: 'operator' },
+    } }));
+    try {
+      await first.dispatcher.accept(input('blocking-turn'));
+      await first.runner.started(1);
+      for (const event of queued) expect(await first.dispatcher.accept(event)).toMatchObject({ kind: 'accepted' });
+      expect(first.runner.calls).toHaveLength(1);
+    } finally { await first.dispatcher.control({ kind: 'stop' }); }
+
+    const restarted = await storedDispatcher(h, new FileEventStore(directory));
+    try {
+      for (const [index, expected] of queued.entries()) {
+        const running = await restarted.runner.started(index + 1);
+        expect(running.input.event.event).toEqual(expected.event);
+        const delivered = parseDaemonProcessMessage({ protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'image-launch',
+          kind: 'start_turn', input: running.input }, 'image-launch');
+        expect(delivered).toMatchObject({ kind: 'start_turn', input: { event: { event: expected.event } } });
+        await restarted.runner.finish(running);
+      }
+      expect(restarted.runner.calls).toHaveLength(2);
+    } finally { await restarted.dispatcher.control({ kind: 'stop' }); }
+
+    const restoredAgain = await storedDispatcher(h, new FileEventStore(directory));
+    try {
+      for (const event of queued) expect(await restoredAgain.dispatcher.accept(event)).toMatchObject({ kind: 'accepted' });
+      await restoredAgain.dispatcher.drain();
+      expect(restoredAgain.runner.calls).toHaveLength(0);
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { await restoredAgain.dispatcher.control({ kind: 'stop' }); }
+  });
+  it.each([false, true])('persists interrupted image references when the child omits interruption fields (session change=%s)', async (withSessionChange) => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const { dispatcher, runner } = await storedDispatcher(h, new FileEventStore(directory));
+    const imageId = '11111111-1111-4111-8111-111111111111';
+    const command = { kind: 'message' as const, text: 'Inspect [Image #1]', imageAttachmentIds: [imageId] };
+    try {
+      await dispatcher.accept({ ...input('interrupted-image'), event: {
+        kind: 'human_command', command, speaker: { namespace: 'test', id: 'operator' },
+      } });
+      const active = await runner.started(1);
+      expect(await dispatcher.control(interrupt(active.turn))).toEqual({ kind: 'interrupted' });
+      const sessionChange = withSessionChange ? { operationId: 'child-change', expectedVersion: 0,
+        session: { ...turnState().session, sessionId: 'saved-session' } } : undefined;
+      await runner.finish(active, { kind: 'interrupted', ...(sessionChange === undefined ? {} : { change: sessionChange }) });
+      const expected = { kind: 'interrupted', change: {
+        operationId: active.turn.operationId, expectedVersion: 0, ...sessionChange,
+        interruptedMessage: command.text, interruptedImageAttachmentIds: [imageId],
+      } };
+      expect(h.applied.get(active.turn.operationId)?.outcome).toEqual(expected);
+      expect(await new FileEventStore(directory).readTurns(active.turn.conversationId)).toEqual([
+        expect.objectContaining({ operationId: active.turn.operationId, outcome: expected }),
+      ]);
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { await dispatcher.control({ kind: 'stop' }); }
+  });
+
+  it('delivers a pending progress backlog in FIFO order', async () => {
+    const h = await harness(); await h.dispatcher.accept(input('fifo-progress'));
+    const active = await h.runner.started(1);
+    const entered = deferred<void>(); const release = deferred<void>();
+    const observed: string[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      if (observed.length === 0) { entered.resolve(); await release.promise; }
+      if (typeof message !== 'string' && message.kind === 'tool_event') observed.push(message.eventId);
+    });
+    const post = (index: number) => h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: {
+      kind: 'tool_event', eventId: String(index), event: { type: 'tool_use', toolActivity: { callId: 'call', operationId: active.turn.operationId, generation: active.turn.generation }, data: { id: String(index), tool: 'Read', input: {} } },
+    } });
+    const pending = [post(0)]; await entered.promise;
+    try {
+      for (let index = 1; index < 500; index++) pending.push(post(index));
+      release.resolve(); await Promise.all(pending);
+      expect(observed).toEqual(Array.from({ length: 500 }, (_, index) => String(index)));
+    } finally {
+      release.resolve();
+      await Promise.all(pending); await h.dispatcher.control({ kind: 'stop' });
+    }
+  });
+  it('keeps tool starts and results ordered and drains their persistence before settling the turn', async () => {
+    const h = await harness(); await h.dispatcher.accept(input('history'));
+    const active = await h.runner.started(1);
+    const entered = deferred<void>(); const release = deferred<void>();
+    const observed: ConversationProgress[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      if (observed.length === 0) { entered.resolve(); await release.promise; }
+      observed.push(message);
+    });
+    const context = { callId: 'call', operationId: active.turn.operationId, generation: active.turn.generation };
+    const start: ConversationProgress = { kind: 'tool_event', eventId: 'start', event: {
+      type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} }, toolActivity: context,
+    } };
+    const result: ConversationProgress = { kind: 'tool_event', eventId: 'result', event: {
+      type: 'tool_result', data: { id: 'tool', content: 'done', isError: false }, toolActivity: context,
+    } };
+    const first = h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: start }); await entered.promise;
+    const second = h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: result });
+    const finish = h.runner.finish(active);
+    try {
+      expect(h.owner.progress).toHaveBeenCalledTimes(1);
+      expect(h.store.saveResult).not.toHaveBeenCalled();
+      release.resolve(); await Promise.all([first, second, finish]);
+      expect(observed).toEqual([start, result]);
+      expect(h.store.records.get('history')?.state).toBe('settled');
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
+  });
+
+  it.each([false, true])('orders pending text deliveries and cancels them when interrupted=%s', async (interrupted) => {
+    const h = await harness();
+    await h.dispatcher.accept(input('ordered-text'));
+    const running = await h.runner.started(1);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const observed: ConversationProgress[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal) => {
+      if (typeof message !== 'string' && message.kind === 'turn_text' && message.message === 'first') {
+        entered.resolve(); await release.promise;
+      }
+      if (!signal.aborted) observed.push(message);
+    });
+    const post = (message: ConversationProgress) => h.dispatcher.post({ kind: 'turn_progress', turn: running.turn, message });
+    const first = post({ kind: 'turn_text', message: 'first' });
+    await entered.promise;
+    const second = post({ kind: 'turn_text', message: 'second' });
+    const tool = post({ kind: 'tool', tool: 'Bash', description: '調査' });
+    try {
+      expect(h.owner.progress).toHaveBeenCalledTimes(1);
+      if (interrupted) await h.dispatcher.control(interrupt(running.turn));
+      const finishing = h.runner.finish(running);
+      expect(h.store.saveResult).not.toHaveBeenCalled();
+      release.resolve();
+      await Promise.all([first, second, tool, finishing]);
+      expect(observed).toEqual(interrupted ? [] : [
+        { kind: 'turn_text', message: 'first' }, { kind: 'turn_text', message: 'second' },
+        { kind: 'tool', tool: 'Bash', description: '調査' },
+      ]);
+      expect(h.applied.get(running.turn.operationId)?.outcome.kind).toBe(interrupted ? 'interrupted' : 'completed');
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { release.resolve(); await Promise.all([first, second, tool]); await h.dispatcher.control({ kind: 'stop' }); }
+  });
+
   it.each(['starting', 'reading'] as const)('redelivers an event interrupted by shutdown while %s before provider execution', async (phase) => {
     const h = await harness();
     const entered = deferred<void>();
@@ -41,7 +193,7 @@ describe('event driven daemon dispatcher', () => {
     if (phase === 'starting') h.store.beforeStart = async () => { entered.resolve(); await release.promise; };
     else {
       const snapshot = h.owner.snapshot;
-      h.owner.snapshot = vi.fn(async (id) => { entered.resolve(); await release.promise; return snapshot(id); });
+      h.owner.snapshot = vi.fn(async (id, request) => { entered.resolve(); await release.promise; return snapshot(id, request); });
     }
     await h.dispatcher.accept(input('E1', 'conversation', 'other'));
     await entered.promise;
@@ -201,10 +353,10 @@ describe('event driven daemon dispatcher', () => {
     const entered = deferred<TurnIdentity>();
     const release = deferred<void>();
     const snapshot = h.owner.snapshot;
-    h.owner.snapshot = vi.fn(async (id) => {
+    h.owner.snapshot = vi.fn(async (id, request) => {
       entered.resolve(h.store.markStarted.mock.calls[0]![1]);
       await release.promise;
-      return snapshot(id);
+      return snapshot(id, request);
     });
     await h.dispatcher.accept(input('T1'));
     const turn = await entered.promise;
@@ -520,8 +672,8 @@ describe('event driven daemon dispatcher', () => {
     const order: string[] = [];
     let savedVersion = 0;
     const snapshot = h.owner.snapshot;
-    h.owner.snapshot = vi.fn(async (id) => {
-      const read = await snapshot(id);
+    h.owner.snapshot = vi.fn(async (id, request) => {
+      const read = await snapshot(id, request);
       return { ...read, turnState: { ...read.turnState, version: savedVersion } };
     });
     h.stateRequests.handle.mockImplementationOnce(async (_turn, _request, signal) => {
@@ -580,9 +732,9 @@ describe('event driven daemon dispatcher', () => {
     expect({ operationId: read.operationId, generation: read.generation }).toEqual({
       operationId: t1.turn.operationId, generation: t1.turn.generation,
     });
-    expect(h.owner.snapshot).toHaveBeenCalledWith('conversation');
+    expect(h.owner.snapshot).toHaveBeenCalledWith('conversation', { toolHistory: false });
     await h.runner.progress(t1, 'progress');
-    expect(h.owner.progress).toHaveBeenCalledWith(t1.turn, 'progress');
+    expect(h.owner.progress).toHaveBeenCalledWith(t1.turn, 'progress', expect.any(AbortSignal));
     await h.runner.finish(t1);
     expect(await h.dispatcher.snapshot('conversation')).toMatchObject({ operationId: null, generation: null });
     await h.dispatcher.accept(input('H1'));
@@ -598,7 +750,7 @@ describe('event driven daemon dispatcher', () => {
     } });
     const active = await h.runner.started(1);
     await h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: { kind: 'thinking' } });
-    expect(h.owner.progress).toHaveBeenCalledExactlyOnceWith(active.turn, { kind: 'thinking' });
+    expect(h.owner.progress).toHaveBeenCalledExactlyOnceWith(active.turn, { kind: 'thinking' }, expect.any(AbortSignal));
     await h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: 'patrol message' });
     await h.dispatcher.post({ kind: 'turn_progress', turn: { ...active.turn, generation: active.turn.generation + 1 },
       message: { kind: 'tool', tool: 'StaleTool' } });
@@ -986,7 +1138,7 @@ describe('event driven daemon dispatcher', () => {
 
   it('passes the accepted event and versioned state unchanged to the turn process', async () => {
     const h = await harness();
-    const snapshot = await h.owner.snapshot('conversation');
+    const snapshot = await h.owner.snapshot('conversation', { toolHistory: false });
     snapshot.turnState.version = 7;
     snapshot.cancel = vi.fn();
     h.owner.snapshot = vi.fn(async () => snapshot);
@@ -994,6 +1146,7 @@ describe('event driven daemon dispatcher', () => {
     const call = await h.runner.started(1);
     expect(call.input).toEqual({ event: h.store.records.get('short')!.event, turn: call.turn, state: snapshot.turnState });
     expect(call.input.state).toBe(snapshot.turnState);
+    expect(h.owner.snapshot).toHaveBeenCalledWith('conversation', { toolHistory: false });
     expect(snapshot.cancel).toHaveBeenCalledTimes(1);
     expect(h.store.records.get('short')?.state).toBe('running');
     await h.runner.finish(call);

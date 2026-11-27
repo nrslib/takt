@@ -147,6 +147,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -224,6 +225,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: 新しい日付形式への対応を追加し、従来形式との互換性を保つ。
@@ -247,6 +249,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -280,6 +283,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -313,6 +317,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -346,6 +351,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -379,6 +385,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -412,6 +419,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -445,6 +453,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -726,6 +735,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -803,6 +813,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: Add the new date format while preserving compatibility with the existing format.
@@ -826,6 +837,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -859,6 +871,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -892,6 +905,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -925,6 +939,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -958,6 +973,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -991,6 +1007,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80
@@ -1024,6 +1041,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 80

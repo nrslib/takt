@@ -21,9 +21,10 @@ export interface StageAndCommitOptions {
   allowGitFilters?: boolean;
 }
 
-export function getCurrentBranch(cwd: string): string {
+export function getCurrentBranch(cwd: string, env?: NodeJS.ProcessEnv): string {
   return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd,
+    env,
     encoding: 'utf-8',
     stdio: 'pipe',
   }).trim();
@@ -219,6 +220,7 @@ export function relayPushCloneToOrigin(cloneCwd: string, rootCwd: string, branch
       execFileSync('git', ['update-ref', '-d', tempRef], { cwd: rootCwd, stdio: 'pipe' });
       log.debug('Relay push: temp ref cleaned up', { tempRef });
     } catch {
+      // eslint-disable-next-line takt/catch-log-includes-error -- The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.debug('Relay push: temp ref cleanup failed (non-fatal)', { tempRef });
     }
   }

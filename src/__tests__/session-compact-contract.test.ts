@@ -40,6 +40,9 @@ function createOptionsBuilder(
     () => '.takt/runs/test/reports',
     () => undefined,
     () => 'test-workflow',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
   );
 }
 

@@ -2,6 +2,9 @@
  * Tests for interactive mode
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
@@ -89,7 +92,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -118,9 +121,11 @@ vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { runConversationLoop } from '../features/interactive/conversationLoop.js';
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
 import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
@@ -130,6 +135,7 @@ import { info, error, StreamDisplay } from '../shared/ui/index.js';
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
+let projectConfigDir: string;
 
 function setupMockProvider(responses: string[]): void {
   const { provider } = createMockProvider(responses);
@@ -138,6 +144,8 @@ function setupMockProvider(responses: string[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  projectConfigDir = mkdtempSync(join(tmpdir(), 'takt-interactive-config-'));
+  vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   mockSelectOption.mockResolvedValue('execute');
   vi.mocked(confirmWithCancel).mockReset().mockResolvedValue({ kind: 'value', value: true });
   mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
@@ -154,6 +162,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreStdin();
   mockSelectOption.mockReset();
+  rmSync(projectConfigDir, { recursive: true, force: true });
 });
 
 describe('interactiveMode', () => {
@@ -202,9 +211,9 @@ describe('interactiveMode', () => {
 
     expect(capture.callCount).toBe(1);
     expect(capture.prompts[0]).toContain('continue discussing the task');
-    expect(capture.systemPrompts[0]).toBe(buildInteractiveSystemPrompt('en', {
+    expect(capture.systemPrompts[0]).toBe(withProgressNotesGuidance(buildInteractiveSystemPrompt('en', {
       grillMe: false, formalSpec: mode, formalSpecComments: true,
-    }));
+    }), 'en'));
     expect(result.action).toBe('cancel');
   });
 

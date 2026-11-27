@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,12 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { EpicStore } from '../infra/epics/store.js';
+import { abortEpic, completeEpic, getEpic, recordEpicVerificationResult, startEpicVerification } from '../infra/epics/index.js';
+import { completedEpicGoal, epicRecord, verificationResultFor } from './helpers/epic-fixtures.js';
 
 let directory: string;
 let reader: WatchGoalReader;
@@ -36,10 +42,30 @@ async function watchSource(onError: (error: unknown) => void) {
   const globalDirectory = join(directory, 'global');
   await registerProject({ globalConfigDirectory: globalDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
   conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
-    new DaemonNotifications(globalDirectory), async () => {}, onError);
+    new DaemonNotifications(globalDirectory), async () => {}, onError, { readTurns: async () => [] });
   source = new FileDaemonWatchSource(conversations, async () => {}, onError);
   return { source, files: new DaemonPersistedFiles(globalDirectory) };
 }
+
+it('keeps remote work alive while observing process identity only for local tasks', async () => {
+  const errors = vi.fn(); const { source, files } = await watchSource(errors);
+  const assignment = RemoteAssignmentSchema.parse({ projectId: directory, taskName: 'remote', workerId: 'w1', workerName: 'w1',
+    registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+    originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+  const running = { name: 'local', status: 'running', goal_id: goalRecord().id, owner_pid: 123, owner_start_time: 'local-start',
+    created_at: '2026-11-13T00:00:00Z', started_at: '2026-11-13T00:00:00Z', completed_at: null };
+  await mkdir(join(directory, '.takt'), { recursive: true });
+  const remote = { ...running, name: 'remote', owner_pid: null, owner_start_time: null, remote_assignment: assignment };
+  const path = join(directory, '.takt/tasks.yaml');
+  await writeFile(path, JSON.stringify({ tasks: [running, remote] }));
+  expect(await source.runs()).toEqual([expect.objectContaining({ task: expect.objectContaining({ taskName: 'local' }),
+    owner: { pid: 123, startTime: 'local-start' } })]);
+  await writeFile(path, JSON.stringify({ tasks: [remote] }));
+  expect(await source.runs()).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect(errors).not.toHaveBeenCalled();
+});
 
 it('parses goal histories in a reusable worker and returns only observation data', async () => {
   const goal = { ...goalRecord(), createdAt: '2026-11-01T00:00:00Z', workLog: [...Array.from({ length: 200 }, () => ({
@@ -95,14 +121,34 @@ it('reports invalid goals and continues observing valid goals', async () => {
   expect(await reader.read(directory, valid.id)).toMatchObject({ id: valid.id });
 });
 
-it.each(['missing', 'invalid JSON', 'invalid schema'] as const)('keeps the daemon alive and reports a goal with %s', async (failure) => {
+it.each(['the goal directory', 'goal.json'] as const)('skips a goal whose %s disappears after listing without reporting an error', async (target) => {
+  const kept = goalRecord();
+  const deleted = { ...goalRecord(), id: randomUUID() };
+  for (const goal of [kept, deleted]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true }); await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const read = reader.read.bind(reader);
+  vi.spyOn(reader, 'read').mockImplementation(async (cwd, id) => {
+    const path = join(directory, '.takt', 'goals', id);
+    if (id === deleted.id) await rm(target === 'goal.json' ? join(path, 'goal.json') : path, { recursive: true });
+    return read(cwd, id);
+  });
+  const errors = vi.fn();
+  const ids = [];
+  for await (const goal of readWatchGoals(directory, errors, reader)) ids.push(goal.id);
+  expect(ids).toEqual([kept.id]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it.each(['invalid JSON', 'invalid schema'] as const)('keeps the daemon alive and reports a goal with %s', async (failure) => {
   const goal = GoalSchema.parse({ ...goalRecord(), executionStatus: 'aborted' });
   const inactivePath = join(directory, '.takt', 'goals', goal.id);
   const unreadablePath = join(directory, '.takt', 'goals', randomUUID());
   await mkdir(inactivePath, { recursive: true });
   await writeFile(join(inactivePath, 'goal.json'), JSON.stringify(goal));
   await mkdir(unreadablePath);
-  if (failure !== 'missing') await writeFile(join(unreadablePath, 'goal.json'), failure === 'invalid JSON' ? '{invalid' : '{}');
+  await writeFile(join(unreadablePath, 'goal.json'), failure === 'invalid JSON' ? '{invalid' : '{}');
   const errors = vi.fn();
   const { source, files } = await watchSource(errors);
   expect(await source.hasWork(files)).toBe(true);
@@ -172,11 +218,29 @@ it.each([true, false])('observes runnable awaiting-merge work only for merge_tas
   expect(errors).not.toHaveBeenCalled();
 });
 
-it('patrols linked pending and running merge work until only human merge waits remain', async () => {
+it.each([
+  { concurrency: 0, waitingReason: undefined, runnable: false },
+  { concurrency: 1, waitingReason: 'Waiting for an available builtin worker slot', runnable: false },
+  { concurrency: 1, waitingReason: undefined, runnable: true },
+])('does not classify capacity waiting as a stalled launch: %j', async ({ concurrency, waitingReason, runnable }) => {
+  const goal = GoalSchema.parse(goalRecord());
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  await writeFile(join(directory, '.takt', 'tasks.yaml'), `tasks:\n  - name: queued\n    status: pending\n    goal_id: ${goal.id}\n    created_at: 2026-11-06T00:00:00.000Z\n    started_at: null\n    completed_at: null\n${waitingReason === undefined ? '' : `    waiting_reason: ${waitingReason}\n`}`);
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+  await writeFile(join(directory, 'global', 'config.yaml'), `daemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+  expect(await source.launches()).toMatchObject([{ runnablePending: runnable, autoRun: true }]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('patrols linked active and failed merge work until only human merge waits remain', async () => {
   const base = goalRecord();
   const completion = { goalBranch: base.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
     changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } };
-  const goals: Goal[] = Array.from({ length: 7 }, () => ({ ...base, id: randomUUID(), status: 'awaiting_merge', completion }));
+  const statuses = ['pending', 'running', 'completed', 'pending', 'pending', 'pending', 'pending', 'failed', 'exceeded', 'pr_failed'] as const;
+  const goals: Goal[] = statuses.map(() => ({ ...base, id: randomUUID(), status: 'awaiting_merge', completion }));
   goals[5]!.executionStatus = 'paused';
   goals[6]!.executionStatus = 'aborted';
   for (const goal of goals) {
@@ -185,14 +249,14 @@ it('patrols linked pending and running merge work until only human merge waits r
     await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
   }
   const tasks = goals.map((goal, index) => ({ name: `task-${index}`, goal_id: goal.id, merge_task: index !== 3,
-    status: index === 0 || index >= 3 ? 'pending' : index === 1 ? 'running' : 'completed',
+    status: statuses[index],
     created_at: '2026-11-06T00:00:00.000Z', started_at: null, completed_at: null }));
   tasks[4]!.goal_id = randomUUID();
   const tasksPath = join(directory, '.takt', 'tasks.yaml');
   await writeFile(tasksPath, JSON.stringify({ tasks }));
   const errors = vi.fn();
   const { source } = await watchSource(errors);
-  expect([...(await source.patrolGoalIds(directory))].sort()).toEqual([goals[0]!.id, goals[1]!.id].sort());
+  expect([...(await source.patrolGoalIds(directory))].sort()).toEqual([0, 1, 7, 8, 9].map((index) => goals[index]!.id).sort());
   await writeFile(tasksPath, JSON.stringify({ tasks: tasks.map((task) => ({ ...task, status: 'completed' })) }));
   expect(await source.patrolGoalIds(directory)).toEqual([]);
   expect(errors).not.toHaveBeenCalled();
@@ -216,4 +280,127 @@ it('reports corrupt tasks and patrols ordinary active goals while excluding awai
   expect(await source.patrolGoalIds(directory)).toEqual([active.id]);
   expect(errors).toHaveBeenCalledOnce();
   expect(errors).toHaveBeenCalledWith(expect.any(Error));
+});
+
+async function savePendingEpic() {
+  const globalConfigDirectory = join(directory, 'global');
+  const workspace = await createWorkspace({ globalConfigDirectory, name: '結合確認待ち', repositoryDirectories: [] });
+  await writeFile(join(globalConfigDirectory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({
+    ...workspace, repositoryDirectories: [directory],
+  }));
+  const goal = completedEpicGoal('b'.repeat(40), 'a'.repeat(40));
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  const member = { repositoryDirectory: directory, goalId: goal.id };
+  const epic = { ...epicRecord(), workspaceId: workspace.id, members: [member], targets: [{ ...member, targetSha: goal.completion!.targetSha! }] };
+  await new EpicStore(globalConfigDirectory, workspace.id).create(epic);
+  return { globalConfigDirectory, workspaceId: workspace.id, epicId: epic.id,
+    path: join(globalConfigDirectory, 'workspaces', workspace.id, 'epics', epic.id, 'epic.json') };
+}
+
+it('keeps a pending Epic active after all goals complete and becomes idle only after the Epic is aborted', async () => {
+  const context = await savePendingEpic();
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect((await source.patrols()).filter((target) => target.workspaceId === context.workspaceId))
+    .toMatchObject([{ epicIds: [context.epicId] }]);
+  await abortEpic({ globalConfigDirectory: context.globalConfigDirectory, workspaceId: context.workspaceId,
+    epicId: context.epicId, reason: '確認を中止する' });
+  expect(await source.hasWork(files)).toBe(false);
+  expect((await source.patrols()).filter((target) => target.workspaceId === context.workspaceId)).toEqual([]);
+  expect(await getEpic({ globalConfigDirectory: context.globalConfigDirectory, workspaceId: context.workspaceId, epicId: context.epicId }))
+    .toMatchObject({ status: 'aborted', members: [{ repositoryDirectory: directory, goalId: goalRecord().id }] });
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('keeps the same pending Epic in daemon work and patrols until explicit completion and retains its evidence afterwards', async () => {
+  execFileSync('git', ['init', '--quiet', directory]);
+  const saved = await savePendingEpic();
+  const context = { globalConfigDirectory: saved.globalConfigDirectory, workspaceId: saved.workspaceId, epicId: saved.epicId };
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  const patrols = async () => (await source.patrols()).filter((target) => target.workspaceId === context.workspaceId);
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect(await patrols()).toMatchObject([{ epicIds: [context.epicId] }]);
+
+  const run = await startEpicVerification(context);
+  await recordEpicVerificationResult({ ...context, result: verificationResultFor(run) });
+  expect(await source.hasWork(files)).toBe(true);
+  expect(await patrols()).toMatchObject([{ epicIds: [context.epicId] }]);
+
+  await completeEpic(context);
+  expect(await source.hasWork(files)).toBe(false);
+  expect(await patrols()).toEqual([]);
+  expect(await getEpic(context)).toMatchObject({ status: 'completed', currentEvidence: { id: run.id },
+    members: [{ repositoryDirectory: directory, goalId: goalRecord().id }], verificationRuns: [{ id: run.id, status: 'succeeded' }] });
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('keeps all active Epic IDs and reports later failures without returning a partial workspace patrol', async () => {
+  const context = await savePendingEpic();
+  const later = { ...epicRecord(), id: '950e8400-e29b-41d4-a716-446655440000', workspaceId: context.workspaceId };
+  await new EpicStore(context.globalConfigDirectory, context.workspaceId).create(later);
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  const workspacePatrols = async () => (await source.patrols()).filter((target) => target.workspaceId === context.workspaceId);
+  expect(await workspacePatrols()).toMatchObject([{ epicIds: [context.epicId, later.id] }]);
+  await abortEpic({ globalConfigDirectory: context.globalConfigDirectory, workspaceId: context.workspaceId, epicId: later.id, reason: 'Stop later Epic' });
+  expect(await workspacePatrols()).toMatchObject([{ epicIds: [context.epicId] }]);
+  expect(await source.hasWork(files)).toBe(true);
+  errors.mockClear();
+  await writeFile(join(context.globalConfigDirectory, 'workspaces', context.workspaceId, 'epics', later.id, 'epic.json'), '{');
+  expect(await source.hasWork(files)).toBe(true);
+  expect(errors).toHaveBeenCalledWith(expect.any(Error));
+  expect(await workspacePatrols()).toEqual([]);
+  expect(errors).toHaveBeenCalledTimes(2);
+});
+
+it.each(['missing', 'invalid JSON', 'wrong workspace'] as const)('keeps the daemon active and reports an Epic with %s', async (failure) => {
+  const context = await savePendingEpic();
+  if (failure === 'missing') await rm(context.path);
+  else if (failure === 'invalid JSON') await writeFile(context.path, '{broken');
+  else await writeFile(context.path, JSON.stringify({ ...epicRecord(), workspaceId: randomUUID() }));
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect(errors).toHaveBeenCalledWith(expect.any(Error));
+});
+
+it('republishes only goal answers left pending for publication and clears their marks', async () => {
+  const savedAnswer = { text: 'CSV', source: 'mcp' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
+  const pendingId = randomUUID();
+  const target = GoalSchema.parse({ ...goalRecord(), questions: [
+    { id: pendingId, body: 'Which format?', recipient: 'human', status: 'answered', answer: savedAnswer, answerPublicationPending: true },
+    { id: randomUUID(), body: 'Which branch?', recipient: 'human', status: 'answered', answer: savedAnswer },
+  ] });
+  const other = GoalSchema.parse({ ...goalRecord(), id: randomUUID(), questions: [
+    { id: randomUUID(), body: 'Which owner?', recipient: 'human', status: 'answered', answer: savedAnswer },
+  ] });
+  for (const goal of [target, other]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const otherPath = join(directory, '.takt', 'goals', other.id, 'goal.json');
+  const otherBefore = await readFile(otherPath, 'utf8');
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+
+  await source.inquiries();
+  await source.inquiries();
+
+  expect(errors).not.toHaveBeenCalled();
+  const inboxNames = await readdir(await files.inboxDirectory(directory));
+  expect(await Promise.all(inboxNames.map((name) => files.readInboxEvent(directory, name)))).toEqual([
+    expect.objectContaining({ kind: 'answer', goalId: target.id, questionId: pendingId, answer: savedAnswer }),
+  ]);
+  const stored = await new GoalStore(directory).get(target.id);
+  expect(stored.questions!.map((question) => question.answerPublicationPending)).toEqual([undefined, undefined]);
+  expect(stored.questions!.map((question) => question.answer)).toEqual([savedAnswer, savedAnswer]);
+  expect(await readFile(otherPath, 'utf8')).toBe(otherBefore);
 });

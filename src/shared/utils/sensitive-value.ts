@@ -13,72 +13,36 @@ export const MAX_INSPECTED_BYTES_PER_SOURCE = 16 * 1024 * 1024;
 
 export interface SensitiveValues {
   values: Set<string>;
-  exhausted: boolean;
   inspectedBytes: number;
 }
 
 /**
- * 予算超過の理由。挙動はいずれも同じ exhaust（fail-closed）だが、
- * 誤爆調査のためにどの上限に当たったかを失敗メッセージへ残す。
- */
-export type SensitiveBudgetExhaustReason =
-  | 'candidate_count'
-  | 'candidate_bytes'
-  | 'source_scan';
-
-/**
  * 予算は「検査した量」ではなく「保持している機密候補」に課金する。
- * 検査量課金だと Write/Edit 本文のような非機密の大きな入力が予算を食い潰し、
- * 健全な長時間実行が fail-closed に到達してしまう（実測で発生）。
- * 保持候補への課金なら、予算超過 = 実際に大量の機密候補を追跡できなくなった
- * ときだけであり、そのときの exhaust（以降すべて [REDACTED]）は漏洩防止として正当。
- * 単一ソースの検査上限（バイト・ノード数）は、走査コストとフラット化攻撃への
- * 防護として別途残す。
+ * Write/Edit 本文などの非機密の大きな入力でも、候補を増やさず継続できる。
+ * 上限を超えた候補は追跡しない。サイズを秘密値の根拠にして全出力を伏せない。
+ * 1 つの入力の検査上限（バイト・ノード数）は走査コストのためのもので、超えた入力も
+ * それまでに集めた候補を追加し、以後の入力の追跡は止めない。
  */
 export class BoundedSensitiveValues {
   readonly values = new Set<string>();
   exhausted = false;
-  exhaustReason: SensitiveBudgetExhaustReason | undefined;
   storedValueBytes = 0;
-
   collect(source: unknown): void {
-    if (this.exhausted) {
-      return;
-    }
+    if (this.exhausted) return;
     const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
-    if (collected.exhausted) {
-      this.exhaust('source_scan');
-      return;
-    }
     for (const value of collected.values) {
-      if (this.values.has(value)) {
-        continue;
-      }
-      this.values.add(value);
-      this.storedValueBytes += Buffer.byteLength(value, 'utf8');
-    }
-    if (this.values.size > MAX_TRACKED_SENSITIVE_VALUES) {
-      this.exhaust('candidate_count');
-      return;
-    }
-    if (this.storedValueBytes > MAX_TRACKED_SENSITIVE_VALUE_BYTES) {
-      this.exhaust('candidate_bytes');
+      if (this.values.has(value)) continue;
+      const bytes = Buffer.byteLength(value, 'utf8');
+      if (this.values.size >= MAX_TRACKED_SENSITIVE_VALUES) { this.exhausted = true; break; }
+      if (this.storedValueBytes + bytes > MAX_TRACKED_SENSITIVE_VALUE_BYTES) { this.exhausted = true; break; }
+      this.values.add(value); this.storedValueBytes += bytes;
     }
   }
 
   reset(): void {
     this.values.clear();
     this.exhausted = false;
-    this.exhaustReason = undefined;
     this.storedValueBytes = 0;
-  }
-
-  exhaust(reason?: SensitiveBudgetExhaustReason): void {
-    this.values.clear();
-    this.exhausted = true;
-    if (reason !== undefined && this.exhaustReason === undefined) {
-      this.exhaustReason = reason;
-    }
   }
 }
 
@@ -111,7 +75,7 @@ export type SensitiveStringReplacer = (
 ) => SensitiveStringReplacement | undefined;
 
 export function sanitizeSensitiveValue(value: unknown, key?: string): unknown {
-  return sanitizeValue(value, key, new Set(), false, undefined);
+  return sanitizeValue(value, key, new Set(), undefined);
 }
 
 export function sanitizeSensitiveValueWithStringReplacer(
@@ -123,7 +87,6 @@ export function sanitizeSensitiveValueWithStringReplacer(
     value,
     undefined,
     sensitiveValues.values,
-    sensitiveValues.exhausted,
     replacer,
   );
 }
@@ -138,16 +101,12 @@ export function sanitizeSensitiveValueWithKnownValues(
     value,
     key,
     sensitiveValues.values,
-    sensitiveValues.exhausted,
     undefined,
   );
 }
 
 export function sanitizeSensitiveTextWithKnownValues(text: string, source: unknown): string {
   const sensitiveValues = collectSensitiveStringValues(source);
-  if (sensitiveValues.exhausted) {
-    return text.length === 0 ? text : REDACTED_VALUE;
-  }
   return sanitizeTextWithValues(text, sensitiveValues.values);
 }
 
@@ -155,17 +114,14 @@ function sanitizeValue(
   value: unknown,
   key: string | undefined,
   knownValues: ReadonlySet<string>,
-  redactAllStrings: boolean,
   stringReplacer: SensitiveStringReplacer | undefined,
 ): unknown {
   const holder: Record<string, unknown> = {};
   const work: SanitizeWorkItem[] = [{ value, key, target: holder, targetKey: 'value' }];
   const seen = new WeakSet<object>();
-  let visitedNodes = 0;
 
   while (work.length > 0) {
     const item = work.pop()!;
-    visitedNodes += 1;
     if (item.key !== undefined && isSensitiveKeyName(item.key)) {
       assignSanitized(item.target, item.targetKey, REDACTED_VALUE);
       continue;
@@ -177,8 +133,6 @@ function sanitizeValue(
         item.targetKey,
         replacement !== undefined
           ? replacement.value
-          : redactAllStrings && item.value.length > 0
-          ? REDACTED_VALUE
           : sanitizeTextWithValues(item.value, knownValues),
       );
       continue;
@@ -191,14 +145,7 @@ function sanitizeValue(
       assignSanitized(item.target, item.targetKey, REDACTED_VALUE);
       continue;
     }
-    const entries = boundedEntries(
-      item.value,
-      MAX_SENSITIVE_VALUE_NODES - visitedNodes - work.length,
-    );
-    if (entries === undefined) {
-      assignSanitized(item.target, item.targetKey, REDACTED_VALUE);
-      continue;
-    }
+    const entries = Object.entries(item.value);
     seen.add(item.value);
     const valueIsArray = Array.isArray(item.value);
     const output: Record<string, unknown> | unknown[] = valueIsArray
@@ -225,11 +172,10 @@ export function collectSensitiveStringValues(
   if (source instanceof BoundedSensitiveValues) {
     return {
       values: new Set(source.values),
-      exhausted: source.exhausted,
       inspectedBytes: 0,
     };
   }
-  const result: SensitiveValues = { values: new Set(), exhausted: false, inspectedBytes: 0 };
+  const result: SensitiveValues = { values: new Set(), inspectedBytes: 0 };
   const work: ValueWorkItem[] = [{ value: source, sensitiveContext: false }];
   const seen = new WeakSet<object>();
   let visitedNodes = 0;
@@ -245,7 +191,6 @@ export function collectSensitiveStringValues(
     if (typeof item.value === 'string') {
       result.inspectedBytes += Buffer.byteLength(item.value);
       if (result.inspectedBytes > maxInspectedBytes) {
-        result.exhausted = true;
         break;
       }
       if (sensitiveContext) {
@@ -255,7 +200,6 @@ export function collectSensitiveStringValues(
       continue;
     }
     if (result.inspectedBytes > maxInspectedBytes) {
-      result.exhausted = true;
       break;
     }
     if (item.value === null || typeof item.value !== 'object' || seen.has(item.value)) {
@@ -266,7 +210,6 @@ export function collectSensitiveStringValues(
       MAX_SENSITIVE_VALUE_NODES - visitedNodes - work.length,
     );
     if (entries === undefined) {
-      result.exhausted = true;
       break;
     }
     seen.add(item.value);

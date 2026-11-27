@@ -17,7 +17,9 @@ const CLONE_FAILED_MESSAGE = 'Git clone failed';
 // Dissociation closes the graph before checkout can lazy-load commit trees on affected Git versions.
 const REFERENCE_CLONE_ARGS = ['-c', 'core.commitGraph=false', 'clone'] as const;
 export const REMOTE_BRANCH_FETCH_FAILED_MESSAGE = 'Git remote branch fetch failed';
+// LC_ALL=C keeps Git's stderr in English, because isShallowReferenceError() matches on the message text.
 const ISOLATED_GIT_ENV = {
+  LC_ALL: 'C',
   GIT_CONFIG_COUNT: '1',
   GIT_CONFIG_KEY_0: 'core.logAllRefUpdates',
   GIT_CONFIG_VALUE_0: 'false',
@@ -85,8 +87,14 @@ function getExecErrorStderr(error: unknown): string {
   return '';
 }
 
-function isShallowReferenceError(message: string): boolean {
-  return message.includes('reference repository is shallow');
+// Git quotes the reference path into the message ("reference repository '<path>' is shallow");
+// the unquoted wording is kept for output that omits the path. The quoted path may itself contain
+// newlines. The match is anchored to a `fatal:` line; a destination that already holds files is
+// protected separately (see destinationHasContent), so a look-alike never causes a deletion.
+const SHALLOW_REFERENCE_PATTERN = /^fatal: reference repository (?:'[\s\S]*?' )?is shallow\s*$/m;
+
+export function isShallowReferenceError(message: string): boolean {
+  return SHALLOW_REFERENCE_PATTERN.test(message);
 }
 
 function cloneFailedError(error: unknown, attempt: 'reference' | 'direct'): Error {
@@ -118,11 +126,23 @@ function runIsolatedGitCommandAbortable(
   return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv());
 }
 
+// A destination that already holds files was not created by this clone attempt, so a failed attempt
+// must never clean it up, whatever its error message says (a path may even contain newlines).
+function destinationHasContent(clonePath: string): boolean {
+  try {
+    return fs.readdirSync(clonePath).length > 0;
+  } catch (error) {
+    // Only a missing destination is known to be ours to create. Anything else (an existing regular file
+    // gives ENOTDIR, an unreadable directory EACCES) means something is there, so it is not cleaned up.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
 function cleanupPartialClone(clonePath: string): void {
   try {
     fs.rmSync(clonePath, { recursive: true, force: true });
-  } catch {
-    log.debug('Failed to cleanup partial clone before retry');
+  } catch (err) {
+    log.debug('Failed to cleanup partial clone before retry', { error: getErrorMessage(err) });
   }
 }
 
@@ -298,11 +318,14 @@ export function cloneAndIsolate(
     ? [...REFERENCE_CLONE_ARGS, '--reference', projectDir, '--dissociate', ...commonArgs]
     : fallbackCloneArgs;
 
+  const destinationHadContent = destinationHasContent(clonePath);
+
   try {
     runIsolatedGitCommandSync(projectDir, referenceCloneArgs);
   } catch (err) {
     const stderr = getExecErrorStderr(err);
-    if (isShallowReferenceError(stderr)) {
+    if (!destinationHadContent && isShallowReferenceError(stderr)) {
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
@@ -508,6 +531,8 @@ export async function cloneAndIsolateAbortable(
     ? [...REFERENCE_CLONE_ARGS, '--reference', projectDir, '--dissociate', ...commonArgs]
     : fallbackCloneArgs;
 
+  const destinationHadContent = destinationHasContent(clonePath);
+
   try {
     await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal);
   } catch (err) {
@@ -516,7 +541,8 @@ export async function cloneAndIsolateAbortable(
     }
 
     const stderr = getErrorMessage(err);
-    if (isShallowReferenceError(stderr)) {
+    if (!destinationHadContent && isShallowReferenceError(stderr)) {
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {

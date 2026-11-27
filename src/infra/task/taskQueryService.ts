@@ -23,10 +23,10 @@ export class TaskQueryService {
       .map((task) => toTaskInfo(this.projectDir, this.tasksFile, task));
   }
 
-  listTasksForProviderPreflight(goalTasksOnly = false): TaskInfo[] {
+  listTasksForProviderPreflight(): TaskInfo[] {
     const state = this.store.read();
     return state.tasks
-      .filter((task) => task.status === 'pending' && (!goalTasksOnly || task.goal_id !== undefined))
+      .filter((task) => task.status === 'pending')
       .flatMap((task) => {
         try {
           return [toTaskInfo(this.projectDir, this.tasksFile, task)];

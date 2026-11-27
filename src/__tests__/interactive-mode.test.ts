@@ -41,7 +41,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -73,6 +73,7 @@ vi.mock('../shared/prompt/confirm.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { selectOptionWithDefault, selectOption } from '../shared/prompt/index.js';
 import { confirm } from '../shared/prompt/confirm.js';
 import { PROVIDER_TYPES } from '../shared/types/provider.js';
@@ -83,6 +84,7 @@ const mockSelectOption = vi.mocked(selectOption);
 const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
+let projectConfigDir: string;
 
 // ── Stdin helpers (same pattern as interactive.test.ts) ──
 
@@ -123,6 +125,8 @@ import type { FirstStepInfo } from '../infra/config/loaders/workflowResolver.js'
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.TMPDIR = TEST_TMPDIR;
+  projectConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-interactive-mode-config-'));
+  vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   mockSelectOptionWithDefault.mockImplementation(async (prompt, options) => {
     if (options.some((option) => option.value === 'save_task')) {
       return mockSelectOption(prompt, options);
@@ -135,6 +139,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreStdin();
   mockSelectOption.mockReset();
+  fs.rmSync(projectConfigDir, { recursive: true, force: true });
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {

@@ -6,6 +6,7 @@ import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import { makeProvider } from './test-helpers.js';
 import * as adapters from '../infra/providers/mcp/index.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 afterEach(() => vi.restoreAllMocks());
 const success = { persona: 'director', status: 'done' as const, content: 'reply', timestamp: new Date(), sessionId: 'next-session' };
@@ -29,7 +30,7 @@ it('exposes only the dedicated MCP set and preserves readonly restrictions on ov
   const f = fixture();
   f.call.mockRejectedValueOnce(new Error('prompt is too long'));
   expect(await f.executor.execute(f.input)).toMatchObject({ message: 'reply', summary: null, sessionId: 'next-session' });
-  expect(f.setup).toHaveBeenCalledWith({ name: 'director', systemPrompt: 'director prompt' });
+  expect(f.setup).toHaveBeenCalledWith({ name: 'director', systemPrompt: withProgressNotesGuidance('director prompt', 'ja') });
   expect(f.call).toHaveBeenCalledTimes(2);
   for (const [, options] of f.call.mock.calls) {
     expect(options).toMatchObject({ cwd: '/config', permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,

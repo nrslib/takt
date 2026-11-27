@@ -43,6 +43,8 @@ export interface RateLimitInfo {
   detectedAt: Date;
   resetAtRaw?: string;
   source: 'sdk_error' | 'stream_marker' | 'error_text';
+  /** Classification of the full provider text, made before the error message is truncated. */
+  rateLimitClass?: 'Transient' | 'Exhausted';
 }
 
 /** Response from an agent execution */
@@ -50,6 +52,8 @@ export interface AgentResponse {
   persona: string;
   status: Status;
   content: string;
+  /** Provider-confirmed visible assistant text from an incomplete turn, never diagnostics. */
+  partialOutput?: string;
   timestamp: Date;
   sessionId?: string;
   /** Error message when the query failed (e.g., API error, rate limit) */

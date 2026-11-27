@@ -1,20 +1,24 @@
-import type { Goal, GoalAnswerInput, GoalQuestion } from '../../infra/goals/schema.js';
+import type { ManagerImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import type { Goal, GoalAnswerInput, GoalQuestion, ManagerGoalSummary } from '../../infra/goals/schema.js';
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
+import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
-import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
+import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
+import type { ToolActivityTurnState, ToolActivityEntry } from '../../shared/tool-activity/types.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
 export type ConversationCommand =
-  | { kind: 'message'; text: string; display?: boolean }
-  | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
-  | { kind: 'dismiss_summary'; revision: number }
+  | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean; imageAttachmentIds?: string[] }
+  | { kind: 'approve_summary'; revision: number; conversationId: string; requirePending?: boolean }
+  | { kind: 'dismiss_summary'; revision: number; conversationId: string }
+  | { kind: 'propose_summary'; conversationId: string; repositoryDirectory?: string; summary: ManagerGoalSummary }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
       source?: 'tui' | 'slack' }
-  | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
+  | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal' | 'delete_goal'; goalId: string }
   | { kind: 'abort_turn'; operationId: string; generation?: number };
 export type QuestionTarget = { goalId: string; repositoryDirectory: string } | { goalId: null; owner: InquiryOwner };
 export interface ConversationState {
@@ -23,12 +27,16 @@ export interface ConversationState {
   revision: number;
   pending: ConversationRecord['pending'];
   approval: ConversationRecord['approval'];
-  running: { operationId: string; kind: string; generation?: number } | null;
+  running: { operationId: string; kind: string; generation?: number; startedAt?: number } | null;
   interrupted: boolean;
   queuedMessageCount?: number;
 }
 export type SnapshotValue =
+  | EpicSnapshot
   | { kind: 'state'; state: ConversationState }
+  | { kind: 'tool_history'; history: ToolActivityTurnState; acceptedSequence?: number }
+  | { kind: 'user_message'; operationId: string; message: string; acceptedSequence: number; pending: boolean }
+  | { kind: 'turn_result'; operationId: string; acceptedSequence: number; result: OperationResult }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string; awaitingHumanMerge: boolean } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
@@ -49,12 +57,17 @@ export type Submission = { kind: 'accepted'; operationId: string; eventId?: stri
 export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'notice'; message: string }
+  | { kind: 'proposal_created'; proposal: { revision: number; repositoryDirectory: string }; message: string }
   | { kind: 'goal_registered'; goal: Goal }
   | { kind: 'answer_saved'; answerSaved: boolean; message: string }
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'tool_started'; entry: ToolActivityEntry }
+  | { kind: 'tool_completed'; entry: ToolActivityEntry }
+  | { kind: 'tool_output'; key: string; text: string; tail?: string }
   | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
+  | (ConversationText & { operationId: string; generation: number })
   | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }
@@ -62,7 +75,7 @@ export type PortOutput =
   | { kind: 'inquiry'; target: QuestionTarget; question: GoalQuestion }
   | { kind: 'result'; operationId: string; result: OperationResult };
 export interface ConversationDelivery {
-  deliver(conversationId: string, output: PortOutput, version: OutputVersion): Promise<
+  deliver(conversationId: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal): Promise<
     { kind: 'delivered' } | { kind: 'unavailable'; reason: string }>;
 }
 export interface ConversationOpen {
@@ -73,9 +86,10 @@ export interface ConversationOpen {
   agentOverrides?: AssistantCliOverrides;
 }
 export interface ConversationInput {
-  open(input: ConversationOpen, delivery: ConversationDelivery): Promise<{ attachmentId: string; read: SnapshotRead }>;
+  open(input: ConversationOpen, delivery: ConversationDelivery, enqueueSnapshot?: (read: SnapshotRead, attachmentId: string) => void): Promise<{ attachmentId: string; read: SnapshotRead }>;
   submit(input: { attachmentId: string; requestId: string; speaker: ConversationActor; command: ConversationCommand }): Promise<Submission>;
-  snapshot(attachmentId: string): Promise<SnapshotRead>;
+  prepareImage(input: { attachmentId: string; sourcePath: string }): Promise<ManagerImageAttachmentReference>;
+  snapshot(attachmentId: string, options?: { enqueueSnapshot?: (read: SnapshotRead) => void }): Promise<SnapshotRead>;
   detach(attachmentId: string): void;
 }
 export interface ConversationPort<Endpoint> {

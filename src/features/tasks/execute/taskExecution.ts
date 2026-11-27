@@ -32,6 +32,7 @@ import {
 } from './taskResultHandler.js';
 import { runWorkflowExecution } from './workflowExecutionApi.js';
 import { resolveTaskSpecForExecution } from './taskSpecContext.js';
+import { withTaskRuntimeAssignment } from '../../../infra/config/runtime-provider/invocation.js';
 import {
   createLoopAnalysisPublicationCoordinator,
   settleLoopAnalysisPublication,
@@ -110,6 +111,21 @@ export async function executeTaskAndCompleteWithResult(
 }
 
 export async function executeTaskAndCompleteWithDetails(
+  task: TaskInfo,
+  taskRunner: TaskRunner,
+  cwd: string,
+  taskExecutor: (options: ExecuteTaskOptions) => Promise<WorkflowExecutionResult>,
+  taskExecutionOptions?: TaskExecutionOptions,
+  parallelOptions?: TaskExecutionParallelOptions,
+  taskContext?: TaskExecutionContextOverride,
+  gitProvider?: GitProvider,
+): Promise<TaskCompletionResult> {
+  return withTaskRuntimeAssignment(task.data?.runtime_assignment, () => executeTaskAndCompleteWithDetailsInScope(
+    task, taskRunner, cwd, taskExecutor, taskExecutionOptions, parallelOptions, taskContext, gitProvider,
+  ));
+}
+
+async function executeTaskAndCompleteWithDetailsInScope(
   task: TaskInfo,
   taskRunner: TaskRunner,
   cwd: string,

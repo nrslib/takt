@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalAnswerSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
 import type { ConversationAssignment } from '../conversations/schema.js';
 import type { IoOptions } from '../../core/daemon/io.js';
@@ -23,9 +23,11 @@ const inboxEvent = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(),
     questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
-  z.object({ ...common, kind: z.enum(['registered', 'resumed', 'patrol']) }).strict(),
+  z.object({ ...common, kind: z.enum(['registered', 'patrol']) }).strict(),
+  z.object({ ...common, kind: z.literal('resumed'), origin: GoalExecutionOriginSchema.optional() }).strict(),
 ]);
 const inquiryId = z.uuid();
+const workspaceRepositories = z.object({ id: z.uuid(), repositoryDirectories: z.array(z.string().refine(isAbsolute)) });
 
 export type DaemonInquiryOwner = Extract<ConversationAssignment, { kind: 'workspace' | 'repository' }>;
 
@@ -64,7 +66,7 @@ export class DaemonPersistedFiles {
   }
 
   async readGoal(repositoryDirectory: string, goalId: string) {
-    const content = await readPrivateFile(join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json'), MAX_PROJECTION_BYTES);
+    const content = await readPrivateFile(this.goalPath(repositoryDirectory, goalId), MAX_PROJECTION_BYTES);
     if (content === undefined) return undefined;
     const goal = GoalSchema.parse(JSON.parse(content.toString('utf8')) as unknown);
     if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
@@ -79,18 +81,28 @@ export class DaemonPersistedFiles {
     }, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
+  // GoalStore.update と同じ 2 つのロックファイル（goal.json.lock と goal-execution.lock）を同じ順で取る。
   private async updateGoal(repositoryDirectory: string, goalId: string, transform: (goal: Goal) => Goal, options: IoOptions): Promise<Goal> {
-    const path = join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json');
+    const path = this.goalPath(repositoryDirectory, goalId);
     const lock = new FileAsyncLock();
     return lock.exclusive(`${path}.lock`, () => lock.exclusive(join(repositoryDirectory, '.takt', 'goal-execution.lock'), async () => {
-      const goal = GoalSchema.parse(await readDisplayFile(path));
-      if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
+      const goal = await this.readStoredGoal(path, goalId);
       const updated = transform(goal);
       if (updated === goal) return goal;
       const saved = GoalSchema.parse(updated);
       await writePrivateFile(path, JSON.stringify(saved), options.signal);
       return saved;
     }, options), options);
+  }
+
+  private goalPath(repositoryDirectory: string, goalId: string): string {
+    return join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json');
+  }
+
+  private async readStoredGoal(path: string, goalId: string): Promise<Goal> {
+    const goal = GoalSchema.parse(await readDisplayFile(path));
+    if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
+    return goal;
   }
 
   async readTasks(repositoryDirectory: string) {
@@ -103,10 +115,38 @@ export class DaemonPersistedFiles {
     return join(this.configDirectory, 'manager-inbox', createHash('sha256').update(canonical).digest('hex'));
   }
 
+  async readWorkspaceRepositories(workspaceId: string): Promise<readonly string[]> {
+    const path = join(this.configDirectory, 'workspaces', inquiryId.parse(workspaceId), 'workspace.json');
+    const content = await readPrivateFile(path, MAX_PROJECTION_BYTES);
+    if (content === undefined) return [];
+    const workspace = workspaceRepositories.parse(JSON.parse(content.toString('utf8')) as unknown);
+    if (workspace.id !== workspaceId) throw new Error('Workspace ID differs from its directory');
+    return workspace.repositoryDirectories;
+  }
+
   async saveStandaloneInquiryAnswer(repositoryDirectory: string, questionId: string, questionBody: string,
     answer: z.infer<typeof GoalAnswerSchema>): Promise<void> {
-    const event = inboxEvent.parse({ kind: 'answer', goalId: null, questionId, questionBody, answer,
-      createdAt: new Date().toISOString() });
+    await this.saveAnswerEvent(repositoryDirectory, { kind: 'answer', goalId: null, questionId, questionBody, answer });
+  }
+
+  async saveGoalAnswer(repositoryDirectory: string, goalId: string, questionId: string,
+    answer: z.infer<typeof GoalAnswerSchema>): Promise<void> {
+    // saveManagerEvent と同じく、中止済みのゴールの回答は manager へ知らせない。
+    if ((await this.readStoredGoal(this.goalPath(repositoryDirectory, goalId), goalId)).executionStatus === 'aborted') return;
+    await this.saveAnswerEvent(repositoryDirectory, { kind: 'answer', goalId, questionId, answer });
+  }
+
+  async markGoalAnswerPublished(repositoryDirectory: string, goalId: string, questionId: string): Promise<void> {
+    await this.updateGoal(repositoryDirectory, goalId, (goal) => {
+      if (goal.questions?.find((question) => question.id === questionId)?.answerPublicationPending !== true) return goal;
+      return { ...goal, questions: goal.questions!.map((question) => question.id === questionId
+        ? { ...question, answerPublicationPending: undefined } : question) };
+    }, { signal: new AbortController().signal, timeoutMs: 5000 });
+  }
+
+  // 受信箱のファイル名と置き場所は saveManagerEvent と同じ形式にそろえる。
+  private async saveAnswerEvent(repositoryDirectory: string, input: Omit<Extract<z.input<typeof inboxEvent>, { kind: 'answer' }>, 'createdAt'>): Promise<void> {
+    const event = inboxEvent.parse({ ...input, createdAt: new Date().toISOString() });
     const name = `${event.createdAt.replaceAll(':', '-')}-${process.hrtime.bigint().toString().padStart(20, '0')}-${randomUUID()}.json`;
     await writePrivateFile(join(await this.inboxDirectory(repositoryDirectory), name), JSON.stringify(event));
   }

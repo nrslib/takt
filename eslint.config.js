@@ -2,6 +2,7 @@ import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import { daemonEntries, daemonReachability } from './scripts/daemon-reachability.mjs';
 import { daemonRules } from './scripts/daemon-lint-rules.mjs';
+import { catchLintPlugin, catchRules } from './scripts/catch-lint-rules.mjs';
 
 const root = import.meta.dirname;
 const graph = await daemonReachability({ root, entries: await daemonEntries(root) });
@@ -21,6 +22,7 @@ export default tseslint.config(
           allowDefaultProject: [
             'eval/*.mjs',
             'eval/asserts/*.mjs',
+            'eval/providers/cli-review.test.mjs',
             'eval/scripts/*.mjs',
             'scripts/test-classification.mjs',
             'scripts/verify-deepseek-sdk-lock.mjs',
@@ -89,6 +91,11 @@ export default tseslint.config(
     },
   },
   ...daemonOverrides,
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: { takt: catchLintPlugin },
+    rules: catchRules,
+  },
   {
     ignores: ['dist/', 'node_modules/', '*.config.js', 'src/__tests__/'],
   }

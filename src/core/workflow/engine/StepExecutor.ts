@@ -8,6 +8,7 @@ import { reportInputEntries } from '../../models/workflow-report-input.js';
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
+import { redactExecutionSecrets } from '../../../shared/utils/execution-secrets.js';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { renderPhaseContext, stripPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type {
@@ -48,7 +49,7 @@ import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { extractReportReferences } from '../instruction/report-reference.js';
 import { getReportFiles } from '../output-contract-files.js';
 import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
-import type { DeclaredReportInputs, InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
+import type { DeclaredReportInputs, InjectedReport, Phase1ReportInputs, PreparedStepInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
@@ -100,6 +101,7 @@ import type { InstructionBuildTransaction } from './instruction-build-transactio
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
+import { composeRecoveryInstruction } from '../progress-notes.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   completeObservedPhase1Attempt,
@@ -194,6 +196,7 @@ function buildCompanionExecutionUnitKey(input: {
 }
 
 export interface StepExecutorDeps {
+  readonly goalSpecificationPaths?: readonly string[];
   readonly reportReferenceObserver?: ReportReferenceObserver;
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
@@ -293,8 +296,11 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly phase1Instruction: string;
+  readonly instructionWithoutLiveIntervention: string;
   readonly injectedReports: readonly InjectedReport[];
+  readonly requiredReferenceContents?: readonly string[];
   readonly reportInputs?: Phase1ReportInputs;
+  readonly reviewScope: TaskReviewScope;
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
   readonly liveInterventionDelivery?: PreparedLiveInterventionDelivery;
@@ -344,6 +350,7 @@ export class StepExecutor {
   async completeReviewerResponse(input: {
     readonly step: AgentWorkflowStep;
     readonly originalInstruction: string;
+    readonly getReviewRequirementsInstruction: () => string;
     readonly initialResponse: AgentResponse;
     readonly executeRetry: (
       instruction: string,
@@ -365,9 +372,6 @@ export class StepExecutor {
     const language = this.deps.getLanguage() ?? 'en';
     const assignment = workflowMeta.context?.assignment;
     const phase1Context = assignment === undefined ? undefined : renderPhaseContext(assignment, 1, language).trimStart();
-    const reviewRequirements = phase1Context !== undefined
-      ? stripPhaseContext(input.originalInstruction, phase1Context)
-      : input.originalInstruction;
     const priorJudgeGapPaths = new Set<string>();
     const result = await runCompletionRetryEpisode({
       config,
@@ -399,6 +403,10 @@ export class StepExecutor {
         }
       },
       judge: async (reviewResponse, attemptIndex) => {
+        const requirementsInstruction = input.getReviewRequirementsInstruction();
+        const reviewRequirements = phase1Context !== undefined
+          ? stripPhaseContext(requirementsInstruction, phase1Context)
+          : requirementsInstruction;
         const judgeStep = buildCompletionRetryJudgeStep({
           reviewerStepName: input.step.name,
           internalAgentSeats: this.deps.internalAgentSeats,
@@ -458,6 +466,9 @@ export class StepExecutor {
                 abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
+                ...(judgeOptions.openCodeExternalDirectories === undefined
+                  ? {}
+                  : { openCodeExternalDirectories: judgeOptions.openCodeExternalDirectories }),
                 onStream: judgeOptions.onStream,
                 onActivity: judgeOptions.onActivity,
                 mcpServers: judgeOptions.mcpServers,
@@ -675,6 +686,9 @@ export class StepExecutor {
   }
 
   async completeCompanionReview(input: {
+    readonly phase1Instruction: string;
+    /** Accumulated Phase 1 and follow-up instructions, excluding replaceable live history. */
+    readonly phase1RecoveryInstruction: string;
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly state: WorkflowState;
@@ -688,7 +702,7 @@ export class StepExecutor {
     readonly phase1LogSource?: string;
     readonly onSingleFixSettled?: () => void;
     readonly abortSignal: AbortSignal | undefined;
-    readonly afterPhase1Response?: (response: AgentResponse) => Promise<CompanionFollowUpResult>;
+    readonly afterPhase1Response?: (response: AgentResponse, recoveryInstruction: string) => Promise<CompanionFollowUpResult>;
     readonly recordUsage?: (
       success: boolean,
       usage: AgentResponse['providerUsage'],
@@ -705,6 +719,7 @@ export class StepExecutor {
           usage,
         );
       });
+    let phase1RecoveryInstruction = input.phase1RecoveryInstruction;
     const fixResult = await runCompanionFixPolicy({
       policy: fixPolicy,
       initialResponse: input.initialResponse,
@@ -729,10 +744,15 @@ export class StepExecutor {
           phaseAttempts.set(recoveryAttempt.sequence, created);
           return created;
         };
+        phase1RecoveryInstruction = composeRecoveryInstruction(
+          phase1RecoveryInstruction,
+          this.buildPhase1FollowUpInstruction(attempt.instruction, attempt.options),
+        );
+        const followUpInstruction = this.appendLiveInterventionInstruction(phase1RecoveryInstruction, undefined);
         const recovery = await runPhase1WithEmptyRecovery({
           workflowMeta: attempt.options.workflowMeta,
           language: attempt.options.language,
-          instruction: this.buildPhase1FollowUpInstruction(attempt.instruction, attempt.options),
+          instruction: followUpInstruction,
           initialSessionId: attempt.sessionId,
           execute: async (recoveryAttempt) => {
             const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
@@ -753,7 +773,13 @@ export class StepExecutor {
                 execute: (instruction, sessionId, onPromptResolved) => executeAgent(
                   input.executableStep.persona,
                   instruction,
-                  { ...attempt.options, sessionId, onPromptResolved },
+                  {
+                    ...attempt.options,
+                    progressNotesInstruction: input.phase1Instruction,
+                    progressNotesRecoveryInstruction: composeRecoveryInstruction(followUpInstruction, instruction),
+                    sessionId,
+                    onPromptResolved,
+                  },
                 ),
                 onPhaseStart: (...args) => {
                   promptResolvedAttempts.add(phaseAttempt.sequence);
@@ -855,7 +881,7 @@ export class StepExecutor {
           recordUsage(false, normalizedResponse.providerUsage);
           return { kind: 'normal_follow_up', response: normalizedResponse };
         }
-        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse);
+        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse, phase1RecoveryInstruction);
         recordUsage(
           responseAfterLiveIntervention.response.status === 'done',
           responseAfterLiveIntervention.response.providerUsage,
@@ -1063,7 +1089,7 @@ export class StepExecutor {
   ): string {
     const absPath = join(resolveReportDirectory(this.deps.getCwd(), directory), filename);
     transaction?.recordSnapshotWrite(absPath);
-    writeFileSync(absPath, content, 'utf-8');
+    writeFileSync(absPath, redactExecutionSecrets(content), 'utf-8');
     return join(directory, filename);
   }
 
@@ -1203,17 +1229,18 @@ export class StepExecutor {
       step: executableStep.name,
       phase: 1,
     }, executableStep.engineSynthesized === true);
+    const instructionWithoutLiveIntervention = this.buildPhase1Instruction(instruction.text, executableStep, runtime);
     return {
       executableStep,
+      instructionWithoutLiveIntervention,
       // Without a prepared delivery, resolve history after the final pending check in runNormalStep.
       phase1Instruction: liveInterventionDelivery === undefined
-        ? this.buildPhase1Instruction(instruction.text, executableStep, runtime)
-        : this.appendLiveInterventionInstruction(
-            this.buildPhase1Instruction(instruction.text, executableStep, runtime),
-            liveInterventionDelivery,
-          ),
+        ? instructionWithoutLiveIntervention
+        : this.appendLiveInterventionInstruction(instructionWithoutLiveIntervention, liveInterventionDelivery),
       injectedReports: instruction.injectedReports,
+      requiredReferenceContents: instruction.requiredReferenceContents,
       reportInputs: instruction.reportInputs,
+      reviewScope: instruction.reviewScope,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
       ...(liveInterventionDelivery === undefined ? {} : { liveInterventionDelivery }),
@@ -1245,7 +1272,7 @@ export class StepExecutor {
     );
     return liveInstruction.length === 0
       ? instruction
-      : [instruction, liveInstruction].join('\n\n');
+      : composeRecoveryInstruction(instruction, liveInstruction);
   }
 
   /**
@@ -1430,18 +1457,6 @@ export class StepExecutor {
   }
 
   /** Build Phase 1 instruction from template */
-  buildInstruction(
-    step: WorkflowStep,
-    stepIteration: number,
-    state: WorkflowState,
-    task: string,
-    maxSteps: number | 'infinite',
-    fallbackContext?: FallbackContext,
-    transaction?: InstructionBuildTransaction,
-  ): string {
-    return this.prepareInstruction(step, stepIteration, state, task, maxSteps, fallbackContext, transaction).text;
-  }
-
   recordReportGeneration(
     reportDir: string,
     reportName: string,
@@ -1535,7 +1550,7 @@ export class StepExecutor {
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
     transaction?: InstructionBuildTransaction,
-  ): PreparedInstruction {
+  ): PreparedStepInstruction {
     const suppressPreviousResponse = state.pendingFallback !== undefined
       && (state.lastOutput?.status === 'error' || state.lastOutput?.status === 'rate_limited');
     const includePreviousResponse = !suppressPreviousResponse;
@@ -1592,8 +1607,10 @@ export class StepExecutor {
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.deps.getCurrentWorkflowStack?.() ?? [],
     );
+    const reviewScope = this.deps.getReviewScope();
     const instruction = new InstructionBuilder(step, {
       task,
+      goalSpecificationPaths: this.deps.goalSpecificationPaths,
       iteration: state.iteration,
       maxSteps,
       stepIteration,
@@ -1614,7 +1631,7 @@ export class StepExecutor {
       isUnavailableReportPath,
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
-      reviewScope: this.deps.getReviewScope(),
+      reviewScope,
       policyContents: policySnapshot
         ? policySnapshot.content.map((content) => ({ content, sourcePath: policySnapshot.sourcePath }))
         : step.policyContents,
@@ -1650,7 +1667,7 @@ export class StepExecutor {
         })),
       );
     }
-    return instruction;
+    return { ...instruction, reviewScope };
   }
 
   savePhase1ExecutionLog(
@@ -1864,7 +1881,7 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    prebuiltInstruction?: PreparedInstruction,
+    prebuiltInstruction?: PreparedStepInstruction,
     runtime?: RuntimeStepResolution,
     preparedExecution?: PreparedNormalStepExecution,
   ): Promise<StepRunResult> {
@@ -1884,10 +1901,17 @@ export class StepExecutor {
         task,
         maxSteps,
       )
-      : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports, reportInputs: preparedExecution.reportInputs };
+      : {
+        text: preparedExecution.phase1Instruction,
+        injectedReports: preparedExecution.injectedReports,
+        requiredReferenceContents: preparedExecution.requiredReferenceContents,
+        reportInputs: preparedExecution.reportInputs,
+        reviewScope: preparedExecution.reviewScope,
+      };
     const instruction = preparedInstruction.text;
-    let phase1Instruction = preparedExecution?.phase1Instruction
+    const instructionWithoutLiveIntervention = preparedExecution?.instructionWithoutLiveIntervention
       ?? this.buildPhase1Instruction(instruction, executableStep, executionRuntime);
+    let phase1Instruction = preparedExecution?.phase1Instruction ?? instructionWithoutLiveIntervention;
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       executableStep,
       executionRuntime,
@@ -1904,10 +1928,11 @@ export class StepExecutor {
         liveInterventionDelivery,
       );
     }
-    const builtAgentOptions = this.deps.optionsBuilder.buildAgentOptions(
-      executableStep,
-      executionRuntime,
-    );
+    const builtAgentOptions: RunAgentOptions = {
+      ...this.deps.optionsBuilder.buildAgentOptions(executableStep, executionRuntime),
+      requiredReferenceContents: preparedInstruction.requiredReferenceContents,
+      progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(executableStep, preparedInstruction.reviewScope),
+    };
     const sessionKey = buildSessionKey(executableStep, {
       provider: providerInfo.provider,
       model: providerInfo.model,
@@ -2029,6 +2054,9 @@ export class StepExecutor {
                     mcpServers: agentOptions.mcpServers,
                     mcpAssignment: agentOptions.mcpAssignment,
                     mcpServerIdentity: agentOptions.mcpServerIdentity,
+                    ...(agentOptions.openCodeExternalDirectories === undefined
+                      ? {}
+                      : { openCodeExternalDirectories: agentOptions.openCodeExternalDirectories }),
                   }).then((response) => {
                     const freshResponse = { ...response };
                     delete freshResponse.sessionId;
@@ -2049,6 +2077,7 @@ export class StepExecutor {
                     attemptInstruction,
                     {
                       ...agentOptions,
+                      progressNotesInstruction: phase1Instruction,
                       sessionId,
                       onPromptResolved,
                     },
@@ -2141,6 +2170,8 @@ export class StepExecutor {
     }
 
     let phaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
+    // Follow-ups accumulate independently; live history is replaced from the store at each call.
+    let phase1RecoveryInstruction = instructionWithoutLiveIntervention;
     const drainLiveIntervention = async (
       initialResponse: AgentResponse,
       initialUsageRecorded = false,
@@ -2173,6 +2204,7 @@ export class StepExecutor {
           executableStep,
           executionRuntime,
         );
+        const liveRecoveryInstruction = composeRecoveryInstruction(phase1RecoveryInstruction, liveInstruction);
         const liveAttempt: Phase1Attempt = {
           sequence: phaseExecutionSequence++,
           reason: 'live_intervention',
@@ -2215,6 +2247,8 @@ export class StepExecutor {
               attemptInstruction,
               {
                 ...agentOptions,
+                progressNotesInstruction: phase1Instruction,
+                progressNotesRecoveryInstruction: liveRecoveryInstruction,
                 sessionId,
                 onPromptResolved,
                 ...(sameSessionCommitter === undefined
@@ -2285,8 +2319,14 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
+    const afterCompanionPhase1Response = async (companionResponse: AgentResponse, recoveryInstruction: string) => {
+      phase1RecoveryInstruction = recoveryInstruction;
+      return drainLiveIntervention(companionResponse);
+    };
     let companionSingleFixSettled = false;
     response = await this.completeCompanionReview({
+      phase1Instruction,
+      phase1RecoveryInstruction,
       eventStep: step,
       executableStep,
       state,
@@ -2297,7 +2337,7 @@ export class StepExecutor {
       providerInfo,
       nextSequence: () => phaseExecutionSequence++,
       phase1ExecutionLog,
-      afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+      afterPhase1Response: afterCompanionPhase1Response,
       onSingleFixSettled: () => {
         companionSingleFixSettled = true;
       },
@@ -2322,9 +2362,14 @@ export class StepExecutor {
     if (executableStep.completionRetry !== undefined) {
       const completion = await this.completeReviewerResponse({
         step: executableStep,
-        originalInstruction: phase1Instruction,
+        originalInstruction: instructionWithoutLiveIntervention,
+        getReviewRequirementsInstruction: () => this.appendLiveInterventionInstruction(
+          instructionWithoutLiveIntervention, undefined,
+        ),
         initialResponse: response,
         executeRetry: async (retryInstruction, retrySessionId) => {
+          phase1RecoveryInstruction = composeRecoveryInstruction(phase1RecoveryInstruction, retryInstruction);
+          const retryRecoveryInstruction = this.appendLiveInterventionInstruction(phase1RecoveryInstruction, undefined);
           if (!companionSingleFixSettled) {
             activeCompanionRuntime?.beginReviewAttempt();
           }
@@ -2339,7 +2384,7 @@ export class StepExecutor {
           const retryResponse = await runPhase1WithEmptyRecovery({
             workflowMeta: agentOptions.workflowMeta,
             language: agentOptions.language,
-            instruction: retryInstruction,
+            instruction: retryRecoveryInstruction,
             initialSessionId: retrySessionId,
             execute: async (attempt) => {
               const observedAttempt = resolveObservedAttempt(attempt);
@@ -2359,7 +2404,15 @@ export class StepExecutor {
                 execute: (attemptInstruction, attemptSessionId, onPromptResolved) => executeAgent(
                   executableStep.persona,
                   attemptInstruction,
-                  { ...agentOptions, sessionId: attemptSessionId, onPromptResolved },
+                  {
+                    ...agentOptions,
+                    progressNotesInstruction: phase1Instruction,
+                    progressNotesRecoveryInstruction: composeRecoveryInstruction(
+                      retryRecoveryInstruction, attemptInstruction,
+                    ),
+                    sessionId: attemptSessionId,
+                    onPromptResolved,
+                  },
                 ),
                 onPhaseStart: this.deps.onPhaseStart,
                 onPhaseComplete: this.deps.onPhaseComplete,
@@ -2416,6 +2469,8 @@ export class StepExecutor {
             return normalizedAfterLiveIntervention.response;
           }
           return this.completeCompanionReview({
+            phase1Instruction,
+            phase1RecoveryInstruction,
             eventStep: step,
             executableStep,
             state,
@@ -2426,7 +2481,7 @@ export class StepExecutor {
             providerInfo,
             nextSequence: () => phaseExecutionSequence++,
             phase1ExecutionLog,
-            afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+            afterPhase1Response: afterCompanionPhase1Response,
             onSingleFixSettled: () => {
               companionSingleFixSettled = true;
             },

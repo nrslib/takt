@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig, LoopMonitorRule } from '../core/models/index.js';
 
@@ -475,10 +475,10 @@ describe('report current versions and execution history in complete prompts', ()
 
     const prompt = prompts.find(({ persona }) => persona === 'consumer')!.prompt;
     const rows = new Map(prompt.split('\n').flatMap((line) => {
-      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+)$/.exec(line);
+      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+); path=`([^`]+)`$/.exec(line);
       return match === null ? [] : [[match[1]!, {
         execution: match[2]!, order: Number(match[3]), completion: Number(match[4]),
-        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]),
+        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]), path: match[8]!,
       }]];
     }));
     const alphaRow = rows.get(plan)!;
@@ -495,6 +495,9 @@ describe('report current versions and execution history in complete prompts', ()
     expect(betaRow.start).toBeLessThan(alphaRow.originCompletion);
     expect(alphaRow.completion).toBeGreaterThan(alphaRow.originCompletion);
     expect(betaRow.completion).toBe(alphaRow.completion);
+    expect(alphaRow.path).not.toBe(betaRow.path);
+    expect(readFileSync(alphaRow.path, 'utf8')).toBe(`BODY-${plan}`);
+    expect(readFileSync(betaRow.path, 'utf8')).toBe(`BODY-${report}`);
 
     const alphaExecution = store.executions(alphaIdentity)
       .find((entry) => entry.id === alphaRow.origin.split('/').at(-1));
@@ -634,6 +637,48 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
   // 1. Cycle triggers judge → unproductive → skip to reviewers
   // =====================================================
   describe('Judge triggered on cycle threshold', () => {
+    it('passes the same external run context allowlist to normal steps and the fresh-session loop judge', async () => {
+      const cloneCwd = join(tmpDir, 'clone');
+      mkdirSync(cloneCwd);
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: { persona: 'supervisor', rules: loopJudgeRules() },
+      });
+      engine = new WorkflowEngine(config, cloneCwd, 'test task', {
+        projectCwd: tmpDir,
+        runPathsDirectory: join(tmpDir, '.takt', 'runs'),
+        reportDirName: 'test-report-dir',
+        provider: 'opencode',
+        model: 'opencode/probe',
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement' }),
+        makeResponse({ persona: 'ai_review' }),
+        makeResponse({ persona: 'ai_fix' }),
+        makeResponse({ persona: 'supervisor' }),
+        makeResponse({ persona: 'reviewers' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      const calls = vi.mocked(runAgent).mock.calls;
+      expect(calls).toHaveLength(5);
+      expect(calls[3]?.[0]).toBe('supervisor');
+      const expectedDirectories = [
+        realpathSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context')),
+      ];
+      for (const [, , options] of calls) {
+        expect(options?.openCodeExternalDirectories).toEqual(expectedDirectories);
+      }
+    });
+
     it('should run judge and redirect to reviewers when cycle is unproductive', async () => {
       const config = buildConfigWithLoopMonitor(2, {
         judge: {

@@ -18,6 +18,7 @@ import type { ProviderType, StreamCallback } from '../../../shared/types/provide
 interface SystemStepExecutorDeps extends PrMergeOptions {
   readonly task: string;
   readonly projectCwd: string;
+  readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly getCwd: () => string;
   readonly getContextDirectory?: () => string;
   readonly taskContext?: {
@@ -36,6 +37,7 @@ interface SystemStepExecutorDeps extends PrMergeOptions {
   ) => StatusJudgmentPhaseContext;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
   readonly abortSignal?: AbortSignal;
+  readonly persistState?: (state: WorkflowState) => void;
   readonly createProviderStream?: (step: WorkflowStep, provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
 }
 
@@ -102,6 +104,7 @@ export class SystemStepExecutor {
       cwd,
       contextDirectory: this.deps.getContextDirectory?.(),
       projectCwd: this.deps.projectCwd,
+      childProcessEnv: this.deps.childProcessEnv,
       task: this.deps.task,
       taskContext: this.deps.taskContext,
       runtimeState: this.runtimeState,
@@ -240,6 +243,7 @@ export class SystemStepExecutor {
       for (const effect of step.effects) {
         stepEffectResults[effect.type] = await this.executeEffect(step, effect, state, cwd);
         state.effectResults.set(step.name, { ...stepEffectResults });
+        this.deps.persistState?.(state);
       }
     }
 

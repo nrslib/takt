@@ -26,12 +26,14 @@
  *   node eval/scripts/prepare.mjs [targetId...]   # default: all targets
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MERGE_CI_TARGETS, prepareMergeCiRecovery } from './prepare-merge-ci-recovery.mjs';
 import { PHASE_AWARENESS_TARGET, preparePhaseAwareness } from './prepare-phase-awareness.mjs';
 import { ADJUDICATOR_TARGETS, buildAdjudicatorFixture } from '../adjudicator-no-fix-cases.mjs';
+import { REPAIR_STRATEGY_TARGET } from '../repair-strategy-cases.mjs';
+import { prepareRepairStrategy } from './prepare-repair-strategy.mjs';
 
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
@@ -50,6 +52,29 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...['carry', 'update'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `review-adjudication-carry-forward-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/review-adjudication-carry-forward/${caseId}`,
+    projectFromFixture: true, copyFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'], reportFile: 'review-resolution.md',
+    carryForwardDecision: true,
+  }))),
+  ...['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `review-proportionality-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/review-proportionality/${caseId}`,
+    projectFromFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'],
+  }))),
+  ...["input-local","input-external","local-condition","long-condition","quality","misdirected-evidence"].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `adjudication-scope-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/adjudication-scope/${caseId}`,
+    ...(language === 'en' ? { fixtureOverlay: `eval/fixtures/adjudication-scope/en/${caseId}` } : {}),
+    projectFromFixture: true, copyFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'], reportFile: 'review-resolution.md',
+  }))),
   ...ADJUDICATOR_TARGETS.map((id) => ({
     id, workflow: 'peer-review', step: 'review-adjudication',
     fixture: `eval/.work/${id}`, projectFromFixture: true,
@@ -1005,6 +1030,7 @@ const ARTIFACT_HANDOFF_TARGET = 'review-artifact-input-handoff';
 export const PREPARE_TARGET_IDS = Object.freeze([
   ...TARGETS.map(({ id }) => id),
   ARTIFACT_HANDOFF_TARGET,
+  REPAIR_STRATEGY_TARGET,
   PHASE_AWARENESS_TARGET,
   ...MERGE_CI_TARGETS,
 ]);
@@ -1205,6 +1231,7 @@ async function main() {
       throw new Error(`Unknown target "${id}". Available: ${PREPARE_TARGET_IDS.join(', ')}`);
     }
   }
+  if (requested.includes(REPAIR_STRATEGY_TARGET)) await prepareRepairStrategy();
   if (requested.includes(PHASE_AWARENESS_TARGET)) preparePhaseAwareness();
   if (requested.includes(ARTIFACT_HANDOFF_TARGET)) {
     execFileSync(process.execPath, ['eval/scripts/prepare-review-artifact-input-handoff.mjs'], {
@@ -1229,6 +1256,7 @@ async function main() {
     step: stepName,
     monitorCycle,
     fixture,
+    fixtureOverlay,
     mutable,
     workflowCallVars,
     projectFromFixture,
@@ -1245,6 +1273,7 @@ async function main() {
     fixtureConfig,
     language: targetLanguage,
     reportsSeed,
+    carryForwardDecision,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
     process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
@@ -1264,6 +1293,12 @@ async function main() {
       rmSync(runDir, { recursive: true, force: true });
       mkdirSync(dirname(runDir), { recursive: true });
       cpSync(fixtureDir, runDir, { recursive: true });
+    }
+    if (fixtureOverlay !== undefined) {
+      if (!copyFixture && !mutable) {
+        throw new Error(`Target "${id}" requires a copied fixture for fixtureOverlay`);
+      }
+      cpSync(resolve(repoRoot, fixtureOverlay), runDir, { recursive: true });
     }
     if (fixtureConfig !== undefined) {
       if (!projectFromFixture || (!copyFixture && !mutable)) {
@@ -1422,6 +1457,16 @@ async function main() {
       workflowCallVars: effectiveWorkflowCallVars,
       workflowRules,
       language,
+      ...(carryForwardDecision === true ? { declaredReportInputs: [
+        { declaredNames: ['coding-review.md'], reports: [{
+          reference: 'coding-review.md', scope: 'declared-producer', producer: 'reviewers',
+          content: readFileSync(join(reportDir, 'coding-review.md'), 'utf8'),
+        }] },
+        { declaredNames: ['review-resolution.md'], reports: [{
+          reference: 'review-resolution.md', scope: 'declared-producer', producer: 'review-adjudication',
+          content: `Previous completed report: 1 / 1; execution=eval-prior; path=\`${join(runDir, 'previous-decision.md')}\`\n\n${readFileSync(join(runDir, 'previous-decision.md'), 'utf8')}`,
+        }] },
+      ] } : {}),
     };
 
     const instruction = companionSystemPrompt !== undefined

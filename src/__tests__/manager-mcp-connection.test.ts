@@ -49,7 +49,8 @@ describe('owned manager MCP sessions', () => {
   });
 
   it('keeps two sessions and their assignment identities separate', async () => {
-    const owner = await startManagerMcpConnection('/repository');
+    const requestDaemon = vi.fn();
+    const owner = await startManagerMcpConnection('/repository', undefined, undefined, undefined, requestDaemon);
     try {
       expect(await request(owner.config.headers!)).toBe(200);
       const assignment = { kind: 'repository', repositoryDirectory: '/work/担当A' };
@@ -62,6 +63,7 @@ describe('owned manager MCP sessions', () => {
       expect(doubles.createMcp).toHaveBeenCalledTimes(2);
       for (const [options] of doubles.createMcp.mock.calls) {
         expect(options.goalExecutionConnection).toBeDefined();
+        expect(options.requestDaemon).toBe(requestDaemon);
       }
     } finally { await owner.dispose(); }
     expect(doubles.serverClose).toHaveBeenCalledTimes(2);

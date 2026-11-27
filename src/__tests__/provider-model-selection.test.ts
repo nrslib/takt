@@ -33,6 +33,9 @@ function createOptionsBuilder(engineOptions: WorkflowEngineOptions): OptionsBuil
     () => '.takt/runs/provider-model-selection/reports',
     () => 'en',
     () => 'provider-model-selection',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
   );
 }
 

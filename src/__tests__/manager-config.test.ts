@@ -5,9 +5,141 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({ loadGlobalConfig: dou
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
+
+it.each([0, 1, 3])('accepts daemon builtin worker concurrency %s without changing its value', (concurrency) => {
+  const input = { daemon: { builtin_worker: { concurrency } } };
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+});
+
+it.each([-1, 0.5, '3', null, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+  'rejects invalid daemon builtin worker concurrency %j', (concurrency) => {
+    expect(GlobalConfigSchema.safeParse({ daemon: { builtin_worker: { concurrency } } }).success).toBe(false);
+  },
+);
+
+it.each([{}, { daemon: {} }, { daemon: { builtin_worker: {} } }])(
+  'keeps omitted builtin concurrency unspecified: %j', (input) => {
+    const parsed = GlobalConfigSchema.parse(input);
+    expect(parsed).not.toHaveProperty('daemon.builtin_worker.concurrency');
+  },
+);
+
+it.each([0, 3])('serializes daemon builtin worker concurrency %s', async (concurrency) => {
+  const { serializeGlobalConfig } = await import('../infra/config/global/globalConfigSerializer.js');
+  const config = { language: 'en' as const, autoFetch: true, daemon: { builtinWorker: { concurrency } } };
+  expect(serializeGlobalConfig(config)).toMatchObject({ daemon: { builtin_worker: { concurrency } } });
+});
+
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
-it('defaults to automatic execution without inventing a default workflow', () => {
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
+it.each([
+  { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },
+  { global: ['default'], project: ['simple'], expected: ['simple'] },
+  { global: 'all', project: [], expected: [] },
+  { global: ['default'], project: 'all', expected: 'all' },
+])('replaces the global manager workflow selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { workflows: global } });
+  doubles.project.mockReturnValue({ manager: { workflows: project } });
+  expect(resolveManagerConfig('/project').workflows).toEqual(expected);
+});
+it.each(['all', [], ['default', { simple: 'Small changes' }, 'takt-default']])('accepts manager workflows %j at both scopes', (workflows) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { workflows } }).manager?.workflows).toEqual(workflows);
+  }
+});
+it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ default: 'one', simple: 'two' }], [{ default: 1 }]])(
+  'rejects malformed manager workflows %j at both scopes', (workflows) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { workflows } }).success).toBe(false);
+    }
+  },
+);
+it.each([
+  { global: ['slow'], project: ['fast'], expected: ['fast'] },
+  { global: ['slow'], project: undefined, expected: ['slow'] },
+  { global: undefined, project: undefined, expected: undefined },
+])('replaces the global manager runtime assignment selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { runtimeAssignments: global } });
+  doubles.project.mockReturnValue({ manager: { runtimeAssignments: project } });
+  expect(resolveManagerConfig('/project').runtimeAssignments).toEqual(expected);
+});
+it('accepts manager runtime assignments at both scopes', () => {
+  const runtime_assignments = ['fast', { slow: 'Slow-path tasks' }];
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { runtime_assignments } }).manager?.runtime_assignments).toEqual(runtime_assignments);
+  }
+});
+it.each(['all', [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ fast: 'Fast', slow: 'Slow' }]])(
+  'rejects malformed manager runtime assignments %j at both scopes', (runtime_assignments) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { runtime_assignments } }).success).toBe(false);
+    }
+  },
+);
+it('tracks manager runtime assignments at both scopes', async () => {
+  const { getGlobalTracedSchema, getProjectTracedSchema } = await import('../infra/config/traced/tracedConfigSchema.js');
+  expect(Object.keys(getProjectTracedSchema())).toContain('manager.runtime_assignments');
+  expect(Object.keys(getGlobalTracedSchema())).toContain('manager.runtime_assignments');
+});
+it('defaults to automatic execution, goal worktree cleanup, and approval for main merges', () => {
+  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, preserveGoalWorktree: false, mainMerge: 'approve' });
+});
+it.each([true, false])('accepts preserve_goal_worktree=%s at both scopes', (preserve_goal_worktree) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { preserve_goal_worktree } }).manager?.preserve_goal_worktree).toBe(preserve_goal_worktree);
+  }
+});
+it.each([null, 'true', 1])('rejects invalid preserve_goal_worktree=%j at both scopes', (preserve_goal_worktree) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { preserve_goal_worktree } }).success).toBe(false);
+  }
+});
+it('resolves project goal worktree preservation before the global setting', () => {
+  doubles.global.mockReturnValue({ manager: { preserveGoalWorktree: true } });
+  expect(resolveManagerConfig('/project').preserveGoalWorktree).toBe(true);
+  doubles.project.mockReturnValue({ manager: { preserveGoalWorktree: false } });
+  expect(resolveManagerConfig('/project').preserveGoalWorktree).toBe(false);
+});
+it.each([
+  { project: {}, global: {}, expected: 'auto' },
+  { project: {}, global: { permission: 'full' }, expected: 'full' },
+  { project: { permission: 'auto' }, global: { permission: 'full' }, expected: 'auto' },
+  { project: { permission: 'full' }, global: { providerPermissions: { codex: 'auto' } }, expected: 'auto' },
+  { project: { providerPermissions: { codex: 'full' } }, global: { providerPermissions: { codex: 'auto' } }, expected: 'full' },
+  { project: { permission: 'full', providerPermissions: { claude: 'auto' } }, global: {}, expected: 'full' },
+])('resolves manager permission from provider overrides before shared defaults: %j', ({ project, global, expected }) => {
+  doubles.project.mockReturnValue({ manager: project });
+  doubles.global.mockReturnValue({ manager: global });
+  expect(resolveManagerConfig('/project', 'codex').permission).toBe(expected);
+  expect(doubles.project).toHaveBeenCalledWith('/project');
+});
+it.each(['claude', 'claude-sdk'] as const)('treats both Claude permission keys as aliases for %s', (provider) => {
+  const alias = provider === 'claude' ? 'claude-sdk' : 'claude';
+  doubles.global.mockReturnValue({ manager: { permission: 'full', providerPermissions: { [alias]: 'auto' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('auto');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [provider]: 'full' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('full');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [alias]: 'full' } } });
+  doubles.global.mockReturnValue({ manager: { providerPermissions: { [provider]: 'auto' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('full');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [provider]: 'auto', [alias]: 'full' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('auto');
+});
+it.each(['auto', 'full'])('accepts manager permission %s at both scopes', (permission) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { permission, provider_permissions: { claude: permission, codex: permission } } }).manager)
+      .toMatchObject({ permission, provider_permissions: { claude: permission, codex: permission } });
+  }
+});
+it.each(['edit', 'readonly', 'AUTO', '', ' ', null, 1, true, {}])('rejects invalid manager permission %j at both scopes', (permission) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { permission } }).success).toBe(false);
+    expect(schema.safeParse({ manager: { provider_permissions: { codex: permission } } }).success).toBe(false);
+  }
+});
+it.each([null, 'auto', ['auto']])('rejects invalid provider permissions map %j', (provider_permissions) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { provider_permissions } }).success).toBe(false);
+  }
 });
 it.each([1, 60, 900, 1800])('accepts manager patrol interval %s in seconds', (patrol_interval) => {
   expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
@@ -20,20 +152,20 @@ it.each([0, -1, 0.5, '1800', null, Number.POSITIVE_INFINITY])('rejects invalid m
 it.each([0, 600, 900, -1, 0.5, '600'])('ignores removed director patrol setting %s', (patrol_interval) => {
   expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(true);
 });
-it('resolves project and global settings separately for each field', () => {
+it('resolves project auto run before the global setting', () => {
   doubles.project.mockReturnValue({ manager: { autoRun: false } });
-  doubles.global.mockReturnValue({ manager: { autoRun: true, defaultWorkflow: 'global-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: false, defaultWorkflow: 'global-workflow', mainMerge: 'approve' });
-  doubles.project.mockReturnValue({ manager: { defaultWorkflow: 'project-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: 'project-workflow', mainMerge: 'approve' });
+  doubles.global.mockReturnValue({ manager: { autoRun: true } });
+  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: false, mainMerge: 'approve' });
+  doubles.project.mockReturnValue({});
+  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, mainMerge: 'approve' });
 });
 it.each(['auto', 'approve'])('uses repository main merge permission %s', (mainMerge) => {
   doubles.project.mockReturnValue({ manager: { mainMerge } });
   expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge });
 });
 it('does not inherit global permission to merge into main', () => {
-  doubles.global.mockReturnValue({ manager: { mainMerge: 'auto', autoRun: false, defaultWorkflow: 'global-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge: 'approve', autoRun: false, defaultWorkflow: 'global-workflow' });
+  doubles.global.mockReturnValue({ manager: { mainMerge: 'auto', autoRun: false } });
+  expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge: 'approve', autoRun: false });
 });
 
 const notificationKinds = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
@@ -140,10 +272,27 @@ it('resolves director Slack from the already loaded global configuration', () =>
 it('serializes manager patrol configuration while leaving director patrol disabled', async () => {
   const { serializeGlobalConfig } = await import('../infra/config/global/globalConfigSerializer.js');
   const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
-  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false, patrolInterval: 1800 } });
+  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false, preserveGoalWorktree: true, patrolInterval: 1800 } });
   const parsed = GlobalConfigSchema.parse(serialized);
   expect(parsed.director).toEqual({ slack: { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'] } });
-  expect(parsed.manager).toMatchObject({ auto_run: false });
+  expect(parsed.manager).toMatchObject({ auto_run: false, preserve_goal_worktree: true });
   expect(parsed.manager).toHaveProperty('patrol_interval', 1800);
   expect(parsed.director).not.toHaveProperty('patrol_interval');
+});
+it.each([2000, 1, 2147483647])('accepts refresh_interval_ms=%s at both scopes', (refresh_interval_ms) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { refresh_interval_ms } }).manager?.refresh_interval_ms).toBe(refresh_interval_ms);
+  }
+});
+it.each([0, -100, 1.5, 2147483648, '2000', null])('rejects invalid refresh_interval_ms=%j at both scopes', (refresh_interval_ms) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { refresh_interval_ms } }).success).toBe(false);
+  }
+});
+it('resolves the manager refresh interval with project before global and a 500ms default', () => {
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(500);
+  doubles.global.mockReturnValue({ manager: { refreshIntervalMs: 2000 } });
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(2000);
+  doubles.project.mockReturnValue({ manager: { refreshIntervalMs: 3000 } });
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(3000);
 });

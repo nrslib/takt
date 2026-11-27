@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
 import { resolveCommandInput } from '../infra/workflow/system/system-command-input.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import type { WorkflowSystemInput } from '../core/models/types.js';
@@ -17,6 +18,7 @@ vi.mock('../shared/utils/private-file.js', () => ({
 }));
 
 describe('command system input adapter', () => {
+  afterEach(() => setExecutionSecrets([]));
   const input: Extract<WorkflowSystemInput, { type: 'command' }> = {
     type: 'command', as: 'approval', command: "printf '{previous_response}'", timeout_ms: 1000,
   };
@@ -34,10 +36,35 @@ describe('command system input adapter', () => {
     doubles.run.mockResolvedValue({ ...result });
   });
 
+  it('redacts distributed values in text and structured previous-output files before executing the command', async () => {
+    setExecutionSecrets(['fake-command-credential']);
+    const current = state();
+    current.lastOutput = { persona: 'worker', status: 'done', content: 'fake-command-credential',
+      structuredOutput: { note: 'fake-command-credential' }, timestamp: new Date() };
+    await resolveCommandInput(input, options, current);
+    expect(doubles.file).toHaveBeenCalledWith(expect.stringContaining('response.txt'), '[REDACTED]');
+    expect(doubles.file).toHaveBeenCalledWith(expect.stringContaining('structured-output.json'), '{"note":"[REDACTED]"}');
+  });
+
   it('requires the run-owned directory before writing or executing', async () => {
     await expect(resolveCommandInput(input, { ...options, contextDirectory: undefined }, state())).rejects.toThrow('run context');
     expect(doubles.directory).not.toHaveBeenCalled();
     expect(doubles.run).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['FAKE_VALUE', 'a9 [REDACTED]'],
+    ['a', '[REDACTED]9 FAKE_VALUE'],
+  ])('preserves JSON structure while redacting %s in the same previous response', async (secret, expected) => {
+    setExecutionSecrets([secret]);
+    const current = state();
+    current.lastOutput = { persona: 'worker', status: 'done', content: 'a9 FAKE_VALUE',
+      structuredOutput: { reason: 'a9 FAKE_VALUE', count: 1, items: [{}] }, timestamp: new Date() };
+    await resolveCommandInput(input, options, current);
+    expect(doubles.file).toHaveBeenCalledWith(expect.stringContaining('response.txt'), expected);
+    const saved = doubles.file.mock.calls.find(([path]) => path.endsWith('structured-output.json'))![1];
+    expect(JSON.parse(saved)).toEqual({ reason: expected, count: 1, items: [{}] });
+    expect(current.lastOutput.status).toBe('done');
   });
 
   it('writes an empty prior response and preserves command and cwd', async () => {
@@ -49,6 +76,17 @@ describe('command system input adapter', () => {
       command: input.command, cwd: '/task', timeoutMs: 1000,
     }));
     expect(doubles.run.mock.calls[0]?.[0].env).not.toHaveProperty('TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE');
+  });
+
+  it('passes only repository identity from childProcessEnv to the command', async () => {
+    await resolveCommandInput(input, {
+      ...options,
+      childProcessEnv: { GH_REPO: 'owner/repo', TAKT_OBSERVABILITY: '{"enabled":true}' },
+    }, state());
+
+    const env = doubles.run.mock.calls[0]?.[0].env;
+    expect(env).toHaveProperty('GH_REPO', 'owner/repo');
+    expect(env).not.toHaveProperty('TAKT_OBSERVABILITY');
   });
 
   it.each([

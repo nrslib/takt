@@ -13,7 +13,7 @@ import type {
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
 import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
-import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
+import { assertCodexPermissionControlOptions } from '../../core/models/workflow-provider-options.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -36,6 +36,7 @@ type RawProviderOptions = {
     network_access?: boolean;
     permission_control?: CodexPermissionControl;
     config_profile?: string;
+    readonly_permission_base?: string;
     reasoning_effort?: CodexReasoningEffort;
     fast_mode?: boolean;
     guards?: RawProviderGuardOptions;
@@ -69,6 +70,10 @@ type RawProviderOptions = {
     sandbox?: {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
+    };
+    permissions?: {
+      deny?: string[];
+      import_user_read_deny?: boolean;
     };
   };
   claude_terminal?: {
@@ -289,6 +294,7 @@ export function normalizeProviderOptions(
     || options.codex?.network_access !== undefined
     || options.codex?.permission_control !== undefined
     || options.codex?.config_profile !== undefined
+    || options.codex?.readonly_permission_base !== undefined
     || options.codex?.reasoning_effort !== undefined
     || options.codex?.fast_mode !== undefined
     || options.codex?.guards !== undefined
@@ -309,6 +315,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.config_profile !== undefined
         ? { configProfile: options.codex.config_profile }
+        : {}),
+      ...(options.codex.readonly_permission_base !== undefined
+        ? { readonlyPermissionBase: options.codex.readonly_permission_base }
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
@@ -382,6 +391,7 @@ export function normalizeProviderOptions(
     || options.claude?.guards !== undefined
     || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
+    || options.claude?.permissions
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
     if (options.claude.base_url !== undefined) {
@@ -412,6 +422,19 @@ export function normalizeProviderOptions(
       };
       if (Object.keys(sandbox).length > 0) {
         claude.sandbox = sandbox;
+      }
+    }
+    if (options.claude.permissions) {
+      const permissions = {
+        ...(options.claude.permissions.deny !== undefined
+          ? { deny: options.claude.permissions.deny }
+          : {}),
+        ...(options.claude.permissions.import_user_read_deny !== undefined
+          ? { importUserReadDeny: options.claude.permissions.import_user_read_deny }
+          : {}),
+      };
+      if (Object.keys(permissions).length > 0) {
+        claude.permissions = permissions;
       }
     }
     if (Object.keys(claude).length > 0) {
@@ -556,6 +579,9 @@ export function mergeProviderOptions(
     if (layer.codex) {
       result.codex = {
         ...result.codex,
+        ...(layer.codex.contextWindow !== undefined
+          ? { contextWindow: layer.codex.contextWindow }
+          : {}),
         ...(layer.codex.baseUrl !== undefined
           ? { baseUrl: layer.codex.baseUrl }
           : {}),
@@ -567,6 +593,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.codex.configProfile !== undefined
           ? { configProfile: layer.codex.configProfile }
+          : {}),
+        ...(layer.codex.readonlyPermissionBase !== undefined
+          ? { readonlyPermissionBase: layer.codex.readonlyPermissionBase }
           : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
@@ -614,6 +643,9 @@ export function mergeProviderOptions(
           };
       result.opencode = {
         ...result.opencode,
+        ...(layer.opencode.contextWindow !== undefined
+          ? { contextWindow: layer.opencode.contextWindow }
+          : {}),
         ...(layer.opencode.skills?.enabled !== undefined
           ? { skills: { enabled: layer.opencode.skills.enabled } }
           : {}),
@@ -649,6 +681,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
+          : {}),
+        ...(layer.claude.permissions
+          ? { permissions: { ...result.claude?.permissions, ...layer.claude.permissions } }
           : {}),
       };
     }
@@ -962,13 +997,13 @@ export function resolveEffectiveProviderOptions(
   if (!resolvedConfigOptions) {
     const merged = mergeProviderOptions(personaOptions, stepOptions);
     if (resolvedProvider === 'codex') {
-      assertCodexConfigProfilePermissionControl(merged?.codex);
+      assertCodexPermissionControlOptions(merged?.codex);
     }
     return merged;
   }
   if (!personaOptions && !stepOptions) {
     if (resolvedProvider === 'codex') {
-      assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+      assertCodexPermissionControlOptions(resolvedConfigOptions.codex);
     }
     return resolvedConfigOptions;
   }
@@ -988,9 +1023,27 @@ export function resolveEffectiveProviderOptions(
     ),
   };
 
+  const claudePermissions = {
+    deny: selectProviderValue(
+      resolvedConfigOptions.claude?.permissions?.deny,
+      personaOptions?.claude?.permissions?.deny,
+      stepOptions?.claude?.permissions?.deny,
+      resolveProviderOptionOrigin(originResolver, 'claude.permissions.deny', source),
+    ),
+    importUserReadDeny: selectProviderValue(
+      resolvedConfigOptions.claude?.permissions?.importUserReadDeny,
+      personaOptions?.claude?.permissions?.importUserReadDeny,
+      stepOptions?.claude?.permissions?.importUserReadDeny,
+      resolveProviderOptionOrigin(originResolver, 'claude.permissions.importUserReadDeny', source),
+    ),
+  };
+
   const claude = {
     ...(claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
       ? { sandbox: claudeSandbox }
+      : {}),
+    ...(claudePermissions.deny !== undefined || claudePermissions.importUserReadDeny !== undefined
+      ? { permissions: claudePermissions }
       : {}),
   };
   const claudeAllowedTools = selectProviderValue(
@@ -1023,6 +1076,11 @@ export function resolveEffectiveProviderOptions(
     resolveProviderOptionOrigin(originResolver, 'claude.guards.callTimeoutMs', source),
   );
 
+  const codexContextWindow = selectProviderValueByScope(
+    resolvedConfigOptions.codex?.contextWindow,
+    personaOptions?.codex?.contextWindow,
+    stepOptions?.codex?.contextWindow,
+  );
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
     personaOptions?.codex?.networkAccess,
@@ -1040,6 +1098,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.configProfile,
     stepOptions?.codex?.configProfile,
     resolveProviderOptionOrigin(originResolver, 'codex.configProfile', source),
+  );
+  const codexReadonlyPermissionBase = selectProviderValue(
+    resolvedConfigOptions.codex?.readonlyPermissionBase,
+    personaOptions?.codex?.readonlyPermissionBase,
+    stepOptions?.codex?.readonlyPermissionBase,
+    resolveProviderOptionOrigin(originResolver, 'codex.readonlyPermissionBase', source),
   );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
@@ -1075,6 +1139,11 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.guards?.callTimeoutMs,
     stepOptions?.codex?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
+  );
+  const opencodeContextWindow = selectProviderValueByScope(
+    resolvedConfigOptions.opencode?.contextWindow,
+    personaOptions?.opencode?.contextWindow,
+    stepOptions?.opencode?.contextWindow,
   );
   const opencodeSkillsEnabled = selectProviderValue(
     resolvedConfigOptions.opencode?.skills?.enabled,
@@ -1298,10 +1367,12 @@ export function resolveEffectiveProviderOptions(
   );
 
   const result: StepProviderOptions = {
-    ...(codexBaseUrl !== undefined
+    ...(codexContextWindow !== undefined
+      || codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
       || codexPermissionControl !== undefined
       || codexConfigProfile !== undefined
+      || codexReadonlyPermissionBase !== undefined
       || codexReasoningEffort !== undefined
       || codexFastMode !== undefined
       || codexCallTimeoutMs !== undefined
@@ -1309,10 +1380,14 @@ export function resolveEffectiveProviderOptions(
       || codexUserSkills !== undefined
       ? {
           codex: {
+            ...(codexContextWindow !== undefined ? { contextWindow: codexContextWindow } : {}),
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
             ...(codexConfigProfile !== undefined ? { configProfile: codexConfigProfile } : {}),
+            ...(codexReadonlyPermissionBase !== undefined
+              ? { readonlyPermissionBase: codexReadonlyPermissionBase }
+              : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
             ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
             ...(codexCallTimeoutMs !== undefined
@@ -1329,7 +1404,8 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(opencodeNetworkAccess !== undefined
+    ...(opencodeContextWindow !== undefined
+      || opencodeNetworkAccess !== undefined
       || opencodeSkillsEnabled !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
@@ -1341,6 +1417,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeGuardReasoningByteLimit !== undefined
       ? {
           opencode: {
+            ...(opencodeContextWindow !== undefined ? { contextWindow: opencodeContextWindow } : {}),
             ...(opencodeSkillsEnabled !== undefined ? { skills: { enabled: opencodeSkillsEnabled } } : {}),
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
@@ -1376,6 +1453,7 @@ export function resolveEffectiveProviderOptions(
         }
       : {}),
     ...(claude.sandbox !== undefined
+      || claude.permissions !== undefined
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
       || claudeEffort !== undefined
@@ -1496,7 +1574,7 @@ export function resolveEffectiveProviderOptions(
 
   const effective = Object.keys(result).length > 0 ? result : undefined;
   if (resolvedProvider === 'codex') {
-    assertCodexConfigProfilePermissionControl(effective?.codex);
+    assertCodexPermissionControlOptions(effective?.codex);
   }
   return effective;
 }
@@ -1528,6 +1606,9 @@ function stripClaudeAllowedTools(
           : {}),
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
+          : {}),
+        ...(providerOptions.claude.permissions !== undefined
+          ? { permissions: { ...providerOptions.claude.permissions } }
           : {}),
       }
     : undefined;
@@ -1641,6 +1722,8 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.allowedTools',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claude.permissions.deny',
+  'claude.permissions.importUserReadDeny',
   'claude.skills.enabled',
   'claude.guards.callTimeoutMs',
   'codex.baseUrl',
@@ -1648,6 +1731,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.networkAccess',
   'codex.permissionControl',
   'codex.configProfile',
+  'codex.readonlyPermissionBase',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',

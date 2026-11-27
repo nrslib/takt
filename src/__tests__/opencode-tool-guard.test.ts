@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   OPENCODE_GUARD_REGISTRY,
-  OpenCodeGuardSuite,
   resolveOpenCodeGuardProfile,
   resolveOpenCodeGuardSuite,
-  type OpenCodeGuard,
   type OpenCodeGuardDescriptor,
   type OpenCodeGuardEvaluation,
 } from '../infra/opencode/guards/index.js';
@@ -25,9 +23,7 @@ import {
 } from '../infra/opencode/tool-call-tuple.js';
 import { readOpenCodeToolPart } from '../infra/opencode/guards/tool-events.js';
 import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
-import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
 import { STALE_IN_FLIGHT_TOOL_FACTOR } from '../infra/opencode/guards/time-guards.js';
-import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
 import { buildToolGuardCorrectionPrompt } from '../infra/opencode/tool-guard.js';
 
 const DEPRECATED_ENV_KEYS = [
@@ -151,7 +147,6 @@ describe('OpenCode guard registry / Strategy', () => {
       { id: 'reasoning-volume', layer: 'resource', mandatory: true },
       { id: 'event-count', layer: 'resource', mandatory: true },
       { id: 'tracked-ids', layer: 'resource', mandatory: true },
-      { id: 'sensitive-budget', layer: 'integrity', mandatory: true },
       { id: 'inactivity-timeout', layer: 'time', mandatory: true },
       { id: 'exact-loop', layer: 'integrity', mandatory: true },
       { id: 'consecutive-errors', layer: 'heuristic', mandatory: false },
@@ -270,23 +265,6 @@ describe('OpenCode guard registry / Strategy', () => {
 });
 
 describe('OpenCode guard suite', () => {
-  it('初期ソース hook は具象 guard 型や sensitive-budget id に依存しない', () => {
-    const resolved = resolveOpenCodeGuardSuite(undefined, 'opencode/model');
-    const sensitiveValues = createBoundedSensitiveValues();
-    const replacement: OpenCodeGuard = {
-      id: 'replacement-integrity-guard',
-      layer: 'integrity',
-      onInitialSource: () => ({ action: 'fail', reason: 'replacement failure' }),
-    };
-    const suite = new OpenCodeGuardSuite(resolved.policy, [replacement], { sensitiveValues });
-
-    expect(suite.sensitiveValues).toBe(sensitiveValues);
-    expect(suite.onInitialSource({ token: 'secret' }).failure).toMatchObject({
-      guardId: 'replacement-integrity-guard',
-      verdict: { reason: 'replacement failure' },
-    });
-  });
-
   it('terminal tool の完全一致タプルが連続12回で停止する', () => {
     const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
     for (let index = 1; index < 12; index += 1) {
@@ -435,50 +413,6 @@ describe('OpenCode guard suite', () => {
       action: 'fail',
       reason: expect.stringContaining('unavailable tool loop'),
     });
-  });
-
-  it('sensitive budget の未設定 exhaust reason は unknown として分類可能な接頭辞を保つ', () => {
-    const sensitiveValues = createBoundedSensitiveValues();
-    sensitiveValues.exhaust();
-    const guard = new SensitiveBudgetGuard(sensitiveValues);
-
-    expect(guard.onInitialSource({})).toEqual({
-      action: 'fail',
-      reason: 'OpenCode sensitive value budget exceeded: unknown',
-    });
-  });
-
-  it('tool input hash は sensitive budget guard だけが保持し terminal と attempt で解放する', () => {
-    const sensitiveValues = createBoundedSensitiveValues();
-    const collect = vi.spyOn(sensitiveValues, 'collect');
-    const guard = new SensitiveBudgetGuard(sensitiveValues);
-    const toolEvent = (status: 'pending' | 'running' | 'completed'): OpenCodeStreamEvent => ({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-1',
-          sessionID: 'session-1',
-          type: 'tool',
-          callID: 'call-1',
-          tool: 'read',
-          state: status === 'completed'
-            ? { status, input: { path: 'a.ts' }, output: 'ok', title: 'read' }
-            : { status, input: { path: 'a.ts' } },
-        },
-      },
-    });
-
-    guard.start('attempt');
-    guard.onEvent(toolEvent('running'));
-    guard.onEvent(toolEvent('running'));
-    guard.onEvent(toolEvent('completed'));
-    expect(collect).toHaveBeenCalledTimes(1);
-
-    guard.onEvent(toolEvent('pending'));
-    expect(collect).toHaveBeenCalledTimes(2);
-    guard.start('attempt');
-    guard.onEvent(toolEvent('pending'));
-    expect(collect).toHaveBeenCalledTimes(3);
   });
 
   it('consecutive-errors は standard で発火し minimal では選択されない', () => {

@@ -47,12 +47,6 @@ describe('generateSessionId', () => {
     expect(id1).not.toBe(id2);
   });
 
-  it('should generate string IDs', () => {
-    const id = generateSessionId();
-    expect(typeof id).toBe('string');
-    expect(id.length).toBeGreaterThan(0);
-  });
-
   it('should follow the new timestamp format', () => {
     const id = generateSessionId();
     expect(id).toMatch(/^\d{8}-\d{6}-[a-z0-9]{6}$/);

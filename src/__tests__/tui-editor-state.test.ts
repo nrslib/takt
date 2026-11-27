@@ -57,21 +57,47 @@ describe('TUI editor state', () => {
     });
 
     it('should keep the newlines of a multi-line paste and leave the caret after it', () => {
-      const state = press(createEditorState(''), { kind: 'insert', text: 'a\nb\nc' });
+      const state = press(createEditorState(''), { kind: 'paste', text: 'a\nb\nc' });
       expect(state.text).toBe('a\nb\nc');
       expect(state.cursor).toBe(5);
     });
 
-    it('should splice a multi-line paste into the middle of the buffer', () => {
-      const state = press(editorAt('xy', 1), { kind: 'insert', text: 'A\nB' });
-      expect(state.text).toBe('xA\nBy');
-      expect(state.cursor).toBe(4);
+    it.each([
+      { name: 'LF', raw: 'A\nB', expected: 'xA\nBy', cursor: 4 },
+      { name: 'CRLF', raw: 'A\r\nB', expected: 'xA\nBy', cursor: 4 },
+      { name: 'CR', raw: 'A\rB', expected: 'xA\nBy', cursor: 4 },
+      { name: 'mixed CRLF, CR and LF', raw: 'A\r\nB\rC\nD', expected: 'xA\nB\nC\nDy', cursor: 8 },
+    ])('should normalize $name line breaks when inserting a multi-line paste into the middle of the buffer', ({ raw, expected, cursor }) => {
+      const state = press(editorAt('xy', 1), { kind: 'paste', text: raw });
+      expect(state.text).toBe(expected);
+      expect(state.cursor).toBe(cursor);
+    });
+
+    it.each([
+      { name: 'CR', raw: 'first\rsecond' },
+      { name: 'CRLF', raw: 'first\r\nsecond' },
+    ])('should preserve embedded $name line breaks in unbracketed input chunks', ({ raw }) => {
+      const state = press(createEditorState(''), { kind: 'insert', text: raw });
+      expect(state.text).toBe('first\nsecond');
+      expect(state.cursor).toBe('first\nsecond'.length);
+    });
+
+    it('should strip a trailing CR from committed text without creating an empty line', () => {
+      const state = press(createEditorState(''), { kind: 'insert', text: 'やあ、てすと\r' });
+      expect(state.text).toBe('やあ、てすと');
+      expect(state.cursor).toBe('やあ、てすと'.length);
+    });
+
+    it('should strip NUL and preserve tabs while normalizing pasted CR line breaks', () => {
+      const state = press(editorAt('xy', 1), { kind: 'paste', text: 'A\x00\rB\tC' });
+      expect(state.text).toBe('xA\nB\tCy');
+      expect(state.cursor).toBe(6);
     });
 
     it('should strip ANSI escapes from the inserted text', () => {
-      const state = press(createEditorState(''), { kind: 'insert', text: '\x1b[31mred\x1b[0m' });
-      expect(state.text).toBe('red');
-      expect(state.cursor).toBe(3);
+      const state = press(editorAt('xy', 1), { kind: 'insert', text: '\x1b[31mred\x1b[0m' });
+      expect(state.text).toBe('xredy');
+      expect(state.cursor).toBe(4);
     });
 
     it('should leave the state alone when the text sanitizes down to nothing', () => {

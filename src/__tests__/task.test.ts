@@ -1241,15 +1241,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
   });
 
-  it('should filter ordinary work before reading content in goal-only preflight', () => {
-    writeTasksFile(testDir, [
-      createPendingRecord({ name: 'ordinary', content: undefined, content_file: 'missing-ordinary-content.txt' }),
-      createPendingRecord({ name: 'goal-work', goal_id: '00000000-0000-4000-8000-000000000001', content: 'Goal work' }),
-    ]);
-
-    expect(runner.listTasksForProviderPreflight(true).map((task) => task.name)).toEqual(['goal-work']);
-    expect(() => runner.listTasksForProviderPreflight()).toThrow(/ENOENT|no such file/i);
-  });
 
   it('should list task state without resolving content_file', () => {
     const contentRoot = mkdtempSync(join(tmpdir(), 'takt-task-content-'));
@@ -1439,6 +1430,22 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.workflow).toBe('default');
     expect(file.tasks[0]?.start_step).toBe('implement');
+  });
+
+  it('should preserve runtime_assignment when requeueing a failed task', () => {
+    writeTasksFile(testDir, [createFailedRecord({ runtime_assignment: 'slow' })]);
+
+    runner.requeueFailedTask('task-a', 'implement', 'retry note');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.runtime_assignment).toBe('slow');
+    expect(runner.listTasks()[0]?.data).toMatchObject({ runtime_assignment: 'slow' });
+  });
+
+  it('should expose runtime_assignment on listed task state', () => {
+    writeTasksFile(testDir, [createFailedRecord({ runtime_assignment: 'slow' })]);
+
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ runtimeAssignment: 'slow' });
   });
 
   it('should auto-requeue failed task and persist the first auto_requeue_count', () => {

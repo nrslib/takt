@@ -69,6 +69,7 @@ export function denormalizeMergeConfig(config: MergeConfig | undefined): Record<
   if (config === undefined) return undefined;
   return {
     ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+    ...(config.prepareWorkflow === undefined ? {} : { prepare_workflow: config.prepareWorkflow }),
     ...(config.method === undefined ? {} : { method: config.method }),
     ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
     ...(config.autoStart === undefined ? {} : { auto_start: config.autoStart }),
@@ -751,6 +752,7 @@ export function denormalizeProviderOptions(
     || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.permissionControl !== undefined
     || providerOptions.codex?.configProfile !== undefined
+    || providerOptions.codex?.readonlyPermissionBase !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
     || providerOptions.codex?.fastMode !== undefined
     || providerOptions.codex?.guards?.callTimeoutMs !== undefined
@@ -769,6 +771,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.codex.configProfile !== undefined
         ? { config_profile: providerOptions.codex.configProfile }
+        : {}),
+      ...(providerOptions.codex.readonlyPermissionBase !== undefined
+        ? { readonly_permission_base: providerOptions.codex.readonlyPermissionBase }
         : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }
@@ -868,6 +873,16 @@ export function denormalizeProviderOptions(
     }
     if (Object.keys(sandbox).length > 0) {
       claude.sandbox = sandbox;
+    }
+    const permissions: Record<string, unknown> = {};
+    if (providerOptions.claude.permissions?.deny !== undefined) {
+      permissions.deny = providerOptions.claude.permissions.deny;
+    }
+    if (providerOptions.claude.permissions?.importUserReadDeny !== undefined) {
+      permissions.import_user_read_deny = providerOptions.claude.permissions.importUserReadDeny;
+    }
+    if (Object.keys(permissions).length > 0) {
+      claude.permissions = permissions;
     }
     if (Object.keys(claude).length > 0) {
       raw.claude = claude;

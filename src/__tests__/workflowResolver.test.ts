@@ -282,26 +282,26 @@ steps:
     expect(result.stepPreviews).toHaveLength(3);
 
     // First step: plan
-    expect(result.stepPreviews[0].name).toBe('plan');
-    expect(result.stepPreviews[0].personaContent).toBe('Plan the task');
-    expect(result.stepPreviews[0].instructionContent).toBe('Create a plan for {task}');
-    expect(result.stepPreviews[0].allowedTools).toEqual(['Read', 'Glob']);
-    expect(result.stepPreviews[0].canEdit).toBe(false);
+    expect(result.stepPreviews[0]?.name).toBe('plan');
+    expect(result.stepPreviews[0]?.personaContent).toBe('Plan the task');
+    expect(result.stepPreviews[0]?.instructionContent).toBe('Create a plan for {task}');
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob']);
+    expect(result.stepPreviews[0]?.canEdit).toBe(false);
 
     // Second step: implement
-    expect(result.stepPreviews[1].name).toBe('implement');
-    expect(result.stepPreviews[1].personaContent).toBe('Implement the code');
-    expect(result.stepPreviews[1].instructionContent).toBe('Implement according to plan');
-    expect(result.stepPreviews[1].allowedTools).toEqual(['Read', 'Edit', 'Bash']);
-    expect(result.stepPreviews[1].canEdit).toBe(true);
+    expect(result.stepPreviews[1]?.name).toBe('implement');
+    expect(result.stepPreviews[1]?.personaContent).toBe('Implement the code');
+    expect(result.stepPreviews[1]?.instructionContent).toBe('Implement according to plan');
+    expect(result.stepPreviews[1]?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+    expect(result.stepPreviews[1]?.canEdit).toBe(true);
 
     // Third step: review
-    expect(result.stepPreviews[2].name).toBe('review');
-    expect(result.stepPreviews[2].personaContent).toBe('Review the code');
-    expect(result.stepPreviews[2].canEdit).toBe(false);
+    expect(result.stepPreviews[2]?.name).toBe('review');
+    expect(result.stepPreviews[2]?.personaContent).toBe('Review the code');
+    expect(result.stepPreviews[2]?.canEdit).toBe(false);
   });
 
-  it('should resolve preview tools from project config and apply readonly filtering', () => {
+  it('should resolve preview tools from project config and filter edit tools while retaining Bash', () => {
     writeProjectConfig(tempDir, `provider: claude
 provider_options:
   claude:
@@ -330,10 +330,10 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
-    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Bash']);
   });
 
-  it('should resolve preview tools for edit false steps without output contracts using readonly filtering', () => {
+  it('should retain Bash in edit false preview steps without output contracts', () => {
     writeProjectRuntime(tempDir, `version: 1
 provider:
   defaults:
@@ -364,8 +364,8 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
-    expect(result.firstStep?.allowedTools).toEqual(['Read']);
-    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read']);
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'bash', 'Bash']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'bash', 'Bash']);
   });
 
   it('should remove OpenCode command tools from edit false preview steps without output contracts', () => {
@@ -725,7 +725,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 5);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].name).toBe('step1');
+    expect(result.stepPreviews[0]?.name).toBe('step1');
   });
 
   it('should stop at ABORT step', () => {
@@ -751,7 +751,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 5);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].name).toBe('step1');
+    expect(result.stepPreviews[0]?.name).toBe('step1');
   });
 
   it('should read persona content from file when personaPath is set', () => {
@@ -780,8 +780,8 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].name).toBe('plan');
-    expect(result.stepPreviews[0].personaContent).toBe(personaContent);
+    expect(result.stepPreviews[0]?.name).toBe('plan');
+    expect(result.stepPreviews[0]?.personaContent).toBe(personaContent);
   });
 
   it('should limit previews to maxCount', () => {
@@ -813,8 +813,8 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 2);
 
     expect(result.stepPreviews).toHaveLength(2);
-    expect(result.stepPreviews[0].name).toBe('step1');
-    expect(result.stepPreviews[1].name).toBe('step2');
+    expect(result.stepPreviews[0]?.name).toBe('step1');
+    expect(result.stepPreviews[1]?.name).toBe('step2');
   });
 
   it('should handle steps without rules (stop after first)', () => {
@@ -837,7 +837,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 3);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].name).toBe('step1');
+    expect(result.stepPreviews[0]?.name).toBe('step1');
   });
 
   it('should return empty previews when initial step not found in list', () => {
@@ -879,7 +879,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 5);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].name).toBe('step1');
+    expect(result.stepPreviews[0]?.name).toBe('step1');
   });
 
   it('should handle multi-node cycle A→B→A (prevent duplicate previews)', () => {
@@ -908,8 +908,8 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 10);
 
     expect(result.stepPreviews).toHaveLength(2);
-    expect(result.stepPreviews[0].name).toBe('stepA');
-    expect(result.stepPreviews[1].name).toBe('stepB');
+    expect(result.stepPreviews[0]?.name).toBe('stepA');
+    expect(result.stepPreviews[1]?.name).toBe('stepB');
   });
 
   it('should return empty stepPreviews when workflow is not found', () => {
@@ -935,7 +935,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].personaContent).toBe('You are an inline persona');
+    expect(result.stepPreviews[0]?.personaContent).toBe('You are an inline persona');
   });
 
   it('should fallback to empty personaContent when personaPath file becomes unreadable', () => {
@@ -967,9 +967,9 @@ steps:
       const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
       expect(result.stepPreviews).toHaveLength(1);
-      expect(result.stepPreviews[0].name).toBe('plan');
-      expect(result.stepPreviews[0].personaContent).toBe('');
-      expect(result.stepPreviews[0].instructionContent).toBe('Plan the task');
+      expect(result.stepPreviews[0]?.name).toBe('plan');
+      expect(result.stepPreviews[0]?.personaContent).toBe('');
+      expect(result.stepPreviews[0]?.instructionContent).toBe('Plan the task');
     } finally {
       // Restore permissions so cleanup can remove the file
       chmodSync(personaPath, 0o644);
@@ -994,7 +994,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
     expect(result.stepPreviews).toHaveLength(1);
-    expect(result.stepPreviews[0].personaDisplayName).toBe('Custom Agent Name');
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('Custom Agent Name');
   });
 });
 
@@ -1099,7 +1099,7 @@ steps:
     expect(result.firstStep!.allowedTools).toEqual(['Read', 'Glob']);
   });
 
-  it('should resolve firstStep tools from project config with the same rules as execution', () => {
+  it('should retain Bash and filter edit tools in firstStep with the same rules as execution', () => {
     writeProjectConfig(tempDir, `provider: claude
 provider_options:
   claude:
@@ -1130,7 +1130,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir);
 
     expect(result.firstStep).toBeDefined();
-    expect(result.firstStep!.allowedTools).toEqual(['Read']);
+    expect(result.firstStep!.allowedTools).toEqual(['Read', 'Bash']);
   });
 
   it('should return firstStep with persona file content', () => {

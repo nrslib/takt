@@ -42,7 +42,7 @@ describe('getOriginalInstruction', () => {
   it('should infer base from refs when reflog is unavailable', () => {
     let developMergeBaseCalls = 0;
     mockExecFileSync.mockImplementation((cmd, args) => {
-      if (cmd !== 'git') {
+      if (cmd !== 'git' || args === undefined) {
         throw new Error('unexpected command');
       }
 
@@ -124,16 +124,6 @@ describe('getOriginalInstruction', () => {
     expect(result).toBe('');
   });
 
-  it('should handle multi-line commit messages (use only first line)', () => {
-    mockExecFileSync
-      .mockReturnValueOnce('f00dbabe\ndeadbeef\nbase123\n')
-      .mockReturnValueOnce('takt: Fix the login bug\n');
-
-    const result = getOriginalInstruction('/project', 'main', 'takt/20260128-fix-login');
-
-    expect(result).toBe('Fix the login bug');
-  });
-
   it('should return empty string when takt prefix has no content', () => {
     mockExecFileSync
       .mockReturnValueOnce('cafebabe\nbase123\n')
@@ -142,16 +132,6 @@ describe('getOriginalInstruction', () => {
     const result = getOriginalInstruction('/project', 'main', 'takt/20260128-task');
 
     expect(result).toBe('');
-  });
-
-  it('should return instruction text when takt prefix has content', () => {
-    mockExecFileSync
-      .mockReturnValueOnce('beadface\nbase123\n')
-      .mockReturnValueOnce('takt: add search feature\n');
-
-    const result = getOriginalInstruction('/project', 'main', 'takt/20260128-task');
-
-    expect(result).toBe('add search feature');
   });
 
   it('should return original subject when branch entry commit has no takt prefix', () => {

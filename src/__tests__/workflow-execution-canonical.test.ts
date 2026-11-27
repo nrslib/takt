@@ -129,6 +129,7 @@ vi.mock('../shared/utils/index.js', () => ({
 vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
     logEvent: vi.fn(),
+    flush: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));
@@ -261,7 +262,7 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
     error: vi.fn(),
     success: vi.fn(),
   })),
-  createPrefixedStreamHandler: vi.fn(() => vi.fn()),
+  createPrefixedStreamHandler: vi.fn(() => Object.assign(vi.fn(), { flush: vi.fn() })),
 }));
 
 vi.mock('../features/tasks/execute/runMeta.js', () => ({

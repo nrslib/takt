@@ -104,6 +104,8 @@ Section maps are optional. Facets can be referenced directly by bare name (e.g.,
 
 `instruction` accepts either one scalar value or a non-empty ordered array. Each array item may be a facet key/path or inline text; items are resolved in place and joined with `\n\n---\n\n`, preserving an explicit boundary between elements. In a callable workflow, an array item may also be `{ $param: name }` for an `instruction` `facet_ref` or `facet_ref[]` parameter. A `facet_ref[]` value is spliced at that position without changing the surrounding order. The scalar form keeps its existing behavior.
 
+For `policy` and `knowledge`, facets with identical content after `$param` substitution and `include` / `extends` expansion are included only once: the first occurrence is kept, preserving order. This applies regardless of reference names, paths, or whether the content comes from a file or an inline definition. References to the same real path are both retained when their source layers resolve `include` / `extends` differently and produce different content. Repeated `instruction` entries and repeated `{{include:...}}` directives within a facet are preserved.
+
 ### Workflow-wide rules (`all_steps.rules`)
 
 Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
@@ -525,7 +527,7 @@ Named pools are discovered with the same layering as step fragments:
 
 Bare names resolve the first matching `<name>.yaml` before `<name>.yml` in each layer. `@owner/repo/name` selects a repertoire package explicitly. Absolute paths, directory traversal, nested paths, root-escaping symlinks, non-regular files, unreadable files, and oversize files are rejected. Provenance and dependency resources are tracked so `doctor`, `preview`, `eject`, and `repertoire install` / `remove` can follow them.
 
-#### Candidate contract
+#### Candidate requirements
 
 Every candidate in a pool shares the same shape:
 
@@ -545,9 +547,9 @@ Every candidate in a pool shares the same shape:
 - A candidate may represent a single facet or a small bundle of facets.
 - The selector can choose multiple candidates.
 - An empty selection means "no additional facet is needed" and is valid.
-- The pool author's contract is that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
+- Pool authors must ensure that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
 
-#### Selector contract
+#### Selector behavior
 
 When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile in a fresh session. It runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`.
 
@@ -665,7 +667,7 @@ The selector guidance references the workflow's existing persona and instruction
 #### Packages, eject, and authoring tools
 
 - Repertoire packages can install and remove `facet-pools/`, and package-local / scoped pools resolve through the same lookup order as step fragments.
-- `takt eject <workflow>` copies referenced external pools and the facet dependencies they own, following the existing eject contract for collision handling and existing-user-file priority.
+- `takt eject <workflow>` copies referenced external pools and the facets they depend on, using the existing collision handling and priority for existing user files.
 - `takt workflow doctor` validates pools, candidates, and facet references.
 - `takt workflow inspect <workflow>` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
@@ -756,7 +758,7 @@ A `workflow_call` step does not accept provider, model, provider-options, or rou
 overrides. The child inherits the already-resolved runtime context from its parent; configure
 provider targets, profiles, options, and routing in `runtime.yaml`.
 
-`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
+`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own. Executable steps in the root and descendant workflows consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
 
 A `workflow_call` step may also declare scalar `vars` for execution context that is not a facet reference. Strings, finite numbers, and booleans are inherited through nested workflow calls; a nested call overrides a key by declaring it again. Agent instruction facets read a value with `{var:name}`. A missing value renders as `unspecified`, so an instruction can define a safe fallback explicitly.
 
@@ -924,6 +926,8 @@ An agent step, `workflow_call`, or parallel parent/sub-step can declare report i
 
 `reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. `{report:filename}` inserts a selected report's body at that position, even when another report with the same name exists in the consumer's local or ancestor scope. If `reports: all` selects several reports with that name, a single `{report:filename}` is ambiguous and fails. Selected reports without a placeholder are appended to the agent's Phase 1 instruction. Names selected across declared producers must be unique, including `reports: all` and optional unrun sources; doctor and runtime reject ambiguous declarations even without a placeholder. A `workflow_call` passes the same selected inputs to its child agents, including through nested calls. A parallel parent's declaration applies to its children unless a child declares its own inputs. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Before the source runs, its contracted report names are reserved, so `{report:filename}` cannot fall back to an unrelated local or ancestor report of the same name. Once the source starts, its reports are required.
 
+`fallback_from_step` selects a completed report from another step with the same report contract only while `from_step` has not run. An incomplete or missing report after the primary source starts still fails. `previous_only: true` with the consumer's own step as `from_step` selects the latest completed report before the current execution. It marks an absent previous version as unavailable. `previous_only` requires explicit report names and cannot be combined with `fallback_from_step` or `optional_if_unrun`.
+
 Multiple producers can be declared as a nonempty array. The single-object form remains supported. Each entry independently applies `optional_if_unrun` and `history`:
 
 ```yaml
@@ -936,9 +940,11 @@ input_reports:
     optional_if_unrun: true
 ```
 
-`{report:filename}` inserts at most 8,000 UTF-16 code units of the current body. Longer bodies include an omission notice and the exact immutable version path for reading the remainder. This code constant also applies to automatically appended current reports; it is not configurable in YAML.
+`{report:filename}` inserts at most 8,000 UTF-16 code units of the current body. Longer bodies include an omission notice and the exact immutable version path for reading the remainder. The immutable path and execution identity of completed reports are supplied regardless of body length. This code constant also applies to automatically appended current reports; it is not configurable in YAML.
 
 `history: {previous: N}` selects up to N completed executions before the current execution from the same producer and execution lineage. N is a nonnegative safe integer; zero selects no previous executions. `{report_history:filename}` inserts an oldest-first list, never past bodies. Every row gives the execution identity, order, completion status, producer, and immutable version path. Plans and reports from the same execution share its identity. All selected rows are supplied, with no additional list limit. Insufficient history, incomplete executions, and missing reports are identified; gaps are not filled with unrelated or older versions. Parallel execution, nested calls, and resume preserve these identities and versions. Old runs without execution records have unavailable history; timestamps are not used to infer it. Unreferenced declared history is appended automatically.
+
+A completed public report from an old run without execution records still supplies its body. TAKT marks the original completed execution version and ID as unavailable. A path created for a long body is labeled as a snapshot for this input, separate from a version fixed by the original execution.
 
 Inputs requesting history also include current execution records. Start and completion orders use a counter shared by the execution lineage. Alongside the call execution identity, each report's actual producer has its own start and completion orders, allowing comparison of verification start against repair completion. Missing orders are marked unavailable.
 
@@ -978,7 +984,7 @@ Promotion is not supported on parallel sub-steps.
 | `policy` | - | Policy key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `instruction` | - | An instruction key, inline text, or a non-empty ordered array of them. Facet references resolve through the section map or, for bare names, project → user → builtin |
-| `edit` | - | Whether the step can edit project files (`true`/`false`). Codex runs Phase 1 of steps with explicit `false` in a `read-only` sandbox |
+| `edit` | - | Whether the step can edit project files (`true`/`false`). With TAKT-managed Codex permissions, explicit `false` prevents writes in Phase 1 while `network_access` independently controls network access |
 | `companion` | - | Run companion reviewers for a normal agent or Team Leader step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
 | `completion_retry` | - | Opt into bounded review completeness checks with an object containing the required `retry_instruction` facet and optional retry bounds |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
@@ -997,11 +1003,13 @@ Provider and model are not workflow fields. Runtime profiles and routing in `run
 them; CLI/env overrides remain available. A workflow that writes these removed fields fails at the
 load boundary with a migration hint.
 
-The effective tool list may be narrower than configured. When `edit: false`, or when a step has `output_contracts` and does not set `edit: true`, TAKT removes command/edit tools from `provider_options.*.allowed_tools` before calling the provider. For Claude-family providers, comma-separated entries are normalized into atomic tool specs first, `Bash(...)` is judged by the canonical tool name before `(`, and `Bash`, `Edit`, `Write`, `Apply_Patch`, and `Patch` are removed. For OpenCode, lowercase tools such as `bash`, `edit`, and `write` are removed. The same read-only filtering applies to `team_leader.part_allowed_tools` when the part's effective edit setting is false, such as `part_edit: false` or inherited `edit: false`.
+The effective tool list may be narrower than configured. When `edit: false`, or when a step has `output_contracts` and does not set `edit: true`, TAKT removes file-editing tools from `provider_options.*.allowed_tools` before calling the provider. For Claude-family providers, comma-separated entries are normalized into atomic tool specs first, and tools are judged by the canonical tool name before `(`. `Edit`, `Write`, `Apply_Patch`, and `Patch` are removed; `Bash` and `Bash(...)` remain available. OpenCode likewise removes editing tools such as `edit` and `write` while retaining `bash`. Pi's default tools for `edit: false` and `readonly` mode include `bash`, but not `edit` or `write`. The same read-only filtering applies to `team_leader.part_allowed_tools` when the part's effective edit setting is false, such as `part_edit: false` or inherited `edit: false`.
 
 The Pi provider maps generic `Read`, `Glob`, `Grep`, `Edit`, `Write`, and `Bash` names to Pi SDK tools. Pi does not support TAKT MCP servers or structured output; step-level MCP settings are dropped, while session-level MCP settings require a provider that supports them. `max_turns` is ignored for Pi calls.
 
-Codex runs Phase 1 of steps with an explicit `edit: false` in a `read-only` sandbox, regardless of the resolved permission mode and even with `permission_control: codex`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Common permission resolution, other providers, omitted `edit`, and `edit: true` keep their existing behavior.
+With TAKT-managed Codex permissions, an explicit `edit: false` prevents writes in Phase 1 regardless of the resolved permission mode. With `network_access: true`, TAKT passes a read-only permission profile that enables network access; otherwise it uses the `read-only` sandbox. With `permission_control: codex`, Codex's own settings determine both permissions, even with `edit: false`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) remain managed by TAKT even with delegated permissions. Without `readonly_permission_base`, they use the `read-only` sandbox and disable network access; with it, TAKT uses a permission profile that extends the base with read-only filesystem access and network disabled. Common permission resolution and other providers keep their existing behavior. See [Codex permission control](./configuration.md#codex-permission-control-permission_control).
+
+TAKT-managed Codex calls also pass `--ignore-rules` for writable steps and for new and resumed sessions, so user or project execpolicy `.rules` cannot bypass the configured sandbox. Delegated Codex calls retain those rules except in Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls), which always disable them and prohibit writes and network access. A selected `config_profile` continues to apply alongside `--ignore-rules` in Phase 2 and these internal calls. When `readonly_permission_base` is set, TAKT also omits `--sandbox`.
 
 ## Workflow-level Configuration
 
@@ -1055,6 +1063,17 @@ steps:
 ```
 
 Presets resolve exactly like `provider_options.extends` (project → global → builtins, with repertoire package scoping). The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). An unresolved name fails fast. `system` and `workflow_call` steps reject `capabilities`.
+
+
+### `repository_identity`
+
+`repository_identity: true` names the project's repository for `gh` and `glab` in a task that runs in a clone (`worktree: true`), which has no `origin` remote for them to read. TAKT passes `GH_REPO` or `GITLAB_REPO` to this workflow's agent steps, command quality gates, and system `command` inputs; no remote and no credential is added.
+
+```yaml
+repository_identity: true
+```
+
+It is off by default, so a workflow that does not operate on the repository gets nothing. Each workflow decides for itself: a called workflow neither inherits the caller's declaration nor loses its own. Nothing is named for a task that runs in the project root, and a variable you set yourself is never overridden. The variables, the host rules, and the GitHub / GitLab detection are in [Repository identity in clones](configuration.md#repository-identity-in-clones).
 
 
 ### `workflow_config.runtime`
@@ -1252,11 +1271,11 @@ Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, t
 
 ## Best Practices
 
-1. **Keep iterations reasonable** — 10-30 is typical for development workflows
-2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code
-3. **Use descriptive step names** — Makes logs easier to read
-4. **Test workflows incrementally** — Start simple, add complexity
-5. **Customize with `takt eject <workflow>`** — Copy a builtin workflow and edit it
+1. Set a reasonable iteration count. Development workflows typically use 10-30.
+2. Use `edit: false` for review steps to prevent reviewers from modifying code. When delegating permission control to Codex, also disable writes in Codex itself.
+3. Use descriptive step names to make logs easier to read.
+4. Test workflows incrementally, starting with a simple structure and adding complexity.
+5. Customize a builtin workflow by copying it with `takt eject <workflow>` and editing it.
 
 ## PR status and system-step waits
 
@@ -1289,21 +1308,44 @@ The `commit_and_push` effect accepts `pr`, commits changes in the PR clone, and 
 
 The merge command checks fork threats before starting the workflow, whether a PR number is given or discovered. It skips that check for a same-repository PR. When a threat is detected or cannot be assessed, TAKT comments with the reason and does not start the workflow. Git fetch and push and provider tools use the normal configuration.
 
-`merge-review` runs `review` and the Caccia effect and comments on the PR with CI results and its assessment. `merge-review-fix` synchronizes and resolves conflicts, runs `review-fix`, pushes fixes, runs the Caccia effect, checks CI and review state, then merges. An aborted review stops the merge and is reported in a comment. CI failures enter the recovery process described below.
+`merge-review` runs `review` and the Caccia effect and comments on the PR with CI results and its assessment. `merge-review-fix` synchronizes and runs `review-fix` after every AI conflict resolution, on both initial synchronization and resynchronization. A clean sync skips the full review. Both paths then push changes, run the Caccia effect, check CI and review state, and merge. An aborted review stops the merge and is reported in a comment. CI failures enter the recovery process described below.
 
-The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch and resolves conflicts when needed before running `review-fix-simple`. After gathering context, one read-only reviewer uses facets suited to the changes. Separate steps adjudicate findings, plan and apply fixes, verify completion, and review again. Once the final requirement check completes, TAKT pushes fixes, runs the Caccia effect, checks CI and GitHub review and mergeability on its returned head, then merges. An aborted child workflow stops the merge and produces a PR comment. CI failures enter the recovery process described below. Select `merge-review-fix` for parallel specialist reviews.
+The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch. A clean sync skips the full review and proceeds to push; every AI conflict resolution calls `review-fix-simple`, on both initial synchronization and resynchronization. After gathering context, one read-only reviewer uses facets suited to the changes. Separate steps adjudicate findings, plan and apply fixes, verify completion, and review again. The review path also completes the final requirement check before joining the shared flow: push changes, run the Caccia effect, check CI and GitHub review and mergeability on its returned head, then merge. An aborted child workflow stops the merge and produces a PR comment. CI failures enter the recovery process described below. Select `merge-review-fix` for parallel specialist reviews.
+
+After synchronization, `merge-prepare` and `merge-review-fix-simple` review the entire cumulative PR diff and incoming base-branch changes. They fix only incorrect conflict resolution and defects caused by combining the two sides, including defects in non-conflicted files. Pre-existing issues unrelated to synchronization are recorded with reasons and carried forward without triggering fix planning, implementation, or rejection at the final check. Clean synchronization still skips the full review, and normal development review and adjudication criteria remain unchanged.
+
+### CI-gated review
+
+`merge-review-ci` is opt-in. Its first system step reads the existing `pr_status` and requires both `ci.finished` and `ci.passed` before calling `merge-review` through `workflow_call`. Success follows the existing definition, including `SUCCESS`, `NEUTRAL` and `SKIPPED`. Pending, failed or absent checks end `COMPLETE` without review, Caccia or evaluation comments. This initial check does not wait or retry and adds no configuration or CLI options.
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+For review and comments without code changes, commits, pushes or merges, use the existing `.takt/config.yaml` setting:
+
+```yaml
+caccia:
+  enabled: false
+```
+
+After the gate, the existing `merge-review` owns review, Caccia, its later CI check, evaluation and `TAKT evaluation: approved={true|false}. {reason}` comments. Its `COMPLETE` or `ABORT` result is preserved. Fork selection and the threat check before the workflow remain unchanged: bulk runs exclude forks unless included, while an explicit number bypasses selection conditions but still runs the threat check. Rejection keeps the existing stop comment. `merge-review`, `merge-review-fix` and `merge-review-fix-simple` retain their direct execution behavior and defaults.
 
 ### CI failure recovery inputs and effects
 
-`merge-review-fix` and `merge-review-fix-simple` resynchronize with the base branch when CI completes and the PR is `CONFLICTING`, resolving conflicts when needed. They skip the initial review on these later attempts and continue through push → Caccia → CI on the new HEAD → merge evaluation. A PR that is only `BEHIND` proceeds to the existing review and merge conditions without resynchronization. The limit is `max(2, runtime concurrency - 1)`: two resynchronizations at concurrency 2 or 3, and three at concurrency 4. Initial synchronization does not count. Runtime concurrency, including a CLI `--concurrency` override, is saved with the task and retained by Requeue and Retry. If the PR is still conflicting at the limit, TAKT comments with the reason and ends ABORT without merging. Resynchronization preserves the CI fix and rerun budgets already used.
+`merge-review-fix` and `merge-review-fix-simple` resynchronize with the base branch when CI completes and the PR is `CONFLICTING`, resolving conflicts when needed. On both initial synchronization and resynchronization, a clean sync skips the full review and continues through push → Caccia → CI on the new HEAD → merge evaluation. Every AI conflict resolution is followed by review and fixes before push. A PR that is only `BEHIND` proceeds to the existing review and merge conditions without resynchronization. The limit is `max(2, runtime concurrency - 1)`: two resynchronizations at concurrency 2 or 3, and three at concurrency 4. Initial synchronization does not count. Runtime concurrency, including a CLI `--concurrency` override, is saved with the task and retained by Requeue and Retry. If the PR is still conflicting at the limit, TAKT comments with the reason and ends ABORT without merging. Resynchronization preserves the CI fix and rerun budgets already used.
 
 Before rerunning, TAKT fetches the current PR HEAD and rejects evidence for a different HEAD. If the HEAD changes after a rerun is accepted, recovery leaves the wait immediately, preserves the original HEAD's failed checks and logs, and comments with the HEAD mismatch before aborting. `pr_status` system inputs always expose `rerunHeadChanged` and `rerunHeadChangeReason`; ordinary polling returns `false` and an empty reason. Run identity, repository and attempt checks still apply.
 
 `comment_pr` accepts optional `body_format: plain_text`. It encloses the entire interpolated body in a code block whose backtick delimiter is longer than any backtick sequence in the body. CI recovery stop and push-failure comments use this format so check/job names, investigation summaries and errors remain literal text. Without this option the body is passed through as Markdown.
 
-For recovery, `pr_ci_failure` takes `source: current_pr` and a full `head_sha` state reference. It returns `number`, `headSha`, `complete`, failed `checks` with run/attempt/job identifiers and log contents, `unavailable` reasons, `fixRounds`, `rerunCount`, and scalar `details` for comments. The `rerun_ci` effect takes `pr` and a full `failure` reference. It requires complete evidence and an external investigation verdict, deduplicates failed runs, and reruns failed jobs once. Its `rerun` result stores the PR, HEAD and previous attempts; pass its full reference as `pr_status.rerun_from` to wait for newer attempts. Before the rerun step executes, this optional reference leaves ordinary polling in place. Fix and rerun counters belong to the same workflow execution.
+For recovery, `pr_ci_failure` takes `source: current_pr` and a full `head_sha` state reference. It returns `number`, `headSha`, `complete`, failed `checks` with run/attempt/job identifiers and log contents, `unavailable` reasons, `fixRounds`, `rerunCount`, and scalar `details` for comments. Failed checks with no Actions log, such as commit statuses and third-party checks, are listed in `external`; they remain failed, but do not make the other checks' evidence incomplete. `complete` is `false` when evidence that should exist is listed in `unavailable`, or when no Actions check is left to judge. The `rerun_ci` effect takes `pr` and a full `failure` reference. It requires complete evidence and an external investigation verdict, deduplicates failed runs, and reruns failed jobs once. Its `rerun` result stores the PR, HEAD and previous attempts; pass its full reference as `pr_status.rerun_from` to wait for newer attempts. Before the rerun step executes, this optional reference leaves ordinary polling in place. Fix and rerun counters belong to the same workflow execution.
 
 ### Caccia system effect
+
+On GitHub, the effect checks unresolved threads started by `coderabbitai` after verifying the starting head. If no matching threads exist, it returns `skipped` with `skipReason: no_review_threads` without waiting for a review. The merge workflow continues to `wait_ci`, which waits for CI on the returned head. With matching threads, the existing review loop runs. Standalone `takt caccia` and automatic post-PR Caccia retain their initial review waits.
 
 The effect requires a matching isolated PR execution context from `takt merge` or an `enqueue_task mode: from_pr` task. `pr` accepts a positive integer or a full template reference; it cannot be an embedded string. The effect reads the existing `caccia.enabled`, `wait_timeout_ms`, `max_iterations`, and `workflow` settings. Disabled or unset configuration skips the CodeRabbit review wait. Standalone `takt caccia <PR>` remains available regardless of `enabled`.
 
@@ -1324,12 +1366,12 @@ Before execution on GitHub, the effect compares the PR head with the clone's sta
         next: wait_ci
 ```
 
-Normal results include `success: true`, `failed: false`, `outcome` (`success`, `skipped`, or `limit`), `headSha`, `unresolvedCount`, `skipReason`, and `reason`. Unused reason fields are `null`. Read them through `effect.<step>.caccia.*` in conditions or `{effect:<step>.caccia.<field>}` in templates. Skip reasons are `config_disabled`, `github_unavailable`, `initial_review_unavailable`, `review_rate_limited`, and `review_skipped`. Failures return `success: false`, `failed: true`, and `error`; no head is guaranteed on failure. Check failure before reading normal fields.
+Normal results include `success: true`, `failed: false`, `outcome` (`success`, `skipped`, or `limit`), `headSha`, `unresolvedCount`, `skipReason`, and `reason`. Unused reason fields are `null`. Read them through `effect.<step>.caccia.*` in conditions or `{effect:<step>.caccia.<field>}` in templates. Skip reasons are `config_disabled`, `github_unavailable`, `no_review_threads`, `initial_review_unavailable`, `review_rate_limited`, and `review_skipped`. Failures return `success: false`, `failed: true`, and `error`; no head is guaranteed on failure. Check failure before reading normal fields.
 
 After a repair push, the same clone is synchronized with a verified fast-forward. CI should compare PR status head with `effect.caccia.caccia.headSha`; merge uses the clone's current head as its expected SHA. Historical push effect results remain unchanged.
 
 GitLab also provides MR details and CI status, so `skipped` with `github_unavailable` continues to CI on the returned head. Merge methods and head constraints remain unsupported; `merge_pr` fails when either is supplied.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia. Automatic post-PR Caccia follows the enablement, exclusion, and ordering rules in the [configuration reference](./configuration.md#caccia-review-loop).
 
-`merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. Initial success behavior is unchanged; CI timeout ends ABORT with unresolved work, and `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.
+`merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. No CI recovery runs when CI succeeds on the first attempt; CI timeout ends ABORT with unresolved work, and `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.

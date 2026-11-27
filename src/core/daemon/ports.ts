@@ -1,13 +1,14 @@
 import type { AcceptedEvent, Admission, ControlEvent, ControlReceipt, EventInput } from './events.js';
 import type { DaemonStateRequest, DaemonStateReply } from './processProtocol.js';
-import type { ConversationSnapshot, RuntimeMessage, TurnIdentity, TurnResult, TurnStart } from './messages.js';
+import type { ConversationSnapshot, RuntimeMessage, TurnIdentity, TurnOutcome, TurnResult, TurnStart } from './messages.js';
 import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 /** A′ が提供し、D/C/E が受付・制御に使う。invalid な入力の検証は adapter が担う。 */
 export interface DaemonIngress {
   accept(input: EventInput): Promise<Admission>;
   control(event: ControlEvent): Promise<ControlReceipt>;
-  snapshot(conversationId: string): Promise<ConversationSnapshot>;
+  /** ツール履歴・発言・ターンの結果は、画面に送る読取（toolHistory: true）だけに含める。 */
+  snapshot(conversationId: string, request?: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot>;
 }
 
 /** A が B に保存させ、再起動時に A が未終了分だけ復元する。running は人の入力を中断し、other を再配信する。 */
@@ -43,13 +44,19 @@ export interface TurnQueues {
   pending(conversationId: string): readonly AcceptedEvent[];
 }
 
+export interface ConversationTurns {
+  // outcome は確定（settled）したターンだけに付ける。確定前の結果は apply が配送するため、読取が先回りして表示させない。
+  readTurns(conversationId: string): Promise<readonly { operationId: string; message?: string; acceptedSequence: number; pending: boolean;
+    outcome?: TurnOutcome }[]>;
+}
+
 /** daemon の保存所有者。apply は turn と change.operationId で冪等にする。 */
 export interface ConversationOwner {
+  begin(turn: TurnIdentity): Promise<void>;
   inquiry(notice: import('./messages.js').InquiryNotice): Promise<void>;
   apply(result: TurnResult): Promise<void>;
-  progress(turn: TurnIdentity, message: ConversationProgress): Promise<void>;
-  // 実行中ターンの識別情報は、それを所有する dispatcher が付ける。
-  snapshot(conversationId: string): Promise<Omit<ConversationSnapshot, 'operationId' | 'generation'>>;
+  progress(turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal): Promise<void>;
+  snapshot(conversationId: string, request: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot>;
 }
 
 /** C が実装し、A′ が開始・中断を送る。start は待たず、終了は必ず bus.post(turn_finished) で通知する。 */

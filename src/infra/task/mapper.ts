@@ -49,6 +49,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     branch: task.branch,
     base_branch: task.base_branch,
     workflow: task.workflow,
+    ...(task.runtime_assignment === undefined ? {} : { runtime_assignment: task.runtime_assignment }),
     issue: task.issue,
     start_step: task.start_step,
     ...(task.goal_id !== undefined && task.retry_note === undefined ? {} : { retry_note: task.retry_note }),
@@ -89,6 +90,8 @@ export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
 export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskRecord): TaskInfo {
   const content = resolveTaskContent(projectDir, task);
   return {
+    workerName: task.worker_name,
+    waitingReason: task.waiting_reason,
     filePath: tasksFile,
     name: task.name,
     slug: task.slug,
@@ -155,6 +158,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    remoteAssignment: task.remote_assignment,
     executionId: task.execution_id,
     goalId: task.goal_id,
     name: task.name,
@@ -198,6 +202,10 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    remoteArtifacts: task.remote_artifacts,
+    remoteAssignment: task.remote_assignment,
+    workerName: task.worker_name,
+    waitingReason: task.waiting_reason,
     executionId: task.execution_id,
     ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
@@ -220,6 +228,7 @@ export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
     worktreePath: task.worktree_path,
     ...(task.merge_task === undefined ? {} : { mergeTask: task.merge_task }),
     workflow: task.workflow,
+    ...(task.runtime_assignment === undefined ? {} : { runtimeAssignment: task.runtime_assignment }),
     prUrl: task.pr_url,
     failure: task.failure,
     startedAt: task.started_at ?? undefined,

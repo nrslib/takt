@@ -1,9 +1,15 @@
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { V2Event } from '@opencode/client';
 import { createV2Transport } from '../infra/opencode/v2-transport.js';
 import { v2EventTranslator } from '../infra/opencode/v2-events.js';
 import { buildV2ServerConfig } from '../infra/opencode/v2-config.js';
+import { createStreamTrackingState, handlePartUpdated, type OpenCodeMessagePartUpdatedEvent } from '../infra/opencode/OpenCodeStreamHandler.js';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
+import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 
 const { api } = vi.hoisted(() => ({ api: {
   session: { create: vi.fn(), get: vi.fn(), update: vi.fn(), switchAgent: vi.fn(), switchModel: vi.fn(), prompt: vi.fn(), interrupt: vi.fn(), wait: vi.fn(), compact: vi.fn() },
@@ -17,6 +23,28 @@ const prompt = {
   model: { providerID: 'probe', modelID: 'probe' }, parts: [{ type: 'text' as const, text: 'review' }],
   tools: { read: true, write: false, bash: false, task: false },
 };
+const temporaryDirectories: string[] = [];
+
+function createExternalContextDirectory() {
+  const root = mkdtempSync(join(tmpdir(), 'takt-opencode-v2-context-'));
+  temporaryDirectories.push(root);
+  const realRunDirectory = join(root, 'real-run');
+  const linkedRunDirectory = join(root, 'run-link');
+  const realContextDirectory = join(realRunDirectory, 'context');
+  mkdirSync(realContextDirectory, { recursive: true });
+  symlinkSync(realRunDirectory, linkedRunDirectory, 'dir');
+  return {
+    contextDirectory: join(linkedRunDirectory, 'context'),
+    canonicalContextDirectory: realpathSync(realContextDirectory),
+  };
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories.length = 0;
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,6 +111,24 @@ describe('OpenCode v2 transport', () => {
     expect(transport.nativeStructuredOutput).toBe(false);
   });
 
+  it('allows the TAKT context directory while keeping other external paths denied', async () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectory();
+    const transport = await createV2Transport('http://localhost', 'password');
+    await transport.session.promptAsync({
+      ...prompt,
+      externalDirectoryAllowlist: [contextDirectory],
+    });
+
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{
+      action: string; resource: string; effect: string;
+    }>;
+    expect(permissions.slice(-3)).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
   it('switches to the neutral read agent while carrying interpretation instructions and read-only tools', async () => {
     await (await createV2Transport('http://localhost', '')).session.promptAsync({
       ...prompt, agent: 'takt-read', system: 'Interpret verification results.',
@@ -124,6 +170,16 @@ describe('OpenCode v2 transport', () => {
     await (await createV2Transport('http://localhost', '')).session.promptAsync(prompt);
     expect(api.plugin.list).toHaveBeenCalledTimes(2);
     expect(api.session.prompt).toHaveBeenCalledOnce();
+  });
+
+  it('adds a narrow external context rule to the v2 server configuration', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectory();
+    const config = buildV2ServerConfig(undefined, undefined, '/plugin', {}, false, [contextDirectory]);
+    expect(config.permissions).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
   });
 
   it('waits for MCP catalog registration before exposing an allowed tool', async () => {
@@ -196,6 +252,42 @@ describe('OpenCode v2 transport', () => {
     expect(events).toEqual([{ type: 'session.idle', properties: { sessionID: 's1' } }]);
   });
 
+  it.each([
+    { name: 'read', tool: 'read', input: { path: '/context/specifications/gherkin.feature' } },
+    { name: 'shell', tool: 'bash', input: { command: 'cat /context/specifications/gherkin.feature' } },
+  ])('$name の実引数と ID を結果より先に provider ログへ記録する', async ({ name, tool, input }) => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-tool-input-'));
+    temporaryDirectories.push(logsDir);
+    const logger = createProviderEventLogger({ logsDir, sessionId: 's1', runId: 'run', enabled: true });
+    const data = { sessionID: 's1', assistantMessageID: 'm1', id: 'tool-1' };
+    const durable = { aggregateID: 's1', seq: 1, version: 1 } as const;
+    const source: V2Event[] = [
+      { type: 'session.tool.input.started', id: 'e1', created: 1, durable, data: { ...data, name } },
+      { type: 'session.tool.input.delta', id: 'e2', created: 2, data: { ...data, delta: JSON.stringify(input).slice(0, 12) } },
+      { type: 'session.tool.input.ended', id: 'e3', created: 3, durable: { ...durable, seq: 2 }, data: { ...data, text: JSON.stringify(input) } },
+      { type: 'session.tool.called', id: 'e4', created: 4, durable: { ...durable, seq: 3 }, data: { ...data, input, executed: false } },
+      { type: 'session.tool.progress', id: 'e5', created: 5, data: { ...data, metadata: { title: '仕様読み取り' } } },
+      { type: 'session.tool.success', id: 'e6', created: 6, durable: { ...durable, seq: 4, version: 2 },
+        data: { ...data, content: [{ type: 'text', text: '仕様本文' }], executed: false } },
+    ];
+    api.event.subscribe.mockReturnValue((async function* () {
+      yield { type: 'server.connected' };
+      yield* source;
+    })());
+    const state = createStreamTrackingState();
+    const { stream } = await (await createV2Transport('http://localhost', '')).event.subscribe({ directory: '/work', sessionID: 's1' }, {});
+    for await (const event of stream) {
+      const updated = event as OpenCodeMessagePartUpdatedEvent;
+      expect(updated.type).toBe('message.part.updated');
+      handlePartUpdated(updated.properties.part, updated.properties.delta,
+        (output) => logger.logEvent({ provider: 'opencode', providerModel: 'test', step: 'inspect' }, output), state);
+    }
+    const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(records.map((record) => record.event_type)).toEqual(['tool_use', 'tool_result']);
+    expect(records[0]?.data).toEqual({ tool, id: data.id, input: name === 'read' ? { ...input, filePath: input.path } : input });
+    expect(records[1]?.data).toEqual({ id: data.id, content: '仕様本文', isError: false });
+  });
+
   it('waits for interruption before completing abort', async () => {
     const order: string[] = [];
     api.session.interrupt.mockImplementation(async () => { order.push('interrupt'); });
@@ -261,6 +353,20 @@ describe('OpenCode v2 events and configuration', () => {
     event('session.tool.input.started');
     event('session.tool.called', { input: { command: 'pwd' } });
     expect(event('session.tool.success', { content: [{ type: 'text', text: '/work' }], metadata: {} })).toMatchObject({ properties: { part: { state: { status: 'completed', output: '/work' } } } });
+  });
+
+  it.each([
+    { type: 'session.compaction.ended', reason: 'auto', notified: true },
+    { type: 'session.compaction.ended', reason: 'manual', notified: false },
+    { type: 'session.compaction.started', reason: 'auto', notified: false },
+    { type: 'session.compaction.failed', reason: 'auto', notified: false },
+  ] as const)('translates only completed automatic compaction ($type, $reason)', ({ type, reason, notified }) => {
+    const translated = v2EventTranslator()({ id: 'event-1', created: 0, durable: { aggregateID: 'session-1', seq: 1, version: 1 },
+      type, data: { sessionID: 'session-1', reason, text: 'summary', error: { type: 'error', message: 'failed summary' } },
+    } as V2Event);
+    expect(translated).toEqual(notified
+      ? { type: 'session.compacted', properties: { sessionID: 'session-1', reason: 'auto' } }
+      : undefined);
   });
 
   it('preserves all MCP OAuth options including the callback port and redirect URI without enabling codemode', () => {

@@ -28,12 +28,17 @@ export interface OpenCodeMessage {
 export interface OpenCodeTransport {
   nativeStructuredOutput?: boolean;
   requiresExplicitMcpTools?: boolean;
+  getModelOutputLimit?(input: { directory: string; providerID: string; modelID: string }, options?: RequestOptions): Promise<number>;
   resolveModel?(input: { directory: string; sessionID?: string; agent?: string }, options?: RequestOptions): Promise<OpenCodeResolvedModel>;
   session: {
     create(input: NonNullable<Parameters<V1Client['session']['create']>[0]>, options?: RequestOptions): Promise<Result<{ id: string }>>;
     get(input: SessionRequest, options?: RequestOptions): Promise<Result<{ id: string }>>;
     messages(input: SessionRequest, options?: RequestOptions): Promise<Result<OpenCodeMessage[]>>;
-    promptAsync(input: Parameters<V1Client['session']['promptAsync']>[0] & { allowConfiguredMcpTools?: boolean; allowedMcpServers?: readonly string[] }, options?: RequestOptions): Promise<unknown>;
+    promptAsync(input: Parameters<V1Client['session']['promptAsync']>[0] & {
+      allowConfiguredMcpTools?: boolean;
+      allowedMcpServers?: readonly string[];
+      externalDirectoryAllowlist?: readonly string[];
+    }, options?: RequestOptions): Promise<unknown>;
     abort(input: SessionRequest, options: RequestOptions): Promise<Result<boolean>>;
     summarize(input: Parameters<V1Client['session']['summarize']>[0], options?: RequestOptions): Promise<unknown>;
   };

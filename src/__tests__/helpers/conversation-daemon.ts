@@ -2,6 +2,7 @@ import type { DaemonBus, TurnRunner } from '../../core/daemon/ports.js';
 import type { ConversationRuntime } from '../../features/manager/conversationRuntime.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { createConversationTurnService } from '../../features/manager/conversationService.js';
+import { ManagerImageAttachments } from '../../features/manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../../features/manager/daemonConversationPort.js';
 import { DaemonConversations } from '../../features/daemon/conversationState.js';
 import { DaemonRouting } from '../../features/daemon/routing.js';
@@ -28,11 +29,11 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
   }
   const routing = new TestRouting(directory);
   const store = new ConversationStateStore(directory);
-  const events = new FileEventStore(directory);
+  const events = new FileEventStore(directory, new DaemonRouting(directory));
   const failures: unknown[] = [];
   const onError = (error: unknown): void => { failures.push(error); };
   const conversations = new DaemonConversations(store, routing, new DaemonNotifications(directory),
-    (id, output, version) => input.deliver(id, output, version), onError);
+    (id, output, version, signal) => input.deliver(id, output, version, signal), onError, events);
   let executions = 0;
   const executionWaiters = new Map<number, Array<() => void>>();
   const business = createConversationTurnService(directory, { ...runtime, async resolve(...args) {
@@ -51,10 +52,10 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
   const pending = new Set<Promise<void>>();
   const bus: DaemonBus = { post: (message) => dispatcher.post(message), request: (turn, request, signal) => dispatcher.request(turn, request, signal) };
   const runner: TurnRunner = {
-    start(value, signal) {
-      conversations.started(value);
+    async start(value, signal) {
+      await conversations.started(value);
       const execute = business.execute(value, { signal, request: (request) => bus.request(value.turn, request, signal),
-        progress(message) { void bus.post({ kind: 'turn_progress', turn: value.turn, message }).catch(onError); } });
+        progress(message) { return bus.post({ kind: 'turn_progress', turn: value.turn, message }); } });
       const operation = execute.catch((error: unknown) => signal.aborted ? { kind: 'interrupted' as const }
         : { kind: 'failed' as const, message: error instanceof Error ? error.message : String(error) })
         .then((outcome) => bus.post({ kind: 'turn_finished', turn: value.turn, outcome }));
@@ -68,7 +69,7 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
     stateRequests: createDaemonStateRequests({ conversations, ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
     resources: { close: () => conversations.close() }, limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 },
     onFailure: ({ error }) => onError(error) });
-  const input = createDaemonConversationInput({ ingress: dispatcher, async resolveAssignment(selected) {
+  const input = createDaemonConversationInput({ configDirectory: directory, images: new ManagerImageAttachments(events), onImageCleanupError: onError, ingress: dispatcher, async resolveAssignment(selected) {
     const assignment = await routing.resolve(selected);
     await conversations.ensure(assignment); return assignment;
   } });
@@ -85,5 +86,5 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
     const waiters = executionWaiters.get(count) ?? [];
     waiters.push(resolve); executionWaiters.set(count, waiters);
   });
-  return { settled, executing, get activeOperationCount() { return dispatcher.activeTurnCount; }, input, dispatcher, conversations, store, events, failures, async close() { await dispatcher.control({ kind: 'stop' }); input.close(); } };
+  return { settled, executing, get activeOperationCount() { return dispatcher.activeTurnCount; }, input, dispatcher, conversations, store, events, failures, async close() { await dispatcher.control({ kind: 'stop' }); await input.close(); } };
 }

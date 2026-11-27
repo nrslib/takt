@@ -89,7 +89,7 @@ Before installing, TAKT displays a summary of the package contents (facet counts
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts package files from `facets/`, `workflows/`, `provider-options/`, `facet-pools/`, and `steps/` (`.md`, `.yaml`, `.yml`), plus root-level `.yaml` / `.yml` step fragments from `steps/`
+2. Extracts `.md`, `.yaml`, and `.yml` package files from `facets/`, `workflows/`, `provider-options/`, and `facet-pools/`, and only root-level `.yaml` / `.yml` step fragments from `steps/`
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -136,13 +136,17 @@ project, user, and builtin provider-options directories. Workflow YAML may
 reference the capability preset, but provider/model/options remain in
 `runtime.yaml` (or the retained legacy config layers).
 
-Capability preset resolution fails fast as a configuration error when a preset
-or path cannot be resolved, a scoped ref points to an unavailable repertoire
-package, the target YAML is invalid or is not a provider-options object, the
-extends chain is circular, or the removed `$ref` key is used. Relative paths
-are resolved from the workflow file and must stay inside the workflow
-directory after symlink resolution; absolute paths and paths whose real target
-escapes that directory are rejected.
+Capability preset resolution stops immediately with a configuration error when
+a preset or path cannot be resolved, or a scoped ref points to an unavailable
+repertoire package. The same applies when the target YAML is invalid or is not
+a provider-options object, the extends chain is circular, or the removed `$ref`
+key is used.
+
+Relative paths are resolved from the directory of the file containing the reference.
+When following only path-based references from a workflow, relative paths stay
+within the workflow directory. After loading a named or scoped preset, subsequent relative paths are confined to that preset's
+directory. Symlink targets must stay within the same permitted directory.
+Absolute paths and paths whose real target escapes that directory are rejected.
 
 ```yaml
 capabilities: '@nrslib/takt-fullstack/edit'

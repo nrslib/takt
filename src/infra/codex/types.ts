@@ -30,16 +30,20 @@ export interface CodexCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  contextWindow?: number;
   reasoningEffort?: string;
   fastMode?: boolean;
   systemPrompt?: string;
   /** Permission mode for the TAKT-controlled sandbox */
   permissionMode?: PermissionMode;
+  aiReviewPermissions?: boolean;
   edit?: boolean;
   /** Select whether TAKT or Codex controls permissions. */
   permissionControl?: CodexPermissionControl;
   /** Name of the Codex config profile selected by the caller. */
   configProfile?: string;
+  /** Base permission profile that Phase 2 and strict-readonly calls inherit from. */
+  readonlyPermissionBase?: string;
   /** Enable network access for the TAKT-controlled sandbox */
   networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */
@@ -73,7 +77,11 @@ export const CODEX_CONFIG_PROFILE_ENV = 'TAKT_CODEX_CONFIG_PROFILE';
 
 // Enumerable symbols survive the SDK's Object.assign environment copy without
 // occupying a user-controlled environment variable name.
-export const CODEX_SPAWN_PROFILE = Symbol('codexSpawnProfile');
+export const CODEX_SPAWN_OPTIONS = Symbol('codexSpawnOptions');
 export type CodexSpawnEnvironment = Record<string, string> & {
-  [CODEX_SPAWN_PROFILE]?: { configProfile?: string };
+  [CODEX_SPAWN_OPTIONS]?: {
+    configProfile?: string;
+    execArgs: readonly string[];
+    preserveConfigProfileEnv: boolean;
+  };
 };

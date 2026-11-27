@@ -1,3 +1,4 @@
+import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
 import type { ManagerAssignmentIdentity } from './assignment.js';
 import { withManagerAssignment } from './assignment.js';
@@ -10,8 +11,13 @@ import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { verifyManagerConversation } from './formalSpecVerification.js';
 import type { ResolvedFormalSpecConfiguration } from '../interactive/taskInstructionFormat.js';
-import { createTurnActivityReporter } from './turnActivity.js';
+import { createTurnActivityReporter, reportManagerStream } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
+import { randomUUID } from 'node:crypto';
+import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
+import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 
 const managerToolNames = [
   ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
@@ -25,7 +31,10 @@ const addRepositoryTools = new Set([
 ]);
 
 export interface ManagerTurnInput {
+  requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
+  operationId?: string;
   prompt: string;
+  imageAttachments?: ImageAttachmentReference[];
   sessionId: string | undefined;
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
@@ -33,19 +42,36 @@ export interface ManagerTurnInput {
   verify?: ResolvedFormalSpecConfiguration & { repositoryDirectory: string };
   onProviderOutput?: () => void;
   onActivity?: (activity: ConversationActivity) => void;
+  onText?: (message: string) => void;
+  onToolEvent?: (event: ToolActivityEvent) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }
 
 export function createManagerTurnExecutor(cwd: string, plan: ManagerConversationPlan) {
-  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
+  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance(plan.strategy.systemPrompt, plan.ctx.lang) });
   return {
     execute(input: ManagerTurnInput) {
       const run = async () => {
         const signal = input.abortSignal;
         signal.throwIfAborted();
-        if (input.verify !== undefined) return verifyManagerConversation(cwd, plan, input, input.verify);
+        const callId = randomUUID();
+        const unidentified = new Map<string, string[]>();
+        const identify = (event: ToolActivityEvent): ToolActivityEvent => {
+          const context = event.toolActivity ?? { callId };
+          const pending = unidentified.get(context.callId) ?? [];
+          unidentified.set(context.callId, pending);
+          const id = event.data.id || (event.type === 'tool_use' ? randomUUID()
+            : event.type === 'tool_result' ? event.data.completedToolIds?.[0] ?? pending[0] ?? randomUUID() : pending[0] ?? randomUUID());
+          if ((event.type === 'tool_use' || event.type === 'tool_output') && !pending.includes(id)) pending.push(id);
+          if (event.type === 'tool_result') {
+            const completed = [id, ...(event.data.completedToolIds ?? [])];
+            for (const value of completed) { const index = pending.indexOf(value); if (index >= 0) pending.splice(index, 1); }
+          }
+          return { ...event, data: { ...event.data, id }, toolActivity: context } as ToolActivityEvent;
+        };
+        if (input.verify !== undefined) return verifyManagerConversation(cwd, plan, input, input.verify, identify);
         let assignment = input.assignment;
-        const reportActivity = createTurnActivityReporter((activity) => input.onActivity?.(activity));
+        const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
         const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(
           Object.entries(plan.ctx.mcpServers).map(([name, config]) => [name,
             assignment === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignment)]),
@@ -64,13 +90,18 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           }
           signal.throwIfAborted();
           const additions = new Set<string>();
+          const native = plan.ctx.provider.supportsNativeImageInput;
+          const prompt = native ? input.prompt : expandImageAttachmentPlaceholders(input.prompt, input.imageAttachments);
+          if (!native && input.imageAttachments?.length) input.onText?.(`Provider "${plan.ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
           const response = await callWithManagerSessionRecovery(agent, {
-            resume: input.prompt,
+            resume: prompt,
             fresh: input.recovery === undefined || input.recovery.context.length === 0
-              ? input.prompt : `${input.prompt}\n\nBusiness context (not approval): ${input.recovery.context}`,
+              ? prompt : `${prompt}\n\nBusiness context (not approval): ${input.recovery.context}`,
           }, {
             cwd, model: plan.ctx.model, sessionId: input.patrol ? undefined : input.sessionId, abortSignal: signal,
             providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
+            aiReviewPermissions: plan.ctx.aiReviewPermissions,
+            ...(native && input.imageAttachments?.length ? { imageAttachments: input.imageAttachments } : {}),
             ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined
               && (plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk')
               ? { allowedTools: managerToolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`) }
@@ -78,9 +109,8 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
             ...(input.recovery === undefined ? {} : { callerManagedSession: true as const }),
             mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
-            onStream: (event) => {
-              input.onProviderOutput?.();
-              if (!signal.aborted) reportActivity(event);
+            onStream: (raw) => {
+              const event = reportManagerStream(raw, identify, reporter, input);
               if (event.type === 'tool_use') {
                 if (addRepositoryTools.has(event.data.tool)) additions.add(event.data.id);
               }
@@ -94,11 +124,12 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
                 } catch { return; }
               }
             },
-          }, input.patrol ? undefined : input.recovery?.invalidateSession);
+          }, input.patrol ? undefined : input.recovery?.invalidateSession, reporter.discard);
           signal.throwIfAborted();
           return { ...parseManagerResponse(response, plan.ctx.providerType),
             sessionId: response.sessionId, assignment };
         } finally {
+          reporter.discard();
           await prepared?.dispose();
         }
       };

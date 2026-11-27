@@ -9,6 +9,8 @@ import {
 } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
+import type { StepProviderInfo } from '../core/workflow/types.js';
+import type { PreparedStepInstruction } from '../core/workflow/instruction/prepared-instruction.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import {
@@ -39,8 +41,53 @@ function makeState(): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
+}
+
+function makeDeps(cwd: string, runPaths: RunPaths, providerInfo: StepProviderInfo): StepExecutorDeps {
+  return {
+    optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
+      buildAgentOptions: vi.fn().mockReturnValue({}),
+      buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+      resolveStepProviderModel: vi.fn().mockReturnValue(providerInfo),
+    } as unknown as StepExecutorDeps['optionsBuilder'],
+    getCwd: () => cwd,
+    getProjectCwd: () => cwd,
+    getReportDir: () => '.takt/reports',
+    getRunPaths: () => runPaths,
+    getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
+    getLanguage: () => undefined,
+    getInteractive: () => false,
+    getWorkflowSteps: () => [{ name: 'implement' }],
+    getWorkflowName: () => 'test-workflow',
+    getTask: () => 'test task',
+    getWorkflowRules: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => undefined,
+    getRetryNote: () => undefined,
+    getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
+    structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+    executionProvider: providerInfo.provider,
+    executionModel: providerInfo.model,
+    emitEvent: vi.fn(),
+    recordSynthesizedAgentUsage: vi.fn(),
+    getRunId: () => 'test-run',
+    getRunPathNamespace: () => [],
+    companionEnabled: false,
+    companionReviewMode: 'completion',
+    onPhaseStart: vi.fn(),
+    onPhaseComplete: vi.fn(),
+    onJudgeStage: vi.fn(),
+  };
+}
+
+function prepared(text: string): PreparedStepInstruction {
+  return { text, injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } };
 }
 
 describe('StepExecutor', () => {
@@ -49,25 +96,7 @@ describe('StepExecutor', () => {
 
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), 'step-executor-'));
-    runPaths = {
-      slug: 'test-run',
-      runRootRel: '.takt/runs/test-run',
-      reportsRel: '.takt/runs/test-run/reports',
-      contextRel: '.takt/runs/test-run/context',
-      contextKnowledgeRel: '.takt/runs/test-run/context/knowledge',
-      contextPolicyRel: '.takt/runs/test-run/context/policy',
-      contextPreviousResponsesRel: '.takt/runs/test-run/context/previous_responses',
-      logsRel: '.takt/runs/test-run/logs',
-      metaRel: '.takt/runs/test-run/meta.json',
-      runRootAbs: join(cwd, '.takt/runs/test-run'),
-      reportsAbs: join(cwd, '.takt/runs/test-run/reports'),
-      contextAbs: join(cwd, '.takt/runs/test-run/context'),
-      contextKnowledgeAbs: join(cwd, '.takt/runs/test-run/context/knowledge'),
-      contextPolicyAbs: join(cwd, '.takt/runs/test-run/context/policy'),
-      contextPreviousResponsesAbs: join(cwd, '.takt/runs/test-run/context/previous_responses'),
-      logsAbs: join(cwd, '.takt/runs/test-run/logs'),
-      metaAbs: join(cwd, '.takt/runs/test-run/meta.json'),
-    };
+    runPaths = buildRunPaths(cwd, 'test-run');
     mkdirSync(runPaths.contextPreviousResponsesAbs, { recursive: true });
     vi.clearAllMocks();
   });
@@ -82,6 +111,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -92,36 +122,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: undefined, model: undefined }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: undefined, model: undefined });
     const executor = new StepExecutor(deps);
 
     expect(() => executor.buildPhase1Instruction(
@@ -139,7 +140,7 @@ describe('StepExecutor', () => {
       getLanguage: () => 'ja',
     } as unknown as StepExecutorDeps);
     const schema = { type: 'object', properties: {}, required: [] };
-    const step = makeStep({ structuredOutput: { schema } });
+    const step = makeStep({ structuredOutput: { schemaRef: 'test-result', schema } });
 
     const instruction = executor.buildPhase1Instruction('指示', step);
     expect(instruction).toBe(buildStructuredJsonSchemaInstruction('指示', schema, 'ja'));
@@ -171,6 +172,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -181,36 +183,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: 'cursor', model: undefined });
     const executor = new StepExecutor(deps);
     const state = makeState();
 
@@ -221,7 +194,7 @@ describe('StepExecutor', () => {
         'test task',
         5,
         vi.fn(),
-        'Plan the next follow-up action.',
+        prepared('Plan the next follow-up action.'),
         undefined,
       ),
     ).rejects.toThrow('Step "implement" requires structured_output for provider "cursor": $.result is required');
@@ -246,6 +219,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -256,36 +230,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: 'cursor', model: undefined });
     const executor = new StepExecutor(deps);
     const state = makeState();
 
@@ -296,7 +241,7 @@ describe('StepExecutor', () => {
         'test task',
         5,
         vi.fn(),
-        'Plan the next follow-up action.',
+        prepared('Plan the next follow-up action.'),
         undefined,
       ),
     ).rejects.toThrow(
@@ -323,6 +268,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -338,36 +284,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: 'cursor', model: undefined });
     const executor = new StepExecutor(deps);
     const state = makeState();
 
@@ -377,7 +294,7 @@ describe('StepExecutor', () => {
       'test task',
       5,
       vi.fn(),
-      'Plan the next follow-up action.',
+      prepared('Plan the next follow-up action.'),
       undefined,
     );
 
@@ -405,6 +322,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -415,36 +333,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'sonnet' }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: 'claude', model: 'sonnet' });
     const executor = new StepExecutor(deps);
     const state = makeState();
 
@@ -455,7 +344,7 @@ describe('StepExecutor', () => {
         'test task',
         5,
         vi.fn(),
-        'Plan the next follow-up action.',
+        prepared('Plan the next follow-up action.'),
         undefined,
       ),
     ).rejects.toThrow('Step "implement" requires structured_output for provider "claude"');
@@ -481,6 +370,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -491,36 +381,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'sonnet' }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: 'claude', model: 'sonnet' });
     const executor = new StepExecutor(deps);
     const state = makeState();
 
@@ -531,7 +392,7 @@ describe('StepExecutor', () => {
         'test task',
         5,
         vi.fn(),
-        'Plan the next follow-up action.',
+        prepared('Plan the next follow-up action.'),
         undefined,
       ),
     ).rejects.toThrow('Step "implement" requires structured_output for provider "claude": $.result is required');
@@ -560,6 +421,7 @@ describe('StepExecutor', () => {
       persona: 'coder',
       instruction: 'Plan the next follow-up action.',
       structuredOutput: {
+        schemaRef: 'test-result',
         schema: {
           type: 'object',
           properties: {
@@ -570,36 +432,7 @@ describe('StepExecutor', () => {
         },
       },
     });
-    const deps: StepExecutorDeps = {
-      optionsBuilder: {
-        buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'sonnet' }),
-      } as unknown as StepExecutorDeps['optionsBuilder'],
-      getCwd: () => cwd,
-      getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
-      getRunPaths: () => runPaths,
-      getLanguage: () => undefined,
-      getInteractive: () => false,
-      getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowName: () => 'test-workflow',
-      getWorkflowDescription: () => undefined,
-      getInheritedReportInputs: () => undefined,
-      resolveDeclaredReportInputs: () => undefined,
-      getRetryNote: () => undefined,
-      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-      structuredCaller: {
-        evaluateCondition: vi.fn(),
-        judgeStatus: vi.fn(),
-        decomposeTask: vi.fn(),
-        requestMoreParts: vi.fn(),
-      },
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      onPhaseStart: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-    };
+    const deps = makeDeps(cwd, runPaths, { provider: 'claude', model: 'sonnet' });
     const executor = new StepExecutor(deps);
     const state = makeState();
 
@@ -610,7 +443,7 @@ describe('StepExecutor', () => {
         'test task',
         5,
         vi.fn(),
-        'Plan the next follow-up action.',
+        prepared('Plan the next follow-up action.'),
         undefined,
       ),
     ).rejects.toThrow(
@@ -664,6 +497,7 @@ describe('StepExecutor dynamic facet integration', () => {
       const getFacetPool = vi.fn().mockReturnValue(pool);
       const deps: StepExecutorDeps = {
         optionsBuilder: {
+          buildProgressNotesRequest: vi.fn(),
           buildAgentOptions: vi.fn().mockReturnValue({}),
           buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
           resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
@@ -672,23 +506,17 @@ describe('StepExecutor dynamic facet integration', () => {
         getProjectCwd: () => cwd,
         getReportDir: () => '.takt/reports',
         getRunPaths: () => runPaths,
+        getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
         getLanguage: () => undefined,
         getInteractive: () => false,
         getWorkflowSteps: () => [{ name: 'fix' }],
         getWorkflowName: () => 'test-workflow',
         getTask: () => 'task',
-        getWorkflowDescription: () => undefined,
         getWorkflowRules: () => undefined,
         getInheritedReportInputs: () => undefined,
         resolveDeclaredReportInputs: () => undefined,
         getRetryNote: () => undefined,
         getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-        structuredCaller: {
-          evaluateCondition: vi.fn(),
-          judgeStatus: vi.fn(),
-          decomposeTask: vi.fn(),
-          requestMoreParts: vi.fn(),
-        },
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
         dynamicFacetSelectorCoordinator: coordinator as unknown as StepExecutorDeps['dynamicFacetSelectorCoordinator'],
         getFacetPool,
@@ -697,6 +525,9 @@ describe('StepExecutor dynamic facet integration', () => {
         emitEvent: vi.fn(),
         recordSynthesizedAgentUsage: vi.fn(),
         getRunId: () => 'test-run',
+        getRunPathNamespace: () => [],
+        companionEnabled: false,
+        companionReviewMode: 'completion',
       };
       const executor = new StepExecutor(deps);
       const state = makeState();

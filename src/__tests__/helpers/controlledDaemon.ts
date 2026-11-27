@@ -22,6 +22,14 @@ export function input(id: string, conversationId = 'conversation', lane: 'human'
 
 export class MemoryEventStore implements EventStore {
   readonly records = new Map<string, StoredEvent | { state: 'settled'; event: AcceptedEvent; result: TurnResult }>();
+  async readTurns(conversationId: string) {
+    return [...this.records.values()].filter(({ event }) => event.conversationId === conversationId).map((record) => ({
+      operationId: record.event.operationId, acceptedSequence: record.event.acceptedSequence, pending: record.state === 'queued',
+      ...(record.event.event.kind === 'human_command' && record.event.event.command.kind === 'message' && record.event.event.command.display !== false
+        ? { message: record.event.event.command.text } : {}),
+      ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}),
+    })).sort((left, right) => left.acceptedSequence - right.acceptedSequence);
+  }
   readonly accept = vi.fn(async (event: AcceptedEvent): ReturnType<EventStore['accept']> => {
     await this.beforeAccept(event);
     const existing = [...this.records.values()].find((record) => record.event.eventId === event.eventId
@@ -127,17 +135,24 @@ export async function harness() {
   const store = new MemoryEventStore();
   const runner = new ControlledTurnRunner();
   const applied = new Map<string, TurnResult>();
-  const owner: ConversationOwner = { inquiry: async () => {},
-    apply: vi.fn(async (result) => { applied.set(result.operationId, result); }),
+  const running = new Map<string, TurnIdentity>();
+  const owner: ConversationOwner = { begin: async (turn) => { running.set(turn.conversationId, turn); }, inquiry: async () => {},
+    apply: vi.fn(async (result) => { applied.set(result.operationId, result); running.delete(result.conversationId); }),
     progress: vi.fn(async () => {}),
-    snapshot: vi.fn(async (conversationId) => ({
-      conversationId, revision: 0, stateSequence: 0,
-      transferId: 'snapshot', mode: 'initial' as const, turnState: turnState(),
-      items: (async function* () {})(), complete() {}, cancel() {},
-    })),
+    snapshot: vi.fn(async (conversationId, request) => {
+      const snapshot = {
+        conversationId, revision: 0, stateSequence: 0, operationId: running.get(conversationId)?.operationId ?? null, generation: running.get(conversationId)?.generation ?? null,
+        transferId: 'snapshot', mode: 'initial' as const, turnState: turnState(),
+        items: (async function* () {})(), complete() {}, cancel() {},
+      };
+      request?.capture?.(snapshot);
+      return snapshot;
+    }),
   };
   const stateRequests = { handle: vi.fn<DaemonStateOwner['handle']>(async (_turn, request) => {
     switch (request.kind) {
+      case 'publish_epic_events': return { kind: 'error', code: 'forbidden', message: 'No workspace Epic store in this double' };
+      case 'wait_command': return { kind: 'error', code: 'forbidden', message: 'No wait command owner in this double' };
       case 'save_conversation': return { kind: 'state_saved', version: request.change.expectedVersion + 1, duplicate: false };
       case 'get_delivery': return { kind: 'delivery', conversationId: request.conversationId, assignment: turnState().assignment, connectedPorts: ['tui'] };
       case 'notify_director': return { kind: 'notification_saved', notificationId: request.notificationId };

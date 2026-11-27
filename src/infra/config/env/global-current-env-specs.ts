@@ -50,6 +50,7 @@ export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'interactive_preview_steps', type: 'number' },
   { path: 'sync_project_local_takt_on_retry', type: 'boolean' },
   { path: 'auto_requeue_max_attempts', type: 'number' },
+  { path: 'manager.refresh_interval_ms', type: 'number' },
   { path: 'ignore_exceed', type: 'boolean' },
   { path: 'runtime', type: 'json' },
   { path: 'runtime.prepare', type: 'json' },

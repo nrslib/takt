@@ -97,6 +97,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -185,6 +186,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -221,6 +223,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -257,6 +260,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -293,6 +297,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -329,6 +334,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -365,6 +371,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -401,6 +408,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -432,6 +440,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -463,6 +472,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -494,6 +504,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -525,6 +536,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -556,6 +568,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -587,6 +600,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -864,6 +878,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -952,6 +967,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -988,6 +1004,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1024,6 +1041,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1060,6 +1078,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1096,6 +1115,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1132,6 +1152,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1168,6 +1189,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1199,6 +1221,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1230,6 +1253,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1261,6 +1285,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1292,6 +1317,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1323,6 +1349,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -1354,6 +1381,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-11T20:28:00.000Z
         currentStepExecutionCount: 4
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-11T20:28:00.000Z, executionCount: 4 }]
         phase: 1
         taskOmission:
           totalBytes: 53

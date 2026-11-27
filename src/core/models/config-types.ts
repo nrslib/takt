@@ -17,6 +17,9 @@ export type RoutingTier = 'high' | 'medium' | 'low';
 export const MANAGER_NOTIFICATION_KINDS = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
 export type ManagerNotificationKind = typeof MANAGER_NOTIFICATION_KINDS[number];
 export type ManagerNotifications = Partial<Record<ManagerNotificationKind, boolean>>;
+export type ManagerPermission = 'auto' | 'full';
+export type ManagerWorkflowsConfig = 'all' | (string | Record<string, string>)[];
+export type ManagerRuntimeAssignmentsConfig = (string | Record<string, string>)[];
 export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
 
 export interface AutoRoutingCandidate {
@@ -282,6 +285,7 @@ export type MergeMethod = 'squash' | 'merge' | 'rebase';
 
 export interface MergeSettings {
   workflow: string;
+  prepareWorkflow: string;
   method: MergeMethod;
   concurrency: number;
   autoStart: boolean;
@@ -355,7 +359,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { patrolInterval?: number; autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications;
+  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications;
     slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
@@ -448,8 +452,11 @@ export interface ProjectConfig {
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
   /** @globalOnly */
+  daemon?: { builtinWorker?: { concurrency?: number }; remoteWorker?: { host: string; port: number;
+    credentials?: import('./daemon-config-schema.js').RemoteCredentialsConfig } };
+  /** @globalOnly */
   director?: { slack?: { channelId: string; allowedUserIds: string[] } };
-  manager?: { patrolInterval?: number; autoRun?: boolean; defaultWorkflow?: string; notifications?: ManagerNotifications };
+  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; notifications?: ManagerNotifications };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */

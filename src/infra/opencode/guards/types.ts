@@ -32,7 +32,6 @@ export interface OpenCodeGuardContext {
 export interface OpenCodeGuard {
   readonly id: string;
   readonly layer: OpenCodeGuardLayer;
-  onInitialSource?(source: unknown): OpenCodeGuardVerdict | undefined;
   onEvent?(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined;
   onToolOutcome?(outcome: ToolOutcomeTuple): OpenCodeGuardVerdict | undefined;
   onMessageCycle?(messageId: string): OpenCodeGuardVerdict | undefined;
@@ -44,7 +43,7 @@ export interface OpenCodeGuardDescriptor {
   readonly id: string;
   readonly layer: OpenCodeGuardLayer;
   readonly mandatory: boolean;
-  create(policy: ResolvedOpenCodeGuardPolicy, context: OpenCodeGuardContext, initialAttemptTimeoutMs?: number): OpenCodeGuard;
+  create(policy: ResolvedOpenCodeGuardPolicy, initialAttemptTimeoutMs?: number): OpenCodeGuard;
 }
 
 export interface OpenCodeGuardStrategy {

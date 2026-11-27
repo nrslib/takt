@@ -10,10 +10,10 @@
  * base ブランチ上で PR をレビューする構成へ「変更 0 件」を注入しないこと。
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   collectTaskReviewScope,
   createTaskReviewScopeResolver,
@@ -87,6 +87,22 @@ describe('collectTaskReviewScope', () => {
     unlinkSync(join(repo, 'untouched.ts'));
 
     expect(collectedPaths(repo)).toEqual(['added.ts', 'base.ts', 'untouched.ts']);
+  });
+
+  it('uses the caller-relative alternate index for staged-only changes from a subdirectory', () => {
+    const callerCwd = join(repo, 'app');
+    mkdirSync(callerCwd);
+    try {
+      vi.stubEnv('GIT_INDEX_FILE', join(repo, '.git', 'review-index'));
+      git(repo, 'read-tree', 'HEAD');
+      writeFileSync(join(repo, 'base.ts'), 'export const base = 2;\n');
+      git(callerCwd, 'add', '../base.ts');
+      writeFileSync(join(repo, 'base.ts'), 'export const base = 1;\n');
+      vi.stubEnv('GIT_INDEX_FILE', '../.git/review-index');
+
+      expect(collectedPaths(callerCwd)).toEqual(['base.ts']);
+    } finally { vi.unstubAllEnvs(); }
+    expect(collectedPaths(repo)).toEqual([]);
   });
 
   it('collects committed changes on a task branch when the working tree is clean', () => {
@@ -236,7 +252,7 @@ describe('pull request derived scope', () => {
     git(repo, 'init', '--quiet', '--initial-branch=main');
     writeFileSync(join(repo, 'base.ts'), 'export const base = 1;\n');
     commitAll(repo, 'base');
-    baseRef = 'refs/takt/pr-base/feature';
+    baseRef = 'refs/takt/pr-base/main';
     headRef = 'refs/heads/feature';
     git(repo, 'update-ref', baseRef, git(repo, 'rev-parse', 'HEAD'));
     git(repo, 'checkout', '--quiet', '-b', 'feature');
@@ -310,10 +326,160 @@ describe('pull request derived scope', () => {
     });
   });
 
-  it('lists local changes even when the PR diff range is not materialized', () => {
+  it('excludes synced base changes while including uncommitted fixes on re-review', () => {
+    git(repo, 'checkout', '--quiet', 'feature');
+    const resolve = createTaskReviewScopeResolver({
+      getCwd: () => repo,
+      getPrContext: () => prContext(true),
+    });
+    expect(resolve()).toMatchObject({ paths: ['pr-change.ts'] });
+
+    git(repo, 'checkout', '--quiet', 'main');
+    writeFileSync(join(repo, 'main-only.ts'), 'export const mainOnly = 1;\n');
+    commitAll(repo, 'base advances');
+    git(repo, 'update-ref', baseRef, git(repo, 'rev-parse', 'HEAD'));
+    git(repo, 'checkout', '--quiet', 'feature');
+    git(repo, 'merge', '--quiet', '--no-edit', 'main');
+
+    expect(resolve()).toMatchObject({ paths: ['pr-change.ts'] });
+
+    writeFileSync(join(repo, 'staged-fix.ts'), 'export const stagedFix = 1;\n');
+    git(repo, 'add', 'staged-fix.ts');
+    writeFileSync(join(repo, 'untracked-fix.ts'), 'export const untrackedFix = 1;\n');
+    unlinkSync(join(repo, 'base.ts'));
+
+    expect(resolve()).toMatchObject({
+      paths: ['base.ts', 'pr-change.ts', 'staged-fix.ts', 'untracked-fix.ts'],
+      source: { includesWorkingTree: true },
+    });
+  });
+
+  it('includes newly committed fixes from HEAD when the PR head ref is stale', () => {
+    git(repo, 'checkout', '--quiet', 'feature');
+    headRef = 'refs/takt/pr-head/42';
+    git(repo, 'update-ref', headRef, git(repo, 'rev-parse', 'HEAD'));
+    const resolve = createTaskReviewScopeResolver({
+      getCwd: () => repo,
+      getPrContext: () => prContext(true),
+    });
+    expect(resolve()).toMatchObject({ paths: ['pr-change.ts'] });
+
+    writeFileSync(join(repo, 'committed-fix.ts'), 'export const committedFix = 1;\n');
+    unlinkSync(join(repo, 'pr-change.ts'));
+    commitAll(repo, 'commit review fix');
+
+    expect(resolve()).toMatchObject({
+      paths: ['committed-fix.ts'],
+      source: { diffRange: { baseDiffRef: baseRef, headDiffRef: 'HEAD' }, includesWorkingTree: false },
+    });
+  });
+
+  it.each([undefined, 'refs/takt/pr-head/another-checkout'])('keeps committed PR changes on the head branch when the recorded head ref is %s', (recordedHeadRef) => {
+    git(repo, 'checkout', '--quiet', 'feature');
+    writeFileSync(join(repo, 'committed-fix.ts'), 'export const committedFix = 1;\n');
+    commitAll(repo, 'commit review fix');
+    const context = recordedHeadRef === undefined
+      ? prContext(false) : { ...prContext(true), headDiffRef: recordedHeadRef };
+
+    const scope = collectTaskReviewScope({
+      cwd: repo,
+      baseRange: resolveReviewScopeBaseRange(repo),
+      prContext: createPullRequestContext(context),
+    });
+
+    expect(scope).toMatchObject({
+      paths: ['committed-fix.ts', 'pr-change.ts'],
+      source: {
+        diffRange: { baseDiffRef: recordedHeadRef === undefined ? 'refs/heads/main' : baseRef, headDiffRef: 'HEAD' },
+        includesWorkingTree: false,
+      },
+    });
+  });
+
+  it('uses the explicit PR head ref and excludes committed changes on another branch', () => {
+    git(repo, 'checkout', '--quiet', '-b', 'other');
+    writeFileSync(join(repo, 'other-only.ts'), 'export const otherOnly = 1;\n');
+    commitAll(repo, 'unrelated local commit');
+    writeFileSync(join(repo, 'base.ts'), 'export const base = 2;\n');
+
+    expect(collectWithPr(true)).toMatchObject({
+      paths: ['base.ts', 'pr-change.ts'],
+      source: { diffRange: { baseDiffRef: baseRef, headDiffRef: headRef } },
+    });
+  });
+
+  it.each(['local', 'remote-tracking', 'remote-tracking-with-stale-local'])('keeps fixes in scope before and after commit without diff refs (%s base)', (baseLocation) => {
+    const context = createPullRequestContext({ ...prContext(false), baseBranch: 'release' });
+    const explicitBaseRef = baseLocation === 'local' ? 'refs/heads/release' : 'refs/remotes/origin/release';
+    git(repo, 'update-ref', explicitBaseRef, git(repo, 'rev-parse', 'main'));
+    if (baseLocation === 'remote-tracking-with-stale-local') {
+      git(repo, 'branch', 'release', 'main');
+    }
+    git(repo, 'checkout', '--quiet', 'feature');
+    const resolve = createTaskReviewScopeResolver({
+      getCwd: () => repo,
+      getPrContext: () => context,
+    });
+    expect(resolve()).toMatchObject({ paths: ['pr-change.ts'] });
+
+    git(repo, 'checkout', '--quiet', 'main');
+    writeFileSync(join(repo, 'base-only.ts'), 'export const baseOnly = 1;\n');
+    commitAll(repo, 'base advances');
+    git(repo, 'update-ref', explicitBaseRef, git(repo, 'rev-parse', 'HEAD'));
+    git(repo, 'checkout', '--quiet', 'feature');
+    git(repo, 'merge', '--quiet', '--no-edit', explicitBaseRef);
+
+    expect(resolve()).toMatchObject({
+      paths: ['pr-change.ts'],
+      source: { diffRange: { baseDiffRef: explicitBaseRef, headDiffRef: 'HEAD' } },
+    });
+
+    writeFileSync(join(repo, 'base.ts'), 'export const base = 2;\n');
+    writeFileSync(join(repo, 'staged-fix.ts'), 'export const stagedFix = 1;\n');
+    git(repo, 'add', 'staged-fix.ts');
+    writeFileSync(join(repo, 'untracked-fix.ts'), 'export const untrackedFix = 1;\n');
+    const expectedPaths = ['base.ts', 'pr-change.ts', 'staged-fix.ts', 'untracked-fix.ts'];
+    const refsBefore = git(repo, 'show-ref');
+    const statusBefore = git(repo, 'status', '--porcelain');
+
+    expect(resolve()).toMatchObject({ paths: expectedPaths, source: { includesWorkingTree: true } });
+    expect(git(repo, 'show-ref')).toBe(refsBefore);
+    expect(git(repo, 'status', '--porcelain')).toBe(statusBefore);
+
+    commitAll(repo, 'commit review fixes');
+
+    expect(resolve()).toMatchObject({ paths: expectedPaths, source: { includesWorkingTree: false } });
+  });
+
+  it.each(['detached', 'renamed'])('keeps committed fixes in scope without diff refs on a %s checkout', (checkout) => {
+    git(repo, 'update-ref', 'refs/remotes/origin/feature', git(repo, 'rev-parse', 'main'));
+    git(repo, 'checkout', '--quiet', ...(checkout === 'detached'
+      ? ['--detach', 'feature'] : ['-b', 'review-fixes', 'feature']));
+    const resolve = createTaskReviewScopeResolver({
+      getCwd: () => repo,
+      getPrContext: () => prContext(false),
+    });
+    expect(resolve()).toMatchObject({ paths: ['pr-change.ts'] });
+
+    writeFileSync(join(repo, 'committed-fix.ts'), 'export const committedFix = 1;\n');
+    unlinkSync(join(repo, 'pr-change.ts'));
+    commitAll(repo, 'commit review fix');
+
+    expect(resolve()).toMatchObject({
+      paths: ['committed-fix.ts'],
+      source: { diffRange: { baseDiffRef: 'refs/heads/main', headDiffRef: 'HEAD' }, includesWorkingTree: false },
+    });
+  });
+
+  it('lists only uncommitted changes when the explicit PR base cannot be resolved', () => {
+    git(repo, 'checkout', '--quiet', 'feature');
     writeFileSync(join(repo, 'fix-for-review.ts'), 'export const fix = 1;\n');
 
-    const scope = collectWithPr(false);
+    const scope = collectTaskReviewScope({
+      cwd: repo,
+      baseRange: resolveReviewScopeBaseRange(repo),
+      prContext: createPullRequestContext({ ...prContext(false), baseBranch: 'missing-base' }),
+    });
 
     expect(scope.kind).toBe('collected');
     if (scope.kind !== 'collected') return;
@@ -322,7 +488,7 @@ describe('pull request derived scope', () => {
       kind: 'pull_request',
       prNumber: 42,
       includesWorkingTree: true,
-      baseRange: { kind: 'base_branch_head' },
+      baseRange: { kind: 'branch_base', baseCommit: expect.any(String) },
     });
   });
 
@@ -340,18 +506,17 @@ describe('pull request derived scope', () => {
     expect(scope.source.kind).toBe('pull_request');
   });
 
-  it('drops the diff range when the recorded refs no longer exist', () => {
+  it('preserves PR context and local changes without substituting a range when a recorded ref is unavailable', () => {
     git(repo, 'update-ref', '-d', baseRef);
+    writeFileSync(join(repo, 'local-fix.ts'), 'export const fix = 1;\n');
 
-    const scope = collectWithPr(true);
-
-    expect(scope.kind).toBe('collected');
-    if (scope.kind !== 'collected') return;
-    expect(scope.source).toEqual({
-      kind: 'pull_request',
-      prNumber: 42,
-      includesWorkingTree: false,
-      baseRange: { kind: 'base_branch_head' },
+    expect(collectWithPr(true)).toEqual({
+      kind: 'collected',
+      paths: ['local-fix.ts'],
+      source: {
+        kind: 'pull_request', prNumber: 42, includesWorkingTree: true,
+        baseRange: { kind: 'base_branch_head' },
+      },
     });
   });
 });
@@ -371,6 +536,19 @@ describe('createTaskReviewScopeResolver', () => {
 
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  it.each(['config', 'ownership', 'executable'] as const)('propagates Git %s errors through the scope resolver', (failure) => {
+    const resolve = createTaskReviewScopeResolver({ getCwd: () => repo, getPrContext: () => undefined });
+    try {
+      vi.stubEnv('GIT_CONFIG_GLOBAL', devNull);
+      vi.stubEnv('GIT_CONFIG_SYSTEM', devNull);
+      if (failure === 'config') writeFileSync(join(repo, '.git', 'config'), '[invalid\n');
+      else if (failure === 'ownership') vi.stubEnv('GIT_TEST_ASSUME_DIFFERENT_OWNER', '1');
+      else vi.stubEnv('PATH', join(repo, 'no-executables'));
+
+      expect(() => resolve()).toThrow();
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('keeps the resolved base across calls while re-reading the working tree', () => {

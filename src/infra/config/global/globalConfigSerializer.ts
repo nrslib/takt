@@ -19,6 +19,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     language: config.language,
     provider: config.provider,
   };
+  if (config.daemon !== undefined) {
+    raw.daemon = {
+      ...(config.daemon.remoteWorker === undefined ? {} : { remote_worker: config.daemon.remoteWorker }),
+      ...(config.daemon.builtinWorker === undefined ? {} : { builtin_worker: {
+        ...(config.daemon.builtinWorker.concurrency === undefined ? {} : { concurrency: config.daemon.builtinWorker.concurrency }),
+      } }),
+    };
+  }
   if (config.model) {
     raw.model = config.model;
   }
@@ -85,7 +93,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     };
   }
   if (config.manager !== undefined) {
-    raw.manager = { patrol_interval: config.manager.patrolInterval, auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
+    raw.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, refresh_interval_ms: config.manager.refreshIntervalMs, auto_run: config.manager.autoRun, preserve_goal_worktree: config.manager.preserveGoalWorktree, workflows: config.manager.workflows, runtime_assignments: config.manager.runtimeAssignments, notifications: config.manager.notifications };
   }
   const rawMerge = denormalizeMergeConfig(config.merge);
   if (rawMerge !== undefined) raw.merge = rawMerge;

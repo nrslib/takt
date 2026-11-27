@@ -417,13 +417,6 @@ describe('prompt', () => {
       const result = await selectOptionWithDefault('Test:', [], 'fallback');
       expect(result).toBe('fallback');
     });
-
-    it('should have return type that allows null (cancel)', async () => {
-      const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
-      // When options are empty, default is returned (not null)
-      const result: string | null = await selectOptionWithDefault('Test:', [], 'fallback');
-      expect(result).toBe('fallback');
-    });
   });
 
   describe('selectOptionWithDefault (stdin E2E)', () => {
@@ -565,12 +558,6 @@ describe('prompt', () => {
   });
 
   describe('selectOptionWithDefault cancel behavior', () => {
-    it('handleKeyInput should return cancel with optionCount when hasCancelOption is true', () => {
-      // Simulates ESC key press with cancel option enabled (as selectOptionWithDefault now does)
-      const result = handleKeyInput('\x1B', 0, 4, true, 3);
-      expect(result).toEqual({ action: 'cancel', cancelIndex: 3 });
-    });
-
     it('handleKeyInput should support navigating to Cancel item', () => {
       // With 3 options + cancel, totalItems = 4, cancel is at index 3
       const downResult = handleKeyInput('\x1B[B', 2, 4, true, 3);

@@ -10,13 +10,13 @@ export function assertManagerInputPartition({ replay, execution }) {
   ];
   assert.deepEqual(execution.map(key).sort(), expectedExecution.sort());
   assert.equal(new Set(execution.map(({ case: caseId }) => caseId)).size, 4);
-  assert.equal(replay.length, 142);
-  assert.equal(new Set(replay.map(({ case: caseId }) => caseId)).size, 71);
+  assert.equal(replay.length, 176);
+  assert.equal(new Set(replay.map(({ case: caseId }) => caseId)).size, 88);
   const inputs = [...replay, ...execution];
-  assert.equal(inputs.length, 150);
-  assert.equal(new Set(inputs.map(key)).size, 150);
+  assert.equal(inputs.length, 184);
+  assert.equal(new Set(inputs.map(key)).size, 184);
   const cases = new Set(inputs.map(({ case: caseId }) => caseId));
-  assert.equal(cases.size, 75);
+  assert.equal(cases.size, 92);
   for (const caseId of cases) {
     assert.deepEqual(inputs.filter((input) => input.case === caseId).map(({ lang }) => lang).sort(), ['en', 'ja']);
   }

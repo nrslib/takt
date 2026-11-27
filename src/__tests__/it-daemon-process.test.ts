@@ -1,4 +1,10 @@
+import { Client } from './helpers/conversation-ipc-client.js';
+import { snapshotItemKey } from '../features/manager/snapshotChanges.js';
+import type { SnapshotItem } from '../features/manager/conversationPort.js';
+import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -7,10 +13,188 @@ import { readDaemonOwner, isDaemonOwnerRunning, writeDaemonOwner } from '../infr
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { packageVersion } from '../shared/package-info.js';
+import { expectDaemonSurvivesIdle, managerDaemonFixture, submitManagerText, waitForManager } from './helpers/manager-daemon-tui.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { EpicStore } from '../infra/epics/store.js';
+import { getEpic } from '../infra/epics/index.js';
+import { applyEpicVerificationResult, beginEpicVerification, finishEpic, reviseEpic } from '../infra/epics/state.js';
+import { DaemonNotifications } from '../infra/daemon/notifications.js';
+import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
+import { EpicSchema } from '../infra/epics/schema.js';
+import { completedEpicGoal, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
+import { captureOwnedChild, terminateOwnedProcess } from './helpers/owned-process.js';
+import { UPDATE_NOTIFIER_DISABLED_ARG } from '../shared/utils/updateNotifierProcess.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 const io = () => ({ signal: new AbortController().signal, timeoutMs: 5000 });
 afterEach(async () => { await lifecycle.stopDaemon(); });
+
+async function daemonStartupLog(directory: string, pid: number): Promise<string> {
+  const root = join(directory, 'daemon-logs');
+  const records = await Promise.all((await readdir(root)).filter((name) => name.endsWith('.json'))
+    .map(async (name) => JSON.parse(await readFile(join(root, name), 'utf8')) as { level: string; message: string }));
+  const startup = records.find((record) => record.level === 'info' && record.message.startsWith(`Daemon started (${pid})`));
+  expect(startup).toBeDefined();
+  return startup!.message;
+}
+
+async function connectWorkerFromCli(directory: string, port: number, token: string): Promise<void> {
+  const workerHome = join(directory, `worker-${randomUUID()}`);
+  await mkdir(workerHome);
+  const child = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), UPDATE_NOTIFIER_DISABLED_ARG,
+    'worker', '--url', `http://127.0.0.1:${port}`, '--token', token], {
+    cwd: workerHome, env: { ...process.env, HOME: workerHome, TAKT_CONFIG_DIR: join(workerHome, '.takt'), NODE_OPTIONS: '' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+  const closed = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('close', () => resolve()); });
+  const owned = await captureOwnedChild(child);
+  try {
+    await vi.waitFor(() => {
+      expect(child.exitCode ?? child.signalCode, output).toBeNull();
+      expect(output).toMatch(/Worker w1 connected/);
+    }, { timeout: 15_000 });
+  } finally {
+    if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
+    await closed;
+  }
+}
+
+it.each(['manual', 'automatic'] as const)('connects a worker using the logged port after %s daemon startup with port 0 and a fixed port', async (mode) => {
+  const fixture = managerDaemonFixture('en');
+  let retained: import('node:net').Socket | undefined;
+  try {
+    const registered = await fixture.runCli(['worker', 'add', 'w1', '--concurrency', '1']);
+    expect(registered.code).toBe(0);
+    const token = registered.output.trim();
+    let selectedPort = 0;
+    for (const fixed of [false, true]) {
+      await writeFile(join(fixture.directory, 'config.yaml'), `provider: mock\nlanguage: en\nmanager:\n  auto_run: false\ndaemon:\n  remote_worker:\n    host: 127.0.0.1\n    port: ${selectedPort}\n`);
+      const owner = mode === 'manual' ? await fixture.startDaemon(true) : await (async () => {
+        retained = await lifecycle.ensureDaemon({ retainConnection: true });
+        return (await readDaemonOwner(fixture.directory))!;
+      })();
+      await vi.waitFor(async () => {
+        const message = await daemonStartupLog(fixture.directory, owner.pid);
+        const match = /worker port: (\d+)/.exec(message);
+        expect(match).not.toBeNull();
+        const port = Number(match![1]);
+        expect(port).toBeGreaterThan(0);
+        expect(port).toBeLessThanOrEqual(65535);
+        if (fixed) expect(port).toBe(selectedPort);
+      }, { timeout: 5000 });
+      const message = await daemonStartupLog(fixture.directory, owner.pid);
+      selectedPort = Number(/worker port: (\d+)/.exec(message)![1]);
+      expect(message.includes(token)).toBe(false);
+      await connectWorkerFromCli(fixture.directory, selectedPort, token);
+      retained?.destroy(); retained = undefined;
+      expect((await fixture.runCli(['daemon', 'stop'])).code).toBe(0);
+    }
+  } finally { retained?.destroy(); await fixture.cleanup(); }
+});
+
+it('prints a description of --resident in the real daemon CLI help', async () => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const result = await fixture.runCli(['daemon', '--help']);
+    expect(result.code).toBe(0);
+    expect(result.output).toMatch(/--resident\s+\S[^\n]*(?:running|alive|idle|常駐|自動終了)/iu);
+  } finally { await fixture.cleanup(); }
+});
+
+it.each(['stop command', 'SIGTERM'] as const)('keeps an idle resident daemon alive and shuts it down with %s', async (instruction) => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(true);
+    expect(owner).toMatchObject({ resident: true });
+    await expectDaemonSurvivesIdle(fixture.directory, owner);
+    if (instruction === 'stop command') {
+      expect((await fixture.runCli(['daemon', 'stop'])).code).toBe(0);
+    } else process.kill(owner.pid, 'SIGTERM');
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 30000 });
+  } finally { await fixture.cleanup(); }
+});
+
+it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('exits a mismatching manager with update instructions and preserves the resident daemon: %j', async (difference) => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(true);
+    const recorded = { ...owner, ...difference };
+    // 実際の daemon を置き換えず、起動元が読む記録にだけ不一致を作る。
+    await writeDaemonOwner(fixture.directory, recorded);
+
+    const result = await fixture.runCli(['manager']);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toMatch(/resident/iu);
+    expect(result.output).toContain(difference.version ?? difference.cliPath);
+    expect(result.output).toContain('takt daemon stop');
+    expect(result.output).toContain('takt daemon --resident');
+    expect(result.output.indexOf('takt daemon stop')).toBeLessThan(result.output.indexOf('takt daemon --resident'));
+    await expectDaemonSurvivesIdle(fixture.directory, recorded);
+    expect((await readDaemonIpcState(fixture.directory))?.owner).toEqual(owner);
+    expect(await isConversationIpcReady(fixture.directory, owner)).toBe(true);
+  } finally { await fixture.cleanup(); }
+});
+
+it('automatically stops a manually started daemon without --resident when there is no work', async () => {
+  const fixture = managerDaemonFixture('en');
+  try {
+    const owner = await fixture.startDaemon(false);
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
+
+it.each([true, false])('preserves the running daemon and TUI after duplicate startup with resident=%s', async (resident) => {
+  const fixture = managerDaemonFixture('en', ['The existing daemon still responds']);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    expect(owner).toBeDefined();
+    expect(owner.resident).not.toBe(true);
+    const ipc = await readDaemonIpcState(fixture.directory);
+    expect(ipc?.owner).toEqual(owner);
+
+    const result = await fixture.runCli(['daemon', ...(resident ? ['--resident'] : [])]);
+
+    if (resident) {
+      expect(result.code).not.toBeNull();
+      expect(result.code).not.toBe(0);
+      expect(result.output).toMatch(/already running/iu);
+      expect(result.output).toContain('takt daemon stop');
+      expect(result.output).toContain('takt daemon --resident');
+      expect(result.output.indexOf('takt daemon stop')).toBeLessThan(result.output.indexOf('takt daemon --resident'));
+    } else expect(result.code).toBe(0);
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+    expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
+    expect(await readDaemonIpcState(fixture.directory)).toEqual(ipc);
+    await submitManagerText(tui, 'Continue using this daemon after the duplicate startup');
+    await waitForManager(tui, 'The existing daemon still responds');
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({ pending: null, running: null, turn: null }), { timeout: 30000 });
+    expect(await readDaemonOwner(fixture.directory)).toEqual(owner);
+
+    await tui.exit();
+
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(fixture.directory)).toBeUndefined();
+      expect(await readDaemonIpcState(fixture.directory)).toBeUndefined();
+    }, { timeout: 10000 });
+  } finally { await fixture.cleanup(); }
+});
 
 it('starts the dedicated daemon entry, confirms authenticated IPC, reuses the owner and stops it', async () => {
   await lifecycle.ensureDaemon();
@@ -20,6 +204,7 @@ it('starts the dedicated daemon entry, confirms authenticated IPC, reuses the ow
   expect(owner.pid).not.toBe(process.pid);
   expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
   expect(await isConversationIpcReady(directory, owner)).toBe(true);
+  await vi.waitFor(async () => expect(await daemonStartupLog(directory, owner.pid)).not.toMatch(/worker port:/), { timeout: 5000 });
   await lifecycle.ensureDaemon();
   expect(await readDaemonOwner(directory)).toEqual(owner);
   await lifecycle.stopDaemon();
@@ -66,4 +251,241 @@ it('forwards manual CLI startup and termination to the dedicated daemon process'
     const code = await exit;
     expect(code).toBe(0);
   } finally { if (cli.exitCode === null && cli.signalCode === null) cli.kill('SIGTERM'); await exit; }
+});
+
+it('hands new, concurrent and already-ready daemon connections through delayed opens and returns to idle after detach', async () => {
+  const sockets: import('node:net').Socket[] = [];
+  try {
+    const results = await Promise.allSettled([
+      lifecycle.ensureDaemon({ retainConnection: true }), lifecycle.ensureDaemon({ retainConnection: true }),
+    ]);
+    for (const result of results) if (result.status === 'fulfilled') sockets.push(result.value);
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) throw new AggregateError(failures.map((result) => result.reason), 'Daemon startup failed');
+    const directory = getGlobalConfigDir();
+    const owner = (await readDaemonOwner(directory))!;
+    const survivesIdle = async () => {
+      const readyAt = Date.now();
+      // 最初の open を送らず、実子プロセスの複数回の idle 判定をまたぐ。
+      await vi.waitFor(async () => {
+        expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
+        expect(await readDaemonOwner(directory)).toEqual(owner);
+        expect(Date.now() - readyAt).toBeGreaterThanOrEqual(1500);
+      }, { timeout: 5000 });
+    };
+    await survivesIdle();
+    const selected = await createTuiConversationPort(directory, { async deliver() { return { kind: 'delivered' }; } }).resolve({ kind: 'daemon' });
+    const existing = await lifecycle.ensureDaemon({ retainConnection: true });
+    sockets.push(existing);
+    const openAndDetach = async (socket: import('node:net').Socket) => {
+      const client = new Client(socket);
+      const opened = (await client.request('open', selected)).result!;
+      expect(await client.items(opened.read.transferId)).toContainEqual(expect.objectContaining({ kind: 'state' }));
+      await client.request('detach', { attachmentId: opened.attachmentId });
+    };
+    await openAndDetach(sockets[0]!);
+    await openAndDetach(sockets[1]!);
+    // 既存 daemon から受け取った接続だけで待機する状態へ移す。
+    await survivesIdle();
+    await openAndDetach(existing);
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(directory)).toBeUndefined();
+      expect(await readDaemonIpcState(directory)).toBeUndefined();
+    }, { timeout: 10_000 });
+  } finally { for (const socket of sockets) socket.destroy(); }
+});
+
+async function persistedEpic(phase: 'running' | 'succeeded' | 'completed') {
+  const directory = getGlobalConfigDir();
+  const repositoryDirectory = join(directory, 'epic-repository');
+  await mkdir(join(repositoryDirectory, '.takt'), { recursive: true });
+  await writeFile(join(directory, 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  patrol_interval: 86400\n');
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: '結合確認', repositoryDirectories: [] });
+  await writeFile(join(directory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({
+    ...workspace, repositoryDirectories: [repositoryDirectory],
+  }));
+  const goal = completedEpicGoal('b'.repeat(40), 'a'.repeat(40));
+  const goalDirectory = join(repositoryDirectory, '.takt', 'goals', goal.id);
+  await mkdir(goalDirectory, { recursive: true });
+  await writeFile(join(goalDirectory, 'goal.json'), JSON.stringify(goal));
+  const member = { repositoryDirectory, goalId: goal.id };
+  const marker = join(directory, 'verification-executed');
+  const started = beginEpicVerification({ ...epicRecord(), revision: 3, workspaceId: workspace.id, members: [member],
+    targets: [{ ...member, targetSha: goal.completion!.targetSha! }],
+    verificationProcedure: { version: 1, steps: [`printf executed >> '${marker}'`] },
+  }, verificationRunId, verificationStartedAt);
+  const verified = phase === 'running' ? started.epic : applyEpicVerificationResult(started.epic, verificationResultFor(started.run));
+  const epic = phase === 'completed' ? finishEpic(verified) : verified;
+  const store = new EpicStore(directory, workspace.id);
+  await store.create(epic);
+  return { directory, workspace, store, epic, run: started.run, marker,
+    context: { globalConfigDirectory: directory, workspaceId: workspace.id, epicId: epic.id } };
+}
+
+async function openEpicSnapshot(workspaceId: string, expectedNotices?: number) {
+  const socket = await lifecycle.ensureDaemon({ retainConnection: true });
+  const client = new Client(socket);
+  try {
+    if (expectedNotices !== undefined) await waitForNotificationCount(expectedNotices);
+    const selected = await createTuiConversationPort(getGlobalConfigDir(), { async deliver() { return { kind: 'delivered' }; } })
+      .resolve({ kind: 'workspace', workspaceId });
+    const opened = (await client.request('open', selected)).result!;
+    // 通知の反映が初回転送を置き換える場合も、完了した最新の転送まで復元する。
+    await vi.waitFor(() => {
+      const latest = client.frames.filter(({ output }) => output?.kind === 'transfer_start' && output.purpose === 'snapshot').at(-1)?.output;
+      expect(latest).toBeDefined();
+      expect(client.frames.some(({ output }) => output?.transferId === latest!.transferId && output.kind === 'transfer_end')).toBe(true);
+    }, { timeout: 5_000 });
+    const items = new Map<string, SnapshotItem>();
+    for (const frame of [...client.frames]) {
+      const start = frame.output;
+      if (start?.kind !== 'transfer_start' || start.purpose !== 'snapshot'
+        || !client.frames.some(({ output }) => output?.transferId === start.transferId && output.kind === 'transfer_end')) continue;
+      if ((start as typeof start & { mode: string }).mode === 'initial') items.clear();
+      for (const item of await client.items(start.transferId) as SnapshotItem[]) {
+        if (item.kind === 'remove') items.delete(item.key);
+        else items.set(snapshotItemKey(item), item);
+      }
+    }
+    return { client, opened, items: [...items.values()] };
+  } catch (error) { socket.destroy(); throw error; }
+}
+
+async function notificationIds() {
+  const ids: string[] = [];
+  for await (const notice of new DaemonNotifications(getGlobalConfigDir()).iterate()) ids.push(notice.id);
+  return ids.sort();
+}
+
+async function waitForNotificationCount(count: number) {
+  await vi.waitFor(async () => expect(await notificationIds()).toHaveLength(count), { timeout: 5_000 });
+  return notificationIds();
+}
+
+function snapshotNotices(items: unknown[]) {
+  return items.filter((item): item is { kind: 'display_event'; event: { id: string; message: string } } =>
+    typeof item === 'object' && item !== null && 'kind' in item && item.kind === 'display_event');
+}
+
+async function requeueSavedEpicEvents(directory: string, epicId: string) {
+  const root = join(directory, 'daemon-events');
+  let requeued = 0;
+  for (const name of (await readdir(root)).filter((name) => name.endsWith('.json'))) {
+    const path = join(root, name);
+    const record = EventRecordSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    if (record.event.event.kind === 'patrol' || !JSON.stringify(record.event.event).includes(epicId)) continue;
+    expect(record.state).toBe('settled');
+    await writeFile(path, JSON.stringify({ state: 'queued', event: record.event }));
+    requeued++;
+  }
+  expect(requeued).toBeGreaterThan(0);
+}
+
+it('retains one verification notification after repeated reads and daemon restart', async () => {
+  const f = await persistedEpic('succeeded');
+  const before = await getEpic(f.context);
+  const first = await openEpicSnapshot(f.workspace.id, 1);
+  try {
+    const ids = await waitForNotificationCount(1);
+    for (const _attempt of [1, 2]) {
+      f.store.save(f.epic);
+      const response = (await first.client.request('snapshot', { attachmentId: first.opened.attachmentId })).result!;
+      await first.client.items(response.read.transferId);
+    }
+    first.client.socket.destroy();
+    await lifecycle.stopDaemon();
+    await requeueSavedEpicEvents(f.directory, f.epic.id);
+    const restarted = await openEpicSnapshot(f.workspace.id, 1);
+    try {
+      expect(await waitForNotificationCount(1)).toEqual(ids);
+      expect(snapshotNotices(restarted.items).map(({ event }) => event.id).sort()).toEqual(ids);
+      expect(await getEpic(f.context)).toEqual(before);
+      expect((await getEpic(f.context)).verificationRuns).toHaveLength(1);
+      expect((await getEpic(f.context)).status).toBe('active');
+    } finally { restarted.client.socket.destroy(); }
+  } finally { first.client.socket.destroy(); }
+});
+
+it('preserves separate notifications for different Epics with the same revision and run ID', async () => {
+  const f = await persistedEpic('succeeded');
+  const second = EpicSchema.parse({ ...f.epic, id: randomUUID() });
+  await f.store.create(second);
+  const port = await openEpicSnapshot(f.workspace.id, 2);
+  try {
+    const ids = await waitForNotificationCount(2);
+    expect(new Set(ids).size).toBe(2);
+    const notices = snapshotNotices(port.items);
+    expect(notices.map(({ event }) => event.id).sort()).toEqual(ids);
+  } finally { port.client.socket.destroy(); }
+});
+
+it('retains one completion notification alongside verification after rereading and reconnecting', async () => {
+  const f = await persistedEpic('completed');
+  const before = await getEpic(f.context);
+  const first = await openEpicSnapshot(f.workspace.id, 2);
+  try {
+    const ids = await waitForNotificationCount(2);
+    f.store.save(f.epic);
+    first.client.socket.destroy();
+    await lifecycle.stopDaemon();
+    await requeueSavedEpicEvents(f.directory, f.epic.id);
+    const restarted = await openEpicSnapshot(f.workspace.id, 2);
+    try {
+      expect(await waitForNotificationCount(2)).toEqual(ids);
+      expect(snapshotNotices(restarted.items).map(({ event }) => event.id).sort()).toEqual(ids);
+      expect(await getEpic(f.context)).toEqual(before);
+    } finally { restarted.client.socket.destroy(); }
+  } finally { first.client.socket.destroy(); }
+});
+
+it('retains previous notifications and adds distinct notifications after the same Epic is verified and completed again', async () => {
+  const f = await persistedEpic('completed');
+  const first = await openEpicSnapshot(f.workspace.id, 2);
+  try {
+    const previousIds = await waitForNotificationCount(2);
+    first.client.socket.destroy();
+    await lifecycle.stopDaemon();
+    const changed = reviseEpic(f.epic, { objective: '改訂した結合確認' }, {
+      kind: 'definition', reason: '追加修正を確認する', recordedAt: new Date().toISOString(),
+    });
+    const started = beginEpicVerification(changed, randomUUID(), new Date().toISOString());
+    const completed = finishEpic(applyEpicVerificationResult(started.epic, verificationResultFor(started.run)));
+    f.store.save(completed);
+    const restarted = await openEpicSnapshot(f.workspace.id, 4);
+    try {
+      const ids = await waitForNotificationCount(4);
+      expect(ids).toEqual(expect.arrayContaining(previousIds));
+      expect(new Set(ids).size).toBe(4);
+      expect(snapshotNotices(restarted.items).map(({ event }) => event.id).sort()).toEqual(ids);
+      expect((await getEpic(f.context)).verificationRuns).toHaveLength(2);
+    } finally { restarted.client.socket.destroy(); }
+  } finally { first.client.socket.destroy(); }
+});
+
+it('exposes the original running verification after daemon restart without executing it and patrols the pending Epic', async () => {
+  const f = await persistedEpic('running');
+  const before = await getEpic(f.context);
+  const first = await openEpicSnapshot(f.workspace.id);
+  first.client.socket.destroy();
+  await lifecycle.stopDaemon();
+  const restarted = await openEpicSnapshot(f.workspace.id);
+  try {
+    expect(restarted.items).toContainEqual(expect.objectContaining({ kind: 'epic', epic: expect.objectContaining({
+      id: f.epic.id, status: 'active', runningVerification: f.run,
+    }), recovery: [f.run] }));
+    const savedEvents = async () => {
+      const root = join(f.directory, 'daemon-events');
+      return Promise.all((await readdir(root)).filter((name) => name.endsWith('.json'))
+        .map(async (name) => JSON.parse(await readFile(join(root, name), 'utf8')) as { event: { event: { kind: string } } }));
+    };
+    await vi.waitFor(async () => {
+      const patrols = (await savedEvents()).filter(({ event }) => event.event.kind === 'patrol');
+      expect(patrols.length).toBeGreaterThan(0);
+      expect(patrols.some((record) => JSON.stringify(record.event.event).includes(f.epic.id))).toBe(true);
+    }, { timeout: 5_000 });
+    expect(await getEpic(f.context)).toEqual(before);
+    await expect(access(f.marker)).rejects.toThrow();
+    expect(await notificationIds()).toEqual([]);
+  } finally { restarted.client.socket.destroy(); }
 });

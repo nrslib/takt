@@ -8,6 +8,11 @@ import {
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
+import { isolateUserDirectoriesForTestRun } from './scripts/test-user-isolation.mjs';
+
+// Runs in the parent Vitest process before any worker exists, so threads,
+// forks, and their child processes all inherit the temporary user directories.
+isolateUserDirectoriesForTestRun();
 
 export const srcTestInclude = [
   'src/__tests__/**/*.test.ts',
@@ -49,6 +54,8 @@ export const itSerialTestGlobs = [
   ...itSerialWorkflowLoaderTestGlobs,
 ];
 
+export const unitTestExcludes = [...itTestGlobs, ...itSerialTestGlobs];
+
 // Some workflow tests spawn processes and perform fsync-heavy persistence.
 // Keep one sufficiently large ceiling for every platform and runner.
 const testTimeout = 120_000;
@@ -59,7 +66,9 @@ installNotificationSilence();
 
 export const commonSrcTestConfig = {
   env: {
-    TAKT_CONFIG_DIR: '',
+    // The isolated directory, not '': an empty value made getGlobalConfigDir()
+    // fall back to homedir()/.takt at module load and in beforeAll/afterAll.
+    TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR!,
     TAKT_NOTIFY_WEBHOOK: '',
   },
   // Local runs execute an adaptive unit-shard wave plus fork workers and

@@ -29,14 +29,13 @@ import {
   createStreamTrackingState,
   describeOpenCodeStreamTrackingLimitFailure,
   emitInit,
-  emitText,
-  emitThinking,
   emitPermissionAsked,
   emitPermissionSummary,
   emitResult,
   flushSensitiveTextStreams,
   handlePartUpdated,
   OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
+  writeSensitiveText,
   trackOpenCodeReasoningBytes,
 } from './OpenCodeStreamHandler.js';
 import {
@@ -53,7 +52,6 @@ import {
   resolveOpenCodeGuardSuite,
   resolveOpenCodeGuardPolicy,
   type OpenCodeGuardAbortKind,
-  type OpenCodeGuardEvaluation,
   type OpenCodeGuardSuite,
 } from './guards/index.js';
 import { extractOpenCodeToolRejection } from './guards/tool-events.js';
@@ -79,7 +77,6 @@ import {
 } from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
 import {
-  createSensitiveTextStreamRedactor,
   sanitizeSensitiveText,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
@@ -841,6 +838,7 @@ export class OpenCodeAttemptRunner {
               options.preparedMcp,
               options.skillsEnabled,
               executionContext,
+              options.externalDirectoryAllowlist,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -939,9 +937,6 @@ export class OpenCodeAttemptRunner {
         exactToolRepeatLimit: activeGuardSuite.policy.exactToolRepeatLimit,
         streamEventLimit: activeGuardSuite.policy.streamEventLimit,
         streamLimits: activeGuardSuite.policy.streamLimits,
-        sensitiveCandidateLimit: activeGuardSuite.policy.sensitiveCandidateLimit,
-        sensitiveCandidateByteLimit: activeGuardSuite.policy.sensitiveCandidateByteLimit,
-        sensitiveSourceScanByteLimit: activeGuardSuite.policy.sensitiveSourceScanByteLimit,
       });
       activeGuardSuite.startCall((failure) => callAbortController.abort(new Error(failure.verdict.reason)));
       const guardedOptions: OpenCodeCallOptions & { abortSignal: AbortSignal; model: string } = {
@@ -1037,18 +1032,13 @@ export class OpenCodeAttemptRunner {
     options.childProcessEnv,
   ];
   const state = createStreamTrackingState(guardSuite.policy.streamLimits, guardSuite.sensitiveValues);
-  let initialGuardFailure: OpenCodeGuardEvaluation | undefined;
-  for (const source of attemptSensitiveSources) {
-    initialGuardFailure ??= guardSuite.onInitialSource(source).failure;
-  }
+  for (const source of attemptSensitiveSources) guardSuite.sensitiveValues.collect(source);
   const isTrackingLimitFailureMessage = (message: string): boolean => (
     message === OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE
     || message === describeOpenCodeStreamTrackingLimitFailure('event_count')
     || message === describeOpenCodeStreamTrackingLimitFailure('tracked_id_count')
     || message === describeOpenCodeStreamTrackingLimitFailure('text_bytes')
     || message === describeOpenCodeStreamTrackingLimitFailure('reasoning_bytes')
-    || message === describeOpenCodeStreamTrackingLimitFailure('sensitive_sources')
-    || message.startsWith('OpenCode sensitive value budget exceeded:')
   );
 
   const sanitizeAttemptError = (message: string): string => (
@@ -1179,9 +1169,6 @@ export class OpenCodeAttemptRunner {
   try {
     attemptResult = await (async (): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
   try {
-    if (initialGuardFailure !== undefined) {
-      throw new Error(initialGuardFailure.verdict.reason);
-    }
     log.debug('Starting OpenCode session', {
       agentType,
       model: options.model,
@@ -1204,6 +1191,9 @@ export class OpenCodeAttemptRunner {
       options.preparedMcp,
       options.skillsEnabled,
       executionContext,
+      options.externalDirectoryAllowlist,
+      options.contextWindow,
+      options.cwd,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1254,6 +1244,7 @@ export class OpenCodeAttemptRunner {
       options.allowedTools,
       allowedMcpPermissions,
       options.strictToolAllowlist,
+      options.externalDirectoryAllowlist,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
@@ -1355,6 +1346,9 @@ export class OpenCodeAttemptRunner {
     const promptPayload: Record<string, unknown> = {
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.externalDirectoryAllowlist !== undefined
+        ? { externalDirectoryAllowlist: options.externalDirectoryAllowlist }
+        : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
       model: parsedModel,
@@ -1423,12 +1417,7 @@ export class OpenCodeAttemptRunner {
 
     const consumeTextDelta = (partId: string, visibleDelta: string): void => {
       if (visibleDelta) {
-        const redactor = state.textRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
-        state.textRedactors.set(partId, redactor);
-        emitText(
-          options.onStream,
-          redactor.write(visibleDelta, state.sensitiveSources),
-        );
+        writeSensitiveText(state, 'text', partId, visibleDelta, options.onStream);
         const previous = textContentParts.get(partId) ?? '';
         textContentParts.set(partId, `${previous}${visibleDelta}`);
       }
@@ -1437,19 +1426,8 @@ export class OpenCodeAttemptRunner {
     const consumeReasoningDelta = (partId: string, rawDelta: string): boolean => {
       if (!rawDelta) return true;
       if (!trackOpenCodeReasoningBytes(state, rawDelta)) return false;
-      const fallbackRedactor = state.textRedactors.get(partId);
-      if (fallbackRedactor !== undefined) {
-        state.textRedactors.delete(partId);
-        if (!state.thinkingRedactors.has(partId)) {
-          state.thinkingRedactors.set(partId, fallbackRedactor);
-        }
-      }
-      const redactor = state.thinkingRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
-      state.thinkingRedactors.set(partId, redactor);
-      emitThinking(
-        options.onStream,
-        redactor.write(rawDelta, state.sensitiveSources),
-      );
+      for (const chunk of state.pendingResponseChunks) if (chunk.partId === partId) chunk.kind = 'thinking';
+      writeSensitiveText(state, 'thinking', partId, rawDelta, options.onStream);
       const prevOffset = state.thinkingOffsets.get(partId) ?? 0;
       const nextOffset = prevOffset + rawDelta.length;
       state.thinkingOffsets.set(partId, nextOffset);
@@ -1566,6 +1544,7 @@ export class OpenCodeAttemptRunner {
 
         if (part.type === 'tool') {
           toolExecutionObserved = true;
+          textContentParts.clear();
           const toolPart = part as OpenCodeToolPart;
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
@@ -1678,6 +1657,7 @@ export class OpenCodeAttemptRunner {
                 if (allowed) reply = 'once';
               }
             }
+            flushSensitiveTextStreams(options.onStream, state);
             emitPermissionAsked(options.onStream, {
               requestId: permProps.id,
               sessionId: permProps.sessionID,
@@ -1865,6 +1845,16 @@ export class OpenCodeAttemptRunner {
         continue;
       }
 
+      if (sseEvent.type === 'session.compacted') {
+        const properties = sseEvent.properties as { sessionID?: string; reason?: string };
+        // Only the v2 automatic-completion notification carries a verified reason.
+        // A v1 session.compacted event cannot distinguish manual compaction.
+        if (properties.sessionID === activeSessionId && properties.reason === 'auto') {
+          options.onStream?.({ type: 'context_compacted', data: { sessionId: activeSessionId } });
+        }
+        continue;
+      }
+
       if (sseEvent.type === 'session.status') {
         const statusProps = sseEvent.properties as {
           sessionID?: string;
@@ -1963,7 +1953,9 @@ export class OpenCodeAttemptRunner {
       failureMessage = 'OpenCode stream ended before the session became idle';
     }
 
-    content = [...textContentParts.values()].join('\n');
+    // All remaining text parts form the answer after the last tool part. A turn that ends with a
+    // tool has no answer because tool handling cleared every earlier text part.
+    content = [...textContentParts.values()].join('');
     if (!success && !streamAbortController.signal.aborted) {
       streamAbortController.abort();
     }
@@ -2204,6 +2196,8 @@ export class OpenCodeAttemptRunner {
       });
     }
 
+    // 下の debug ログに出す JSON の解析エラーには応答の一部が入るため、応答の中で見つかった秘密値もここで伏せる対象に加える。
+    state.sensitiveSources.collect(state.responseBuffer.sensitiveValues);
     const trimmed = content.trim();
 
     // format 要求時に structured がイベントで捕捉できなかった場合は、
@@ -2303,6 +2297,7 @@ export class OpenCodeAttemptRunner {
         agentType,
         attempt,
         errorMessage: sanitizeAttemptError(errorMessage),
+        error: sanitizeAttemptError(message),
       });
       await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();
@@ -2395,7 +2390,9 @@ export class OpenCodeAttemptRunner {
         state.sensitiveSources,
       );
     }
-    return attemptResult;
+    state.sensitiveSources.collect(state.responseBuffer.sensitiveValues);
+    if (attemptResult === RETRY_ATTEMPT || attemptResult.error === undefined) return attemptResult;
+    return { ...attemptResult, error: sanitizeSensitiveTextWithKnownValues(attemptResult.error, state.sensitiveSources) };
   } finally {
     removeServerInvalidationListener?.();
     release?.();

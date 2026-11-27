@@ -1,4 +1,6 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
+import { heavyItGuard } from './scripts/vitest-heavy-it-guard.js';
 import {
   commonSrcTestConfig,
   heavyParallelItTestExcludes,
@@ -6,14 +8,19 @@ import {
   parallelSrcRunnerConfig,
 } from './vitest.config.shared.js';
 
+export function resolveHeavyItMaxWorkers(cpuCount: number, isCi: boolean): number {
+  return isCi || cpuCount <= 2 ? 1 : Math.min(4, Math.floor(cpuCount / 2));
+}
+
 export default defineConfig({
+  plugins: [heavyItGuard],
   test: {
     ...commonSrcTestConfig,
     ...parallelSrcRunnerConfig,
-    // Heavy ITs drive real engines, Git repositories, child processes, and
-    // fsync-heavy stores. Keep one worker per runner to avoid synchronous IO
-    // contention; CI scales out with isolated job-level shards instead.
-    maxWorkers: 1,
+    // CI keeps one worker per runner and scales out with job-level shards.
+    // Locally use half the CPUs, capped at four to limit IO contention from
+    // Git, child processes, and fsync-heavy stores.
+    maxWorkers: resolveHeavyItMaxWorkers(availableParallelism(), Boolean(process.env.CI)),
     include: heavyParallelItTestGlobs,
     exclude: heavyParallelItTestExcludes,
   },

@@ -65,6 +65,11 @@ const ClaudeSandboxShape = {
 /** Claude sandbox settings schema */
 export const ClaudeSandboxSchema = z.object(ClaudeSandboxShape).optional();
 
+const ClaudePermissionsShape = {
+  deny: z.array(z.string().min(1)).optional(),
+  import_user_read_deny: z.boolean().optional(),
+};
+
 /** Provider-specific step options schema */
 const CodexSkillsShape = {
   repo: z.boolean().optional(),
@@ -88,6 +93,7 @@ const CodexProviderOptionShape = {
   network_access: z.boolean().optional(),
   permission_control: z.enum(['takt', 'codex']).optional(),
   config_profile: CodexConfigProfileSchema.optional(),
+  readonly_permission_base: CodexConfigProfileSchema.optional(),
   reasoning_effort: ProviderEffortSchema.optional(),
   fast_mode: z.boolean().optional(),
   skills: z.object(CodexSkillsShape).optional(),
@@ -137,6 +143,7 @@ const ClaudeProviderOptionShape = {
   effort: ProviderEffortSchema.optional(),
   skills: ClaudeSkillsSchema.optional(),
   sandbox: z.object(ClaudeSandboxShape).optional(),
+  permissions: z.object(ClaudePermissionsShape).strict().optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 };
 
@@ -653,6 +660,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     networkAccess: z.boolean().optional(),
     permissionControl: z.enum(['takt', 'codex']).optional(),
     configProfile: CodexConfigProfileSchema.optional(),
+    readonlyPermissionBase: CodexConfigProfileSchema.optional(),
     reasoningEffort: ProviderEffortSchema.optional(),
     fastMode: z.boolean().optional(),
     guards: z.object({
@@ -688,6 +696,10 @@ const NormalizedStepProviderOptionsSchema = z.object({
     sandbox: z.object({
       allowUnsandboxedCommands: z.boolean().optional(),
       excludedCommands: z.array(z.string()).optional(),
+    }).strict().optional(),
+    permissions: z.object({
+      deny: z.array(z.string().min(1)).optional(),
+      importUserReadDeny: z.boolean().optional(),
     }).strict().optional(),
   }).strict().optional(),
   claudeTerminal: z.object({

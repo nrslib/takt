@@ -29,10 +29,8 @@ import {
   AgentFailureDetail,
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
-import {
-  mapToCodexSandboxMode,
-  CodexCallOptions,
-} from './types.js';
+import type { CodexCallOptions } from './types.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 import { buildCodexSessionConfig } from './session-config.js';
 import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from './mcp-isolation.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
@@ -45,6 +43,7 @@ import {
   emitResult,
   emitCodexItemStart,
   emitCodexItemCompleted,
+  isCodexToolItem,
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
 import { buildRateLimitedResponseFields, classifyRateLimitError, isRateLimitNoticeResponse } from '../rate-limit/detection.js';
@@ -53,6 +52,10 @@ import {
   boundCodexFailureMessage,
   type CodexFailureMessageOptions,
 } from './failure-message.js';
+import {
+  createCodexRolloutObservation,
+  detectCodexCompaction,
+} from './compaction.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -301,11 +304,13 @@ export class CodexClient {
     source: Parameters<typeof buildRateLimitedResponseFields>[1] = 'sdk_error',
   ): AgentResponse {
     const response = buildRateLimitedResponseFields('codex', source, message);
+    const rateLimitClass = classifyRateLimitError(message);
     return {
       persona: agentType,
       timestamp: new Date(),
       sessionId,
       ...response,
+      rateLimitInfo: rateLimitClass === 'NotRateLimit' ? response.rateLimitInfo : { ...response.rateLimitInfo, rateLimitClass },
       error: boundCodexFailureMessage(response.error, options, true),
       ...(retryCount > 0 ? { retryCount } : {}),
     };
@@ -339,36 +344,11 @@ export class CodexClient {
   private async callWithSdk(
     agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex'],
   ): Promise<AgentResponse> {
-    const readOnlyStep = options.executionPhase === 1 && options.edit === false;
-    const threadOptions = {
-      ...(options.model ? { model: options.model } : {}),
-      workingDirectory: options.cwd,
-      skipGitRepoCheck: true,
-      ...(options.permissionControl === 'codex' && options.executionPhase !== 2
-          && !readOnlyStep
-        ? {}
-        : {
-            sandboxMode: readOnlyStep || options.executionPhase === 2 || options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
-              ? mapToCodexSandboxMode(options.permissionMode)
-              : 'workspace-write' as const,
-            ...(options.mcpOnlySideEffects
-              ? { networkAccessEnabled: false, webSearchMode: 'disabled' as const }
-              : options.networkAccess === undefined
-              ? {}
-              : { networkAccessEnabled: options.networkAccess }),
-          }),
-      // TAKT runs Codex non-interactively — there is no human to approve escalations.
-      // Force `never` so Codex cannot wait for an approval that no caller can provide.
-      approvalPolicy: 'never' as const,
-    };
     let threadId = options.sessionId;
 
-    const fullPrompt = options.systemPrompt
-      ? `${options.systemPrompt}\n\n${prompt}`
-      : prompt;
     let input: Input;
     try {
-      input = buildCodexInput(fullPrompt, options.imageAttachments);
+      input = buildCodexInput(prompt, options.imageAttachments);
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
       const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
@@ -396,16 +376,28 @@ export class CodexClient {
       );
       return errorResponse;
     }
-    const { config: codexConfig, env: codexEnvironment } = sessionConfig;
+    const { config: codexConfig, env: codexEnvironment, configOverrides: permissionConfigOverrides } = sessionConfig;
+    const threadOptions = {
+      ...(options.model ? { model: options.model } : {}),
+      workingDirectory: options.cwd,
+      skipGitRepoCheck: true,
+      ...sessionConfig.permissionThreadOptions,
+    };
     let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];
+    let rolloutObservation: Awaited<ReturnType<typeof createCodexRolloutObservation>>;
     try {
-      isolation = options.mcpOnlySideEffects
-        ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
+      isolation = options.mcpOnlySideEffects || options.internalAgentIsolation === 'strict-readonly'
+        ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment, permissionConfigOverrides)
         : undefined;
       if (isolation === undefined) {
         mcpExclusions = await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment);
       }
+      rolloutObservation = createCodexRolloutObservation(
+        codexEnvironment,
+        threadId,
+        new Date(),
+      );
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
       const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
@@ -419,8 +411,21 @@ export class CodexClient {
       return errorResponse;
     }
 
+    // Codex exposes no verified compaction cause. Reinjection intentionally includes
+    // confirmed compacted events/rollout records after explicit new_context, not only automatic compaction.
+    const compactedThreadIds = new Set<string | undefined>();
+    const signalCompaction = (sessionId: string | undefined): void => {
+      if (compactedThreadIds.has(sessionId)) return;
+      compactedThreadIds.add(sessionId);
+      options.onStream?.({
+        type: 'context_compacted',
+        data: { ...(sessionId !== undefined ? { sessionId } : {}) },
+      });
+    };
+
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
+      const onStream = withToolActivityCall(options.onStream);
       options.onActivity?.({ kind: 'attempt_started' });
       let currentThreadId = threadId;
       const codexClientOptions: CodexOptions = {
@@ -428,7 +433,9 @@ export class CodexClient {
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(isolation === undefined ? {
           env: codexEnvironment, config: codexConfig,
-          ...(mcpExclusions.length === 0 ? {} : { configOverrides: mcpExclusions }),
+          ...(permissionConfigOverrides.length === 0 && mcpExclusions.length === 0
+            ? {}
+            : { configOverrides: [...permissionConfigOverrides, ...mcpExclusions] }),
           ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
         } : isolation),
       };
@@ -490,9 +497,11 @@ export class CodexClient {
         resetIdleTimeout();
         diag.onConnected();
 
-        let content = '';
-        let lastAgentMessageText = '';
-        const contentOffsets = new Map<string, number>();
+        // The latest agent message after the last tool call is the answer; earlier messages are working
+        // text (progress notes, commentary). Only a completed message is final enough for notices and
+        // structured output.
+        let lastAgentMessage = { text: '', completed: false };
+        let sawAgentText = false;
         let success = true;
         let failureMessage = '';
         let providerUsage: ProviderUsageSnapshot | undefined;
@@ -506,7 +515,12 @@ export class CodexClient {
 
           if (event.type === 'thread.started') {
             currentThreadId = typeof event.thread_id === 'string' ? event.thread_id : currentThreadId;
-            emitInit(options.onStream, options.model, currentThreadId);
+            emitInit(onStream, options.model, currentThreadId);
+            continue;
+          }
+
+          if (event.type === 'compacted') {
+            signalCompaction(currentThreadId);
             continue;
           }
 
@@ -531,69 +545,33 @@ export class CodexClient {
             continue;
           }
 
-          if (event.type === 'item.started') {
+          if (event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed') {
             const item = event.item as CodexItem | undefined;
-            if (item) {
-              emitCodexItemStart(item, options.onStream, state);
+            if (!item) {
+              continue;
             }
-            continue;
-          }
-
-          if (event.type === 'item.updated') {
-            const item = event.item as CodexItem | undefined;
-            if (item) {
-              if (item.type === 'agent_message' && typeof item.text === 'string') {
-                const itemId = item.id;
-                const text = item.text;
-                if (itemId) {
-                  const prev = contentOffsets.get(itemId) ?? 0;
-                  if (text.length > prev) {
-                    if (prev === 0 && content.length > 0) {
-                      content += '\n';
-                    }
-                    content += text.slice(prev);
-                    contentOffsets.set(itemId, text.length);
-                  }
-                }
-              }
-              emitCodexItemUpdate(item, options.onStream, state);
+            if (isCodexToolItem(item)) {
+              lastAgentMessage = { text: '', completed: false };
+            } else if (event.type !== 'item.started' && item.type === 'agent_message' && typeof item.text === 'string') {
+              lastAgentMessage = { text: item.text, completed: event.type === 'item.completed' };
+              sawAgentText ||= item.text.trim().length > 0;
             }
-            continue;
-          }
-
-          if (event.type === 'item.completed') {
-            const item = event.item as CodexItem | undefined;
-            if (item) {
-              if (item.type === 'agent_message' && typeof item.text === 'string') {
-                const itemId = item.id;
-                const text = item.text;
-                lastAgentMessageText = text;
-                if (itemId) {
-                  const prev = contentOffsets.get(itemId) ?? 0;
-                  if (text.length > prev) {
-                    if (prev === 0 && content.length > 0) {
-                      content += '\n';
-                    }
-                    content += text.slice(prev);
-                    contentOffsets.set(itemId, text.length);
-                  }
-                } else if (text) {
-                  if (content.length > 0) {
-                    content += '\n';
-                  }
-                  content += text;
-                }
-              }
-              emitCodexItemCompleted(item, options.onStream, state);
+            if (event.type === 'item.started') {
+              emitCodexItemStart(item, onStream, state);
+            } else if (event.type === 'item.updated') {
+              emitCodexItemUpdate(item, onStream, state);
+            } else {
+              emitCodexItemCompleted(item, onStream, state);
             }
             continue;
           }
         }
 
-        const trimmed = content.trim();
+        const finalAnswer = lastAgentMessage.text.trim();
+        const completedAnswer = lastAgentMessage.completed ? finalAnswer : '';
         const streamErrorFailureMessage = success
           && !sawTurnCompleted
-          && trimmed.length === 0
+          && !sawAgentText
           ? lastStreamErrorMessage
           : undefined;
         const failedAfterStreamError = streamErrorFailureMessage !== undefined;
@@ -630,7 +608,7 @@ export class CodexClient {
               options,
               totalRetryCount(),
             );
-            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+            emitResult(onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
             return rateLimitedResponse;
           }
 
@@ -659,7 +637,7 @@ export class CodexClient {
             totalRetryCount(),
           );
           emitResult(
-            options.onStream,
+            onStream,
             false,
             errorResponse.error ?? errorResponse.content,
             currentThreadId,
@@ -668,16 +646,16 @@ export class CodexClient {
           return errorResponse;
         }
 
-        if (isRateLimitNoticeResponse(lastAgentMessageText)) {
+        if (isRateLimitNoticeResponse(completedAnswer)) {
           const rateLimitedResponse = this.buildRateLimitedResponse(
             agentType,
             currentThreadId,
-            lastAgentMessageText.trim(),
+            completedAnswer,
             options,
             totalRetryCount(),
             'error_text',
           );
-          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          emitResult(onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return {
             ...rateLimitedResponse,
             providerUsage: providerUsage ?? {
@@ -687,15 +665,15 @@ export class CodexClient {
           };
         }
 
-        const structuredOutput = parseStructuredOutput(lastAgentMessageText.trim(), !!options.outputSchema);
+        const structuredOutput = parseStructuredOutput(completedAnswer, !!options.outputSchema);
         // JSON（または fence）で始まる純粋な structured 応答は、拒否文を引用していても拒否ではない。
         // 拒否文で始まる応答は、末尾に JSON が続いていてもこの除外に該当しない。
-        // 検出は連結本文のみを対象とする。長い前置きに続く拒否は見逃す可能性があるが、
-        // その場合は従来どおりルール不一致の fail-fast に落ちるだけで、正常応答を
+        // 判定は content と同じ最後の agent message だけを対象とし、それより前の進捗メモは見ない。
+        // 長い前置きに続く拒否は見逃す可能性があるが、その場合は従来どおりルール不一致の fail-fast に落ちるだけで、正常応答を
         // 誤って拒否扱いして枯渇エラーにする誤検出よりも安全側である。
         const looksLikePureStructuredOutput = structuredOutput !== undefined
-          && (trimmed.startsWith('{') || trimmed.startsWith('```'));
-        const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(trimmed);
+          && (finalAnswer.startsWith('{') || finalAnswer.startsWith('```'));
+        const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(finalAnswer);
         if (refusalDetected) {
           if (!options.callerManagedSession && refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
             refusalRetryCount += 1;
@@ -708,7 +686,7 @@ export class CodexClient {
             continue;
           }
           const failure = createProviderErrorFailure(
-            `Codex safety filter refused the request after ${CODEX_REFUSAL_MAX_RETRIES + 1} attempts: ${trimmed.slice(0, 200)}`,
+            `Codex safety filter refused the request after ${CODEX_REFUSAL_MAX_RETRIES + 1} attempts: ${finalAnswer.slice(0, 200)}`,
           );
           const errorResponse = this.buildErrorResponse(
             agentType,
@@ -718,7 +696,7 @@ export class CodexClient {
             totalRetryCount(),
           );
           emitResult(
-            options.onStream,
+            onStream,
             false,
             errorResponse.error ?? errorResponse.content,
             currentThreadId,
@@ -727,12 +705,16 @@ export class CodexClient {
           return errorResponse;
         }
 
-        emitResult(options.onStream, true, trimmed, currentThreadId);
+        if (!compactedThreadIds.has(currentThreadId)
+          && await detectCodexCompaction(rolloutObservation, currentThreadId)) {
+          signalCompaction(currentThreadId);
+        }
+        emitResult(onStream, true, finalAnswer, currentThreadId);
 
         const response: AgentResponse = {
           persona: agentType,
           status: 'done',
-          content: trimmed,
+          content: finalAnswer,
           timestamp: new Date(),
           sessionId: currentThreadId,
           structuredOutput,
@@ -767,7 +749,7 @@ export class CodexClient {
             options,
             totalRetryCount(),
           );
-          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          emitResult(onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return rateLimitedResponse;
         }
 
@@ -813,7 +795,7 @@ export class CodexClient {
           totalRetryCount(),
         );
         emitResult(
-          options.onStream,
+          onStream,
           false,
           errorResponse.error ?? errorResponse.content,
           currentThreadId,

@@ -1402,6 +1402,66 @@ describe('callKiro output cleanup (issue #781)', () => {
     expect(result).toMatchObject({ status: 'done', content: 'answer' });
   });
 
+  it('returns only the text after the last tool use as content when Kiro JSONL has no terminal result', async () => {
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          kind: 'AssistantMessage',
+          content: [
+            { kind: 'text', text: 'Progress note: checked input.ts. ' },
+            { kind: 'toolUse', toolUseId: 'kiro-tool-1', name: 'read', input: { path: 'retry.ts' } },
+          ],
+        }),
+        JSON.stringify({
+          kind: 'ToolResults',
+          content: [{ kind: 'toolResult', toolUseId: 'kiro-tool-1', status: 'success', content: [{ kind: 'text', text: 'retry source' }] }],
+        }),
+        JSON.stringify({ kind: 'AssistantMessage', content: [{ kind: 'text', text: 'Final answer' }] }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'Final answer' });
+    // The note before the tool use still reaches progress notes and the live display, once and in order.
+    expect(onStream.mock.calls.map(([event]) => event.type === 'text' ? event.data.text : event.type)).toEqual([
+      'Progress note: checked input.ts. ', 'tool_use', 'tool_result', 'Final answer', 'result',
+    ]);
+  });
+
+  it('returns an empty successful answer with the session ID when the turn ends with a tool call', async () => {
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({
+          kind: 'AssistantMessage',
+          content: [
+            { kind: 'text', text: 'Progress note: editing retry.ts. ' },
+            { kind: 'toolUse', toolUseId: 'kiro-tool-1', name: 'write', input: { path: 'retry.ts' } },
+          ],
+        }),
+        JSON.stringify({
+          kind: 'ToolResults',
+          content: [{ kind: 'toolResult', toolUseId: 'kiro-tool-1', status: 'success', content: [{ kind: 'text', text: 'written' }] }],
+        }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'edit retry.ts', { cwd: '/repo', sessionId: 'kiro-session', onStream });
+
+    // An empty answer continues the same session; a provider error would repeat the edit in a fresh session.
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId: 'kiro-session' });
+    expect(result.error).toBeUndefined();
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Progress note: editing retry.ts. ' } });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ result: '', success: true, sessionId: 'kiro-session' }),
+    });
+  });
+
   it('ignores text in diagnostic fields while traversing recognized content containers', async () => {
     mockSpawnWithScenario({ stdout: JSON.stringify({
       kind: 'envelope', diagnostics: { kind: 'text', text: 'not assistant output' },
@@ -1496,8 +1556,8 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
   const sessionId = 'd396ce0c-da35-4615-80cf-fdf8ee9cea13';
 
   // kiro-cli 2.24.0 (--agent-engine v2) の実出力を採取したもの。
-  // finalText はチャンク連結結果と異なる値にしている — 同値だと finalText を
-  // 無視してチャンクだけを繋ぐ壊れた実装でも検証を通ってしまう。
+  // 実出力の finalText はチャンク連結と同じ値だが、ここでは異なる値にしている —
+  // 同値だと本文をどちらから取ったかを区別できない。
   const acpStdout = [
     JSON.stringify({ type: 'runStarted', data: { payloadSchema: 'acp', acpProtocolVersion: 1, engine: 'v2' } }),
     JSON.stringify({ type: 'metadata', data: { sessionId, contextUsagePercentage: 1.5 } }),
@@ -1520,14 +1580,89 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
     vi.clearAllMocks();
   });
 
-  it('Given the ACP payload, When called, Then extracts finalText and the session ID', async () => {
+  const chunk = (text: string): string => JSON.stringify({
+    type: 'sessionUpdate',
+    data: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } },
+  });
+  const toolCallLine = JSON.stringify({
+    type: 'sessionUpdate',
+    data: {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'run_command',
+        content: [{ type: 'content', content: { type: 'text', text: 'NOISE' } }],
+      },
+    },
+  });
+  const textEventsOf = (onStream: ReturnType<typeof vi.fn>): string[] =>
+    onStream.mock.calls.flatMap(([event]) => event.type === 'text' ? [event.data.text] : []);
+
+  it('Given the ACP payload, When called, Then the streamed chunks are the body and the session ID is extracted', async () => {
     mockSpawnWithScenario({ stdout: acpStdout, code: 0 });
 
     const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
 
     expect(result.status).toBe('done');
-    expect(result.content).toBe('FINAL');
+    expect(result.content).toBe('HELLO');
     expect(result.sessionId).toBe(sessionId);
+  });
+
+  it('Given an ACP payload with finalText but no message chunks, When called, Then finalText is the body', async () => {
+    const withoutChunks = acpStdout.replace(`${chunk('HEL')}\n${chunk('LO')}\n`, '');
+    expect(withoutChunks).not.toContain('agent_message_chunk');
+    mockSpawnWithScenario({ stdout: withoutChunks, code: 0 });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'FINAL', sessionId });
+    expect(textEventsOf(onStream)).toEqual(['FINAL']);
+  });
+
+  it('Given a progress note, a tool call and a final answer, When finalText joins every message, Then the body is only the final answer', async () => {
+    const withTool = acpStdout
+      .replace('"finalText":"FINAL"', '"finalText":"Progress note: checked input.ts. HELLO"')
+      .replace(chunk('HEL'), `${chunk('Progress note: checked input.ts. ')}\n${toolCallLine}\n${chunk('HEL')}`);
+    expect(withTool).toContain(toolCallLine);
+    mockSpawnWithScenario({ stdout: withTool, code: 0 });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'say hello', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'HELLO', sessionId });
+    expect(textEventsOf(onStream)).toEqual(['Progress note: checked input.ts. ', 'HEL', 'LO']);
+  });
+
+  it('Given a progress note and a turn that ends with a tool call, When finalText repeats the note, Then the body is empty with the session ID', async () => {
+    const endsWithTool = acpStdout
+      .replace('"finalText":"FINAL"', '"finalText":"Progress note: editing retry.ts. "')
+      .replace(`${chunk('HEL')}\n${chunk('LO')}`, `${chunk('Progress note: editing retry.ts. ')}\n${toolCallLine}`);
+    expect(endsWithTool).toContain(toolCallLine);
+    mockSpawnWithScenario({ stdout: endsWithTool, code: 0 });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'edit retry.ts', { cwd: '/repo', onStream });
+
+    // An empty answer continues the same session; a provider error would repeat the edit in a fresh session.
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId });
+    expect(result.error).toBeUndefined();
+    expect(textEventsOf(onStream)).toEqual(['Progress note: editing retry.ts. ']);
+  });
+
+  it('Given an ACP tool call without prior text or finalText, Then the body is empty with the session ID', async () => {
+    const toolOnly = acpStdout
+      .replace(`${chunk('HEL')}\n${chunk('LO')}`, toolCallLine)
+      .replace('"finalText":"FINAL"', '"finalText":""');
+    mockSpawnWithScenario({ stdout: toolOnly, code: 0 });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'run the tool', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId });
+    expect(result.error).toBeUndefined();
+    expect(textEventsOf(onStream)).toEqual([]);
   });
 
   it('Given finalText is truncated, When called, Then falls back to the streamed chunks', async () => {
@@ -1535,30 +1670,6 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
       '"finalText":"FINAL","finalTextTruncated":false',
       '"finalText":"FI","finalTextTruncated":true',
     );
-    mockSpawnWithScenario({ stdout: truncated, code: 0 });
-
-    const result = await callKiro('coder', 'say hello', { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.content).toBe('HELLO');
-  });
-
-  it('Given a tool_call update carries text, When finalText is truncated, Then tool text does not leak into the body', async () => {
-    const toolCallLine = JSON.stringify({
-      type: 'sessionUpdate',
-      data: {
-        sessionId,
-        update: {
-          sessionUpdate: 'tool_call',
-          toolCallId: 'tc-1',
-          title: 'run_command',
-          content: [{ type: 'content', content: { type: 'text', text: 'NOISE' } }],
-        },
-      },
-    });
-    const truncated = acpStdout
-      .replace('"finalText":"FINAL","finalTextTruncated":false', '"finalText":"FI","finalTextTruncated":true')
-      .replace('{"type":"runFinished"', `${toolCallLine}\n{"type":"runFinished"}`);
     mockSpawnWithScenario({ stdout: truncated, code: 0 });
 
     const result = await callKiro('coder', 'say hello', { cwd: '/repo' });

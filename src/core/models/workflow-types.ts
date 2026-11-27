@@ -51,6 +51,7 @@ export type {
   CopilotEffort,
   KiroEffort,
   ClaudeSandboxSettings,
+  ClaudePermissionsOptions,
   ProviderGuardOptions,
   CodexProviderOptions,
   CodexPermissionControl,
@@ -218,8 +219,10 @@ export interface WorkflowCallInvocationRecord {
 
 export interface WorkflowReportInput {
   fromStep: string;
+  fallbackFromStep?: string;
   reports: readonly string[] | 'all';
   optionalIfUnrun?: true;
+  previousOnly?: true;
   history?: { previous: number };
 }
 
@@ -593,6 +596,11 @@ export interface WorkflowConfig {
   allStepsRules?: readonly WorkflowWideRule[];
   steps: WorkflowStep[];
   initialStep: string;
+  /**
+   * `repository_identity: true`: name the project's repository for `gh` / `glab` in a task that
+   * runs in a clone. Off by default; each workflow decides for itself, called ones included.
+   */
+  repositoryIdentity?: boolean;
   maxSteps: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];

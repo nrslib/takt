@@ -27,10 +27,11 @@ const doubles = vi.hoisted(() => ({
 vi.mock('node:child_process', async (original) => ({
   ...await original<typeof import('node:child_process')>(), spawn: doubles.spawn,
 }));
-vi.mock('../infra/daemon/owner.js', () => ({
+vi.mock('../infra/daemon/owner.js', async (original) => ({
+  ...await original<typeof import('../infra/daemon/owner.js')>(),
   readDaemonOwner: doubles.readOwner, isDaemonOwnerRunning: () => true, removeDaemonOwner: vi.fn(),
 }));
-vi.mock('../features/daemon/conversationReadiness.js', () => ({ isConversationIpcReady: doubles.ready }));
+vi.mock('../features/daemon/conversationReadiness.js', () => ({ connectConversationIpc: doubles.ready }));
 vi.mock('../shared/utils/cli-invocation.js', () => ({
   resolveCliInvocation: () => ({ cliPath: '/test/cli.js', args: ['/test/cli.js', 'daemon'] }),
 }));
@@ -84,7 +85,7 @@ describe('manager startup logging with global debug configuration', () => {
       version: packageVersion, cliPath: '/test/cli.js',
     };
     doubles.readOwner.mockReset().mockReturnValue(undefined);
-    doubles.ready.mockReset().mockResolvedValue(true);
+    doubles.ready.mockReset().mockImplementation(async () => ({ destroy: vi.fn() }));
     doubles.spawn.mockImplementation(() => {
       const child = Object.assign(new EventEmitter(), {
         pid: owner.pid, exitCode: null, signalCode: null, unref: vi.fn(),

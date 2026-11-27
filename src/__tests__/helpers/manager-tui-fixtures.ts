@@ -9,6 +9,7 @@ import type { ManagerGoalSummary } from '../../infra/goals/schema.js';
 import { conversationRecord } from './conversation-fixtures.js';
 
 export const cwd = '/test/manager-repository';
+export const managerConversationId = conversationRecord(cwd).id;
 export const summaryA: ManagerGoalSummary = { objective: 'CSVを出力する', outOfScope: ['JSON出力'],
   acceptanceCriteria: ['CSVを取得できる'], constraints: ['mock provider のみ'] };
 export const summaryB: ManagerGoalSummary = { objective: 'JSONを出力する', outOfScope: ['CSV出力', '通知'],
@@ -37,11 +38,18 @@ export class ManagerClientDouble {
   getSnapshot = (): ConversationClientSnapshot => this.view;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   onOutput = (listener: (output: Output) => void): (() => void) => { this.outputs.add(listener); return () => { this.outputs.delete(listener); }; };
-  submit = vi.fn(async (_command: ConversationCommand, onAccepted?: (id: string) => void): Promise<Submission> => {
+  submit = vi.fn(async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<Submission> => {
     const operationId = randomUUID();
     onAccepted?.(operationId);
+    if (command.kind === 'message' && command.display !== false && this.view.state?.running == null) {
+      this.output({ kind: 'user_message', operationId, message: command.text });
+    }
     return { kind: 'accepted', operationId };
   });
+  getImageDirectory = vi.fn<import('../../features/manager/conversationIpcClient.js').ConversationIpcClient['getImageDirectory']>()
+    .mockRejectedValue(new Error('No image directory configured'));
+  prepareImage = vi.fn<import('../../features/manager/conversationIpcClient.js').ConversationIpcClient['prepareImage']>()
+    .mockRejectedValue(new Error('No prepared image configured'));
   refresh = vi.fn(async (): Promise<void> => {});
   close = vi.fn();
   change(change: Partial<ConversationClientSnapshot>): void {

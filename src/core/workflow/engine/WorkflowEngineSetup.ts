@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildWorkflowPromptTree, locateWorkflowPromptStep, renderWorkflowPromptTree } from '../workflow-prompt-context.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, isRealPathInside } from '../../../shared/utils/index.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import {
   DEFAULT_COMPANION_FIX_POLICY,
@@ -25,7 +25,7 @@ import type {
 } from '../../models/types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
-import type { RunPaths } from '../run/run-paths.js';
+import { resolveReportDirectory, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
@@ -40,6 +40,7 @@ import { DynamicFacetSelectionStore } from '../dynamic-facets/dynamicFacetSelect
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
+import type { WorkflowResultsStore } from '../run/workflow-results.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
@@ -78,6 +79,7 @@ import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
 const log = createLogger('workflow-engine');
 
 interface WorkflowEngineSetupParams {
+  workflowResults: WorkflowResultsStore;
   config: WorkflowConfig;
   state: WorkflowState;
   task: string;
@@ -129,6 +131,7 @@ interface WorkflowEngineSetupParams {
 }
 
 export interface WorkflowEngineServices {
+  openCodeExternalDirectories: readonly string[];
   stepAbortSignalContext: WorkflowStepAbortSignalContext;
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
@@ -182,6 +185,14 @@ export function ensureRunDirsExist(runPaths: RunPaths): void {
   }
 }
 
+export function resolveOpenCodeExternalDirectories(
+  executionCwd: string,
+  contextDirectory: string,
+): string[] {
+  const realContextDirectory = realpathSync(contextDirectory);
+  return isRealPathInside(executionCwd, realContextDirectory) ? [] : [realContextDirectory];
+}
+
 export function applyRuntimeEnvironment(
   cwd: string,
   config: WorkflowConfig,
@@ -233,8 +244,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const getReviewScope = createTaskReviewScopeResolver({
     getCwd: params.getCwd,
     getPrContext: () => params.options.prContext,
+    getReportDir: () => resolveReportDirectory(params.getCwd(), params.getReportDir()),
   });
   const failureDir = join(params.runPaths.runRootAbs, 'failures');
+  const runContextRoot = join(params.runPaths.runRootAbs, 'context');
+  const openCodeExternalDirectories = resolveOpenCodeExternalDirectories(params.getCwd(), runContextRoot);
   const sharedTree = params.sharedRuntime.workflowPromptTree;
   // Direct engine callers have no bundle; describe the current definition without resolving calls.
   const promptTree = sharedTree ?? buildWorkflowPromptTree(params.config, undefined, params.projectCwd, params.getCwd());
@@ -295,6 +309,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         }).join('\n'),
       };
     },
+    openCodeExternalDirectories,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
@@ -346,6 +361,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   );
 
   const stepExecutor = new StepExecutor({
+    goalSpecificationPaths: params.options.goalSpecificationPaths,
     reportReferenceObserver: {
       resolved: (step, currentStep, reports) => {
         params.emitEvent('report:resolved', {
@@ -528,6 +544,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const arpeggioRunner = new ArpeggioRunner({
+    goalSpecificationPaths: params.options.goalSpecificationPaths,
     optionsBuilder,
     stepExecutor,
     liveIntervention: params.options.liveIntervention,
@@ -575,9 +592,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const systemStepExecutor = new SystemStepExecutor({
+    persistState: () => params.workflowResults.save(),
     abortSignal: params.options.abortSignal,
     task: params.task,
     projectCwd: params.projectCwd,
+    childProcessEnv: params.options.childProcessEnv,
     getCwd: params.getCwd,
     getContextDirectory: () => params.getRunPaths().contextAbs,
     createProviderStream: (step, provider, model) => optionsBuilder.buildProviderStream(
@@ -677,6 +696,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   return {
+    openCodeExternalDirectories,
     stepAbortSignalContext,
     optionsBuilder,
     stepExecutor,
