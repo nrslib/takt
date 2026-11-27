@@ -50,6 +50,7 @@ import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { normalizeQualityGates } from '../infra/config/configNormalizers.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
+import * as sessionCompaction from '../core/workflow/engine/session-compaction.js';
 
 type CommandGateRunResult = QualityGateRunResult;
 type LoopDeps = Parameters<typeof runWorkflowToCompletion>[0];
@@ -299,6 +300,56 @@ describe('WorkflowRunLoop command quality gates', () => {
       expect(instructions.get('edit-0')?.match(/^Exit code: .*$/gm)).toBeNull();
     } finally {
       vi.mocked(runAgent).mockReset();
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a parallel gate failure when session compaction stops the retry before dispatch', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-parallel-gate-compaction-'));
+    const gate = createCommandGate(cwd, 'verify', 7);
+    const child = makeStep('edit', {
+      session: 'compact',
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: gate.command, guidance: 'Check the fixture' }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const parent = makeStep('edit-in-parallel', {
+      parallel: [child],
+      rules: [makeRule('all("complete")', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine(makeConfig(parent), cwd, 'Apply an edit', {
+      projectCwd: cwd,
+      reportDirName: 'gate-compaction',
+      provider: 'mock',
+    });
+    const agent = vi.mocked(runAgent);
+    agent.mockClear();
+    agent.mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return makeResponse({ persona: 'edit', content: 'complete', sessionId: 'edit-session' });
+    });
+    const compact = vi.spyOn(sessionCompaction, 'compactSessionBeforePhase1');
+    try {
+      const failed = await engine.runSingleIteration();
+      expect(failed.nextStep).toBe(parent.name);
+      const diagnostics = failed.response.parallelBeforeReportGateFailures;
+      expect(diagnostics).toEqual([expect.objectContaining({
+        persona: 'edit',
+        content: expect.stringContaining('Exit code: 7'),
+        beforeReportGateGuidance: 'Check the fixture',
+      })]);
+
+      compact.mockRejectedValueOnce(new Error('Cannot compact the session'));
+      const stopped = await engine.runSingleIteration();
+
+      expect(compact.mock.lastCall?.[1].sessionId).toBe('edit-session');
+      expect(agent).toHaveBeenCalledTimes(1);
+      expect(stopped.response.status).toBe('error');
+      expect(stopped.response.parallelBeforeReportGateFailures).toEqual(diagnostics);
+      expect(engine.getState().lastOutput?.parallelBeforeReportGateFailures).toEqual(diagnostics);
+    } finally {
+      compact.mockRestore();
+      agent.mockReset();
       engine.removeAllListeners();
       rmSync(cwd, { recursive: true, force: true });
     }

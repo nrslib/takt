@@ -1494,6 +1494,12 @@ export class ParallelRunner {
       throw childExecutionState?.originalError ?? unhandledChildFailure.reason;
     }
 
+    const gateFailures = subResults.flatMap(({ subStep }) => {
+      const failure = pendingGateFailures.get(subStep.name);
+      return failure === undefined ? [] : [failure];
+    });
+    const gateDiagnostics = gateFailures.length > 0 ? { parallelBeforeReportGateFailures: gateFailures } : {};
+    const terminalParentContext = { step, state, stepIteration, subResults, gateDiagnostics };
     const terminalResults = this.collectTerminalResults(subResults);
     const parseFailureResult = terminalResults.find(
       (result) => result.response.failureCategory
@@ -1514,10 +1520,7 @@ export class ParallelRunner {
     }
     if (parseFailureResult) {
       return this.createTerminalParentResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
+        ...terminalParentContext,
         terminalResults,
         status: 'error',
         providerInfo: parseFailureResult.providerInfo ?? parentPm,
@@ -1526,10 +1529,7 @@ export class ParallelRunner {
     }
     if (continuationFailureResult !== undefined) {
       return this.createTerminalParentResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
+        ...terminalParentContext,
         terminalResults,
         status: 'error',
         providerInfo: continuationFailureResult.providerInfo ?? parentPm,
@@ -1538,10 +1538,7 @@ export class ParallelRunner {
     }
     if (rateLimitedResult) {
       return this.createTerminalParentResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
+        ...terminalParentContext,
         terminalResults,
         status: 'rate_limited',
         providerInfo: rateLimitedResult.providerInfo ?? parentPm,
@@ -1560,10 +1557,7 @@ export class ParallelRunner {
         throw new Error(`Parallel step "${step.name}" has no primary error result`);
       }
       return this.createTerminalParentResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
+        ...terminalParentContext,
         terminalResults,
         status: 'error',
         providerInfo: primaryFailure.providerInfo ?? parentPm,
@@ -1579,10 +1573,7 @@ export class ParallelRunner {
         }
         const reason = `Parallel step "${step.name}" exceeded its explicit error retry limit (${MAX_EXPLICIT_PARALLEL_ERROR_RETRIES})`;
         return this.createTerminalParentResult({
-          step,
-          state,
-          stepIteration,
-          subResults,
+          ...terminalParentContext,
           terminalResults: errorResults,
           status: 'error',
           providerInfo: primaryFailure.providerInfo ?? parentPm,
@@ -1607,10 +1598,7 @@ export class ParallelRunner {
         throw new Error(`Parallel step "${step.name}" has no primary blocked result`);
       }
       return this.createTerminalParentResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
+        ...terminalParentContext,
         terminalResults: blockedResults,
         status: 'blocked',
         providerInfo: primaryFailure.providerInfo ?? parentPm,
@@ -1623,7 +1611,6 @@ export class ParallelRunner {
     ));
     const retryCount = sumRetryCounts(subResults.map((result) => result.response));
     if (qualityGateFailure) {
-      const parallelBeforeReportGateFailures = this.collectBeforeReportGateFailures(subResults);
       const failureResponse: AgentResponse = {
         persona: step.name,
         status: 'done',
@@ -1634,7 +1621,7 @@ export class ParallelRunner {
         ].join('\n'),
         timestamp: new Date(),
         ...(qualityGateFailure.response.beforeReportGateFailed === true ? { beforeReportGateFailed: true } : {}),
-        ...(parallelBeforeReportGateFailures === undefined ? {} : { parallelBeforeReportGateFailures }),
+        ...gateDiagnostics,
         ...(retryCount === undefined ? {} : { retryCount }),
       };
       return {
@@ -1699,6 +1686,7 @@ export class ParallelRunner {
       content: aggregatedContent,
       timestamp: new Date(),
       ...(match && { matchedRuleIndex: match.index, matchedRuleMethod: match.method }),
+      ...gateDiagnostics,
       ...(retryCount === undefined ? {} : { retryCount }),
     };
 
@@ -1982,18 +1970,12 @@ export class ParallelRunner {
     return options;
   }
 
-  private collectBeforeReportGateFailures(subResults: readonly ParallelSubStepResult[]): readonly AgentResponse[] | undefined {
-    const failures = subResults
-      .map(({ response }) => response)
-      .filter((response) => response.beforeReportGateFailed === true);
-    return failures.length > 0 ? failures : undefined;
-  }
-
   private createTerminalParentResult(options: {
     step: WorkflowStep;
     state: WorkflowState;
     stepIteration: number;
     subResults: ParallelSubStepResult[];
+    gateDiagnostics: Pick<AgentResponse, 'parallelBeforeReportGateFailures'>;
     terminalResults: ParallelSubStepResult[];
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
@@ -2017,7 +1999,6 @@ export class ParallelRunner {
       MAX_AGENT_FAILURE_MESSAGE_BYTES,
     );
     const retryCount = sumRetryCounts(options.subResults.map((result) => result.response));
-    const parallelBeforeReportGateFailures = this.collectBeforeReportGateFailures(options.subResults);
     const response: AgentResponse = {
       persona: options.step.name,
       status: options.status,
@@ -2028,7 +2009,7 @@ export class ParallelRunner {
         : {}),
       ...(failureCategory && { failureCategory }),
       ...(retryCount === undefined ? {} : { retryCount }),
-      ...(parallelBeforeReportGateFailures === undefined ? {} : { parallelBeforeReportGateFailures }),
+      ...options.gateDiagnostics,
       ...(options.status === 'rate_limited'
         ? {
             ...(primaryFailure.response.errorKind === undefined
