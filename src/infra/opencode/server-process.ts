@@ -3,9 +3,9 @@ import { randomBytes } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { crossSpawn } from '../../shared/utils/spawn.js';
-import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import type { OpenCodeRuntime } from './runtime.js';
-import type { OpenCodeTransport } from './transport.js';
+import type { ManagedOpenCodeTransport } from './transport.js';
 import { createV2Transport } from './v2-transport.js';
 import { createV1Transport } from './v1-transport.js';
 
@@ -18,10 +18,11 @@ export interface OpenCodeServerStartOptions {
   timeoutMs: number;
   config: Record<string, unknown>;
   mcpServerNames?: readonly string[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface OpenCodeServerProcess {
-  client: OpenCodeTransport;
+  client: ManagedOpenCodeTransport;
   close: () => Promise<void>;
   onError: (listener: (error: Error) => void) => () => void;
 }
@@ -137,7 +138,7 @@ export async function startOpenCodeServer(
     ['serve', `--hostname=${OPENCODE_SERVER_HOSTNAME}`, `--port=${options.port}`],
     {
       env: {
-        ...buildChildProcessEnv(),
+        ...buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config),
         ...(password === undefined ? {} : { OPENCODE_PASSWORD: password }),
       },
@@ -276,7 +277,7 @@ export async function startOpenCodeServer(
   });
 
   try {
-    const client = password === undefined ? createV1Transport(url) : createV2Transport(url, password, options.mcpServerNames);
+    const client = password === undefined ? await createV1Transport(url) : await createV2Transport(url, password, options.mcpServerNames);
     let closePromise: Promise<void> | undefined;
     return {
       client,

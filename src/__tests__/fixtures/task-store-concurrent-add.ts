@@ -14,10 +14,12 @@ while (!existsSync(releaseFile)) {
 }
 
 try {
-  new TaskRunner(projectDir).addTask(`Concurrent task ${workerId}`, {
+  const options = {
     issue: 42,
     slug: `concurrent-task-${workerId}`,
-  });
+    deduplicateActiveTargets: true,
+  };
+  new TaskRunner(projectDir).addTask(`Concurrent task ${workerId}`, options);
   process.stdout.write('created');
 } catch (error) {
   if (error instanceof ActiveTaskTargetConflictError) {

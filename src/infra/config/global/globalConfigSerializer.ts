@@ -10,6 +10,7 @@ import {
   denormalizeAutoRoutingConfig,
   denormalizeAssistantConfig,
   denormalizeCacciaConfig,
+  denormalizeMergeConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -18,6 +19,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     language: config.language,
     provider: config.provider,
   };
+  if (config.daemon !== undefined) {
+    raw.daemon = {
+      ...(config.daemon.remoteWorker === undefined ? {} : { remote_worker: config.daemon.remoteWorker }),
+      ...(config.daemon.builtinWorker === undefined ? {} : { builtin_worker: {
+        ...(config.daemon.builtinWorker.concurrency === undefined ? {} : { concurrency: config.daemon.builtinWorker.concurrency }),
+      } }),
+    };
+  }
   if (config.model) {
     raw.model = config.model;
   }
@@ -76,6 +85,18 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.draft_pr = config.draftPr;
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
+  if (config.director !== undefined) {
+    raw.director = {
+      ...(config.director.slack === undefined ? {} : { slack: {
+        channel_id: config.director.slack.channelId, allowed_user_ids: config.director.slack.allowedUserIds,
+      } }),
+    };
+  }
+  if (config.manager !== undefined) {
+    raw.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, refresh_interval_ms: config.manager.refreshIntervalMs, auto_run: config.manager.autoRun, preserve_goal_worktree: config.manager.preserveGoalWorktree, workflows: config.manager.workflows, runtime_assignments: config.manager.runtimeAssignments, notifications: config.manager.notifications };
+  }
+  const rawMerge = denormalizeMergeConfig(config.merge);
+  if (rawMerge !== undefined) raw.merge = rawMerge;
   if (rawCaccia !== undefined) {
     raw.caccia = rawCaccia;
   }
@@ -117,6 +138,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   if (config.kiroCliPath) {
     raw.kiro_cli_path = config.kiroCliPath;
+  }
+  if (config.devinCliPath) {
+    raw.devin_cli_path = config.devinCliPath;
   }
   if (config.copilotGithubToken) {
     raw.copilot_github_token = config.copilotGithubToken;
@@ -161,6 +185,11 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.workflowCommandGates) {
     raw.workflow_command_gates = {
       custom_scripts: config.workflowCommandGates.customScripts,
+    };
+  }
+  if (config.workflowSystemCommands) {
+    raw.workflow_system_commands = {
+      custom_scripts: config.workflowSystemCommands.customScripts,
     };
   }
   if (config.workflowArpeggio) {

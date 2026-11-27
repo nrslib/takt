@@ -11,7 +11,8 @@
  * Widths and grapheme boundaries both come from `shared/utils/grapheme`, which
  * measures with the same package Ink lays its frames out with. Rows are cut
  * between graphemes, so an emoji sequence or a combining sequence is never
- * split and the caret never lands inside one.
+ * split and the caret never lands inside one. Tabs occupy one displayed space,
+ * while the buffer and row offsets retain the original tab code units.
  */
 
 import { measureWidth, segmentGraphemes } from '../../shared/utils/grapheme.js';
@@ -34,11 +35,19 @@ export interface PromptLayout {
 }
 
 /** Columns the prompt box has left for text once its own chrome is paid for. */
-export function resolvePromptContentWidth(terminalColumns: number | undefined): number {
+export function resolvePromptContentWidth(
+  terminalColumns: number | undefined,
+  minimumWidth = MIN_CONTENT_WIDTH,
+): number {
   const columns = terminalColumns === undefined || terminalColumns <= 0
     ? FALLBACK_TERMINAL_COLUMNS
     : terminalColumns;
-  return Math.max(columns - BOX_CHROME_COLUMNS, MIN_CONTENT_WIDTH);
+  return Math.max(columns - BOX_CHROME_COLUMNS, minimumWidth);
+}
+
+/** Displays each tab as one space without changing buffer-relative code-unit offsets. */
+export function toPromptDisplayText(text: string): string {
+  return text.replaceAll('\t', ' ');
 }
 
 /**
@@ -58,7 +67,7 @@ function splitLine(line: string, capacity: number): string[] {
   let current = '';
   let width = 0;
   for (const grapheme of segmentGraphemes(line)) {
-    const graphemeWidth = measureWidth(grapheme);
+    const graphemeWidth = measureWidth(toPromptDisplayText(grapheme));
     if (width + graphemeWidth > capacity && current !== '') {
       pieces.push(current);
       current = '';
@@ -71,6 +80,7 @@ function splitLine(line: string, capacity: number): string[] {
   return pieces;
 }
 
+/** Wraps the original buffer into display rows and maps the caret without altering submitted text. */
 export function layoutPromptRows(
   text: string,
   cursor: number,
@@ -133,7 +143,7 @@ export function moveCaretByRow(
     return null;
   }
   const currentRow = layout.rows[layout.cursorRow] ?? '';
-  const column = measureWidth(currentRow.slice(0, layout.cursorColumn));
+  const column = measureWidth(toPromptDisplayText(currentRow.slice(0, layout.cursorColumn)));
   return (layout.rowStarts[targetRow] ?? 0)
     + offsetForDisplayColumn(layout.rows[targetRow] ?? '', column);
 }
@@ -143,7 +153,7 @@ function offsetForDisplayColumn(row: string, column: number): number {
   let width = 0;
   let offset = 0;
   for (const grapheme of segmentGraphemes(row)) {
-    const graphemeWidth = measureWidth(grapheme);
+    const graphemeWidth = measureWidth(toPromptDisplayText(grapheme));
     if (width + graphemeWidth > column) {
       break;
     }

@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'PR #1803: report handoff at four review consumers, including one anomalous follow-up input'
+prompts:
+  - label: follow-up-baseline
+    raw: file://../../prompts/review-artifact-input-handoff/follow-up-baseline.md
+    config: &fixture
+      working_dir: .work/review-artifact-input-handoff
+  - label: follow-up-current
+    raw: file://../../prompts/review-artifact-input-handoff/follow-up-current.md
+    config: *fixture
+  - label: replan-baseline
+    raw: file://../../prompts/review-artifact-input-handoff/replan-baseline.md
+    config: *fixture
+  - label: replan-current
+    raw: file://../../prompts/review-artifact-input-handoff/replan-current.md
+    config: *fixture
+  - label: synthesis-baseline
+    raw: file://../../prompts/review-artifact-input-handoff/synthesis-baseline.md
+    config: *fixture
+  - label: synthesis-current
+    raw: file://../../prompts/review-artifact-input-handoff/synthesis-current.md
+    config: *fixture
+  - label: merge-baseline
+    raw: file://../../prompts/review-artifact-input-handoff/merge-baseline.md
+    config: *fixture
+  - label: merge-current
+    raw: file://../../prompts/review-artifact-input-handoff/merge-current.md
+    config: *fixture
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-6.1-sol
+      reasoning_effort: high
+      working_dir: .work/review-artifact-input-handoff
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 1
+tests:
+  - description: anomalous completed-call and incomplete-verifier combination retains unresolved finding
+    prompts: [follow-up-baseline, follow-up-current]
+    vars:
+      case: follow-up
+      task: |
+        F-17 の修正後レビューを行ってください。今回の修正計画、修正報告、確認できる証跡から未解消かどうかを判断し、結論と根拠を簡潔に示してください。
+    assert:
+      - type: javascript
+        value: file://../../asserts/review-artifact-input-handoff.mjs
+  - description: blocked review resolution is retained without inventing local work
+    prompts: [replan-baseline, replan-current]
+    vars:
+      case: replan
+      task: |
+        独立レビュー後の再計画を行ってください。既存の受入条件を維持し、現在の証跡で実行可能な作業と外部確認を区別して結論を示してください。
+    assert:
+      - type: javascript
+        value: file://../../asserts/review-artifact-input-handoff.mjs
+  - description: synthesis uses selected reviewer finding without optional reviewer
+    prompts: [synthesis-baseline, synthesis-current]
+    vars:
+      case: synthesis
+      task: |
+        完了した専門レビューを統合してください。選択されたレビューだけを根拠に最終判定と未解消の指摘を示してください。
+    assert:
+      - type: javascript
+        value: file://../../asserts/review-artifact-input-handoff.mjs
+  - description: merge judge rejects unresolved review despite green CI
+    prompts: [merge-baseline, merge-current]
+    vars:
+      case: merge
+      task: |
+        PR 123 のマージ判断を行ってください。CI は成功し、ブランチはマージ可能ですが、完了したレビューの未解消指摘も判定に含めて approved と reason を示してください。
+    assert:
+      - type: javascript
+        value: file://../../asserts/review-artifact-input-handoff.mjs

@@ -24,6 +24,8 @@ const {
   mockRemoveClone,
   mockMaterializeCloneHeadToRootBranch,
   mockRelayPushCloneToOrigin,
+  mockCaptureConflictFiles,
+  mockValidateConflictFiles,
 } = vi.hoisted(() => ({
   mockGetCurrentBranch: vi.fn(),
   mockExecFileSync: vi.fn(),
@@ -46,6 +48,15 @@ const {
   mockRemoveClone: vi.fn(),
   mockMaterializeCloneHeadToRootBranch: vi.fn(),
   mockRelayPushCloneToOrigin: vi.fn(),
+  mockCaptureConflictFiles: vi.fn(),
+  mockValidateConflictFiles: vi.fn(),
+}));
+
+vi.mock('../infra/task/git-environment.js', () => ({
+  buildSafeGitEnvironment: vi.fn(async () => ({ SAFE_GIT: '1' })),
+}));
+vi.mock('../infra/service/syncConflictFiles.js', () => ({
+  captureSyncConflictFiles: (...args: unknown[]) => mockCaptureConflictFiles(...args),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -93,9 +104,9 @@ vi.mock('../shared/prompts/index.js', () => ({
 
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: vi.fn(() => ({
-    checkCliStatus: vi.fn(() => ({ available: true })),
+    checkCliStatus: vi.fn(() => ({ available: true as const })),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
-    createIssue: vi.fn(() => ({ success: true, issueNumber: 586 })),
+    createIssue: vi.fn(() => ({ success: true as const, issueNumber: 586 })),
     closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
     listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
@@ -153,6 +164,9 @@ function createWorkflowState(currentStep = 'route_context'): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -161,7 +175,7 @@ function createSystemStepGitProvider(
   overrides: Partial<SystemStepGitProvider>,
 ): SystemStepGitProvider {
   return {
-    checkCliStatus: vi.fn(() => ({ available: true })),
+    checkCliStatus: vi.fn(() => ({ available: true as const })),
     fetchIssue: vi.fn(() => ({
       number: 1,
       title: 'Issue',
@@ -169,8 +183,8 @@ function createSystemStepGitProvider(
       labels: [],
       comments: [],
     })),
-    createIssue: vi.fn(() => ({ success: true, issueNumber: 1 })),
-    closeIssue: vi.fn(() => ({ success: true })),
+    createIssue: vi.fn(() => ({ success: true as const, issueNumber: 1 })),
+    closeIssue: vi.fn(() => ({ success: true as const })),
     fetchPrReviewComments: vi.fn(() => ({
       number: 1,
       title: 'PR',
@@ -184,9 +198,9 @@ function createSystemStepGitProvider(
     listOpenIssues: vi.fn(() => []),
     listOpenPrs: vi.fn(() => []),
     findExistingPr: vi.fn(() => undefined),
-    commentOnPr: vi.fn(() => ({ success: true })),
-    closePr: vi.fn(() => ({ success: true })),
-    mergePr: vi.fn(() => ({ success: true })),
+    commentOnPr: vi.fn(() => ({ success: true as const })),
+    closePr: vi.fn(() => ({ success: true as const })),
+    mergePr: vi.fn(() => ({ success: true as const })),
     ...overrides,
   };
 }
@@ -221,6 +235,8 @@ describe('DefaultSystemStepServices', () => {
     mockRemoveClone.mockReset();
     mockMaterializeCloneHeadToRootBranch.mockReset();
     mockRelayPushCloneToOrigin.mockReset();
+    mockCaptureConflictFiles.mockReset();
+    mockValidateConflictFiles.mockReset();
     mockGetCurrentBranch.mockReturnValue('task/test-branch');
     mockFindExistingPr.mockReturnValue(undefined);
     mockListOpenIssues.mockReturnValue([]);
@@ -231,11 +247,11 @@ describe('DefaultSystemStepServices', () => {
       persona: 'conflict-resolver',
       timestamp: new Date(),
     });
-    mockCommentOnPr.mockReturnValue({ success: true });
-    mockMergePr.mockReturnValue({ success: true });
+    mockCommentOnPr.mockReturnValue({ success: true as const });
+    mockMergePr.mockReturnValue({ success: true as const });
     mockSaveTaskFile.mockResolvedValue({ taskName: 'task-1', tasksFile: '/repo/.takt/tasks.yaml' });
     mockCreateIssueFromTaskResult.mockReturnValue({ success: false, error: 'Failed to create issue from task' });
-    mockCloseIssue.mockReturnValue({ success: true });
+    mockCloseIssue.mockReturnValue({ success: true as const });
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
     mockCreateBaseBranchIfMissing.mockImplementation((_cwd: string, config: { name: string }) => ({
@@ -243,6 +259,7 @@ describe('DefaultSystemStepServices', () => {
       created: true,
     }));
     mockResolveCloneBaseDir.mockReturnValue('/repo/.takt');
+    mockCaptureConflictFiles.mockReturnValue({ validateAndStage: mockValidateConflictFiles });
   });
 
   it('resolves issue_context from current task issue number', () => {
@@ -1103,7 +1120,7 @@ describe('DefaultSystemStepServices', () => {
         where: {
           head_branch: string;
           managed_by_takt: boolean;
-          labels: string[];
+          labels?: string[];
           same_repository: boolean;
           draft: boolean;
         };
@@ -1625,16 +1642,8 @@ describe('DefaultSystemStepServices', () => {
 
   it('pr_list は CLI が利用不可なら listOpenPrs を呼ばずに失敗する', () => {
     vi.mocked(getGitProvider).mockReturnValueOnce({
-      checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
-      fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
-      createIssue: vi.fn(() => ({ success: true, issueNumber: 586 })),
-      closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
-      listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
-      fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
-      listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
-      findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
-      commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
-      mergePr: (...args: unknown[]) => mockMergePr(...args),
+      ...getGitProvider(),
+      checkCliStatus: vi.fn(() => ({ available: false as const, error: 'gh unavailable' })),
     });
 
     const services = new DefaultSystemStepServices({
@@ -1653,16 +1662,8 @@ describe('DefaultSystemStepServices', () => {
 
   it('issue_list は CLI が利用不可なら listOpenIssues を呼ばずに失敗する', () => {
     vi.mocked(getGitProvider).mockReturnValueOnce({
-      checkCliStatus: vi.fn(() => ({ available: false, error: 'gh unavailable' })),
-      fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
-      createIssue: vi.fn(() => ({ success: true, issueNumber: 586 })),
-      closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
-      listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
-      fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
-      listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
-      findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
-      commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
-      mergePr: (...args: unknown[]) => mockMergePr(...args),
+      ...getGitProvider(),
+      checkCliStatus: vi.fn(() => ({ available: false as const, error: 'gh unavailable' })),
     });
 
     const services = new DefaultSystemStepServices({
@@ -1715,7 +1716,7 @@ describe('DefaultSystemStepServices', () => {
 
   it('comment_pr は SystemStepServicesOptions の gitProvider を優先する', async () => {
     const requestProvider = createSystemStepGitProvider({
-      commentOnPr: vi.fn(() => ({ success: true })),
+      commentOnPr: vi.fn(() => ({ success: true as const })),
     });
 
     const services = new DefaultSystemStepServices({
@@ -1744,7 +1745,7 @@ describe('DefaultSystemStepServices', () => {
       createIssue: vi.fn(),
       closeIssue: vi.fn(),
     });
-    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true as const, issueNumber: 586 });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1823,7 +1824,7 @@ describe('DefaultSystemStepServices', () => {
   });
 
   it('creates a new follow-up task and forwards worktree options', async () => {
-    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true as const, issueNumber: 586 });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1880,6 +1881,7 @@ describe('DefaultSystemStepServices', () => {
     });
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       issue: 586,
       worktree: true,
       baseBranch: 'improve',
@@ -1929,6 +1931,7 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       worktree: true,
       autoPr: true,
       draftPr: false,
@@ -1973,6 +1976,7 @@ describe('DefaultSystemStepServices', () => {
     expect(mockResolveBaseBranch).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       baseBranch: 'improve',
     });
     expect(result).toEqual({
@@ -2053,7 +2057,7 @@ describe('DefaultSystemStepServices', () => {
   });
 
   it('leaves the created issue open when enqueue_task task saving fails after issue creation', async () => {
-    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true as const, issueNumber: 586 });
     mockSaveTaskFile.mockRejectedValueOnce(new Error('disk full'));
 
     const services = new DefaultSystemStepServices({
@@ -2088,7 +2092,7 @@ describe('DefaultSystemStepServices', () => {
   });
 
   it('redacts secrets and local paths from enqueue_task issue failure results', async () => {
-    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true as const, issueNumber: 586 });
     mockSaveTaskFile.mockRejectedValueOnce(
       new Error('token=plain-secret\nCannot write file:///Users/nrs/secret/tasks.yaml'),
     );
@@ -2162,12 +2166,14 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Address review comments', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       worktree: true,
       branch: 'task/test-branch',
       baseBranch: 'main',
       autoPr: false,
       shouldPublishBranchToOrigin: true,
       prNumber: 42,
+      cacciaExecutionSource: 'from_pr',
     });
     expect(mockResolveBaseBranch).toHaveBeenCalledWith('/repo', 'main');
     expect(result).toEqual({
@@ -2223,12 +2229,14 @@ describe('DefaultSystemStepServices', () => {
     expect(mockResolveBaseBranch).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Address review comments', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       worktree: true,
       branch: 'task/test-branch',
       baseBranch: 'improve',
       autoPr: false,
       shouldPublishBranchToOrigin: true,
       prNumber: 42,
+      cacciaExecutionSource: 'from_pr',
     });
     expect(result).toEqual({
       success: true,
@@ -2533,7 +2541,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge failed', 'fatal: refusing to merge unrelated histories');
       }
       return '';
@@ -2560,7 +2568,7 @@ describe('DefaultSystemStepServices', () => {
     );
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
-      ['merge', 'refs/remotes/origin/improve'],
+      ['merge', '--ff', '--no-edit', 'refs/remotes/origin/improve'],
       expect.any(Object),
     );
   });
@@ -2756,7 +2764,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -2793,7 +2801,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -2832,7 +2840,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       if (argsArr[0] === 'merge' && argsArr[1] === '--abort') {
@@ -2929,7 +2937,7 @@ describe('DefaultSystemStepServices', () => {
       (args) => args[0] === 'fetch' && args[1] === '/repo' && args[2] === 'refs/remotes/origin/improve:refs/remotes/origin/improve',
     );
     const baseMerge = findGitCallIndex(
-      (args) => args[0] === 'merge' && args[1] === 'refs/remotes/origin/improve',
+      (args) => args[0] === 'merge' && args[1] === '--ff',
     );
     expect(headFetchProject).toBeGreaterThanOrEqual(0);
     expect(headFetchProject).toBeLessThan(headFetchWorktree);
@@ -3020,6 +3028,28 @@ describe('DefaultSystemStepServices', () => {
     });
   });
 
+  it('plain_textは改行と長いバッククォート列を含む本文全体を囲む', async () => {
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Comment' });
+    const body = '[unit](https://example.invalid)\n`````\n[run](https://example.invalid/run)';
+    await services.executeEffect({ type: 'comment_pr', pr: 42, body, body_format: 'plain_text' },
+      { pr: 42, body, body_format: 'plain_text' }, {} as never);
+    expect(mockCommentOnPr).toHaveBeenCalledWith(42, `\`\`\`\`\`\`text\n${body}\n\`\`\`\`\`\``, '/repo');
+  });
+
+  it('body中の設定名は出力方式を変更せず未指定時はMarkdown本文をそのまま渡す', async () => {
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Comment' });
+    const body = 'body_format: plain_text [run](https://github.com/org/repo/actions/runs/10)';
+    await services.executeEffect({ type: 'comment_pr', pr: 42, body }, { pr: 42, body }, {} as never);
+    expect(mockCommentOnPr).toHaveBeenCalledWith(42, body, '/repo');
+  });
+
+  it('解決済みpayloadの不正なbody_formatは投稿前に拒否する', async () => {
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Comment' });
+    await expect(services.executeEffect({ type: 'comment_pr', pr: 42, body: 'Comment' },
+      { pr: 42, body: 'Comment', body_format: 'html' }, {} as never)).rejects.toThrow();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+  });
+
   it('validates comment_pr payload fields', async () => {
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -3047,7 +3077,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -3067,6 +3097,8 @@ describe('DefaultSystemStepServices', () => {
       conflicted: false,
     });
     expect(mockAgentCall).toHaveBeenCalled();
+    expect(mockCaptureConflictFiles).toHaveBeenCalledWith(expect.any(String), { SAFE_GIT: '1' });
+    expect(mockValidateConflictFiles).toHaveBeenCalledOnce();
   });
 
   it('returns success for resolve_conflicts_with_ai without calling AI when there is no conflict', async () => {
@@ -3098,7 +3130,7 @@ describe('DefaultSystemStepServices', () => {
     });
     expect(mockAgentCall).not.toHaveBeenCalled();
     expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === '--ff-only')).toBeGreaterThanOrEqual(0);
-    expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === 'refs/remotes/origin/improve')).toBeGreaterThanOrEqual(0);
+    expect(findGitCallIndex((args) => args[0] === 'merge' && args[1] === '--ff')).toBeGreaterThanOrEqual(0);
   });
 
   it('runs resolve_conflicts_with_ai on a PR-scoped clone when cwd is not on the PR head branch', async () => {
@@ -3116,7 +3148,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -3174,7 +3206,7 @@ describe('DefaultSystemStepServices', () => {
     let baseMergeCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         baseMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
@@ -3225,7 +3257,7 @@ describe('DefaultSystemStepServices', () => {
     let baseMergeCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         baseMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
@@ -3299,7 +3331,7 @@ describe('DefaultSystemStepServices', () => {
     });
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       if (argsArr[0] === 'merge' && argsArr[1] === '--abort') {
@@ -3346,7 +3378,7 @@ describe('DefaultSystemStepServices', () => {
     let conflictMergeCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         conflictMergeCalls += 1;
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
@@ -3397,7 +3429,7 @@ describe('DefaultSystemStepServices', () => {
     let mergeBaseCalls = 0;
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         mergeBaseCalls += 1;
         if (mergeBaseCalls === 1) {
           throw createCommandError('merge in progress', 'fatal: You have not concluded your merge (MERGE_HEAD exists)');
@@ -3445,7 +3477,7 @@ describe('DefaultSystemStepServices', () => {
   });
 
   it('returns successful merge_pr effect results', async () => {
-    mockMergePr.mockReturnValue({ success: true });
+    mockMergePr.mockReturnValue({ success: true as const });
 
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -3455,8 +3487,29 @@ describe('DefaultSystemStepServices', () => {
 
     const result = await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
 
-    expect(mockMergePr).toHaveBeenCalledWith(42, '/repo');
+    expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, '/repo']);
     expect(result).toEqual({ success: true, failed: false });
+  });
+
+  it.each([false, true])('merge_prは現在のclone HEADを使い、preserveHeadBranch=%sを反映する', async (preserveHeadBranch) => {
+    const headSha = 'b'.repeat(40);
+    mockExecFileSync.mockReturnValue(headSha);
+    mockMergePr.mockReturnValue({ success: true });
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
+      prExecutionContext: {
+        prNumber: 42, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+        headRepositoryUrl: '/repo', headRepositoryPushUrls: ['/repo'],
+        preserveHeadBranch,
+      },
+      prGitOperations: { fetch: vi.fn(), push: vi.fn() },
+    });
+
+    const result = await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
+
+    expect(result).toEqual({ success: true, failed: false });
+    expect(mockMergePr).toHaveBeenCalledWith(42, '/repo', undefined, headSha,
+      ...(preserveHeadBranch ? [{ deleteBranch: false }] : []));
   });
 
   it('returns failed merge_pr effect results with provider errors', async () => {
@@ -3470,7 +3523,7 @@ describe('DefaultSystemStepServices', () => {
 
     const result = await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
 
-    expect(mockMergePr).toHaveBeenCalledWith(42, '/repo');
+    expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, '/repo']);
     expect(result).toEqual({
       success: false,
       failed: true,

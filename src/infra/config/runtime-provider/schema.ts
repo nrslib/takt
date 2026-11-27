@@ -29,6 +29,14 @@ const ProfileSchema = z
   .object({
     provider: ProviderNameSchema.optional(),
     model: z.string().min(1).optional(),
+    context_window: z.union([
+      z.literal('auto'),
+      z.number().int().positive(),
+      z.object({
+        initial: z.number().int().positive(),
+        auto_expand: z.boolean().optional(),
+      }).strict(),
+    ]).optional(),
     options: ProfileOptionsSchema.optional(),
     capabilities: z.union([
       z.string().min(1),
@@ -73,6 +81,22 @@ const DefaultAssignmentSchema = z
       ctx.addIssue({
         code: 'custom',
         message: 'provider.defaults must specify exactly one of `profile` or `ladder`',
+      });
+    }
+  });
+
+const ProviderDefaultsSchema = z
+  .object({
+    profile: z.string().min(1).optional(),
+    ladder: z.array(z.string().min(1)).min(1).optional(),
+    assignment: z.string().min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if ([value.profile, value.ladder, value.assignment].filter((form) => form !== undefined).length !== 1) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'provider.defaults must specify exactly one of `profile`, `ladder`, or `assignment`',
       });
     }
   });
@@ -139,7 +163,10 @@ const TargetsSchema = z
     personas: z.record(z.string(), AssignmentSchema).optional(),
     tags: z.record(z.string(), AssignmentSchema).optional(),
     steps: z.record(z.string(), AssignmentSchema).optional(),
-    internal_agents: z.record(z.string(), AssignmentSchema).optional(),
+    internal_agents: z.preprocess((value) => {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+      return Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'manager-permission-judge'));
+    }, z.record(z.string(), AssignmentSchema)).optional(),
     companions: z.record(z.string(), CompanionAssignmentSchema).optional(),
   })
   .strict();
@@ -161,7 +188,7 @@ const ProviderAssignmentSetSchema = z
 
 const ProviderSectionSchema = z
   .object({
-    defaults: DefaultAssignmentSchema.optional(),
+    defaults: ProviderDefaultsSchema.optional(),
     profiles: z.record(z.string(), ProfileSchema).optional(),
     targets: TargetsSchema.optional(),
     assignments: z.record(z.string(), ProviderAssignmentSetSchema).optional(),

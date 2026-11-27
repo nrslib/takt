@@ -11,11 +11,13 @@ import {
   buildTaskRetryRestartTree,
   formatTaskRetryPath,
   resolveTaskRetryStackPath,
+  type ResolvedTaskRetryPath,
   type TaskRetryRestartTreeNode,
   type TaskRetryStartPathContext,
 } from '../taskRetryStartPath.js';
 
 const RESUME_SELECTION_VALUE = 'resume-checkpoint';
+const INITIAL_SELECTION_VALUE = 'workflow-initial';
 const RESTART_VALUE_PREFIX = 'restart:';
 const HEADING_VALUE_PREFIX = 'heading:';
 const RESUME_LABEL_PREFIX = 'Resume failed position: ';
@@ -30,6 +32,7 @@ export class InvalidTaskRetryResumeWithoutRestartError extends Error {
 }
 
 export type TaskRetryStartSelection =
+  | { kind: 'initial' }
   | { kind: 'resume'; resumePoint: WorkflowResumePoint }
   | { kind: 'restart'; restartPoint: WorkflowRestartPoint };
 
@@ -45,6 +48,7 @@ export type TaskRetryStartOptionSelector = (
 ) => Promise<string | null>;
 
 export interface SelectTaskRetryStartOptions extends TaskRetryStartPathContext {
+  allowInitialStart?: boolean;
   resumePoint?: WorkflowResumePoint;
   preferredRootStep?: string;
 }
@@ -52,6 +56,8 @@ export interface SelectTaskRetryStartOptions extends TaskRetryStartPathContext {
 /** Public, opaque choices shared by CLI and Web UI. */
 export interface TaskRetryStartOption {
   readonly id: string;
+  readonly path: string;
+  readonly headings?: ResolvedTaskRetryPath['headings'];
   readonly label: string;
   readonly selectable: boolean;
   readonly description?: string;
@@ -75,6 +81,7 @@ export function resolveTaskRetryStartOwnership(
   selectedStart: TaskRetryStartSelection,
   workflowConfig: Pick<WorkflowConfig, 'initialStep'>,
 ): TaskRetryStartOwnership {
+  if (selectedStart.kind === 'initial') return {};
   if (selectedStart.kind === 'resume') {
     const rootEntry = selectedStart.resumePoint.stack[0]!;
     return {
@@ -87,6 +94,8 @@ export function resolveTaskRetryStartOwnership(
 
 interface ResumeOption {
   value: string;
+  path: string;
+  headings: ResolvedTaskRetryPath['headings'];
   label: string;
   description: string;
   selection: Extract<TaskRetryStartSelection, { kind: 'resume' }>;
@@ -99,7 +108,7 @@ function createResumeOption(
   if (options.resumePoint === undefined) {
     return undefined;
   }
-  let stack = options.resumePoint.stack;
+  const stack = options.resumePoint.stack;
   const resolve = (): ReturnType<typeof resolveTaskRetryStackPath> => {
     try {
       return resolveTaskRetryStackPath(rootWorkflow, stack, options);
@@ -109,32 +118,24 @@ function createResumeOption(
       return { reason };
     }
   };
-  let resolved = resolve();
-  let truncationReason: string | undefined;
+  const resolved = resolve();
   if ('reason' in resolved) {
-    const failure = resolved;
-    while (stack.length > 1 && 'reason' in resolved) {
-      stack = stack.slice(0, -1);
-      resolved = resolve();
-    }
-    if ('reason' in resolved) {
-      return failure;
-    }
-    truncationReason = failure.reason;
+    return resolved;
   }
   const resolvedPath = formatTaskRetryPath(resolved.segments);
   return {
     value: RESUME_SELECTION_VALUE,
+    path: resolvedPath,
+    headings: resolved.headings,
     label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath([stack.at(-1)!.step])}`,
-    description: truncationReason === undefined
-      ? resolvedPath
-      : `Full saved position could not be resolved: ${sanitizeTerminalText(truncationReason)}. Resume will use the valid prefix: ${resolvedPath}.`,
+    description: resolvedPath,
     selection: { kind: 'resume', resumePoint: { ...options.resumePoint, stack } },
   };
 }
 
 interface FlattenedTree {
   promptOptions: SelectOptionItem<string>[];
+  paths: Map<string, Pick<TaskRetryStartOption, 'path' | 'headings'>>;
   selections: Map<string, TaskRetryStartSelection>;
   /** Value -> concise (unindented) label used for the confirmation log. */
   resultLabels: Map<string, string>;
@@ -152,12 +153,17 @@ function flattenRestartTree(
   preferredRootStep: string | undefined,
 ): FlattenedTree {
   const promptOptions: SelectOptionItem<string>[] = [];
+  const paths = new Map<string, Pick<TaskRetryStartOption, 'path' | 'headings'>>();
   const selections = new Map<string, TaskRetryStartSelection>();
   const resultLabels = new Map<string, string>();
   let firstLeafValue: string | undefined;
   let preferredLeafValue: string | undefined;
 
-  const visit = (nodes: TaskRetryRestartTreeNode[], rootStepName: string | undefined): void => {
+  const visit = (
+    nodes: TaskRetryRestartTreeNode[],
+    rootStepName: string | undefined,
+    headings: NonNullable<TaskRetryStartOption['headings']>,
+  ): void => {
     for (const node of nodes) {
       const indent = TREE_INDENT.repeat(node.depth);
       // The authored step name is serialized so control characters stay
@@ -165,16 +171,19 @@ function flattenRestartTree(
       const stepLabel = formatTaskRetryPath([node.step.name]);
       const currentRoot = node.depth === 0 ? node.step.name : rootStepName;
       if (node.kind === 'heading') {
+        const heading = { path: node.path, ...(node.step.description === undefined ? {} : { description: node.step.description }) };
+        paths.set(`${HEADING_VALUE_PREFIX}${node.id}`, { path: node.path, headings });
         promptOptions.push({
           label: `${indent}${stepLabel}:`,
           value: `${HEADING_VALUE_PREFIX}${node.id}`,
           selectable: false,
           ...(node.note === undefined ? {} : { description: node.note }),
         });
-        visit(node.children, currentRoot);
+        visit(node.children, currentRoot, [...headings, heading]);
         continue;
       }
       const value = `${RESTART_VALUE_PREFIX}${node.id}`;
+      paths.set(value, { path: node.path, headings });
       promptOptions.push({ label: `${indent}${stepLabel}`, value });
       selections.set(value, { kind: 'restart', restartPoint: node.restartPoint });
       resultLabels.set(value, stepLabel);
@@ -193,9 +202,9 @@ function flattenRestartTree(
       }
     }
   };
-  visit(tree, undefined);
+  visit(tree, undefined, []);
 
-  return { promptOptions, selections, resultLabels, firstLeafValue, preferredLeafValue };
+  return { promptOptions, paths, selections, resultLabels, firstLeafValue, preferredLeafValue };
 }
 
 function buildTaskRetryStartCatalog(
@@ -208,7 +217,9 @@ function buildTaskRetryStartCatalog(
   const resumeOption = resumeResolution !== undefined && 'selection' in resumeResolution
     ? resumeResolution
     : undefined;
+  const initialStart = options.allowInitialStart === true && options.resumePoint === undefined;
   const defaultId = resumeOption?.value
+    ?? (initialStart ? INITIAL_SELECTION_VALUE : undefined)
     ?? flattened.preferredLeafValue
     ?? flattened.firstLeafValue;
   if (defaultId === undefined) {
@@ -221,6 +232,13 @@ function buildTaskRetryStartCatalog(
   const promptOptions: SelectOptionItem<string>[] = [];
   const selections = new Map<string, TaskRetryStartSelection>(flattened.selections);
   const resultLabels = new Map<string, string>(flattened.resultLabels);
+  if (initialStart) {
+    const label = 'Start workflow from the beginning';
+    promptOptions.push({ value: INITIAL_SELECTION_VALUE, label });
+    flattened.paths.set(INITIAL_SELECTION_VALUE, { path: formatTaskRetryPath([rootWorkflow.name, rootWorkflow.initialStep]) });
+    selections.set(INITIAL_SELECTION_VALUE, { kind: 'initial' });
+    resultLabels.set(INITIAL_SELECTION_VALUE, label);
+  }
   if (resumeOption !== undefined) {
     promptOptions.push({
       label: resumeOption.label,
@@ -234,6 +252,9 @@ function buildTaskRetryStartCatalog(
   return {
     options: promptOptions.map((option) => ({
       id: option.value,
+      ...(option.value === resumeOption?.value
+        ? { path: resumeOption.path, headings: resumeOption.headings }
+        : flattened.paths.get(option.value)!),
       label: option.label,
       selectable: option.selectable !== false,
       ...(option.description === undefined ? {} : { description: option.description }),

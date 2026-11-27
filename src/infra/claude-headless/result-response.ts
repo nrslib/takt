@@ -1,8 +1,8 @@
 import type { AgentResponse } from '../../core/models/index.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
 import { parseStructuredOutput } from '../../shared/utils/index.js';
-import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError } from '../rate-limit/detection.js';
 import { findRateLimitNoticeInStdout, type StreamJsonStdoutResult } from './stream-json-lines.js';
+import { isClaudeSessionMissing } from '../claude/session-resume.js';
 
 type ClaudeHeadlessResponseInput = {
   agentName: string;
@@ -10,8 +10,8 @@ type ClaudeHeadlessResponseInput = {
   stdout: string;
   stderr: string;
   sessionId: string | undefined;
+  resumeSessionId?: string;
   outputSchema: Record<string, unknown> | undefined;
-  onStream: StreamCallback | undefined;
 };
 
 function buildNoContentMessage(stdout: string, stderr: string): string {
@@ -23,37 +23,16 @@ function hasCompatibilityDisplayText(parsed: StreamJsonStdoutResult): boolean {
   return !parsed.hasResult && parsed.displayText.length > 0;
 }
 
-function emitResultEvent(
-  onStream: StreamCallback | undefined,
-  payload: { result: string; success: boolean; sessionId: string; error?: string },
-): void {
-  if (!onStream) {
-    return;
-  }
-
-  onStream({
-    type: 'result',
-    data: payload,
-  });
-}
-
 export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput): AgentResponse {
-  const { agentName, parsed, stdout, stderr, sessionId, outputSchema, onStream } = input;
+  const { agentName, parsed, stdout, stderr, sessionId, outputSchema } = input;
   const content = parsed.content;
   const structuredOutput =
     parsed.structuredOutput ?? parseStructuredOutput(content, !!outputSchema);
-  const resolvedSessionId = sessionId ?? '';
   const compatibilitySuccess = hasCompatibilityDisplayText(parsed);
   // assistant / result イベント単位で通知文を探す。stdout 全体の部分一致は使わない (#1674)。
   const rateLimitMarkerText = findRateLimitNoticeInStdout(stdout);
 
   if (rateLimitMarkerText) {
-    emitResultEvent(onStream, {
-      result: '',
-      success: false,
-      error: rateLimitMarkerText,
-      sessionId: resolvedSessionId,
-    });
     return {
       persona: agentName,
       timestamp: new Date(),
@@ -64,12 +43,6 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
 
   if (!parsed.hasResult && !compatibilitySuccess) {
     const message = buildNoContentMessage(stdout, stderr);
-    emitResultEvent(onStream, {
-      result: '',
-      success: false,
-      error: message,
-      sessionId: resolvedSessionId,
-    });
     return {
       persona: agentName,
       status: 'error',
@@ -82,13 +55,7 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
 
   if (parsed.hasResult && !parsed.success) {
     const message = parsed.error ?? buildNoContentMessage(stdout, stderr);
-    if (containsRateLimitError(message)) {
-      emitResultEvent(onStream, {
-        result: '',
-        success: false,
-        error: message,
-        sessionId: resolvedSessionId,
-      });
+    if (classifyRateLimitError(message) !== 'NotRateLimit') {
       return {
         persona: agentName,
         timestamp: new Date(),
@@ -96,12 +63,6 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
         ...buildRateLimitedResponseFields('claude-headless', 'error_text', message || content),
       };
     }
-    emitResultEvent(onStream, {
-      result: content,
-      success: false,
-      error: message,
-      sessionId: resolvedSessionId,
-    });
     return {
       persona: agentName,
       status: 'error',
@@ -109,14 +70,11 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
       timestamp: new Date(),
       sessionId,
       error: message,
+      ...(isClaudeSessionMissing(input.resumeSessionId, parsed.error)
+        ? { failureCategory: 'session_continuation_unsupported' as const } : {}),
     };
   }
 
-  emitResultEvent(onStream, {
-    result: content,
-    success: true,
-    sessionId: resolvedSessionId,
-  });
   return {
     persona: agentName,
     status: 'done',

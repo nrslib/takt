@@ -1,0 +1,8 @@
+{
+  "name": "sales-report-cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

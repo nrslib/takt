@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: frontend-review
+description: Check the UI implementation and its fidelity to the design and report frontend problems.
 capabilities: readonly
 tags:
   - review

@@ -7,6 +7,7 @@ params:
     facet_kind: knowledge
   ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: ai-antipattern-review
+description: Check for implementation problems typical of AI-generated code and report findings that require fixes.
 capabilities: readonly
 tags: [review]
 edit: false

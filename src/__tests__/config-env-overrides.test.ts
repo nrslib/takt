@@ -10,6 +10,7 @@ import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/ta
 const testRoot = join(tmpdir(), `takt-config-env-${randomUUID()}`);
 const globalTaktDir = join(testRoot, 'global');
 const globalConfigPath = join(globalTaktDir, 'config.yaml');
+const npmPluginResolution = vi.hoisted(() => vi.fn());
 
 type ConfigWithObservability<T> = T & {
   observability?: {
@@ -26,6 +27,15 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
     ...original,
     getGlobalConfigPath: () => globalConfigPath,
     getTaktDir: () => globalTaktDir,
+  };
+});
+
+vi.mock('../infra/deepseek-harness/npm-plugin.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/deepseek-harness/npm-plugin.js')>();
+  return {
+    ...actual,
+    resolveDeepSeekHarnessNpmPlugins: (...args: Parameters<typeof actual.resolveDeepSeekHarnessNpmPlugins>) =>
+      npmPluginResolution(...args),
   };
 });
 
@@ -174,6 +184,78 @@ describe('config traced env overrides', () => {
     expect(config.providerOptions).toEqual({
       codex: { networkAccess: true },
     });
+  });
+
+  it('claude permissions の leaf から traced-config 用の env 名を生成する', () => {
+    expect(envVarNameFromPath('provider_options.claude.permissions.deny'))
+      .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY');
+    expect(envVarNameFromPath('provider_options.claude.permissions.import_user_read_deny'))
+      .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY');
+  });
+
+  it('project config は claude permissions の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-claude-permissions-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./yaml-only)"',
+        '      import_user_read_deny: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY = '["Read(./.env)","Read(~/.ssh/**)"]';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY = 'true';
+
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      claude: {
+        permissions: {
+          deny: ['Read(./.env)', 'Read(~/.ssh/**)'],
+          importUserReadDeny: true,
+        },
+      },
+    });
+  });
+
+  it('global config は claude permissions の yaml 値と env override を leaf ごとに反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./.env)"',
+        '      import_user_read_deny: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY = 'true';
+
+    expect(loadGlobalConfig().providerOptions).toEqual({
+      claude: {
+        permissions: {
+          deny: ['Read(./.env)'],
+          importUserReadDeny: true,
+        },
+      },
+    });
+  });
+
+  it('project config は配列でない claude permissions.deny の env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-claude-permissions-env-invalid');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY = '"Read(./.env)"';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow();
   });
 
   it('project config は DeepSeek reasoning_effort の env override を反映する', () => {
@@ -446,6 +528,65 @@ describe('config traced env overrides', () => {
 
     expect(() => loadProjectConfig(projectDir))
       .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
+  });
+
+  it.each([
+    ['npm source string', ['      - npm:local-project-plugin@1.0.0']],
+    ['npm source object', ['      - source: npm:local-project-plugin@1.0.0', '        id: project-plugin']],
+    ['Git source object', ['      - id: project-plugin', '        source: https://example.test/plugin.git']],
+  ] as const)('rejects executable DeepSeek plugins from project YAML before npm resolution (%s)', (_form, pluginLines) => {
+    npmPluginResolution.mockClear();
+    const projectDir = join(testRoot, `project-deepseek-plugins-${_form.replaceAll(' ', '-')}`);
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider_options:', '  deepseek_harness:', '    plugins:', ...pluginLines,
+    ].join('\n'));
+    expect(() => loadProjectConfig(projectDir))
+      .toThrow('provider_options.deepseek_harness.plugins is not allowed');
+    expect(npmPluginResolution).not.toHaveBeenCalled();
+  });
+
+  it('preserves executable DeepSeek plugins loaded from global YAML', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, [
+      'provider_options:', '  deepseek_harness:', '    plugins:',
+      '      - npm:local-global-plugin@1.0.0',
+      '      - source: npm:another-global-plugin@2.0.0', '        id: npm-global-plugin',
+      '        config:', '          enabled: true',
+      '      - id: global-plugin', '        source: https://example.test/plugin.git',
+      '        ref: v1.0.0', '        config:', '          token: global-plugin-secret',
+    ].join('\n'));
+    expect(loadGlobalConfig().providerOptions?.deepseekHarness?.plugins).toEqual([
+      'npm:local-global-plugin@1.0.0',
+      { id: 'npm-global-plugin', source: 'npm:another-global-plugin@2.0.0', config: { enabled: true } },
+      {
+        id: 'global-plugin', source: 'https://example.test/plugin.git', ref: 'v1.0.0',
+        config: { token: 'global-plugin-secret' },
+      },
+    ]);
+  });
+
+  it('accepts DeepSeek plugins from the user-controlled environment without project YAML', () => {
+    const plugins = [{ id: 'env-plugin', source: 'https://example.test/plugin.git' }];
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS = JSON.stringify(plugins);
+    expect(loadProjectConfig(join(testRoot, 'env-deepseek-plugins')).providerOptions?.deepseekHarness?.plugins)
+      .toEqual(plugins);
+  });
+
+  it('does not let project YAML override trusted environment plugin configuration', () => {
+    const projectDir = join(testRoot, 'project-deepseek-plugins-with-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider_options:', '  deepseek_harness:', '    plugins:',
+      '      - id: project-plugin', '        source: https://example.test/untrusted.git',
+    ].join('\n'));
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS = JSON.stringify([
+      { id: 'env-plugin', source: 'https://example.test/trusted.git' },
+    ]);
+    expect(() => loadProjectConfig(projectDir))
+      .toThrow('provider_options.deepseek_harness.plugins is not allowed');
   });
 
   it('project config に base_url がない場合は env override を反映する', () => {

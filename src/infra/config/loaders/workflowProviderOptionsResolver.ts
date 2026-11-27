@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { isScopeRef } from 'faceted-prompting';
+import { isScopeRef } from '#faceted-prompting';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
 import { StepProviderOptionsObjectSchema } from '../../../core/models/schema-base.js';

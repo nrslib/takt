@@ -45,6 +45,14 @@ function requireEffectScalarReference(
 
 function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
   switch (effect.type) {
+  case 'rerun_ci':
+    return {
+      type: 'rerun_ci',
+      pr: requireEffectScalarReference(effect.pr, 'effects.pr'),
+      failure: normalizeTemplateReference(effect.failure, 'effects.failure'),
+    };
+  case 'caccia':
+    return { type: 'caccia', pr: requireEffectScalarReference(effect.pr, 'effects.pr') };
   case 'enqueue_task':
     return {
       type: 'enqueue_task',
@@ -68,6 +76,7 @@ function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
       type: 'comment_pr',
       pr: requireEffectScalarReference(effect.pr, 'effects.pr'),
       body: effect.body,
+      ...(effect.body_format !== undefined ? { body_format: effect.body_format } : {}),
     };
   case 'sync_with_root':
     return {
@@ -82,6 +91,11 @@ function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
   case 'merge_pr':
     return {
       type: 'merge_pr',
+      pr: requireEffectScalarReference(effect.pr, 'effects.pr'),
+    };
+  case 'commit_and_push':
+    return {
+      type: 'commit_and_push',
       pr: requireEffectScalarReference(effect.pr, 'effects.pr'),
     };
   case 'close_pr':

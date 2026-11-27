@@ -1,3 +1,4 @@
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 /**
  * Execution module type definitions
  */
@@ -8,6 +9,7 @@ import type {
   AutoRoutingStrategy,
   PersonaProviderEntry,
   ProviderRoutingConfig,
+  WorkflowSystemCommandsConfig,
 } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
@@ -17,6 +19,7 @@ import type {
   AskUserQuestionHandler,
   SelectorProviderInfo,
   StepProviderInfo,
+  WorkflowAbortKind,
   WorkflowCallResolver,
   WorkflowTraceTaskMetadata,
 } from '../../../core/workflow/types.js';
@@ -27,6 +30,7 @@ import type {
 } from '../../../core/workflow/provider-options-trace.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
+import type { PrMergeOptions } from '../../../core/workflow/system/pr-execution-context.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 import type { RunFinalizationIssue } from './workflowRunExecution.js';
@@ -75,6 +79,7 @@ export type WorkflowExecutionEvent =
     }
   | {
       type: 'progress';
+      level?: 'warn';
       message: string;
       step?: string;
     }
@@ -194,7 +199,12 @@ export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void
 
 /** Result of workflow execution */
 export interface WorkflowExecutionResult {
+  setupFailed?: boolean;
+  interrupted?: boolean;
   success: boolean;
+  abortKind?: WorkflowAbortKind;
+  /** Whether the root or a started child workflow defines an explicit Caccia effect. */
+  workflowHasCaccia?: boolean;
   reason?: string;
   retryable?: boolean;
   lastStep?: string;
@@ -217,7 +227,13 @@ export interface InteractiveMetadata {
 }
 
 /** Options for workflow execution */
-export interface WorkflowExecutionOptions {
+export interface WorkflowExecutionOptions extends PrMergeOptions {
+  /** Verified input supplied by an execution owner instead of live workflow discovery. */
+  preparedWorkflowBundle?: import('./workflowExecutionBundle.js').PreparedWorkflowExecutionBundle;
+  onLiveInterventionDelivery?: (instructionIds: readonly number[], context: import('../../../core/workflow/live-intervention/types.js').LiveInterventionDelivery) => void;
+  toolDisplayMode?: ToolActivityDisplayMode;
+  /** System command permission resolved for this run, including the configuration source. */
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Header prefix for display */
   headerPrefix?: string;
   /** Controls terminal-oriented output side effects. */
@@ -277,13 +293,18 @@ export interface WorkflowExecutionOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   /** Resolver used to inspect workflow_call targets before engine construction. */
   workflowCallResolver?: WorkflowCallResolver;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   taskSpec?: ResolvedTaskSpec;
+  /** Goal whose saved specifications are staged into this run. */
+  goalId?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
@@ -338,7 +359,12 @@ export interface TaskExecutionParallelOptions {
   outputMode?: 'terminal' | 'silent';
 }
 
-export interface ExecuteTaskOptions {
+export interface ExecuteTaskOptions extends PrMergeOptions {
+  toolDisplayMode?: ToolActivityDisplayMode;
+  /** System command permission resolved before changing the project checkout. */
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
+  /** Goal ownership enables the terminal details used by the manager. */
+  goalId?: string;
   /** Task content */
   task: string;
   /** Working directory (may be a clone path) */
@@ -376,6 +402,7 @@ export interface ExecuteTaskOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   taskSpec?: ResolvedTaskSpec;
@@ -383,6 +410,8 @@ export interface ExecuteTaskOptions {
   providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
+  /** Overrides SIGINT ownership independently of the task signal. */
+  handleSigint?: boolean;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
   taskPrefix?: string;
   /** Optional full task label used instead of taskName truncation when prefixed output is rendered */
@@ -451,6 +480,7 @@ export interface WorktreeConfirmationResult {
 
 export interface SelectAndExecuteOptions {
   workflow?: string;
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */

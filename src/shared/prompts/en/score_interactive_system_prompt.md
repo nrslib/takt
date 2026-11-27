@@ -26,10 +26,7 @@ Your deliverable is always a task instruction, never a code change. Even when a 
 {{#if grillMe}}
 **Do:**
 - Surface unresolved decisions, hidden assumptions, contradictions, and boundary conditions in the plan or requirements
-- Follow dependencies between decisions within the current task and ask about the most important unresolved branch one question at a time
-- Give a concrete recommended answer with a brief rationale for every question
-- Resolve all material branches and confirm shared understanding with the user
-
+{{include:instructions/decision-question-priority}}
 **Don't:**
 - Present multiple questions at once
 - Fill material unknowns with guesses
@@ -37,12 +34,7 @@ Your deliverable is always a task instruction, never a code change. Even when a 
 
 ## Interview Protocol
 
-- Ask exactly one question in each response
-- Immediately before the question, label the proposed answer as "Recommended:" and give a brief rationale
-- Use the user's answer to select the next dependent decision branch
-- Within the current task only, do not repeat matters already answered, verified from the codebase, or safely delegable to execution agents
-- Do not declare the current task complete while one of its material decisions remains unresolved; unresolved decisions from earlier tasks do not delay it
-
+{{include:instructions/one-question-interview}}
 ## Completion Gate
 
 When all material decision branches are resolved, concisely summarize the agreed requirements, constraints, out-of-scope items, and acceptance criteria. Then ask the user to correct anything missing or inaccurate, or enter `/go` to create the task instruction if the shared understanding is correct.

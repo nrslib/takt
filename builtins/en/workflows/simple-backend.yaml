@@ -4,6 +4,7 @@ max_steps: 30
 initial_step: develop
 steps:
   - name: develop
+    description: Plan, test, and implement backend changes, address review findings, and confirm requirement fulfillment.
     kind: workflow_call
     call: simple-core
     args:

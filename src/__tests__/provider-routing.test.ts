@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { buildSessionKey } from '../core/workflow/session-key.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
@@ -81,9 +82,10 @@ function createBuilder(
     getSessionId,
     () => '.takt/runs/provider-routing/reports',
     () => 'ja',
-    () => [{ name: 'implement' }],
     () => 'provider-routing-test',
-    () => 'Provider routing test workflow',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
   );
 }
 
@@ -334,13 +336,15 @@ describe('provider_routing provider_options resolution', () => {
       persona: 'coder',
       providerRoutingPersonaKey: 'coder',
     });
+    const sessionKey = buildSessionKey(step, { provider: 'codex', model: 'project-model' });
+    expect(JSON.parse(sessionKey).slice(0, 3)).toEqual(['coder', 'codex', 'project-model']);
     const builder = createBuilder({
       providerRouting: {
         personas: {
           coder: { provider: 'codex' },
         },
       },
-    }, (key) => (key === '["coder","codex","project-model"]' ? 'session-codex' : undefined));
+    }, (key) => (key === sessionKey ? 'session-codex' : undefined));
 
     const options = builder.buildAgentOptions(step);
 

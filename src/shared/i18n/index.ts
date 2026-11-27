@@ -8,7 +8,7 @@
  * This module handles UI labels only — AI prompts live in ../prompts/.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -16,17 +16,17 @@ import type { Language } from '../../core/models/types.js';
 import { DEFAULT_LANGUAGE } from '../constants.js';
 
 /** Cached YAML data per language */
-const labelCache = new Map<Language, Record<string, unknown>>();
+const labelCache = new Map<Language, Record<string, unknown>>(await Promise.all(
+  (['ja', 'en'] as const).map(async (lang) => {
+    const path = join(dirname(fileURLToPath(import.meta.url)), `labels_${lang}.yaml`);
+    return [lang, parseYaml(await readFile(path, 'utf8')) as Record<string, unknown>] as const;
+  }),
+));
 
 function loadLabels(lang: Language): Record<string, unknown> {
   const cached = labelCache.get(lang);
   if (cached) return cached;
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const yamlPath = join(__dirname, `labels_${lang}.yaml`);
-  const content = readFileSync(yamlPath, 'utf-8');
-  const data = parseYaml(content) as Record<string, unknown>;
-  labelCache.set(lang, data);
-  return data;
+  throw new Error(`Unsupported label language: ${lang}`);
 }
 
 /**
@@ -104,9 +104,4 @@ export function getLabelObject<T>(key: string, lang?: Language): T {
   }
 
   return value as T;
-}
-
-/** Reset cached data (for testing) */
-export function _resetLabelCache(): void {
-  labelCache.clear();
 }

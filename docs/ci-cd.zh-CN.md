@@ -2,7 +2,7 @@
 
 # CI/CD 集成
 
-TAKT 可以集成到 CI/CD 流水线中，自动执行任务、审查 PR 和生成代码。本指南介绍 GitHub Actions 的设置、pipeline 模式选项，以及其他 CI 系统的配置。
+本指南介绍如何从 CI/CD 流水线运行 TAKT，包括 GitHub Actions 示例、非交互模式选项，以及其他 CI 系统的配置。
 
 ## GitHub Actions
 
@@ -70,7 +70,7 @@ Pipeline 模式必须指定任务来源：`--task`、`--issue` 或 `--pr` 中的
 | `--skip-git` | 跳过创建分支、提交和推送（pipeline 模式，仅执行 workflow） |
 | `--repo <owner/repo>` | 指定仓库（创建 PR 时使用） |
 | `-q, --quiet` | 最小输出模式：抑制 AI 输出（用于 CI） |
-| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock） |
 | `--model <name>` | 覆盖 agent model |
 | `--auto-strategy <strategy>` | 自动路由策略（cost\|balanced\|performance） |
 
@@ -164,6 +164,7 @@ pipeline:
 ```bash
 # 安装 takt
 npm install -g takt
+takt install claude-sdk
 
 # 以 pipeline 模式运行
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
@@ -205,7 +206,7 @@ export TAKT_KIRO_API_KEY=...
 
 优先级：环境变量优先于 `config.yaml` 中的设置。
 
-> **注意**：DeepSeek Harness SDK/runtime 需先通过 `takt install deepseek-harness` 安装到 TAKT 管理目录。CI 默认 provider 测试使用 local mock，不会调用 DeepSeek 计费 API。live test 采用 opt-in，只有显式配置 credential 后才运行。支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor、Copilot 和 Kiro 需要安装各自的 CLI。
+> **注意**：DeepSeek Harness SDK/runtime 需先通过 `takt install deepseek-harness` 安装到 TAKT 管理目录。CI 默认 provider 测试使用 local mock，不会调用 DeepSeek 计费 API。live test 采用 opt-in，只有显式配置 credential 后才运行。支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor、Copilot、Kiro 和 Devin 需要安装各自的 CLI。
 
 ## 成本注意事项
 
@@ -216,3 +217,21 @@ TAKT 使用 AI API（Anthropic、OpenAI 等），可能产生较高费用，尤�
 - **选择合适的 workflow**：简单 workflow 的 API 调用次数少于多阶段 workflow（例如包含并行审查的 `default`）。
 - **限制 CI 触发条件**：使用条件触发（如 `if: contains(github.event.comment.body, '@takt')`），防止意外执行。
 - **使用 `--provider mock` 测试**：开发 CI 流水线时使用 mock provider，避免产生实际 API 费用。
+
+## 托管SDK的安装与更新
+
+Claude SDK、Codex、OpenCode、Pi和DeepSeek Harness SDK不包含在TAKT的普通安装中。每个TAKT版本提供固定版本的manifest和lock，通过`npm ci --omit=dev --ignore-scripts`安装到托管目录，需要npm及注册表网络连接。
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # 仅更新已安装且版本不匹配的提供者
+takt update codex     # 仅更新指定提供者
+```
+
+交互入口在执行前显示所需安装和容量估算。拒绝安装缺失的SDK会阻止执行；对话显示安装提示后返回输入。拒绝更新时会警告并使用完整的旧版本，失败时提供update提示。执行过程中不确认、不安装、不更新。CI、pipeline及watcher必须预先安装所需提供者。
+
+容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。

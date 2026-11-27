@@ -1,4 +1,4 @@
-import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 import type { ReportReferenceDiagnostic } from '../../../core/workflow/instruction/report-reference-validation.js';
 import type { ReportReferencesResolved } from '../../../core/workflow/instruction/prepared-instruction.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
@@ -65,6 +65,9 @@ export interface WorkflowExecutionEventState {
 }
 
 interface WorkflowExecutionEventBridgeDeps {
+  toolDisplayMode?: ToolActivityDisplayMode;
+  flushStream?: () => void;
+  getCacciaFailureReason?: () => string | undefined;
   runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   engine: WorkflowEngine;
   workflowConfig: {
@@ -113,7 +116,7 @@ export interface WorkflowExecutionEventBridge {
   prepareTerminalPublicationPayload: () => WorkflowTerminalPublicationPayload;
   emitProviderOutput: (event: StreamEvent) => void;
   emitTerminalFeedback: (
-    event: Extract<WorkflowExecutionEvent, { type: 'completed' }>,
+    event: Extract<WorkflowExecutionEvent, { type: 'completed' | 'progress' }>,
   ) => void;
   flushEventSink: () => Promise<void>;
 }
@@ -564,6 +567,7 @@ export function bindWorkflowExecutionEvents(
   });
 
   deps.engine.on('workflow_call:start', (lifecycle) => {
+    deps.runMetaManager.recordWorkflowCall(lifecycle.stack);
     deps.sessionLogger.onWorkflowCallStart(lifecycle);
   });
 
@@ -587,6 +591,7 @@ export function bindWorkflowExecutionEvents(
     state.currentStepName = resumeStepName;
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateStep(resumeStepName, iteration, state.lastResumePoint);
+    deps.runMetaManager.recordStep(step.name, workflowStack);
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {
@@ -668,7 +673,7 @@ export function bindWorkflowExecutionEvents(
         maxSteps: deps.workflowConfig.maxSteps,
         stepIndex: resolvedStepIndex,
         totalSteps: resolvedTotalSteps,
-      });
+      }, deps.toolDisplayMode);
       deps.handlerRef.current = null;
     }
 
@@ -691,6 +696,7 @@ export function bindWorkflowExecutionEvents(
       deps.displayRef.current.flush();
       deps.displayRef.current = null;
     }
+    deps.flushStream?.();
     deps.prefixWriter?.flush();
     deps.out.blankLine();
 
@@ -794,6 +800,7 @@ export function bindWorkflowExecutionEvents(
     if (deps.displayRef.current) {
       deps.displayRef.current.flush();
     }
+    deps.flushStream?.();
     deps.prefixWriter?.flush();
     const message = response.error ?? `Step "${step.name}" hit a rate limit`;
     if (deps.shouldNotifyRateLimit) {
@@ -970,33 +977,35 @@ export function bindWorkflowExecutionEvents(
 
   deps.engine.on('workflow:abort', (workflowState, reason, kind, failure) => {
     if (terminalIntent === undefined) {
+      const cacciaReason = kind === 'step_transition' ? deps.getCacciaFailureReason?.() : undefined;
+      const abortReason = cacciaReason ?? reason;
       const runFailure: RunFailure = {
         step: failure.step,
-        error: failure.error,
+        error: cacciaReason ?? failure.error,
         ...(failure.failureCategory === undefined
           ? {}
           : { failureCategory: failure.failureCategory }),
       };
-      state.abortReason = reason;
+      state.abortReason = abortReason;
       state.abortKind = kind;
       state.failure = runFailure;
       terminalIntent = {
         kind: 'aborted',
         workflowState,
-        reason,
+        reason: abortReason,
         abortKind: kind,
         failure: runFailure,
         status: resolveWorkflowAbortPublicationStatus(kind),
         endTime: new Date().toISOString(),
       };
     }
-    captureTerminalCleanup(interruptAllQueries);
     captureTerminalProjection(syncLatestResumePoint);
     const display = deps.displayRef.current;
     if (display !== null) {
       deps.displayRef.current = null;
       captureTerminalCleanup(() => display.flush());
     }
+    captureTerminalCleanup(() => deps.flushStream?.());
     captureTerminalCleanup(() => deps.prefixWriter?.flush());
   });
 
@@ -1075,8 +1084,6 @@ export function bindWorkflowExecutionEvents(
         iterations,
         ...(reason === undefined ? {} : { reason }),
         ...(failure === undefined ? {} : { failure }),
-        lastStepContent: state.lastStepContent,
-        lastStepName: state.lastStepName,
         sessionLog: state.sessionLog,
         endTime: terminalIntent.endTime,
       });

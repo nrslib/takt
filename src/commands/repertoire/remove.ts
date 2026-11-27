@@ -4,7 +4,7 @@
 
 import { rmSync, existsSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { validateScopeOwner, validateScopeRepo } from 'faceted-prompting';
+import { validateScopeOwner, validateScopeRepo } from '#faceted-prompting';
 import {
   getRepertoireDir,
   getRepertoirePackageDir,

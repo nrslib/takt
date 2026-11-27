@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 /**
  * `outputMode` decides who owns stdout. A silent caller (the Ink TUI) draws its
  * own frames, so nothing in the AI call may write to the terminal behind it.
@@ -86,6 +87,31 @@ beforeEach(() => {
 });
 
 describe('AI call output ownership', () => {
+  it('should assign a fresh stream call identity when retrying a stale interactive session', async () => {
+    const ctx = createContext();
+    ctx.sessionId = 'stale-session';
+    let attempt = 0;
+    vi.spyOn(ctx.provider, 'setup').mockReturnValue({
+      call: async (_prompt, options) => {
+        attempt += 1;
+        options.onStream?.({ type: 'tool_use', data: { id: 'item_0', tool: 'Read', input: { file_path: 'file.txt' } } });
+        options.onStream?.({ type: 'tool_result', data: { id: 'item_0', content: 'done', isError: false } });
+        return { persona: 'interactive', status: attempt === 1 ? 'error' : 'done', content: 'answer', timestamp: new Date() };
+      },
+    });
+    const events: StreamEvent[] = [];
+    const outcome = await callAIWithRetry('prompt', 'system', ['Read'], '/repo', ctx, {
+      outputMode: 'silent', persistSession: false, onStream: (event) => events.push(event),
+    });
+    expect(outcome.result?.success).toBe(true);
+    expect(events).toHaveLength(4);
+    expect(events[0]!.toolActivity?.callId).toEqual(expect.any(String));
+    expect(events[0]!.toolActivity?.callId).toBe(events[1]!.toolActivity?.callId);
+    expect(events[2]!.toolActivity?.callId).toBe(events[3]!.toolActivity?.callId);
+    expect(events[0]!.toolActivity?.callId).not.toBe(events[2]!.toolActivity?.callId);
+    expect(events.map((event) => 'id' in event.data ? event.data.id : undefined)).toEqual(['item_0', 'item_0', 'item_0', 'item_0']);
+  });
+
   it.each(['external abort', 'SIGINT'] as const)('should notify the caller once for %s before the provider settles', async (source) => {
     let settle!: (value: { persona: string; status: 'done'; content: string; timestamp: Date }) => void;
     const entered = vi.fn();
@@ -175,7 +201,7 @@ describe('AI call output ownership', () => {
       }));
       const callOptions = vi.mocked(agent.call).mock.calls[0]![1];
       expect(callOptions.allowedTools).toEqual(
-        ['claude', 'claude-headless', 'claude-terminal', 'opencode', 'pi'].includes(providerType)
+        ['claude', 'claude-headless', 'claude-terminal'].includes(providerType)
           ? ['Read']
           : undefined,
       );
@@ -186,21 +212,28 @@ describe('AI call output ownership', () => {
   );
 
   it.each(['opencode', 'pi'] as const)(
-    'rejects restricted artifact reads before %s setup or MCP preparation',
+    'rejects verification artifact access for %s before starting the provider',
     async (providerType) => {
-      for (const readonlyFileReadPaths of [[], ['/repo/.takt/runs/verify/specs/spec.qnt']]) {
-        const ctx = createContext();
-        ctx.providerType = providerType;
-        const outcome = await callAIWithRetry('interpret', 'system', ['Read'], '/repo', ctx, {
-          outputMode: 'silent', permissionMode: 'readonly',
-          internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true,
-          readonlyFileReadPaths,
-        });
-        expect(outcome.result).toBeNull();
-        expect(outcome.error).toContain('cannot restrict file reads');
-        expect(ctx.provider.setup).not.toHaveBeenCalled();
-        expect(mockCreateMcpAdapter).not.toHaveBeenCalled();
-      }
+      const ctx = createContext();
+      ctx.providerType = providerType;
+
+      const outcome = await callAIWithRetry(
+        'interpret verification results',
+        'read-only interpreter',
+        ['Read'],
+        '/repo',
+        ctx,
+        {
+          outputMode: 'silent',
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+          allowReadonlyFileRead: true,
+          readonlyFileReadPaths: ['/repo/.takt/runs/verify/specs/spec.qnt'],
+        },
+      );
+
+      expect(outcome.error).toContain(`Provider "${providerType}" does not support read-only access limited to verification artifacts`);
+      expect(ctx.provider.setup).not.toHaveBeenCalled();
     },
   );
 

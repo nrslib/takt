@@ -14,6 +14,8 @@ export function buildTeamLeaderParallelLoggerOptions(
   const options: ParallelLoggerOptions = {
     subStepNames,
     parentOnStream: engineOptions.onStream,
+    toolDisplayMode: engineOptions.toolDisplayMode,
+    quiet: engineOptions.streamQuiet,
     progressInfo: { iteration, maxSteps },
   };
 

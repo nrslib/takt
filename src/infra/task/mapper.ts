@@ -42,13 +42,17 @@ export function resolveTaskContent(projectDir: string, task: TaskRecord): string
 function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
   return TaskFileSchema.parse({
     task: content,
+    ...(task.goal_id === undefined ? {} : { goal_id: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goal_purpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goal_work_key: task.goal_work_key }),
     worktree: task.worktree,
     branch: task.branch,
     base_branch: task.base_branch,
     workflow: task.workflow,
+    ...(task.runtime_assignment === undefined ? {} : { runtime_assignment: task.runtime_assignment }),
     issue: task.issue,
     start_step: task.start_step,
-    retry_note: task.retry_note,
+    ...(task.goal_id !== undefined && task.retry_note === undefined ? {} : { retry_note: task.retry_note }),
     auto_pr: task.auto_pr,
     draft_pr: task.draft_pr,
     managed_pr: task.managed_pr,
@@ -56,10 +60,26 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
     resume_point: task.resume_point,
+    source_resume_point: task.source_resume_point,
     [TASK_RESTART_POINT_KEY]: task[TASK_RESTART_POINT_KEY],
     source: task.source,
     pr_number: task.pr_number,
     context_pr_number: task.context_pr_number,
+    caccia_execution_source: task.caccia_execution_source,
+    caccia_pushed_head: task.caccia_pushed_head,
+    merge_task: task.merge_task,
+    merge_until: task.merge_until,
+    merge_method: task.merge_method,
+    merge_concurrency: task.merge_concurrency,
+    merge_threat_check_max_diff_bytes: task.merge_threat_check_max_diff_bytes,
+    merge_head_repository_url: task.merge_head_repository_url,
+    merge_head_repository_push_urls: task.merge_head_repository_push_urls,
+    merge_initial_head_sha: task.merge_initial_head_sha,
+    merge_clone_prepared: task.merge_clone_prepared,
+    merge_known_remote_head_sha: task.merge_known_remote_head_sha,
+    merge_pushed_head_sha: task.merge_pushed_head_sha,
+    merge_push_base_head_sha: task.merge_push_base_head_sha,
+    merge_push_source: task.merge_push_source,
   });
 }
 
@@ -70,10 +90,13 @@ export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
 export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskRecord): TaskInfo {
   const content = resolveTaskContent(projectDir, task);
   return {
+    workerName: task.worker_name,
+    waitingReason: task.waiting_reason,
     filePath: tasksFile,
     name: task.name,
     slug: task.slug,
     runSlug: task.run_slug,
+    executionId: task.execution_id,
     sourceRunSlug: task.source_run_slug,
     resumeMode: task.resume_mode,
     summary: task.summary,
@@ -82,6 +105,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     createdAt: task.created_at,
     status: task.status,
     worktreePath: task.worktree_path,
+    ...(task.pr_url === undefined ? {} : { prUrl: task.pr_url }),
     data: buildTaskFileData(task, content),
   };
 }
@@ -134,6 +158,9 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    remoteAssignment: task.remote_assignment,
+    executionId: task.execution_id,
+    goalId: task.goal_id,
     name: task.name,
     createdAt: task.created_at,
     filePath: tasksFile,
@@ -175,6 +202,15 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    remoteArtifacts: task.remote_artifacts,
+    remoteAssignment: task.remote_assignment,
+    workerName: task.worker_name,
+    waitingReason: task.waiting_reason,
+    executionId: task.execution_id,
+    ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
+    ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
+    ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),
+    ...(task.completion === undefined ? {} : { completion: task.completion }),
     kind: task.status,
     status: task.status,
     name: task.name,
@@ -190,7 +226,9 @@ export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
     branch: task.branch,
     worktree: task.worktree,
     worktreePath: task.worktree_path,
+    ...(task.merge_task === undefined ? {} : { mergeTask: task.merge_task }),
     workflow: task.workflow,
+    ...(task.runtime_assignment === undefined ? {} : { runtimeAssignment: task.runtime_assignment }),
     prUrl: task.pr_url,
     failure: task.failure,
     startedAt: task.started_at ?? undefined,

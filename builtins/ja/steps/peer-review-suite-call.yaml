@@ -1,3 +1,4 @@
+description: 指定された専門レビューのワークフローを呼び出し、修正の要否を判定する
 kind: workflow_call
 call:
   $param: reviewer_suite

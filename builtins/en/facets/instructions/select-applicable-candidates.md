@@ -1,4 +1,4 @@
-Select applicable candidates using the supplied changed-file list, Report Directory, and report-name references. Read the implementation report, plan, and latest review decision first; inspect changed file bodies only when those reports do not establish the boundary. Do not decide from filenames alone.
+Select applicable candidates using the supplied changed-file list and current-report reference paths. Read the supplied implementation report, plan, and current review decision first; inspect changed file bodies only when those reports do not establish the boundary. Do not decide from filenames alone.
 
 Do not edit files while making this selection. Use available read-only tools for the required files and reports, and use the conditions supplied for each candidate as evidence. Determine who controls each input, which trust or authority boundary it crosses, and which processing or asset it reaches.
 

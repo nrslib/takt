@@ -4,6 +4,7 @@ max_steps: 21
 initial_step: develop
 steps:
   - name: develop
+    description: Plan and implement the frontend and backend, then review them and fix the findings.
     kind: workflow_call
     call: mini-core
     args:

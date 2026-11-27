@@ -1,0 +1,11 @@
+{
+  "model": "gpt-5.6-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "timeoutMs": 240000,
+  "result": "aborted",
+  "executedTurnContexts": 1,
+  "observedToolCalls": 0,
+  "observedCompletedResponses": 0
+}

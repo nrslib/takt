@@ -14,13 +14,19 @@ import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
 export type RoutingTier = 'high' | 'medium' | 'low';
+export const MANAGER_NOTIFICATION_KINDS = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
+export type ManagerNotificationKind = typeof MANAGER_NOTIFICATION_KINDS[number];
+export type ManagerNotifications = Partial<Record<ManagerNotificationKind, boolean>>;
+export type ManagerPermission = 'auto' | 'full';
+export type ManagerWorkflowsConfig = 'all' | (string | Record<string, string>)[];
+export type ManagerRuntimeAssignmentsConfig = (string | Record<string, string>)[];
 export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
 
 export interface AutoRoutingCandidate {
   name: string;
   description?: string;
   provider: ProviderType;
-  model: string;
+  model: string | undefined;
   routingTier: RoutingTier;
   providerOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
@@ -32,7 +38,7 @@ export interface AutoRoutingConfig {
   strategy: AutoRoutingStrategy;
   router: {
     provider: ProviderType;
-    model: string;
+    model: string | undefined;
     providerOptions?: StepProviderOptions;
     permissionMode?: PermissionMode;
   };
@@ -58,6 +64,8 @@ export interface AutoRoutingConfig {
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
+  /** A compiled runtime profile with no model stops lower-priority model lookup. */
+  modelSpecified?: boolean;
   providerOptions?: StepProviderOptions;
   /** Exact permission mode declared by the resolved runtime profile. */
   permissionMode?: PermissionMode;
@@ -260,7 +268,7 @@ export interface PipelineConfig {
 
 /** CodeRabbit review-loop settings shared by project and global configuration. */
 export interface CacciaSettings {
-  /** Automatically run after a task creates or updates a pull request. */
+  /** Allow the caccia system effect to wait for CodeRabbit reviews. */
   enabled: boolean;
   /** Maximum time to wait for a CodeRabbit review, in milliseconds. */
   waitTimeoutMs: number;
@@ -273,6 +281,22 @@ export interface CacciaSettings {
 /** Values explicitly stored in project/global config before defaults are applied. */
 export type CacciaConfig = Partial<CacciaSettings>;
 
+export type MergeMethod = 'squash' | 'merge' | 'rebase';
+
+export interface MergeSettings {
+  workflow: string;
+  prepareWorkflow: string;
+  method: MergeMethod;
+  concurrency: number;
+  autoStart: boolean;
+  includeDraft: boolean;
+  includeForks: boolean;
+  threatCheckMaxDiffBytes: number;
+  where?: import('./workflow-system-input-types.js').WorkflowPrListWhere;
+}
+
+export type MergeConfig = Partial<MergeSettings>;
+
 /** Workflow-level runtime.prepare policy */
 export interface WorkflowRuntimePrepareConfig {
   /** Allow custom script paths from workflow YAML (default: false) */
@@ -282,6 +306,11 @@ export interface WorkflowRuntimePrepareConfig {
 /** Workflow-level command quality gate policy */
 export interface WorkflowCommandGatesConfig {
   /** Allow command gates from workflow YAML (default: false) */
+  customScripts?: boolean;
+}
+
+/** Workflow-level system command input policy */
+export interface WorkflowSystemCommandsConfig {
   customScripts?: boolean;
 }
 
@@ -330,6 +359,8 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
+  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications;
+    slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
@@ -356,6 +387,7 @@ export interface ProjectConfig {
   pipeline?: PipelineConfig;
   /** CodeRabbit review-loop settings */
   caccia?: CacciaConfig;
+  merge?: MergeConfig;
   /** TAKT internal target provider/model overrides */
   taktProviders?: TaktProvidersConfig;
   /** Initial context files explicitly loaded by assistant interactive mode */
@@ -402,6 +434,7 @@ export interface ProjectConfig {
   workflowRuntimePrepare?: WorkflowRuntimePrepareConfig;
   /** Workflow-level command quality gate policy */
   workflowCommandGates?: WorkflowCommandGatesConfig;
+  workflowSystemCommands?: WorkflowSystemCommandsConfig;
   /** Workflow-level Arpeggio policy */
   workflowArpeggio?: WorkflowArpeggioConfig;
   /** Sync conflict resolver behavior */
@@ -417,7 +450,13 @@ export interface ProjectConfig {
  * For overlapping keys, ProjectConfig values take priority at runtime
  * — handled by the resolution layer.
  */
-export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
+export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
+  /** @globalOnly */
+  daemon?: { builtinWorker?: { concurrency?: number }; remoteWorker?: { host: string; port: number;
+    credentials?: import('./daemon-config-schema.js').RemoteCredentialsConfig } };
+  /** @globalOnly */
+  director?: { slack?: { channelId: string; allowedUserIds: string[] } };
+  manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; notifications?: ManagerNotifications };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */
@@ -465,6 +504,9 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** @globalOnly */
   /** External Kiro CLI path (overridden by TAKT_KIRO_CLI_PATH env var) */
   kiroCliPath?: string;
+  /** @globalOnly */
+  /** External Devin CLI path (overridden by TAKT_DEVIN_CLI_PATH env var) */
+  devinCliPath?: string;
   /** @globalOnly */
   /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
   copilotGithubToken?: string;

@@ -55,6 +55,12 @@ prompts:
       working_dir: fixtures/review-external-confirmation/service-outage
       required_snapshots:
         - .takt/eval-snapshots/review-external-confirmation-service-outage-policies.md
+  - label: review-external-confirmation-basis-not-applicable
+    raw: file://../../prompts/review-external-confirmation-basis-not-applicable.phase1.j2
+    config:
+      working_dir: fixtures/review-external-confirmation/basis-not-applicable
+      required_snapshots:
+        - .takt/eval-snapshots/review-external-confirmation-basis-not-applicable-policies.md
 providers:
   - id: file://../../providers/cli-review.mjs
     label: codex-sol-low
@@ -209,3 +215,16 @@ tests:
           見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
 
           外部サービスの停止でイベントを送信できず、本番受付の結果は未確認と明示する。コードに起因しない失敗として分類し、当該問題を修正対象にしない。要求された本番確認を外部確認待ちとして確認先と方法・再開後に必要な証拠を引き継ぎ、修正対象なしと判定する。
+  - description: basis-not-applicable
+    prompts:
+      - review-external-confirmation-basis-not-applicable
+    vars:
+      task: file://../../cases/review-external-confirmation-basis-not-applicable-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: review-external-confirmation/basis-not-applicable
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          採点対象は、前段裁定が追加した本番 webhook の受付・再送確認の扱いだけとする。当該確認を修正対象にも外部確認待ちにも含めない場合に合格とする。回答全体の修正対象数や、他の項目についての指摘の妥当性は採点しない。未確認の事実の記載場所も採点しない。

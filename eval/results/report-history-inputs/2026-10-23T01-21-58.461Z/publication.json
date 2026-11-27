@@ -1,0 +1,21 @@
+{
+  "isolated": false,
+  "historical": true,
+  "files": {
+    "project/reports/.takt-report-internal/executions/index.json": "67f44c912e110e4958a70b6cdefec8a8a5895aeb48403a83ae43865fa21dcbc8",
+    "project/reports/.takt-report-internal/executions/versions/6c1b51db-563f-4834-b97d-dcb96fb8eb13/review-resolution.md": "01d1bcce280b7fbb4824c4883321785b0f1c02ee565a2b7dbd179cffdc43f3ca",
+    "project/reports/.takt-report-internal/executions/versions/c9ccf238-aa61-4b47-a168-63b5909dfc6d/review-resolution.md": "b8cec51eb798d04eaf48fbd04b32e47e5a0a629c8156676e454cf025ef327825",
+    "project/reports/.takt-report-internal/history/c037e490d0c3c1f78b88cc154f9b4741300ce79dbc791a20fd4a334f35acd6c7/writer/review-resolution.md.20261023T012200Z": "01d1bcce280b7fbb4824c4883321785b0f1c02ee565a2b7dbd179cffdc43f3ca",
+    "project/reports/review-resolution.md": "b8cec51eb798d04eaf48fbd04b32e47e5a0a629c8156676e454cf025ef327825",
+    "fix-plan.invocation.json": "806b7b998d9c5ea10a8dfe28d38bbb14ed42fe8b72345e895efe125e1c20f815",
+    "fix-plan.prompt.md": "aff999a7060c4023879be66f8ac7c86d8b202e103c22ff85429c036d735fd9d5",
+    "fix-plan.output.md": "7470a37279634a805a7eb8c45ca89f407480395bd01e03ca66c9ab24635c62ec",
+    "fix-plan.trace.json": "a304165a86abdad5904ae50a875aee513b2ad17d72bbc4908459e55dca6c8524",
+    "loop-monitor.invocation.json": "ecbd8d230f5ee34f5e605ab693718f7ce657bf8789639285cec08265046b5c4e",
+    "loop-monitor.prompt.md": "63b1f2bb20a1172bc6fe6335abd70d03eed45827708519110a18cfaf0f98e3be",
+    "loop-monitor.output.md": "7470a37279634a805a7eb8c45ca89f407480395bd01e03ca66c9ab24635c62ec",
+    "loop-monitor.trace.json": "bb7459c7c724ff64fb2db41e6f18e3b439160e7f7540e0cfff81a94125410083",
+    "summary.json": "63a30ab64e1cc883e99219c955447bbf3560c828926ad5d24f4872e9856b0353",
+    "receipt-verification.json": "9c3ef6e76e3ca0597b828ccf49541e3d8c3edd2361d43b2e474ada8e35a45439"
+  }
+}

@@ -2,7 +2,7 @@ import type { PermissionMode, WorkflowConfig, WorkflowStep } from '../../../core
 import { DEFAULT_COMPANION_REVIEW_MODE } from '../../../core/models/companion-types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
+import type { InternalAgentSeats, TagRoutingConflictPolicy, WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
@@ -29,6 +29,7 @@ import {
 } from '../providerOptions.js';
 import { loadPersonaPromptFromPath } from './agentLoader.js';
 import { loadWorkflowByIdentifier } from './workflowResolver.js';
+import { resolveWorkflowCallTarget } from './workflowCallResolver.js';
 import {
   type SelectorProviderOverrides,
 } from '../selectorProviderResolution.js';
@@ -475,6 +476,7 @@ export function getWorkflowDescription(
   lookupCwd = projectCwd,
   selectorOverrides?: SelectorProviderOverrides,
   firstStepOverrides?: SelectorProviderOverrides,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): {
   name: string;
   description: string;
@@ -483,7 +485,7 @@ export function getWorkflowDescription(
   firstStep?: FirstStepInfo;
   companionReviewMode: PreviewProviderResolution['companionReviewMode'];
 } {
-  const workflow = loadWorkflowByIdentifier(identifier, projectCwd, { lookupCwd });
+  const workflow = loadWorkflowByIdentifier(identifier, projectCwd, { lookupCwd, workflowSystemCommandsPolicy });
   if (!workflow) {
     return {
       name: identifier,
@@ -499,7 +501,9 @@ export function getWorkflowDescription(
     previewCount,
     lookupCwd,
     selectorOverrides,
-    undefined,
+    workflowSystemCommandsPolicy === undefined ? undefined : (input) => resolveWorkflowCallTarget(
+      input.parentWorkflow, input.step, input.projectCwd, input.lookupCwd, { workflowSystemCommandsPolicy },
+    ),
     undefined,
     firstStepOverrides,
   );

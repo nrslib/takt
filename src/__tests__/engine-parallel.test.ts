@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +33,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/phase-runner.js')>(),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -61,6 +63,7 @@ import type { WorkflowConfig } from '../core/models/types.js';
 import { isDynamicParallelSubSteps } from '../core/models/types.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { ReportPhaseGenerationError } from '../core/workflow/report-phase-runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleEvaluator as ActualRuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -81,7 +84,9 @@ import {
 } from '../core/workflow/selector-contract.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildSessionKey } from '../core/workflow/session-key.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 import { MAX_EXPLICIT_PARALLEL_ERROR_RETRIES } from '../core/workflow/engine/ParallelRunner.js';
 import {
   makeResponse,
@@ -544,9 +549,10 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       'reports',
       reportName,
     );
-    vi.mocked(runReportPhase).mockImplementation(async () => {
+    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context, onReportWritten) => {
       mkdirSync(join(reportPath, '..'), { recursive: true });
-      writeFileSync(reportPath, '# Architecture review\n');
+      writePhaseReportFixture(context, reportName, '# Architecture review\n');
+      onReportWritten?.(reportName);
       return undefined;
     });
     const config = buildDefaultWorkflowConfig({
@@ -1048,7 +1054,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       .toContain(facetKnowledge(config, 'security-facets', 'cli'));
   });
 
-  it('should preserve selected dynamic fragment metadata through participant and report execution', async () => {
+  it.each(['architecture', 'frontend'])('should preserve selected dynamic fragment metadata through participant and report execution when %s reports first', async (firstReporter) => {
     const raw = dynamicParallelWorkflowRaw();
     Object.assign(raw, {
       report_formats: {
@@ -1109,6 +1115,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: string | undefined;
       providerOptions: unknown;
     }> = [];
+    const firstReportStarted = createDeferred();
+    vi.mocked(runReportPhase).mockImplementation(async (step) => {
+      if (step.name === firstReporter) {
+        firstReportStarted.resolve();
+      }
+    });
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       if (options?.outputSchema) {
         return makeResponse({
@@ -1129,6 +1141,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         systemPrompt: persona ?? '',
         userInstruction: 'review',
       });
+      if (persona !== `${firstReporter}-reviewer`) {
+        await firstReportStarted.promise;
+      }
       return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
     });
     mockRuleEvaluationSequence([
@@ -1160,8 +1175,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     ]);
     const reportedSteps = vi.mocked(runReportPhase).mock.calls.map(([step]) => step);
     expect(reportedSteps).toHaveLength(2);
-    expect(reportedSteps).toEqual([
-      expect.objectContaining({
+    expect(reportedSteps[0]?.name).toBe(firstReporter);
+    expect(Object.fromEntries(reportedSteps.map((step) => [step.name, step]))).toEqual({
+      architecture: expect.objectContaining({
         name: 'architecture',
         persona: 'architecture-reviewer',
         policyContents: [{ content: 'Architecture policy contract' }],
@@ -1171,7 +1187,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           format: 'Return a metadata-aware review report.',
         })],
       }),
-      expect.objectContaining({
+      frontend: expect.objectContaining({
         name: 'frontend',
         persona: 'frontend-reviewer',
         policyContents: [{ content: 'Frontend policy contract' }],
@@ -1181,8 +1197,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           format: 'Return a metadata-aware review report.',
         })],
       }),
-    ]);
+    });
     expect(reportedSteps.some((step) => step.name === 'backend')).toBe(false);
+    expect(state.lastOutput?.content.match(/^## .+$/gm)).toEqual(['## architecture', '## frontend']);
   });
 
   it('should record same-named parallel parent and child participation separately', async () => {
@@ -1201,11 +1218,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       report: [{ name: 'frontend-review.md', format: 'review' }],
     };
     const config = normalizeWorkflowConfig(raw, tmpDir);
-    vi.mocked(runReportPhase).mockImplementation(async (step) => {
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
       const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
       mkdirSync(reportDir, { recursive: true });
       for (const contract of step.outputContracts ?? []) {
-        writeFileSync(join(reportDir, contract.name), `${step.name} report`, 'utf-8');
+        writePhaseReportFixture(context, contract.name, `${step.name} report`);
+        onReportWritten?.(contract.name);
       }
     });
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
@@ -1249,6 +1267,140 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(resumePoint?.workflow_step_participations[childIdentity]).toEqual({
       report_names: ['architecture-review.md'],
     });
+  });
+
+  it.each([
+    { failedAttempt: 1, label: 'the first static parallel run' },
+    { failedAttempt: 2, label: 'a repeated static parallel run with an old report file' },
+  ])('rejects a missing required child report in $label', async ({ failedAttempt }) => {
+    const backend = makeStep('backend', {
+      outputContracts: [{ name: 'backend.md', format: 'backend report' }],
+    });
+    const testing = makeStep('testing', {
+      outputContracts: [{ name: 'testing.md', format: 'testing report' }],
+    });
+    const reviewers = makeStep('reviewers', {
+      parallel: [backend, testing],
+      rules: failedAttempt === 1
+        ? [makeRule('complete', 'consumer')]
+        : [makeRule('repeat', 'again'), makeRule('complete', 'consumer')],
+    });
+    const config: WorkflowConfig = {
+      name: 'static-report-handoff',
+      initialStep: 'reviewers',
+      maxSteps: 5,
+      steps: [
+        reviewers,
+        makeStep('again', { rules: [makeRule('complete', 'reviewers')] }),
+        makeStep('consumer', {
+          inputReports: { fromStep: 'reviewers', reports: 'all' },
+          rules: [makeRule('complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+    let testingAttempt = 0;
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name === 'testing' && ++testingAttempt === failedAttempt) {
+        throw new ReportPhaseGenerationError('report failed', 'provider_error', {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        });
+      }
+      for (const contract of step.outputContracts ?? []) {
+        writePhaseReportFixture(context, contract.name, `${step.name} report from attempt ${testingAttempt}`);
+        onReportWritten?.(contract.name);
+      }
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    let reviewersRun = 0;
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      if (step.name === 'reviewers') {
+        const index = failedAttempt === 2 && reviewersRun++ === 0 ? 0 : failedAttempt === 2 ? 1 : 0;
+        return { index, method: 'aggregate' };
+      }
+      return step.name === 'again' ? { index: 0, method: 'phase3_tag' } : undefined;
+    });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+    });
+    let abortReason = '';
+    engine.on('workflow:abort', (_state, reason) => { abortReason = reason; });
+    const state = await engine.run();
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toMatch(/not_produced:testing:testing.md/);
+    expect(testingAttempt).toBe(failedAttempt);
+    const childIdentity = buildWorkflowStepParticipationIdentity(
+      getWorkflowReference(config),
+      'testing',
+      [],
+      'reviewers',
+    );
+    expect(engine.getResumePoint()?.workflow_step_participations[childIdentity]).toEqual({ report_names: [] });
+    if (failedAttempt === 2) {
+      expect(readFileSync(join(reportDir, 'testing.md'), 'utf-8')).toContain('attempt 1');
+    }
+  });
+
+  it('stops a parallel report producer before status judgment when a later step requires its report', async () => {
+    const backend = makeStep('backend', {
+      outputContracts: [{ name: 'backend.md', format: 'backend report' }],
+    });
+    const testing = makeStep('testing', {
+      outputContracts: [{ name: 'testing.md', format: 'testing report' }],
+    });
+    const config: WorkflowConfig = {
+      name: 'parallel-required-report',
+      initialStep: 'reviewers',
+      maxSteps: 3,
+      steps: [
+        makeStep('reviewers', {
+          parallel: [backend, testing],
+          rules: [makeRule('complete', 'consumer')],
+        }),
+        makeStep('consumer', {
+          instruction: 'Use {report:testing.md}',
+          rules: [makeRule('complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name === 'testing') {
+        throw new ReportPhaseGenerationError('testing report failed', 'provider_error', {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        });
+      }
+      mkdirSync(context.reportDir, { recursive: true });
+      writePhaseReportFixture(context, 'backend.md', 'backend report');
+      onReportWritten?.('backend.md');
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    const judgedSteps: string[] = [];
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      judgedSteps.push(step.name);
+      return { index: 0, method: 'phase3_tag' };
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(judgedSteps).not.toContain('testing');
+    expect(judgedSteps).not.toContain('reviewers');
+    expect(judgedSteps).not.toContain('consumer');
+    expect(state.stepOutputs.get('testing')?.error).toContain('testing.md');
+    expect(state.stepOutputs.get('testing')?.failureCategory).toBe('provider_error');
   });
 
   it('should allow OpenCode default model for a static participant after dropping a mismatched candidate', async () => {
@@ -1931,11 +2083,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.has('security')).toBe(false);
   });
 
-  it('should reject a mismatched workflow-call invocation before agent start', () => {
+  it('should discard a mismatched workflow-call invocation and continue before agent start', () => {
     const config = normalizeWorkflowConfig({
       name: 'workflow-call-invocation-mismatch',
       initial_step: 'delegate',
-      max_steps: 1,
+      max_steps: 3,
       steps: [{
         name: 'delegate',
         kind: 'workflow_call',
@@ -1943,12 +2095,21 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
       }],
     }, tmpDir);
+    const child = normalizeWorkflowConfig({
+      name: 'child',
+      subworkflow: { callable: true },
+      initial_step: 'review',
+      max_steps: 1,
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review', rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }, tmpDir);
     const invocationIdentity = buildWorkflowCallInvocationIdentity(config.name, 'delegate', []);
+    const warning = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
 
-    expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
+      workflowCallResolver: ({ step }) => step.call === 'child' ? child : null,
       resumePoint: {
         version: 2,
         stack: [{
@@ -1969,9 +2130,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         },
         workflow_step_participations: {},
       },
-    })).toThrow('Workflow-call invocation identity does not match resume entry "delegate"');
+    });
 
     expect(runAgent).not.toHaveBeenCalled();
+    expect(warning.mock.calls.some(([level, , message]) => level === 'WARN'
+      && message === 'Ignoring unmatched inherited workflow invocation')).toBe(true);
+    engine.removeAllListeners();
+    warning.mockRestore();
   });
 
   it.each([
@@ -2157,22 +2322,20 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   });
 
   it('should save routed parallel sub-step sessions with the resolved provider key', async () => {
+    const reviewer = makeStep('api-review', {
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      providerRoutingPersonaKey: 'coder',
+      tags: ['implementation'],
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const codexSessionKey = buildSessionKey(reviewer, { provider: 'codex', model: 'gpt-5' });
     const config = buildDefaultWorkflowConfig({
       maxSteps: 1,
       initialStep: 'reviewers',
       steps: [
         makeStep('reviewers', {
-          parallel: [
-            makeStep('api-review', {
-              persona: 'coder',
-              personaDisplayName: 'coder',
-              providerRoutingPersonaKey: 'coder',
-              tags: ['implementation'],
-              rules: [
-                makeRule('approved', 'COMPLETE'),
-              ],
-            }),
-          ],
+          parallel: [reviewer],
           rules: [
             makeRule('all("approved")', 'COMPLETE'),
           ],
@@ -2200,27 +2363,26 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('session-codex-1');
+    expect(JSON.parse(codexSessionKey).slice(0, 3)).toEqual(['coder', 'codex', 'gpt-5']);
+    expect(state.personaSessions.get(codexSessionKey)).toBe('session-codex-1');
     expect(state.personaSessions.has('["coder","claude-sdk"]')).toBe(false);
   });
 
   it('should keep an existing parallel sub-step session when the response omits sessionId', async () => {
+    const reviewer = makeStep('api-review', {
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      providerRoutingPersonaKey: 'coder',
+      tags: ['implementation'],
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const codexSessionKey = buildSessionKey(reviewer, { provider: 'codex', model: 'gpt-5' });
     const config = buildDefaultWorkflowConfig({
       maxSteps: 1,
       initialStep: 'reviewers',
       steps: [
         makeStep('reviewers', {
-          parallel: [
-            makeStep('api-review', {
-              persona: 'coder',
-              personaDisplayName: 'coder',
-              providerRoutingPersonaKey: 'coder',
-              tags: ['implementation'],
-              rules: [
-                makeRule('approved', 'COMPLETE'),
-              ],
-            }),
-          ],
+          parallel: [reviewer],
           rules: [
             makeRule('all("approved")', 'COMPLETE'),
           ],
@@ -2231,9 +2393,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
-      initialSessions: {
-        '["coder","codex","gpt-5"]': 'existing-codex-session',
-      },
+      initialSessions: { [codexSessionKey]: 'existing-codex-session' },
       onSessionUpdate,
       providerRouting: {
         tags: {
@@ -2253,7 +2413,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('existing-codex-session');
+    expect(state.personaSessions.get(codexSessionKey)).toBe('existing-codex-session');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({ sessionId: 'existing-codex-session' });
     expect(onSessionUpdate).not.toHaveBeenCalled();
   });
 

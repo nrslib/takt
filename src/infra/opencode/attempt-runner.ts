@@ -6,8 +6,9 @@
  */
 
 import type { AgentResponse } from '../../core/models/index.js';
+import type { OpenCodeExecutionContext } from './execution-context.js';
 import { openCodeRuntimeSelection } from './runtime.js';
-import { mapsToOpenCodeEditPermission } from './allowedTools.js';
+import { mapsToOpenCodeEditPermission, toOpenCodeMcpServerPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
@@ -28,14 +29,13 @@ import {
   createStreamTrackingState,
   describeOpenCodeStreamTrackingLimitFailure,
   emitInit,
-  emitText,
-  emitThinking,
   emitPermissionAsked,
   emitPermissionSummary,
   emitResult,
   flushSensitiveTextStreams,
   handlePartUpdated,
   OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
+  writeSensitiveText,
   trackOpenCodeReasoningBytes,
 } from './OpenCodeStreamHandler.js';
 import {
@@ -52,7 +52,6 @@ import {
   resolveOpenCodeGuardSuite,
   resolveOpenCodeGuardPolicy,
   type OpenCodeGuardAbortKind,
-  type OpenCodeGuardEvaluation,
   type OpenCodeGuardSuite,
 } from './guards/index.js';
 import { extractOpenCodeToolRejection } from './guards/tool-events.js';
@@ -76,9 +75,8 @@ import {
   createPartTimeoutReason,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
-import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
 import {
-  createSensitiveTextStreamRedactor,
   sanitizeSensitiveText,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
@@ -215,6 +213,16 @@ function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): s
 }
 
 let nextProvisionalId = 1;
+
+function rejectedResumeCategory(error: unknown, options: OpenCodeCallOptions): AgentFailureCategory | undefined {
+  if (!options.callerManagedSession || options.sessionId === undefined || typeof error !== 'object' || error === null) return undefined;
+  if ('_tag' in error && error._tag === 'SessionNotFoundError'
+    && 'sessionID' in error && error.sessionID === options.sessionId) {
+    return AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
+  }
+  return undefined;
+}
+
 export async function getOpenCodeSessionSnapshot(
   model: string,
   sessionID: string,
@@ -290,7 +298,7 @@ async function postmortemRateLimitError(
   sessionID: string,
   directory: string,
   abortSignal: AbortSignal,
-): Promise<string | undefined> {
+): Promise<{ message: string; classification: RateLimitClass } | undefined> {
   let messages: OpenCodeSessionMessages;
   try {
     const result = await withTimeout(
@@ -325,11 +333,9 @@ async function postmortemRateLimitError(
     return undefined;
   }
   const message = extractOpenCodeErrorMessage(error);
-  if (extractStatusCode(error) === RATE_LIMIT_STATUS_CODE) {
-    return message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
-  }
-  if (message !== undefined && containsRateLimitError(message)) {
-    return message;
+  const classification = classifyRateLimitError(message, extractStatusCode(error));
+  if (classification !== 'NotRateLimit') {
+    return { message: message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`, classification };
   }
   return undefined;
 }
@@ -794,6 +800,7 @@ export class OpenCodeAttemptRunner {
     agentType: string,
     prompt: string,
     options: OpenCodeCallOptions,
+    executionContext: OpenCodeExecutionContext,
   ): Promise<AgentResponse> {
     const callAbortController = new AbortController();
     const abortFromCaller = (): void => callAbortController.abort(options.abortSignal?.reason);
@@ -830,6 +837,8 @@ export class OpenCodeAttemptRunner {
               `model-selection-${provisionalKey}`,
               options.preparedMcp,
               options.skillsEnabled,
+              executionContext,
+              options.externalDirectoryAllowlist,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -847,7 +856,7 @@ export class OpenCodeAttemptRunner {
             break;
           } catch (error) {
             lastError = error;
-            if (timedOut || callAbortController.signal.aborted || !this.isRetriableError(getErrorMessage(error), 'prompt') || resolutionAttempt === OPENCODE_RETRY_MAX_ATTEMPTS) {
+            if (options.callerManagedSession || timedOut || callAbortController.signal.aborted || !this.isRetriableError(getErrorMessage(error), 'prompt') || resolutionAttempt === OPENCODE_RETRY_MAX_ATTEMPTS) {
               break;
             }
             try {
@@ -864,7 +873,7 @@ export class OpenCodeAttemptRunner {
             ? AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
             : callAbortController.signal.aborted
               ? AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
-              : undefined;
+              : rejectedResumeCategory(lastError, options);
           const message = timedOut
             ? createPartTimeoutReason(timeoutMs)
             : callAbortController.signal.aborted
@@ -928,9 +937,6 @@ export class OpenCodeAttemptRunner {
         exactToolRepeatLimit: activeGuardSuite.policy.exactToolRepeatLimit,
         streamEventLimit: activeGuardSuite.policy.streamEventLimit,
         streamLimits: activeGuardSuite.policy.streamLimits,
-        sensitiveCandidateLimit: activeGuardSuite.policy.sensitiveCandidateLimit,
-        sensitiveCandidateByteLimit: activeGuardSuite.policy.sensitiveCandidateByteLimit,
-        sensitiveSourceScanByteLimit: activeGuardSuite.policy.sensitiveSourceScanByteLimit,
       });
       activeGuardSuite.startCall((failure) => callAbortController.abort(new Error(failure.verdict.reason)));
       const guardedOptions: OpenCodeCallOptions & { abortSignal: AbortSignal; model: string } = {
@@ -955,6 +961,7 @@ export class OpenCodeAttemptRunner {
           provisionalKey,
           activeGuardSuite,
           callState,
+          executionContext,
         );
         if (result !== RETRY_ATTEMPT) return result;
       }
@@ -975,6 +982,7 @@ export class OpenCodeAttemptRunner {
     provisionalKey: string,
   guardSuite: OpenCodeGuardSuite,
   callState: OpenCodeCallState,
+  executionContext: OpenCodeExecutionContext,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
   const streamAbortController = new AbortController();
   let timeoutMessage = OPENCODE_STREAM_ABORTED_MESSAGE;
@@ -996,6 +1004,8 @@ export class OpenCodeAttemptRunner {
   } | undefined;
   let finalizationInvalidationError: OpenCodeSharedServerInvalidationError | undefined;
   let attemptCleanupError: AggregateError | undefined;
+  let rateLimitClass: RateLimitClass = 'NotRateLimit';
+  let toolExecutionObserved = false;
   const structuredAttemptPlan = planStructuredOutputAttempt(callState.recoveryState, hasInitialSessionId);
   // tool-guard fresh recovery 後の attempt は fresh session を強制する。
   // plan の sessionMode を実態に合わせないと、後段の
@@ -1016,23 +1026,19 @@ export class OpenCodeAttemptRunner {
   let promptCompletion: Promise<unknown> | undefined;
   let promptCompletionWait: Promise<void> | undefined;
   let promptError: string | undefined;
+  let resumeFailureCategory: AgentFailureCategory | undefined;
   const attemptSensitiveSources: unknown[] = [
     { opencodeApiKey: options.opencodeApiKey },
     options.childProcessEnv,
   ];
   const state = createStreamTrackingState(guardSuite.policy.streamLimits, guardSuite.sensitiveValues);
-  let initialGuardFailure: OpenCodeGuardEvaluation | undefined;
-  for (const source of attemptSensitiveSources) {
-    initialGuardFailure ??= guardSuite.onInitialSource(source).failure;
-  }
+  for (const source of attemptSensitiveSources) guardSuite.sensitiveValues.collect(source);
   const isTrackingLimitFailureMessage = (message: string): boolean => (
     message === OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE
     || message === describeOpenCodeStreamTrackingLimitFailure('event_count')
     || message === describeOpenCodeStreamTrackingLimitFailure('tracked_id_count')
     || message === describeOpenCodeStreamTrackingLimitFailure('text_bytes')
     || message === describeOpenCodeStreamTrackingLimitFailure('reasoning_bytes')
-    || message === describeOpenCodeStreamTrackingLimitFailure('sensitive_sources')
-    || message.startsWith('OpenCode sensitive value budget exceeded:')
   );
 
   const sanitizeAttemptError = (message: string): string => (
@@ -1131,6 +1137,26 @@ export class OpenCodeAttemptRunner {
     throw new Error(failure?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE);
   };
 
+  const handleRateLimitFailure = async (
+    message: string,
+    classification: RateLimitClass,
+    failedSessionId: string | undefined,
+  ): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
+    throwIfCallAborted();
+    throwIfServerInvalidated();
+    if (!options.callerManagedSession && classification === 'Transient' && !toolExecutionObserved && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      await this.waitForRetryDelay(attempt, options.abortSignal);
+      throwIfCallAborted();
+      throwIfServerInvalidated();
+      return RETRY_ATTEMPT;
+    }
+    const response = this.buildRateLimitedResponse(agentType, failedSessionId,
+      sanitizeAttemptError(message), attempt - 1);
+    if (failedSessionId) scheduleResultEmission(false, response.error ?? response.content, failedSessionId);
+    throwIfServerInvalidated();
+    return response;
+  };
+
   guardSuite.startAttempt((failure) => {
     if (streamAbortController.signal.aborted) return;
     timeoutMessage = failure.verdict.reason;
@@ -1143,9 +1169,6 @@ export class OpenCodeAttemptRunner {
   try {
     attemptResult = await (async (): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
   try {
-    if (initialGuardFailure !== undefined) {
-      throw new Error(initialGuardFailure.verdict.reason);
-    }
     log.debug('Starting OpenCode session', {
       agentType,
       model: options.model,
@@ -1167,6 +1190,10 @@ export class OpenCodeAttemptRunner {
       sessionId ?? provisionalKey,
       options.preparedMcp,
       options.skillsEnabled,
+      executionContext,
+      options.externalDirectoryAllowlist,
+      options.contextWindow,
+      options.cwd,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1193,11 +1220,17 @@ export class OpenCodeAttemptRunner {
       release = undefined;
       throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
     }
+    // Every tool of an approved server is allowed by its `<server>_*` permission rule.
+    // Only the rules and a v1 prompt carry that wildcard: a v2 prompt names concrete
+    // tool ids, so v2 receives the server names and resolves their registered tools.
+    const allowedMcpPermissions = options.allowedMcpTools === undefined && options.allowedMcpServers === undefined
+      ? undefined
+      : [...(options.allowedMcpTools ?? []), ...(options.allowedMcpServers ?? []).map(toOpenCodeMcpServerPermission)];
     const permissionRuleset = buildOpenCodePermissionRuleset(
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      allowedMcpPermissions,
     );
     // The session is created once per step and reused across phases: a
     // session-scoped deny can never be escalated later, and recreating the
@@ -1209,7 +1242,9 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      allowedMcpPermissions,
+      options.strictToolAllowlist,
+      options.externalDirectoryAllowlist,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
@@ -1275,10 +1310,13 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      opencodeApiClient.requiresExplicitMcpTools ? options.allowedMcpTools : allowedMcpPermissions,
+      options.strictToolAllowlist,
     );
-    if (openCodeRuntimeSelection().generation === 'v2') {
-      promptTools.skill = options.skillsEnabled === true && options.disableSkills !== true;
+    if (options.disableSkills === true) {
+      promptTools.skill = false;
+    } else if (openCodeRuntimeSelection().generation === 'v2') {
+      promptTools.skill = options.skillsEnabled === true;
     }
     log.debug('Selecting OpenCode agent', {
       agentName,
@@ -1288,7 +1326,10 @@ export class OpenCodeAttemptRunner {
     // native format 劣化後の attempt は、structured_json_schema_instruction
     // でスキーマと fenced JSON 契約・StructuredOutput 禁止を明示したプロンプトへ
     // 包み直す。この attempt は session も fresh 強制済み（attemptPlan 参照）。
-    const formatless = attemptPlan.structuredMode === 'formatless' || opencodeApiClient.nativeStructuredOutput === false;
+    // Native structured output adds a StructuredOutput tool outside the strict allowlist.
+    const formatless = options.strictToolAllowlist !== undefined
+      || attemptPlan.structuredMode === 'formatless'
+      || opencodeApiClient.nativeStructuredOutput === false;
     const basePromptText = formatless && options.outputSchema !== undefined
       ? buildFormatlessStructuredPrompt(prompt, options.outputSchema, options.language ?? 'en')
       : prompt;
@@ -1304,6 +1345,10 @@ export class OpenCodeAttemptRunner {
         : basePromptText;
     const promptPayload: Record<string, unknown> = {
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.externalDirectoryAllowlist !== undefined
+        ? { externalDirectoryAllowlist: options.externalDirectoryAllowlist }
+        : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
       model: parsedModel,
@@ -1325,7 +1370,9 @@ export class OpenCodeAttemptRunner {
       signal: streamAbortController.signal,
     }).catch((error) => {
       promptError = getErrorMessage(error);
+      resumeFailureCategory = rejectedResumeCategory(error, options);
       if (!streamAbortController.signal.aborted) {
+        rateLimitClass = classifyRateLimitError(promptError, extractStatusCode(error));
         abortCause = 'prompt';
         streamAbortController.abort();
       }
@@ -1370,12 +1417,7 @@ export class OpenCodeAttemptRunner {
 
     const consumeTextDelta = (partId: string, visibleDelta: string): void => {
       if (visibleDelta) {
-        const redactor = state.textRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
-        state.textRedactors.set(partId, redactor);
-        emitText(
-          options.onStream,
-          redactor.write(visibleDelta, state.sensitiveSources),
-        );
+        writeSensitiveText(state, 'text', partId, visibleDelta, options.onStream);
         const previous = textContentParts.get(partId) ?? '';
         textContentParts.set(partId, `${previous}${visibleDelta}`);
       }
@@ -1384,19 +1426,8 @@ export class OpenCodeAttemptRunner {
     const consumeReasoningDelta = (partId: string, rawDelta: string): boolean => {
       if (!rawDelta) return true;
       if (!trackOpenCodeReasoningBytes(state, rawDelta)) return false;
-      const fallbackRedactor = state.textRedactors.get(partId);
-      if (fallbackRedactor !== undefined) {
-        state.textRedactors.delete(partId);
-        if (!state.thinkingRedactors.has(partId)) {
-          state.thinkingRedactors.set(partId, fallbackRedactor);
-        }
-      }
-      const redactor = state.thinkingRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
-      state.thinkingRedactors.set(partId, redactor);
-      emitThinking(
-        options.onStream,
-        redactor.write(rawDelta, state.sensitiveSources),
-      );
+      for (const chunk of state.pendingResponseChunks) if (chunk.partId === partId) chunk.kind = 'thinking';
+      writeSensitiveText(state, 'thinking', partId, rawDelta, options.onStream);
       const prevOffset = state.thinkingOffsets.get(partId) ?? 0;
       const nextOffset = prevOffset + rawDelta.length;
       state.thinkingOffsets.set(partId, nextOffset);
@@ -1512,6 +1543,8 @@ export class OpenCodeAttemptRunner {
         }
 
         if (part.type === 'tool') {
+          toolExecutionObserved = true;
+          textContentParts.clear();
           const toolPart = part as OpenCodeToolPart;
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
@@ -1624,6 +1657,7 @@ export class OpenCodeAttemptRunner {
                 if (allowed) reply = 'once';
               }
             }
+            flushSensitiveTextStreams(options.onStream, state);
             emitPermissionAsked(options.onStream, {
               requestId: permProps.id,
               sessionId: permProps.sessionID,
@@ -1751,10 +1785,12 @@ export class OpenCodeAttemptRunner {
             capturedStructuredOutput = info.structured as Record<string, unknown>;
           }
           const streamError = extractOpenCodeErrorMessage(info?.error);
-          if (streamError) {
+          const streamClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
+          if (streamClass !== 'NotRateLimit') rateLimitClass = streamClass;
+          if (streamError || streamClass !== 'NotRateLimit') {
             success = false;
-            failureMessage = streamError;
-            diag.onStreamError('message.updated', sanitizeAttemptError(streamError));
+            failureMessage = streamError ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
+            diag.onStreamError('message.updated', sanitizeAttemptError(failureMessage));
             break;
           }
         }
@@ -1777,10 +1813,12 @@ export class OpenCodeAttemptRunner {
             capturedStructuredOutput = info.structured as Record<string, unknown>;
           }
           const streamError = extractOpenCodeErrorMessage(info?.error);
-          if (streamError) {
+          const streamClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
+          if (streamClass !== 'NotRateLimit') rateLimitClass = streamClass;
+          if (streamError || streamClass !== 'NotRateLimit') {
             success = false;
-            failureMessage = streamError;
-            diag.onStreamError('message.completed', sanitizeAttemptError(streamError));
+            failureMessage = streamError ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
+            diag.onStreamError('message.completed', sanitizeAttemptError(failureMessage));
             break;
           }
         }
@@ -1800,8 +1838,19 @@ export class OpenCodeAttemptRunner {
         if (isCurrentAssistantMessage) {
           success = false;
           failureMessage = extractOpenCodeErrorMessage(info?.error) ?? 'OpenCode message failed';
+          rateLimitClass = classifyRateLimitError(failureMessage, extractStatusCode(info?.error));
           diag.onStreamError('message.failed', sanitizeAttemptError(failureMessage));
           break;
+        }
+        continue;
+      }
+
+      if (sseEvent.type === 'session.compacted') {
+        const properties = sseEvent.properties as { sessionID?: string; reason?: string };
+        // Only the v2 automatic-completion notification carries a verified reason.
+        // A v1 session.compacted event cannot distinguish manual compaction.
+        if (properties.sessionID === activeSessionId && properties.reason === 'auto') {
+          options.onStream?.({ type: 'context_compacted', data: { sessionId: activeSessionId } });
         }
         continue;
       }
@@ -1837,6 +1886,8 @@ export class OpenCodeAttemptRunner {
         if (errorProps.sessionID === activeSessionId) {
           success = false;
           failureMessage = extractOpenCodeErrorMessage(errorProps.error) ?? 'OpenCode session error';
+          resumeFailureCategory = rejectedResumeCategory(errorProps.error, options);
+          rateLimitClass = classifyRateLimitError(failureMessage, extractStatusCode(errorProps.error));
           diag.onStreamError('session.error', sanitizeAttemptError(failureMessage));
           break;
         }
@@ -1902,7 +1953,9 @@ export class OpenCodeAttemptRunner {
       failureMessage = 'OpenCode stream ended before the session became idle';
     }
 
-    content = [...textContentParts.values()].join('\n');
+    // All remaining text parts form the answer after the last tool part. A turn that ends with a
+    // tool has no answer because tool handling cleared every earlier text part.
+    content = [...textContentParts.values()].join('');
     if (!success && !streamAbortController.signal.aborted) {
       streamAbortController.abort();
     }
@@ -1947,7 +2000,8 @@ export class OpenCodeAttemptRunner {
       // メッセージ文字列だけでは判別できないため、セッションを検死する。
       if (
         abortCause === 'timeout'
-        && !containsRateLimitError(message)
+        && rateLimitClass === 'NotRateLimit'
+        && classifyRateLimitError(message) === 'NotRateLimit'
         && opencodeApiClient !== undefined
         && activeSessionId !== undefined
       ) {
@@ -1966,33 +2020,13 @@ export class OpenCodeAttemptRunner {
             sessionId: activeSessionId,
             model: options.model,
           });
-          // 検死で 429 と確定済み。message 文字列に 429 の語が含まれるとは
-          // 限らない（statusCode だけで判定した場合）ため再判定はしない。
-          const rateLimitedResponse = this.buildRateLimitedResponse(
-            agentType,
-            activeSessionId,
-            sanitizeAttemptError(rateLimitMessage),
-            attempt - 1,
-          );
-          scheduleResultEmission(
-            false,
-            rateLimitedResponse.error ?? rateLimitedResponse.content,
-            activeSessionId,
-          );
-          throwIfServerInvalidated();
-          return rateLimitedResponse;
+          message = rateLimitMessage.message;
+          rateLimitClass = rateLimitMessage.classification;
         }
       }
-      if (containsRateLimitError(message)) {
-        const rateLimitedResponse = this.buildRateLimitedResponse(
-          agentType,
-          activeSessionId,
-          sanitizeAttemptError(message),
-          attempt - 1,
-        );
-        scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
-        throwIfServerInvalidated();
-        return rateLimitedResponse;
+      if (rateLimitClass === 'NotRateLimit') rateLimitClass = classifyRateLimitError(message);
+      if (rateLimitClass !== 'NotRateLimit') {
+        return await handleRateLimitFailure(message, rateLimitClass, activeSessionId);
       }
       // Failures that point at the native json_schema request itself: a
       // model that never emits the StructuredOutput tool ("did not produce
@@ -2004,7 +2038,8 @@ export class OpenCodeAttemptRunner {
       // native tool it just failed to use. Generic transient errors
       // (transport/network) must not trigger this, or they would burn the
       // one-shot fallback budget before a real format failure arrives.
-      if (shouldDegradeToFormatless(callState.recoveryState, message, toolGuardFailure !== undefined)) {
+      if (!options.callerManagedSession && options.strictToolAllowlist === undefined
+        && shouldDegradeToFormatless(callState.recoveryState, message, toolGuardFailure !== undefined)) {
         throwIfCallAborted();
         callState.recoveryState = degradeToFormatless(callState.recoveryState);
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
@@ -2027,7 +2062,7 @@ export class OpenCodeAttemptRunner {
       // that is stale session memory, not a real failure of this request —
       // retry the same prompt once in a fresh session instead of failing
       // the step outright.
-      if (shouldRecoverStaleSession(callState.recoveryState, attemptPlan, unavailableLoopToolName)) {
+      if (!options.callerManagedSession && shouldRecoverStaleSession(callState.recoveryState, attemptPlan, unavailableLoopToolName)) {
         throwIfCallAborted();
         callState.recoveryState = recoverStaleSession(callState.recoveryState);
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
@@ -2047,7 +2082,7 @@ export class OpenCodeAttemptRunner {
         && toolGuardFailure.tool === STRUCTURED_OUTPUT_TOOL_NAME
         ? undefined
         : toolGuardFailure;
-      if (recoverableToolFailure !== undefined) {
+      if (!options.callerManagedSession && recoverableToolFailure !== undefined) {
         const toolGuardRecoveryAction = resolveToolGuardRecoveryAction(
           callState.toolGuardRecovery,
           getToolGuardFailureFingerprint(recoverableToolFailure),
@@ -2101,7 +2136,7 @@ export class OpenCodeAttemptRunner {
       // 混同しない。
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
-      if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      if (!options.callerManagedSession && retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
         throwIfCallAborted();
         log.info('Retrying OpenCode call after transient failure', {
           agentType,
@@ -2144,6 +2179,7 @@ export class OpenCodeAttemptRunner {
         timestamp: new Date(),
         sessionId: activeSessionId,
         debugInfo: { toolHealth: failureToolHealth },
+        ...(resumeFailureCategory === undefined ? {} : { failureCategory: resumeFailureCategory }),
         ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
       };
     }
@@ -2160,6 +2196,8 @@ export class OpenCodeAttemptRunner {
       });
     }
 
+    // 下の debug ログに出す JSON の解析エラーには応答の一部が入るため、応答の中で見つかった秘密値もここで伏せる対象に加える。
+    state.sensitiveSources.collect(state.responseBuffer.sensitiveValues);
     const trimmed = content.trim();
 
     // format 要求時に structured がイベントで捕捉できなかった場合は、
@@ -2229,21 +2267,17 @@ export class OpenCodeAttemptRunner {
       return buildAttemptErrorResponse(errorMessage);
     }
 
-    if (containsRateLimitError(errorMessage)) {
-      const rateLimitedResponse = this.buildRateLimitedResponse(
-        agentType,
-        sessionId,
-        sanitizeAttemptError(errorMessage),
-        attempt - 1,
-      );
-      if (sessionId) {
-        scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+    const exceptionClass = rateLimitClass !== 'NotRateLimit'
+      ? rateLimitClass : classifyRateLimitError(errorMessage, extractStatusCode(error));
+    if (!options.abortSignal.aborted && (stopResult === undefined || stopResult.ok)
+      && exceptionClass !== 'NotRateLimit') {
+      try {
+        return await handleRateLimitFailure(errorMessage, exceptionClass, sessionId);
+      } catch (retryError) {
+        const invalidation = currentServerInvalidationError();
+        if (invalidation !== undefined) return buildServerInvalidationResponse(invalidation);
+        errorMessage = getErrorMessage(retryError);
       }
-      const invalidationAfterRateLimitEmit = currentServerInvalidationError();
-      if (invalidationAfterRateLimitEmit !== undefined) {
-        return buildServerInvalidationResponse(invalidationAfterRateLimitEmit);
-      }
-      return rateLimitedResponse;
     }
 
     pendingCompletion = {
@@ -2257,12 +2291,13 @@ export class OpenCodeAttemptRunner {
 
     const retriable = (stopResult === undefined || stopResult.ok)
       && this.isRetriableError(errorMessage, abortCause);
-    if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+    if (!options.callerManagedSession && retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
       throwIfCallAborted();
       log.info('Retrying OpenCode call after transient exception', {
         agentType,
         attempt,
         errorMessage: sanitizeAttemptError(errorMessage),
+        error: sanitizeAttemptError(message),
       });
       await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();
@@ -2282,7 +2317,8 @@ export class OpenCodeAttemptRunner {
     }
 
     const sanitizedErrorMessage = sanitizeAttemptError(errorMessage);
-    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause);
+    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause)
+      ?? resumeFailureCategory ?? rejectedResumeCategory(error, options);
     return {
       persona: agentType,
       status: 'error',
@@ -2354,7 +2390,9 @@ export class OpenCodeAttemptRunner {
         state.sensitiveSources,
       );
     }
-    return attemptResult;
+    state.sensitiveSources.collect(state.responseBuffer.sensitiveValues);
+    if (attemptResult === RETRY_ATTEMPT || attemptResult.error === undefined) return attemptResult;
+    return { ...attemptResult, error: sanitizeSensitiveTextWithKnownValues(attemptResult.error, state.sensitiveSources) };
   } finally {
     removeServerInvalidationListener?.();
     release?.();
@@ -2365,8 +2403,8 @@ export class OpenCodeAttemptRunner {
     }
   }
   }
-  async compactSession(options: OpenCodeCompactSessionOptions): Promise<void> {
-    await compactOpenCodeSessionWithCoordinator(options);
+  async compactSession(options: OpenCodeCompactSessionOptions, executionContext: OpenCodeExecutionContext): Promise<void> {
+    await compactOpenCodeSessionWithCoordinator(options, executionContext);
   }
 
   /** Call OpenCode with a custom agent configuration (system prompt + prompt) */
@@ -2375,10 +2413,11 @@ export class OpenCodeAttemptRunner {
     prompt: string,
     systemPrompt: string,
     options: OpenCodeCallOptions,
+    executionContext: OpenCodeExecutionContext,
   ): Promise<AgentResponse> {
     return this.call(agentName, prompt, {
       ...options,
       systemPrompt,
-    });
+    }, executionContext);
   }
 }

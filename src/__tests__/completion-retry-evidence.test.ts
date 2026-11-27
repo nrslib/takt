@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { TaskReviewScope } from '../core/workflow/review-scope.js';
+import { collectTaskReviewScope, type TaskReviewScope } from '../core/workflow/review-scope.js';
 import { isSensitiveProjectFilePath } from '../shared/utils/sensitive-file-path.js';
 import {
   collectCompletionRetryEvidence,
@@ -303,7 +303,7 @@ describe('completion retry evidence', () => {
     ]));
   });
 
-  it('includes commits after a materialized PR head in local diff evidence', () => {
+  it.each([true, false])('collects PR uncommitted diff from HEAD after base sync (diff refs: %s)', (hasDiffRefs) => {
     const cwd = createDirectory('takt-review-completion-pr-local-evidence-');
     execFileSync('git', ['init'], { cwd });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
@@ -313,36 +313,43 @@ describe('completion retry evidence', () => {
     execFileSync('git', ['commit', '-m', 'base'], { cwd });
     const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
     writeFileSync(join(cwd, 'source.ts'), 'export const version = 1;\n');
-    execFileSync('git', ['commit', '-am', 'pull request head'], { cwd });
-    const pullRequestHead = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-    }).trim();
-    writeFileSync(join(cwd, 'source.ts'), 'export const version = 2;\n');
-    execFileSync('git', ['commit', '-am', 'local follow-up'], { cwd });
+    execFileSync('git', ['commit', '-am', 'synced base change'], { cwd });
+    execFileSync('git', ['update-ref', 'refs/takt/pr-base/main', 'HEAD'], { cwd });
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd });
+    writeFileSync(join(cwd, 'source.ts'), 'export const version = 1;\nexport const feature = true;\n');
+    execFileSync('git', ['commit', '-am', 'pull request change'], { cwd });
+    writeFileSync(join(cwd, 'source.ts'), 'export const version = 2;\nexport const feature = true;\n');
 
     const evidence = collectCompletionRetryEvidence({
       cwd,
-      reviewScope: {
-        kind: 'collected',
-        paths: ['source.ts'],
-        source: {
-          kind: 'pull_request',
+      reviewScope: collectTaskReviewScope({
+        cwd,
+        baseRange: { kind: 'branch_base', baseCommit },
+        prContext: {
+          source: 'pr_review',
           prNumber: 1,
-          diffRange: { baseDiffRef: baseCommit, headDiffRef: pullRequestHead },
-          includesWorkingTree: true,
-          baseRange: { kind: 'branch_base', baseCommit },
+          baseBranch: 'missing-base',
+          headBranch: 'feature',
+          baseBranchSource: 'pull_request',
+          ...(hasDiffRefs ? { baseDiffRef: 'refs/takt/pr-base/main', headDiffRef: 'refs/heads/feature' } : {}),
         },
-      },
+      }),
     });
 
     expect(evidence.files).toEqual([{
       path: 'source.ts',
-      content: 'export const version = 2;\n',
+      content: 'export const version = 2;\nexport const feature = true;\n',
       truncated: false,
     }]);
-    expect(evidence.diff).toMatch(/\+export const version = 1;/);
-    expect(evidence.diff).toMatch(/\+export const version = 2;/);
+    expect(evidence.diff).toBeDefined();
+    const addedLines = evidence.diff!.split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+      .map((line) => line.slice(1));
+    expect(addedLines).toEqual([
+      ...(hasDiffRefs ? ['export const feature = true;'] : []),
+      'export const version = 2;',
+    ]);
+    expect(evidence.diff).toContain('-export const version = 1;');
   });
 
   it('enforces per-file and serialized evidence limits', () => {

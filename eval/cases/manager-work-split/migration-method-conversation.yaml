@@ -1,0 +1,404 @@
+ja:
+  lang: ja
+  expectedQuestionType: choice
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 顧客台帳を新しい保存先へ移行する
+    outOfScope:
+      - 本番環境の切り替え
+    acceptanceCriteria:
+      - 顧客と住所の全件を移行し、件数と参照関係を維持する。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/ledger-migration
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/migration-study.md
+      result: 現行台帳の書き込みを止めて一括転送すれば約40分で移行できる。業務予定を確認し、約40分の停止枠を確保できることが分かったが、その間は利用者の台帳更新業務が止まる。書き込みを継続して差分を追い段階的に切り替える方式も実装可能で、必要な数日間の検証期間は確保できるが、同期処理の追加実装と検証の手間がかかる。両方式とも件数と参照関係を維持できる。停止による業務への影響と、段階移行の実装・検証の手間のどちらを受け入れるかは決まっておらず、受け入れ条件や制約にも優先順位の指定はない。
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: 設計、実装、レビューを実行する。
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          status: created
+          executionStatus: active
+          branch: takt/goal/ledger-migration
+          integrationBranch: main
+          objective: 顧客台帳を新しい保存先へ移行する
+          acceptanceCriteriaVersion: 1
+          questions: []
+          pendingQuestionCount: 0
+          questionCount: 0
+          workLog: []
+          workLogCount: 0
+          notificationCount: 0
+          truncated: true
+          omissions:
+            specifications: {}
+            objective:
+              totalBytes: 48
+            questions:
+              totalCount: 0
+            workLog:
+              totalCount: 0
+            notifications:
+              totalCount: 0
+              returnedCount: 0
+            acceptanceCriteria:
+              totalCount: 1
+              returnedCount: 0
+            constraints:
+              totalCount: 0
+              returnedCount: 0
+            outOfScope:
+              totalCount: 1
+              returnedCount: 0
+          retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+        content: 顧客台帳を新しい保存先へ移行する
+        totalBytes: 48
+        offset: 0
+        returnedBytes: 48
+        direction: forward
+        truncated: false
+        nextOffset: null
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+        items:
+          - 本番環境の切り替え
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+        items:
+          - 顧客と住所の全件を移行し、件数と参照関係を維持する。
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks: []
+        collection: tasks
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/tasks.yaml
+      result:
+        tasks: []
+  user: 顧客台帳の移行について相談したいです。段階的に移せば業務を止めずに済みそうですね。調査結果を踏まえて、移行の進め方を決めたいです。
+en:
+  lang: en
+  expectedQuestionType: choice
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Migrate the customer ledger to the new store
+    outOfScope:
+      - Production cutover
+    acceptanceCriteria:
+      - Migrate all customers and addresses, preserving counts and references.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/ledger-migration
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/migration-study.md
+      result: Pausing ledger writes permits a bulk transfer in about 40 minutes. The operating schedule has been checked and a roughly 40-minute pause window can be secured, but users cannot update the ledger during that time. Staged transfer while writes stay active is also feasible, and the several days needed for validation can be secured, but it requires additional synchronization implementation and validation effort. Both preserve counts and references. No decision has been made on whether to accept the business impact of a pause or the implementation and validation effort of staged migration, and the acceptance criteria and constraints specify no priority.
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Plan, implement and review the assigned work.
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          status: created
+          executionStatus: active
+          branch: takt/goal/ledger-migration
+          integrationBranch: main
+          objective: Migrate the customer ledger to the new store
+          acceptanceCriteriaVersion: 1
+          questions: []
+          pendingQuestionCount: 0
+          questionCount: 0
+          workLog: []
+          workLogCount: 0
+          notificationCount: 0
+          truncated: true
+          omissions:
+            specifications: {}
+            objective:
+              totalBytes: 44
+            questions:
+              totalCount: 0
+            workLog:
+              totalCount: 0
+            notifications:
+              totalCount: 0
+              returnedCount: 0
+            acceptanceCriteria:
+              totalCount: 1
+              returnedCount: 0
+            constraints:
+              totalCount: 0
+              returnedCount: 0
+            outOfScope:
+              totalCount: 1
+              returnedCount: 0
+          retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+        content: Migrate the customer ledger to the new store
+        totalBytes: 44
+        offset: 0
+        returnedBytes: 44
+        direction: forward
+        truncated: false
+        nextOffset: null
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+        items:
+          - Production cutover
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+        items:
+          - Migrate all customers and addresses, preserving counts and references.
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks: []
+        collection: tasks
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/tasks.yaml
+      result:
+        tasks: []
+  user: I would like to discuss the customer ledger migration. A staged transfer seems to avoid interrupting operations. Based on the investigation, I would like to decide how to proceed.

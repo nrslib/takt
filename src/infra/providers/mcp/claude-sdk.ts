@@ -6,6 +6,7 @@
  * loaded (order.md:159-161).
  */
 
+import { filterMcpHeaderEnvServers } from './header-env.js';
 import type {
   ProviderMcpAdapter,
   ProviderMcpContext,
@@ -25,6 +26,8 @@ export function createClaudeSdkMcpAdapter(): ProviderMcpAdapter {
       servers: ResolvedMcpServers,
       _context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
+      const original = servers;
+      servers = filterMcpHeaderEnvServers('claude-sdk', servers, true);
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
         // Empty set: MCP is disabled (order.md:152) so no `mcpServers` option
         // is passed, but `strictMcpConfig: true` is still emitted so ambient
@@ -32,7 +35,10 @@ export function createClaudeSdkMcpAdapter(): ProviderMcpAdapter {
         // (order.md:160). The adapter does not know whether runtime MCP mode
         // is active; the runner boundary decides whether to call `prepare`
         // at all for an empty set.
-        return { dispose: noopDispose, sdkOptions: { strictMcpConfig: true } };
+        return { dispose: noopDispose, sdkOptions: {
+          strictMcpConfig: true,
+          ...(original.enabled && original.serverNames.length > 0 ? { mcpServers: {} } : {}),
+        } };
       }
       const mcpServers = toSdkMcpServers(servers.servers);
       return {

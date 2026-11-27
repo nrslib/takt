@@ -19,6 +19,17 @@ export type CodexItem = {
   [key: string]: unknown;
 };
 
+const CODEX_TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'command_execution',
+  'mcp_tool_call',
+  'web_search',
+  'file_change',
+]);
+
+export function isCodexToolItem(item: CodexItem): boolean {
+  return CODEX_TOOL_ITEM_TYPES.has(item.type);
+}
+
 /** Tracking state for stream offsets during a single Codex thread run */
 export interface StreamTrackingState {
   startedItems: Set<string>;
@@ -26,6 +37,7 @@ export interface StreamTrackingState {
   textOffsets: Map<string, number>;
   thinkingOffsets: Map<string, number>;
   anonymousItemIds: Map<string, string>;
+  observedToolUse: boolean;
   activeTool?: StreamToolUseEventData;
 }
 
@@ -36,6 +48,7 @@ export function createStreamTrackingState(): StreamTrackingState {
     textOffsets: new Map<string, number>(),
     thinkingOffsets: new Map<string, number>(),
     anonymousItemIds: new Map<string, string>(),
+    observedToolUse: false,
   };
 }
 
@@ -89,6 +102,7 @@ function recordToolUse(
   input: Record<string, unknown>,
   id: string,
 ): void {
+  state.observedToolUse = true;
   state.activeTool = { tool, input, id };
 }
 

@@ -7,22 +7,35 @@ import { toTaskInfo } from './mapper.js';
 import { TaskStore } from './store.js';
 import { buildAutoRequeueNote } from './retryNote.js';
 import { buildRetryTaskRecord, normalizeTaskRef } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 
 interface AutoRequeueOptions {
   maxAttempts: number;
 }
 
 export interface TaskRetryOptions {
+  freshStart?: boolean;
   startStep?: string;
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
+  runtimeAssignment?: string;
   taskDir?: string;
-  sourceRunSlug?: string;
+  sourceRunSlug?: string | null;
   restartPoint?: WorkflowRestartPoint;
+  sourceResumePoint?: WorkflowResumePoint;
+}
+
+function assertFreshCloneRetryCandidate(task: TaskRecord): void {
+  if (task.status !== 'failed' || !task.worktree || task.merge_task === true
+    || task.worktree_path !== undefined || task.run_slug !== undefined || task.source_run_slug !== undefined
+    || !task.failure?.error.trim() || task.failure.step?.trim() || task.resume_point) {
+    throw new Error(`Task "${task.name}" cannot start a fresh clone retry because execution or worktree history exists.`);
+  }
 }
 
 export type AutoRequeueSkipReason =
+  | 'goal_owned'
   | 'disabled'
   | 'task_not_failed'
   | 'max_attempts_reached'
@@ -52,6 +65,16 @@ function replaceTaskAtIndex(
   return tasks.map((task, taskIndex) => (taskIndex === index ? updated : task));
 }
 
+function findRetryTargetConflict(tasks: readonly TaskRecord[], index: number, updated: TaskRecord) {
+  if (updated.merge_task !== true) return undefined;
+  return findActiveTaskTargetConflict(tasks.filter((_, taskIndex) => taskIndex !== index), updated);
+}
+
+function assertRetryTargetAvailable(tasks: readonly TaskRecord[], index: number, updated: TaskRecord): void {
+  const conflict = findRetryTargetConflict(tasks, index, updated);
+  if (conflict) throw conflict;
+}
+
 function findTaskIndex(tasks: readonly TaskRecord[], taskName: string, taskRef: string): number {
   const index = tasks.findIndex((task) => task.name === taskName);
   if (index === -1) {
@@ -65,6 +88,10 @@ function getAutoRequeueSkipResult(
   maxAttempts: number,
 ): AutoRequeueResult | undefined {
   const currentAttempts = target.auto_requeue_count ?? 0;
+
+  if (target.goal_id !== undefined) {
+    return { requeued: false, attempt: currentAttempts, maxAttempts, reason: 'goal_owned' };
+  }
 
   if (target.status !== 'failed') {
     return {
@@ -111,11 +138,12 @@ function getAutoRequeueSkipResult(
 }
 
 function resolveResumeSource(
-  explicitSourceRunSlug: string | undefined,
+  explicitSourceRunSlug: string | null | undefined,
   task: TaskRecord,
   resumeMode: RunResumeSource['resumeMode'],
 ): RunResumeSource {
-  const sourceRunSlug = explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
+  const sourceRunSlug = explicitSourceRunSlug === null
+    ? undefined : explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
   return {
     ...(sourceRunSlug ? { sourceRunSlug } : {}),
     resumeMode,
@@ -128,6 +156,16 @@ export class TaskRetryService {
     private readonly tasksFile: string,
     private readonly store: TaskStore,
   ) {}
+
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+    if (maxAttempts <= 0) return false;
+    const taskName = normalizeTaskRef(taskRef);
+    const current = this.store.read();
+    const index = findTaskIndex(current.tasks, taskName, taskRef);
+    const target = current.tasks[index]!;
+    return getAutoRequeueSkipResult(target, maxAttempts) === undefined
+      && findRetryTargetConflict(current.tasks, index, target) === undefined;
+  }
 
   requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {
     return this.requeueTask(taskRef, ['failed'], { startStep, retryNote });
@@ -184,10 +222,13 @@ export class TaskRetryService {
             taskDir: target.task_dir,
             resumeSource: resolveResumeSource(undefined, target, 'requeue'),
             restartPoint,
+            sourceResumePoint: target.source_resume_point,
           },
         ),
         auto_requeue_count: nextAttempt,
       };
+
+      assertRetryTargetAvailable(current.tasks, index, updated);
 
       result = {
         requeued: true,
@@ -210,6 +251,9 @@ export class TaskRetryService {
     resumeMode: RunResumeSource['resumeMode'],
     options: TaskRetryOptions = {},
   ): TaskInfo {
+    if (options.freshStart) {
+      throw new Error('A fresh clone retry must be queued before execution.');
+    }
     const taskName = normalizeTaskRef(taskRef);
     let found: TaskRecord | undefined;
 
@@ -224,6 +268,7 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
+      if (target.remote_assignment !== undefined) throw new Error('Remote task retry and requeue are not supported');
       const updated = buildRetryTaskRecord(
         target,
         'running',
@@ -232,11 +277,15 @@ export class TaskRetryService {
           retryNote: options.retryNote,
           resumePoint: options.resumePoint,
           workflow: options.workflow,
+          runtimeAssignment: options.runtimeAssignment,
           taskDir: options.taskDir,
           resumeSource: resolveResumeSource(options.sourceRunSlug, target, resumeMode),
           restartPoint: options.restartPoint,
+          sourceResumePoint: options.sourceResumePoint,
         },
       );
+
+      assertRetryTargetAvailable(current.tasks, index, updated);
 
       found = updated;
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
@@ -263,19 +312,30 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
+      if (options.freshStart) {
+        assertFreshCloneRetryCandidate(target);
+        if (options.resumePoint || options.sourceRunSlug) {
+          throw new Error('A fresh clone retry cannot resume a previous run.');
+        }
+      }
       const updated = buildRetryTaskRecord(
         target,
         'pending',
         {
-          startStep: options.startStep,
+          startStep: options.freshStart && options.startStep === undefined && options.restartPoint === undefined
+            ? target.start_step : options.startStep,
           retryNote: options.retryNote,
           resumePoint: options.resumePoint,
           workflow: options.workflow,
+          runtimeAssignment: options.runtimeAssignment,
           taskDir: options.taskDir,
-          resumeSource: resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
+          resumeSource: options.freshStart ? undefined : resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
           restartPoint: options.restartPoint,
+          sourceResumePoint: options.sourceResumePoint,
         },
       );
+
+      assertRetryTargetAvailable(current.tasks, index, updated);
 
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });

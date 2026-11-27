@@ -1,11 +1,28 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { stringify as stringifyYaml } from 'yaml';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const mockLstatFailure = vi.hoisted(() => ({ path: '' }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    lstatSync: (target: Parameters<typeof actual.lstatSync>[0]) => {
+      if (target === mockLstatFailure.path) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return actual.lstatSync(target);
+    },
+  };
+});
+
 vi.mock('../shared/prompt/index.js', () => ({
   confirm: vi.fn(),
+  selectMultipleOptions: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -26,10 +43,14 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
   deleteBranch: (...args: unknown[]) => mockDeleteBranch(...args),
 }));
 
-import { confirm } from '../shared/prompt/index.js';
-import { error as logError } from '../shared/ui/index.js';
-import { deleteTaskByKind, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
+import { confirm, selectMultipleOptions } from '../shared/prompt/index.js';
+import { error as logError, success } from '../shared/ui/index.js';
+import { deleteTaskResources, deleteTaskByKind, deleteAllTasks, deleteSelectedTasks } from '../features/tasks/list/taskDeleteActions.js';
+import { deleteBranch } from '../features/tasks/list/taskBranchLifecycleActions.js';
+import { encodeWorktreePath } from '../infra/config/project/sessionStore.js';
 import type { TaskListItem } from '../infra/task/types.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 const mockConfirm = vi.mocked(confirm);
 const mockLogError = vi.mocked(logError);
@@ -63,7 +84,7 @@ function setupTasksFile(projectDir: string): string {
         status: 'completed',
         content: 'completed',
         branch: 'takt/completed-task',
-        worktree_path: '/tmp/takt/completed-task',
+        worktree_path: path.join(projectDir, '.takt', 'worktrees', 'completed-task'),
         created_at: '2025-01-15T00:00:00.000Z',
         started_at: '2025-01-15T00:01:00.000Z',
         completed_at: '2025-01-15T00:02:00.000Z',
@@ -85,8 +106,9 @@ function setupTasksFile(projectDir: string): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLstatFailure.path = '';
   mockDeleteBranch.mockReturnValue(true);
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-'));
+  tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-')));
 });
 
 afterEach(() => {
@@ -94,6 +116,93 @@ afterEach(() => {
 });
 
 describe('taskDeleteActions', () => {
+  it('keeps remote tasks out of synchronous local deletion without a worker ACK', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const task = runner.listAllTaskItems().find((task) => task.kind === 'failed')!;
+    const id = '11111111-1111-4111-8111-111111111111';
+    const remoteAssignment = RemoteAssignmentSchema.parse({ projectId: tmpDir, taskName: task.name,
+      workerId: 'w1', workerName: 'w1', registrationGeneration: id, executionId: id, assignmentGeneration: 1,
+      requestId: 'request', originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'task',
+      leaseExpiresAt: 1, lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: id, retryReservation: true });
+    expect(() => deleteTaskResources({ ...task, remoteAssignment })).toThrow('acknowledge workspace cleanup');
+    expect(runner.listAllTaskItems()).toContainEqual(expect.objectContaining({ name: task.name, kind: 'failed' }));
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+  });
+  it('rejects a missing selection before cleanup with the existing error', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    runner.deleteTask(selected.name, 'completed');
+
+    expect(() => deleteTaskResources(selected)).toThrow('Task not found: completed-task (completed)');
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the record until cleanup succeeds', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => {
+      expect(runner.listAllTaskItems()).toContainEqual(expect.objectContaining({ name: selected.name, kind: 'completed' }));
+      return true;
+    });
+
+    expect(deleteTaskResources(selected)).toBe(true);
+    expect(runner.listAllTaskItems().map((task) => task.name)).not.toContain(selected.name);
+  });
+
+  it.each(['delete', 'restart'] as const)('rejects an attempt to %s the reserved target during cleanup and preserves its record', (operation) => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const before = runner.listAllTaskItems();
+    const selected = before.find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => {
+      if (operation === 'delete') runner.deleteTask(selected.name, 'completed');
+      else runner.startReExecution(selected.name, ['completed'], 'instruct');
+      return true;
+    });
+
+    expect(() => deleteTaskResources(selected)).toThrow();
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(1);
+    expect(runner.listAllTaskItems()).toEqual(before);
+  });
+
+  it('rejects a completed selection after re-execution starts without cleanup', () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    runner.startReExecution(selected.name, ['completed'], 'instruct');
+
+    expect(() => deleteTaskResources(selected)).toThrow();
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(runner.listAllTaskItems().find((task) => task.name === selected.name)?.kind).toBe('running');
+    expect(fs.existsSync(tasksFile)).toBe(true);
+  });
+
+  it('preserves the record on a cleanup exception and releases the lock for the next operation', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => { throw new Error('cleanup failed'); });
+
+    expect(() => deleteTaskResources(selected)).toThrow();
+    expect(runner.listAllTaskItems().map((task) => task.name)).toContain(selected.name);
+    expect(deleteTaskResources(selected)).toBe(true);
+    expect(runner.listAllTaskItems().map((task) => task.name)).not.toContain(selected.name);
+  });
+
+  it('rejects running tasks at the resource deletion boundary without touching records or branches', () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const original = fs.readFileSync(tasksFile, 'utf8');
+    const running: TaskListItem = { kind: 'running', name: 'running-task', createdAt: '2026-02-09T00:00:00Z',
+      filePath: tasksFile, content: 'running', branch: 'feature/running' };
+
+    expect(() => deleteTaskResources(running, { quiet: true })).toThrow();
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).toBe(original);
+  });
+
   it('should delete pending task when confirmed', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
@@ -139,7 +248,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'failed',
       branch: 'takt/failed-task',
-      worktreePath: '/tmp/takt/failed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'failed-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -151,6 +260,73 @@ describe('taskDeleteActions', () => {
     expect(raw).not.toContain('failed-task');
   });
 
+  it('merge taskのheadがmainでもroot branchを削除せずcloneだけを片付ける', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(clonePath, { recursive: true });
+    fs.writeFileSync(path.join(clonePath, 'note.txt'), 'temporary clone\n');
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'main', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.existsSync(clonePath)).toBe(false);
+    expect(fs.readFileSync(tasksFile, 'utf8')).not.toContain('failed-task');
+  });
+
+  it('merge cloneが存在しない場合はroot branchに触れずtaskを削除する', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'missing'),
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).not.toContain('failed-task');
+  });
+
+  it('merge cloneへの壊れたsymlinkを欠落扱いせずtaskを残す', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(path.dirname(clonePath), { recursive: true });
+    fs.symlinkSync(path.join(tmpDir, 'missing-target'), clonePath);
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+
+    expect(await deleteTaskByKind(task)).toBe(false);
+    expect(fs.lstatSync(clonePath).isSymbolicLink()).toBe(true);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).toContain('failed-task');
+  });
+
+  it('merge cloneの検査が失敗した場合はroot branchにもtask recordにも触れない', async () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const clonePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    const task: TaskListItem = {
+      kind: 'failed', name: 'failed-task', createdAt: '2025-01-15T12:34:56',
+      filePath: tasksFile, content: 'merge PR', branch: 'main', worktreePath: clonePath,
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple', merge_task: true },
+    };
+    mockConfirm.mockResolvedValue(true);
+    mockLstatFailure.path = clonePath;
+    expect(await deleteTaskByKind(task)).toBe(false);
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).toContain('failed-task');
+  });
+
   it('should keep failed task record when branch cleanup fails', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
@@ -160,7 +336,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'failed',
       branch: 'takt/failed-task',
-      worktreePath: '/tmp/takt/failed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'failed-task'),
     };
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
@@ -171,6 +347,37 @@ describe('taskDeleteActions', () => {
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, task);
     const raw = fs.readFileSync(tasksFile, 'utf-8');
     expect(raw).toContain('failed-task');
+    mockDeleteBranch.mockReturnValueOnce(true);
+    expect(deleteTaskResources(task)).toBe(true);
+    expect(new TaskRunner(tmpDir).listAllTaskItems().map(({ name }) => name)).not.toContain(task.name);
+  });
+
+  it('does not clean a single task claimed while waiting for confirmation', async () => {
+    const runner = new TaskRunner(tmpDir);
+    const target = runner.addTask('single', { branch: 'takt/single' });
+    const task = runner.listAllTaskItems()[0]!;
+    mockConfirm.mockImplementationOnce(async () => {
+      expect(runner.claimNextTasks(1).map(({ name }) => name)).toEqual([target.name]);
+      return true;
+    });
+
+    expect(await deleteTaskByKind(task)).toBe(false);
+
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(runner.listAllTaskItems()).toMatchObject([{ name: target.name, kind: 'running' }]);
+  });
+
+  it('does not start cleanup when single-task confirmation is declined', async () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const task = runner.listAllTaskItems().find(({ kind }) => kind === 'completed')!;
+    const before = fs.readFileSync(runner.getTasksFilePath(), 'utf8');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    expect(await deleteTaskByKind(task)).toBe(false);
+
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(runner.getTasksFilePath(), 'utf8')).toBe(before);
   });
 
   it('should return false when target task is missing', async () => {
@@ -199,7 +406,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'exceeded',
       branch: 'takt/exceeded-task',
-      worktreePath: '/tmp/takt/exceeded-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'exceeded-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -220,7 +427,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'completed',
       branch: 'takt/completed-task',
-      worktreePath: '/tmp/takt/completed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -239,7 +446,7 @@ describe('deleteAllTasks', () => {
     const tasks: TaskListItem[] = [
       { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
       { kind: 'failed', name: 'failed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'failed' },
-      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task') },
     ];
     mockConfirm.mockResolvedValue(true);
 
@@ -303,8 +510,8 @@ describe('deleteAllTasks', () => {
   it('should skip task when branch cleanup fails but continue with others', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const tasks: TaskListItem[] = [
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task') },
       { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
-      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
     ];
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
@@ -320,7 +527,7 @@ describe('deleteAllTasks', () => {
   it('should return false when all tasks fail branch cleanup', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const tasks: TaskListItem[] = [
-      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task') },
     ];
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
@@ -339,7 +546,7 @@ describe('deleteAllTasks', () => {
       filePath: tasksFile,
       content: 'exceeded',
       branch: 'takt/exceeded-task',
-      worktreePath: '/tmp/takt/exceeded-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'exceeded-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -360,7 +567,7 @@ describe('deleteAllTasks', () => {
       filePath: tasksFile,
       content: 'completed',
       branch: 'takt/completed-task',
-      worktreePath: '/tmp/takt/completed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task'),
     };
     const tasks: TaskListItem[] = [completedTask];
     mockConfirm.mockResolvedValue(true);
@@ -368,5 +575,89 @@ describe('deleteAllTasks', () => {
     await deleteAllTasks(tasks);
 
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, completedTask);
+  });
+});
+
+describe('deletion while a task is claimed', () => {
+  it.each([false, true])('preserves a worktree claimed during selection: %s', async (claim) => {
+    execFileSync('git', ['init', '--quiet', tmpDir], { stdio: 'pipe' });
+    const runner = new TaskRunner(tmpDir);
+    const worktreePath = path.join(tmpDir, '.takt', 'worktrees', 'first');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const marker = path.join(worktreePath, 'work.txt');
+    fs.writeFileSync(marker, 'keep work');
+    const sessionFile = path.join(tmpDir, '.takt', 'worktree-sessions', `${encodeWorktreePath(worktreePath)}.json`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, '{}');
+    fs.writeFileSync(runner.getTasksFilePath(), stringifyYaml({ tasks: [
+      { name: 'first', status: 'pending', content: 'first', branch: 'takt/first', worktree_path: worktreePath,
+        created_at: '2026-10-20T00:00:00.000Z', started_at: null, completed_at: null },
+      { name: 'second', status: 'completed', content: 'second', created_at: '2026-10-20T00:00:00.000Z',
+        started_at: '2026-10-20T00:00:00.000Z', completed_at: '2026-10-20T00:00:00.000Z' },
+    ] }));
+    const tasks = runner.listAllTaskItems();
+    let select!: (values: string[]) => void;
+    vi.mocked(selectMultipleOptions).mockReturnValueOnce(new Promise<string[]>((resolve) => { select = resolve; }));
+    mockConfirm.mockResolvedValue(true);
+    mockDeleteBranch.mockImplementation(deleteBranch);
+
+    const operation = deleteSelectedTasks(tasks);
+    try {
+      expect(selectMultipleOptions).toHaveBeenCalledTimes(1);
+      expect(mockDeleteBranch).not.toHaveBeenCalled();
+      if (claim) expect(runner.claimNextTasks(1).map((task) => task.name)).toEqual(['first']);
+    } finally {
+      select(['0', '1']);
+    }
+    expect(await operation).toBe(true);
+
+    expect(fs.existsSync(marker)).toBe(claim);
+    expect(fs.existsSync(sessionFile)).toBe(claim);
+    expect(runner.listAllTaskItems().map(({ name, kind }) => ({ name, kind }))).toEqual(
+      claim ? [{ name: 'first', kind: 'running' }] : [],
+    );
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(claim ? 0 : 1);
+    expect(success).toHaveBeenCalledWith(`Deleted ${claim ? 1 : 2} of 2 tasks.`);
+    expect(mockLogError).toHaveBeenCalledTimes(claim ? 1 : 0);
+  });
+
+  it.each([false, true])('preserves a merge clone requeued and claimed during confirmation: %s', async (claim) => {
+    const runner = new TaskRunner(tmpDir);
+    const worktreePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const marker = path.join(worktreePath, 'work.txt');
+    fs.writeFileSync(marker, 'keep clone');
+    const merge = runner.startPrMergeTask({
+      prNumber: 123, headBranch: 'main', baseBranch: 'release', headSha: 'a'.repeat(40),
+      headRepositoryUrl: 'https://github.com/example/repo.git',
+      headRepositoryPushUrls: ['https://github.com/example/repo.git'],
+      workflow: 'merge-review-fix-simple', method: 'merge', worktreePath, threatCheckMaxDiffBytes: 1000,
+    });
+    runner.forceFailRunningTask(merge.name, { error: 'retry' });
+    const tasks = runner.listAllTaskItems();
+    let approve!: (approved: boolean) => void;
+    vi.mocked(selectMultipleOptions).mockResolvedValueOnce(['0']);
+    mockConfirm.mockReturnValueOnce(new Promise<boolean>((resolve) => { approve = resolve; }));
+
+    const operation = deleteSelectedTasks(tasks);
+    try {
+      await vi.waitFor(() => expect(mockConfirm).toHaveBeenCalledTimes(1));
+      expect(fs.existsSync(marker)).toBe(true);
+      if (claim) {
+        runner.requeueFailedTask('merge-pr-123');
+        expect(runner.claimNextTasks(1)).toMatchObject([{ name: 'merge-pr-123', worktreePath }]);
+      }
+    } finally {
+      approve(true);
+    }
+    expect(await operation).toBe(!claim);
+
+    expect(fs.existsSync(marker)).toBe(claim);
+    expect(runner.listAllTaskItems().map(({ name, kind }) => ({ name, kind }))).toEqual(
+      claim ? [{ name: 'merge-pr-123', kind: 'running' }] : [],
+    );
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith(`Deleted ${claim ? 0 : 1} of 1 tasks.`);
+    expect(mockLogError).toHaveBeenCalledTimes(claim ? 1 : 0);
   });
 });

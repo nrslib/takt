@@ -13,6 +13,11 @@
 |-------------|-------|-----------------------|----------------|---------|----------------|--------------------------------------------|
 | {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the top-level production entry through every relevant stage to the observable result} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} | {Applied rule names and how they support the boundary decision} |
 
+## Repair Method Comparison
+| Repair Unit | History and Fixed-Version References | Method Review Decision | Required Conditions and Earlier Assumptions | Compared Methods and Change Locations | Selection Reason and Shared-Cause Treatment | Preserved Conditions | Verification Changes from Earlier Method |
+|-------------|--------------------------------------|------------------------|--------------------------------------------|---------------------------------------|---------------------------------------------|----------------------|------------------------------------------|
+| {Name} | {History analyzed from original records: each round's counterexample, change, resolved conditions and passing targeted verification; current counterexample, shared cause, and why earlier verification missed it. Fixed-version references to plans, repairs, and verification from the same execution. Note absent, missing, or incomplete history} | {Trigger / Do not trigger and why; explicitly do not trigger when completing an in-progress plan} | {Requirements versus implementation assumptions} | {Concrete retention/change options and locations} | {Selected method, assumption removed or reason to retain it} | {Scope, mandated method, success and failure outcomes} | {Observation of shared-cause removal and conditions failing under the old method, or reason for no change} |
+
 ## Impact Paths
 | Repair Unit / Path | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
 |--------------------|-----------------------------------|----------------------------|-----------|--------------------|--------------------------------------|
@@ -24,9 +29,9 @@
 | {N} | {Name} | {Boundary change / Consumer migration / Obsolete-path removal / Local repair} | {Earlier work or none} | {Condition verifiable from code and observable results} |
 
 ## Verification Approach
-| Repair Unit | Path or State to Check | Successful Example | Failure or Boundary Example | Method |
-|-------------|------------------------|--------------------|-----------------------------|--------|
-| {Name} | {Actual affected path or state} | {Concrete expected success} | {Concrete example that detects a violation} | {Test, reproduction, search, or code tracing} |
+| Repair Unit | Path or State to Check | Successful Example | Failure or Boundary Example | Basis for the Counterexample Being in Scope | Method |
+|-------------|------------------------|--------------------|-----------------------------|---------------------------------------------|--------|
+| {Name} | {Actual affected path or state} | {Concrete expected success} | {Concrete example that detects a violation} | {Applicable item in “Scope of inputs used for counterexamples” and evidence location, or N/A} | {Test, reproduction, search, or code tracing} |
 
 ## Plan-scoped Investigation
 {None, or the finding ID, unresolved hypothesis, fixed conditions, single varied condition, observation target, execution method, and result-dependent repair and verification to execute as a repair unit}
@@ -41,4 +46,5 @@
 - Combine findings into one repair unit when they share the same cause, condition to preserve, and acceptance criteria
 - While planning each repair unit, inspect actual paths affected by the same cause instead of only the reported location
 - Do not add nonexistent paths or unrelated mechanisms as checklist items
+- Record each counterexample from earlier completion verification or findings that is added to acceptance criteria, regression conditions, or verification items as its own row in “Verification Approach.” In “Basis for the Counterexample Being in Scope,” identify the applicable item in “Scope of inputs used for counterexamples” and the location of supporting documentation, code, or records. Use “N/A” for checks that do not rely on counterexamples
 - Map every in-scope finding ID before confirming the plan; do not stop after the first missing item

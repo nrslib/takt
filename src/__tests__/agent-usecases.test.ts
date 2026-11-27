@@ -2,7 +2,7 @@ import { buildDecomposePrompt, buildMorePartsPrompt } from '../agents/team-leade
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
-import { detectJudgeIndex } from '../agents/judge-utils.js';
+import { buildJudgePrompt, detectJudgeIndex } from '../agents/judge-utils.js';
 import {
   executeAgent,
   executeIsolatedStructuredInternalAgent,
@@ -73,7 +73,7 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
   };
 }
 
-const judgeOptions = { cwd: '/repo', stepName: 'review' };
+const judgeOptions = { cwd: '/repo', stepName: 'review', judgmentInput: 'work result' };
 
 const withResolvedMockProvider = <T extends { provider?: unknown; resolvedProvider?: unknown }>(
   options: T,
@@ -981,6 +981,10 @@ describe('agent-usecases', () => {
     );
 
     expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
+    expect(buildJudgePrompt).toHaveBeenCalledWith('work result', [
+      { index: 0, text: 'done' },
+      { index: 1, text: 'fix' },
+    ], 'en', undefined);
   });
 
   it('judgeStatus は全ての判定に失敗したらエラー', async () => {
@@ -1145,18 +1149,21 @@ describe('agent-usecases', () => {
   });
 
   it('decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+    const onValidationError = vi.fn();
     vi.mocked(runAgent)
       .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
       .mockResolvedValueOnce(doneResponse('valid', {
         parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
       }));
 
-    const result = await decomposeTask('instruction', 2, { cwd: '/repo' });
+    const result = await decomposeTask('instruction', 2, { cwd: '/repo', onValidationError });
 
     expect(result.parts).toEqual([
       { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
     ]);
     expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(onValidationError).toHaveBeenCalledOnce();
+    expect(onValidationError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it('decomposition は provider 例外を再試行しない', async () => {
@@ -1368,8 +1375,7 @@ describe('agent-usecases', () => {
     const workflowMeta = {
       workflowName: 'takt-default',
       currentStep: 'implement',
-      stepsList: [{ name: 'plan' }, { name: 'implement' }],
-      currentPosition: '2/2',
+
       processSafety: {
         protectedParentRunPid: 4242,
       },
@@ -1388,7 +1394,7 @@ describe('agent-usecases', () => {
     );
   });
 
-  it('decomposeTask は mcpServers を runAgent に伝搬する', async () => {
+  it('decomposeTask は MCP と外部ディレクトリの許可を runAgent に伝搬する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       parts: [
         { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
@@ -1397,17 +1403,19 @@ describe('agent-usecases', () => {
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp' },
     };
+    const openCodeExternalDirectories = ['/repo/.takt/runs/review/context'];
 
     await decomposeTask('instruction', 2, {
       cwd: '/repo',
       persona: 'team-leader',
       mcpServers,
+      openCodeExternalDirectories,
     });
 
     expect(runAgent).toHaveBeenCalledWith(
       'team-leader',
       expect.any(String),
-      expect.objectContaining({ mcpServers }),
+      expect.objectContaining({ mcpServers, openCodeExternalDirectories }),
     );
   });
 
@@ -1577,6 +1585,21 @@ describe('agent-usecases', () => {
     )).rejects.toThrow("timeout");
   });
 
+  it('requestMoreParts は不正な feedback の検証失敗を通知する', async () => {
+    const onValidationError = vi.fn();
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('invalid feedback', {
+      done: true, reasoning: 'Enough', cancelPartIds: ['unknown-part'], parts: [],
+    }));
+
+    await expect(requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      { cwd: '/repo', persona: 'team-leader', cancellablePartIds: [], onValidationError },
+    )).rejects.toThrow();
+    expect(onValidationError).toHaveBeenCalledOnce();
+  });
+
   it('requestMoreParts は AbortSignal と provider usage を呼び出し境界へ伝搬する', async () => {
     const providerUsage = {
       inputTokens: 4,
@@ -1634,8 +1657,7 @@ describe('agent-usecases', () => {
     const workflowMeta = {
       workflowName: 'takt-default',
       currentStep: 'implement',
-      stepsList: [{ name: 'plan' }, { name: 'implement' }],
-      currentPosition: '2/2',
+
       processSafety: {
         protectedParentRunPid: 4242,
       },
@@ -1660,7 +1682,7 @@ describe('agent-usecases', () => {
     );
   });
 
-  it('requestMoreParts は mcpServers を runAgent に伝搬する', async () => {
+  it('requestMoreParts は MCP と外部ディレクトリの許可を runAgent に伝搬する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'enough',
@@ -1670,6 +1692,7 @@ describe('agent-usecases', () => {
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp' },
     };
+    const openCodeExternalDirectories = ['/repo/.takt/runs/review/context'];
 
     await requestMoreParts(
       'instruction',
@@ -1680,13 +1703,14 @@ describe('agent-usecases', () => {
         persona: 'team-leader',
         cancellablePartIds: [],
         mcpServers,
+        openCodeExternalDirectories,
       },
     );
 
     expect(runAgent).toHaveBeenCalledWith(
       'team-leader',
       expect.any(String),
-      expect.objectContaining({ mcpServers }),
+      expect.objectContaining({ mcpServers, openCodeExternalDirectories }),
     );
   });
 
@@ -1776,16 +1800,5 @@ describe('agent-usecases', () => {
     expect(result).toBeUndefined();
   });
 
-  // --- DecomposeTaskOptions.provider 型契約（ARCH-NEW-BoySCout-ProviderType-DecomposeTask 再発防止） ---
 
-  it('DecomposeTaskOptions.provider は cursor/copilot を受け入れる（ProviderType 型契約）', () => {
-    // ProviderType の全値が DecomposeTaskOptions.provider に代入できることを確認。
-    // TypeScript コンパイルが通ることで型の一致を保証。
-    const optionsCursor: DecomposeTaskOptions = { cwd: '/repo', provider: 'cursor' };
-    const optionsCopilot: DecomposeTaskOptions = { cwd: '/repo', provider: 'copilot' };
-    const optionsClaude: DecomposeTaskOptions = { cwd: '/repo', provider: 'claude' };
-    expect(optionsCursor.provider).toBe('cursor');
-    expect(optionsCopilot.provider).toBe('copilot');
-    expect(optionsClaude.provider).toBe('claude');
-  });
 });

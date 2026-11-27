@@ -6,19 +6,23 @@ import {
   persistTaskOrderRevision,
   type PersistedTaskOrderRevision,
 } from './orderRevision.js';
-import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { assertPrMergeRetryWorktreePath, assertReusableWorktreePath } from './execute/reusedWorktree.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from './execute/providerPreflight.js';
 
 export interface FailedTaskRetryPersistenceOptions {
   readonly task: TaskListItem;
   readonly projectDir: string;
-  readonly worktreePath: string;
+  readonly worktreePath: string | undefined;
+  readonly freshStart?: boolean;
   readonly startStep: string | undefined;
   readonly retryNote: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
   readonly workflow: string | undefined;
+  readonly runtimeAssignment?: string;
   readonly taskDir: string | undefined;
   readonly sourceRunSlug: string | null;
   readonly restartPoint: WorkflowRestartPoint | undefined;
+  readonly sourceResumePoint?: WorkflowResumePoint;
   readonly revisedOrder?: {
     readonly content: string;
     readonly lang: 'en' | 'ja';
@@ -38,12 +42,38 @@ export function appendRetryNote(existing: string | undefined, additional: string
 }
 
 /** Persist an approved failed-task retry and return the task to pending. */
-export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOptions): void {
+export async function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOptions): Promise<void> {
   if (options.task.kind !== 'failed') {
     throw new Error(`Failed task retry persistence requires failed task. received: ${options.task.kind}`);
   }
+  const remote = options.task.remoteAssignment !== undefined;
+  if (!remote && (options.freshStart === true) !== (options.worktreePath === undefined)) {
+    throw new Error('Fresh clone retry and worktree path disagree.');
+  }
 
-  assertReusableWorktreePath(options.projectDir, options.worktreePath);
+  const assertWorktree = (): void => {
+    if (remote || options.freshStart) return;
+    const worktreePath = options.worktreePath;
+    if (worktreePath === undefined) {
+      throw new Error('Worktree path is not set for task retry.');
+    }
+    if (options.task.data?.merge_task === true) {
+      assertPrMergeRetryWorktreePath(options.projectDir, worktreePath,
+        options.task.data.merge_clone_prepared === true);
+    } else {
+      assertReusableWorktreePath(options.projectDir, worktreePath);
+    }
+  };
+  assertWorktree();
+  const preflightTask = options.runtimeAssignment === undefined || options.task.data === undefined
+    ? options.task
+    : { ...options.task, data: { ...options.task.data, runtime_assignment: options.runtimeAssignment } };
+  if (!remote) await checkQueuedTaskProviders(options.projectDir,
+    options.freshStart ? { ...preflightTask, kind: 'pending' } : preflightTask,
+    {}, terminalProviderConfirmation(), undefined, {
+      workflow: options.workflow,
+      worktreePath: options.worktreePath,
+    });
   let revision: PersistedTaskOrderRevision | undefined;
   try {
     if (options.revisedOrder !== undefined) {
@@ -56,7 +86,7 @@ export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOption
       );
     }
 
-    assertReusableWorktreePath(options.projectDir, options.worktreePath);
+    assertWorktree();
     new TaskRunner(options.projectDir).requeueTask(
       options.task.name,
       ['failed'],
@@ -65,9 +95,12 @@ export function persistFailedTaskRetry(options: FailedTaskRetryPersistenceOption
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
         workflow: options.workflow,
+        runtimeAssignment: options.runtimeAssignment,
         taskDir: revision?.taskDirRelative ?? options.taskDir,
-        sourceRunSlug: options.sourceRunSlug ?? undefined,
+        sourceRunSlug: options.sourceRunSlug,
         restartPoint: options.restartPoint,
+        sourceResumePoint: options.sourceResumePoint,
+        ...(options.freshStart ? { freshStart: true } : {}),
       },
     );
   } catch (error) {

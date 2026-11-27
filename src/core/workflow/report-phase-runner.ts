@@ -12,6 +12,7 @@ import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
+import { reportPhaseEventTools } from './report-phase-tools.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 
 const log = createLogger('phase-runner');
@@ -87,7 +88,7 @@ export class ReportPhaseGenerationError extends Error {
 
 /**
  * Phase 2: Report output.
- * Resumes the agent session with no tools to request report content.
+ * Resumes the agent session with readonly tools to request report content.
  * Each report file is generated individually in a loop.
  * レポート本文は plain text として扱う。
  */
@@ -95,6 +96,7 @@ export async function runReportPhase(
   step: WorkflowStep,
   stepIteration: number,
   ctx: ReportPhaseRunnerContext,
+  onReportWritten?: (reportName: string) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
   return executeReportPhase(step, stepIteration, ctx, {}, (report) => {
     writeReportFile(
@@ -102,7 +104,9 @@ export async function runReportPhase(
       report.reportName,
       report.reportContent,
       ctx.reportContentSanitizer,
+      (content) => ctx.onReportPersisted?.(report.reportName, content),
     );
+    onReportWritten?.(report.reportName);
   });
 }
 
@@ -128,7 +132,10 @@ async function executeReportPhase(
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
-  const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
+  const lastResponse = ctx.lastStructuredOutput !== undefined && !ctx.lastResponse?.trim()
+    ? JSON.stringify(ctx.lastStructuredOutput, null, 2)
+    : ctx.lastResponse;
+  const hasLastResponse = lastResponse != null && lastResponse.trim().length > 0;
 
   log.debug('Running report phase', {
     step: step.name,
@@ -158,6 +165,7 @@ async function executeReportPhase(
     log.debug('Generating report file', { step: step.name, fileName });
 
     const firstAttemptInstruction = new ReportInstructionBuilder(step, {
+      workflowAssignment: ctx.workflowMeta?.context?.assignment,
       cwd: ctx.cwd,
       task: ctx.task,
       userInputs: ctx.userInputs,
@@ -167,7 +175,8 @@ async function executeReportPhase(
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
-      lastResponse: ctx.lastResponse,
+      lastResponse,
+      phase1ExecutionLog: ctx.phase1ExecutionLog,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
@@ -179,18 +188,12 @@ async function executeReportPhase(
         maxTurns: REPORT_PHASE_MAX_TURNS,
       });
     }
-    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(
-      step.name,
-      ctx.iteration,
-      nextPhaseSequence(),
-    );
-
     const firstAttempt = await runSingleReportAttempt(
       step,
       firstAttemptInstruction,
       firstAttemptOptions,
       ctx,
-      firstAttemptPhaseExecutionId,
+      nextReportPhaseExecutionId(step.name, ctx.iteration, nextPhaseSequence()),
       options.validateReportContent,
     );
     if (firstAttempt.kind === 'blocked') {
@@ -233,6 +236,7 @@ async function executeReportPhase(
     }
 
     const baseRetryInstruction = new ReportInstructionBuilder(step, {
+      workflowAssignment: ctx.workflowMeta?.context?.assignment,
       cwd: ctx.cwd,
       task: ctx.task,
       userInputs: ctx.userInputs,
@@ -242,7 +246,8 @@ async function executeReportPhase(
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
-      lastResponse: ctx.lastResponse,
+      lastResponse,
+      phase1ExecutionLog: ctx.phase1ExecutionLog,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
@@ -266,18 +271,12 @@ async function executeReportPhase(
         reason: firstAttempt.failureReason,
       });
 
-      const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(
-        step.name,
-        ctx.iteration,
-        nextPhaseSequence(),
-      );
-
       const retryAttempt = await runSingleReportAttempt(
         step,
         retryInstruction,
         retryOptions,
         ctx,
-        retryAttemptPhaseExecutionId,
+        nextReportPhaseExecutionId(step.name, ctx.iteration, nextPhaseSequence()),
         options.validateReportContent,
       );
       if (retryAttempt.kind === 'blocked') {
@@ -331,17 +330,12 @@ async function executeReportPhase(
       provider: fallbackOptions.resolvedProvider,
     });
 
-    const fallbackAttemptPhaseExecutionId = nextReportPhaseExecutionId(
-      step.name,
-      ctx.iteration,
-      nextPhaseSequence(),
-    );
     const fallbackAttempt = await runSingleReportAttempt(
       step,
       retryInstruction,
       fallbackOptions,
       ctx,
-      fallbackAttemptPhaseExecutionId,
+      nextReportPhaseExecutionId(step.name, ctx.iteration, nextPhaseSequence()),
       options.validateReportContent,
     );
     if (fallbackAttempt.kind === 'blocked') {
@@ -402,7 +396,6 @@ function nextReportPhaseExecutionId(stepName: string, iteration: number | undefi
 
 function buildNewSessionRetryOptions(step: WorkflowStep, ctx: ReportPhaseRunnerContext): RunAgentOptions {
   return ctx.buildNewSessionReportOptions(step, {
-    allowedTools: [],
     maxTurns: REPORT_PHASE_MAX_TURNS,
   });
 }
@@ -413,35 +406,31 @@ function buildFallbackReportOptions(
   ctx: ReportPhaseRunnerContext,
 ): RunAgentOptions | undefined {
   return ctx.buildFallbackReportOptions(step, retryOptions, {
-    allowedTools: [],
     maxTurns: REPORT_PHASE_MAX_TURNS,
   });
 }
 
-function buildReportPhaseToolUseError(tool: string): ReportPhaseToolCallError {
-  return new ReportPhaseToolCallError(`Report phase does not allow tool calls, but provider emitted tool "${tool}".`);
-}
-
-function buildReportPhaseToolResultError(): ReportPhaseToolCallError {
-  return new ReportPhaseToolCallError('Report phase does not allow tool results.');
-}
-
-/**
- * Phase 2 のツール禁止ガード。
- *
- * report phase は構造化出力を要求しないので、provider がネイティブ構造化出力の
- * 疑似ツール（OpenCode の StructuredOutput）を流すことはない。ツールイベントは
- * すべて汚染セッション由来の違反として拒否する。
- */
-function detectReportPhaseToolCall(event: StreamEvent): ReportPhaseToolCallError | undefined {
+function detectReportPhaseToolCall(
+  event: StreamEvent,
+  allowedTools: ReadonlySet<string>,
+  allowedCalls: Map<string, string>,
+): ReportPhaseToolCallError | undefined {
   if (event.type === 'tool_use') {
-    return buildReportPhaseToolUseError(event.data.tool);
+    if (!allowedTools.has(event.data.tool) || !event.data.id) {
+      return new ReportPhaseToolCallError(`Report phase does not allow tool "${event.data.tool}".`);
+    }
+    allowedCalls.set(event.data.id, event.data.tool);
   }
-
   if (event.type === 'tool_result') {
-    return buildReportPhaseToolResultError();
+    const ids = [...(event.data.id === undefined ? [] : [event.data.id]), ...(event.data.completedToolIds ?? [])];
+    if (ids.length === 0 || ids.some((id) => !allowedCalls.has(id))) {
+      return new ReportPhaseToolCallError('Report phase received an unmatched tool result.');
+    }
   }
-
+  if (event.type === 'tool_output'
+    && (event.data.id === undefined || allowedCalls.get(event.data.id) !== event.data.tool)) {
+    return new ReportPhaseToolCallError('Report phase received unmatched tool output.');
+  }
   return undefined;
 }
 
@@ -471,7 +460,8 @@ export type ReportRetryFailureReason =
   | 'tool_call'
   | 'empty_output'
   | 'provider_error'
-  | 'invalid_output';
+  | 'invalid_output'
+  | 'context_compacted';
 
 function isFreshPhase1RecoveryFailure(
   failureReason: ReportRetryFailureReason,
@@ -506,6 +496,23 @@ async function runSingleReportAttempt(
   let didEmitPhaseStart = false;
   let resolvedPromptParts: PhasePromptParts | undefined;
   let reportToolCallError: ReportPhaseToolCallError | undefined;
+  const attemptProviderInfo = resolveReportAttemptProviderInfo(step, options, ctx);
+  const allowedTools = new Set(reportPhaseEventTools(attemptProviderInfo.provider));
+  const allowedCalls = new Map<string, string>();
+  let compactionDetected = false;
+  let compactionSessionId: string | undefined;
+  const classifyAttemptFailure = (result: AgentResponse): ReportRetryableFailure | undefined => {
+    const responseSessionId = result.sessionId ?? options.sessionId;
+    const compactionMatchesResponse = compactionSessionId === undefined
+      || compactionSessionId === responseSessionId;
+    if (result.status === 'done' && compactionDetected && compactionMatchesResponse) {
+      return {
+        failureReason: 'context_compacted',
+        errorMessage: buildRetryableFailureEventError('context_compacted', result.status),
+      };
+    }
+    return classifyRetryableFailure(step, result, validateReportContent);
+  };
   const callOptions: RunAgentOptions = {
     ...options,
     onPromptResolved: (promptParts) => {
@@ -514,7 +521,11 @@ async function runSingleReportAttempt(
       didEmitPhaseStart = true;
     },
     onStream: (event) => {
-      const detected = detectReportPhaseToolCall(event);
+      if (event.type === 'context_compacted') {
+        compactionDetected = true;
+        compactionSessionId = event.data.sessionId;
+      }
+      const detected = detectReportPhaseToolCall(event, allowedTools, allowedCalls);
       if (detected !== undefined) {
         reportToolCallError ??= detected;
         throw reportToolCallError;
@@ -531,7 +542,6 @@ async function runSingleReportAttempt(
   let response: AgentResponse;
   let classifiedFailure: ReportRetryableFailure | undefined;
   let didClassifySpanOutcome = false;
-  const attemptProviderInfo = resolveReportAttemptProviderInfo(step, options, ctx);
   let didRecordProviderAttempt = false;
   let providerResponse: AgentResponse | undefined;
   try {
@@ -555,11 +565,7 @@ async function runSingleReportAttempt(
       return result;
     }, (result) => {
       didClassifySpanOutcome = true;
-      classifiedFailure = classifyRetryableFailure(
-        step,
-        result,
-        validateReportContent,
-      );
+      classifiedFailure = classifyAttemptFailure(result);
       return buildReportAttemptSpanOutcome(
         result,
         reportToolCallError,
@@ -567,11 +573,7 @@ async function runSingleReportAttempt(
       );
     });
     if (!didClassifySpanOutcome) {
-      classifiedFailure = classifyRetryableFailure(
-        step,
-        response,
-        validateReportContent,
-      );
+      classifiedFailure = classifyAttemptFailure(response);
     }
     didRecordProviderAttempt = true;
     ctx.onProviderAttempt?.(
@@ -829,6 +831,9 @@ function buildRetryableFailureEventError(
   if (failureReason === 'invalid_output') {
     return 'Report output failed deterministic validation';
   }
+  if (failureReason === 'context_compacted') {
+    return 'Report phase context was compacted';
+  }
   return `Report phase provider returned status "${status}"`;
 }
 
@@ -837,6 +842,13 @@ function resolveReportAttemptProviderInfo(
   options: RunAgentOptions,
   ctx: ReportPhaseRunnerContext,
 ): StepProviderInfo {
+  if (options.resolvedExecution !== undefined) {
+    return {
+      provider: options.resolvedExecution.provider,
+      model: options.resolvedExecution.model,
+      providerOptions: options.resolvedExecution.providerOptions,
+    };
+  }
   const providerInfo = ctx.resolveStepProviderModel(step);
   const fallbackProviderInfo = ctx.resolveReportFallbackProviderModel();
   if (

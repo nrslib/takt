@@ -3,6 +3,7 @@ import {
   type ConversationMessage,
   type WorkflowContext,
 } from './interactive-summary.js';
+import type { InlineUtteranceSource } from './promptSections.js';
 
 export type { ConversationMessage, WorkflowContext };
 
@@ -10,6 +11,7 @@ export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSe
 
 /** Context the caller already resolved and wants reflected in the summary prompt. */
 export interface ConversationSummaryContext {
+  userNoteSource?: InlineUtteranceSource;
   workflowContext?: WorkflowContext;
   sourceContext?: string;
   /** Whether a separate handoff transcript will be quoted in the user prompt. */
@@ -31,14 +33,10 @@ export function buildConversationSummaryPrompt(
   context?: ConversationSummaryContext,
   formalSpecComments = true,
 ): string {
-  const trimmedNote = userNote.trim();
-  const summaryHistory = trimmedNote
-    ? [...history, { role: 'user' as const, content: trimmedNote }]
-    : history;
   const resumedSessionNote = context?.resumedSessionNote;
   const hasSession = resumedSessionNote !== undefined;
   return buildInteractiveSummaryPrompt(
-    summaryHistory,
+    history,
     hasSession,
     lang,
     hasSession ? resumedSessionNote : '',
@@ -49,5 +47,7 @@ export function buildConversationSummaryPrompt(
     formalSpec,
     context?.hasReferenceHistory === true,
     formalSpecComments,
+    userNote,
+    context?.userNoteSource,
   );
 }

@@ -1,0 +1,7 @@
+{
+  "source": "watch_observation",
+  "before": 0,
+  "after": 1,
+  "sameRegisteredObject": true,
+  "gitRepository": true
+}

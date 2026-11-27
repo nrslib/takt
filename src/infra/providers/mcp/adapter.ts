@@ -9,6 +9,7 @@ import type {
   ProviderMcpValidationContext,
 } from './types.js';
 import { getProvider } from '../index.js';
+import { filterMcpHeaderEnvServers } from './header-env.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../../shared/types/agent-failure.js';
 
@@ -22,6 +23,7 @@ export function validateTransports(
   servers: ResolvedMcpServers,
   context: ProviderMcpValidationContext | undefined,
 ): void {
+  servers = filterMcpHeaderEnvServers(provider, servers, false);
   if (!servers.enabled) {
     return;
   }
@@ -56,6 +58,7 @@ export function createUnsupportedMcpAdapter(provider: ProviderType): ProviderMcp
       validateTransports(provider, servers, context);
     },
     async prepare(servers: ResolvedMcpServers, context: ProviderMcpContext) {
+      servers = filterMcpHeaderEnvServers(provider, servers, true);
       validateTransports(provider, servers, {
         ...(context.sourcePath !== undefined ? { sourcePath: context.sourcePath } : {}),
       });

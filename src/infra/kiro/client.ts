@@ -78,6 +78,10 @@ function buildArgs(options: KiroCallOptions): string[] {
     args.push('--model', options.model);
   }
 
+  if (options.effort) {
+    args.push('--effort', options.effort);
+  }
+
   if (options.agent) {
     validateAgentName(options.agent);
     args.push('--agent', options.agent);
@@ -315,11 +319,26 @@ function parseKiroToolResult(record: Record<string, unknown>): StreamEvent | und
   };
 }
 
+/**
+ * Text before a tool call is working text (progress notes, commentary); the answer follows the last
+ * call. Without a usable terminal result, only the text after it becomes the content.
+ */
+function startNewAnswerSegment(assistantText: string[]): void {
+  assistantText.length = 0;
+}
+
+/** Every assistant text, including working text before tool calls, reaches the stream in order. */
+function recordAssistantText(text: string, events: StreamEvent[], assistantText: string[]): void {
+  if (text.length === 0) return;
+  assistantText.push(text);
+  events.push({ type: 'text', data: { text } });
+}
+
 function collectKiroStructuredEvents(
   value: unknown,
   events: StreamEvent[],
   assistantText: string[],
-  terminalContent: { value?: string },
+  terminalContent: { value?: string; calledTool?: boolean },
 ): void {
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -334,6 +353,7 @@ function collectKiroStructuredEvents(
   }
 
   if (isKiroToolUse(record)) {
+    startNewAnswerSegment(assistantText);
     const event = parseKiroToolUse(record);
     if (event !== undefined) {
       events.push(event);
@@ -359,7 +379,7 @@ function collectKiroStructuredEvents(
       terminalContent,
     );
     if (typeof content === 'string') {
-      assistantText.push(content);
+      recordAssistantText(content, events, assistantText);
     }
     return;
   }
@@ -394,7 +414,7 @@ function collectKiroStructuredEvents(
   }
 
   if (typeof record.text === 'string' && kind === 'text') {
-    assistantText.push(record.text);
+    recordAssistantText(record.text, events, assistantText);
     return;
   }
 
@@ -403,8 +423,13 @@ function collectKiroStructuredEvents(
   // 他 update 種別にも text ブロックがあり得るため、判別なしに辿るとツール由来の
   // テキストが assistantText に混入する。
   const update = toRecord(record.update);
-  if (update !== undefined && normalizedEventKind(update.sessionUpdate) === 'agentmessagechunk') {
+  const updateKind = update === undefined ? undefined : normalizedEventKind(update.sessionUpdate);
+  if (updateKind === 'agentmessagechunk') {
     collectKiroStructuredEvents(update, events, assistantText, terminalContent);
+  }
+  if (updateKind === 'toolcall') {
+    terminalContent.calledTool = true;
+    startNewAnswerSegment(assistantText);
   }
 
   for (const key of ['content', 'message', 'data', 'results']) {
@@ -423,25 +448,36 @@ function parseKiroOutput(stdout: string): KiroParsedOutput | { error: string } {
     const content = cleanKiroOutput(stdout);
     return content.length === 0
       ? { error: 'kiro-cli returned empty output' }
-      : { content, events: [] };
+      : { content, events: [{ type: 'text', data: { text: content } }] };
   }
 
   const events: StreamEvent[] = [];
   const assistantText: string[] = [];
-  const terminalContent: { value?: string } = {};
+  const terminalContent: { value?: string; calledTool?: boolean } = {};
   let sessionId: string | undefined;
   for (const line of lines) {
     sessionId = extractKiroSessionId(line) ?? sessionId;
     collectKiroStructuredEvents(line, events, assistantText, terminalContent);
   }
 
-  const content = terminalContent.value ?? assistantText.join('');
-  if (content.length === 0) {
+  // Every assistant text reaches the events as text. The terminal result (finalText, result, final) may
+  // be truncated and is not known to leave out the working text before tool calls, so it is the answer
+  // only when the output carries no assistant text; otherwise the text after the last tool call is.
+  const streamedText = events.some((event) => event.type === 'text');
+  const content = streamedText ? assistantText.join('') : terminalContent.value ?? '';
+  // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+  // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+  if (content.length === 0 && events.length === 0 && terminalContent.calledTool !== true) {
     return {
       error: `Failed to extract assistant content from kiro-cli JSONL output: ${trimDetail(trimmed)}`,
     };
   }
-  return { content, sessionId, events };
+  // An output with only a terminal result has no text events; its result is the visible text.
+  return {
+    content,
+    sessionId,
+    events: streamedText || content.length === 0 ? events : [...events, { type: 'text', data: { text: content } }],
+  };
 }
 
 function emitResult(
@@ -494,11 +530,9 @@ export class KiroClient {
         };
       }
       const content = parsed.content;
-      const outputError = content.length === 0
-        ? 'kiro-cli returned empty output'
-        : content === KIRO_CONTEXT_COMPACTION_NOTICE
-          ? KIRO_CONTEXT_COMPACTION_ERROR
-          : undefined;
+      const outputError = content === KIRO_CONTEXT_COMPACTION_NOTICE
+        ? KIRO_CONTEXT_COMPACTION_ERROR
+        : undefined;
 
       if (outputError !== undefined) {
         emitResult(options, '', false, outputError, options.sessionId);
@@ -520,7 +554,6 @@ export class KiroClient {
         ?? await resolveLatestSessionId(effectiveOptions);
 
       emitStructuredEvents(options.onStream, parsed.events);
-      options.onStream?.({ type: 'text', data: { text: content } });
       emitResult(options, content, true, undefined, resolvedSessionId);
 
       return {

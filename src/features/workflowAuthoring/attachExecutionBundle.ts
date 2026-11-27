@@ -17,9 +17,11 @@ import type { WorkflowStep } from '../../core/models/index.js';
 import { getAllParallelSubSteps } from '../../core/models/index.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../../core/workflow/step-kind.js';
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
+import { buildOpaqueWorkflowRef } from '../../shared/workflowConfigMetadata.js';
 import { trimResumePointStackForWorkflow } from '../../core/workflow/run/resume-point.js';
 import { isValidReportDirName } from '../../shared/utils/index.js';
 import { loadWorkflowByIdentifier } from '../../infra/config/index.js';
+import { getAttachedWorkflowTrustInfo } from '../../infra/config/loaders/workflowSourceMetadata.js';
 import { invalidateGlobalConfigCache } from '../../infra/config/global/globalConfig.js';
 import { withGlobalConfigDirOverride } from '../../infra/config/paths.js';
 import { withResourcesDirOverride } from '../../infra/resources/index.js';
@@ -300,7 +302,10 @@ export function attachLegacyWorkflowExecutionBundle(
           throw new Error(`Historical root workflow name "${rootWorkflow.name}" does not match run metadata "${meta.workflow}"`);
         }
         const computedRootRef = getWorkflowReference(rootWorkflow);
-        const movedHistoricalRoot = computedRootRef !== evidence.rootRef;
+        const trustInfo = getAttachedWorkflowTrustInfo(rootWorkflow);
+        const matchesLegacyBuiltinLocation = trustInfo?.source === 'builtin'
+          && buildOpaqueWorkflowRef(rootWorkflowPath, trustInfo) === evidence.rootRef;
+        const movedHistoricalRoot = computedRootRef !== evidence.rootRef && !matchesLegacyBuiltinLocation;
         const historicalRefBySourceRef = new Map<string, string>([[computedRootRef, evidence.rootRef]]);
         const sourceRefByHistoricalRef = new Map<string, string>([[evidence.rootRef, computedRootRef]]);
         const bindHistoricalRef = (workflow: typeof rootWorkflow, historicalRef: string): string => {

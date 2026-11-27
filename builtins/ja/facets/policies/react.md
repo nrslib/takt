@@ -50,7 +50,7 @@ Reactのstate、props、Context、reducer、Effect、hookを、再描画、state
 
 | 基準 | 判定 |
 |------|------|
-| hookがstate、Effect、Context、query、form、イベント変換を一つの画面の動作としてまとめる | OK |
+| 画面専用hookが画面固有の型・API・状態を直接扱い、state、Effect、Context、query、form、操作の受理判断と処理開始を画面の実装分割としてまとめる（別の独自状態所有者への委譲だけのhookは含まない） | OK |
 | hookが純粋な計算だけを包む | 通常の関数との分割を検討する |
 | hook、コンポーネント、画面が循環依存し、表示や通信の変更経路が読めない | REJECT |
 | hookが返すstate、event、派生値を描画の入力へ渡す経路が分かる | OK |

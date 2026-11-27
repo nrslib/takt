@@ -147,7 +147,6 @@ export async function openProjectRepository(
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   await repository.reconcile();
   return repository;

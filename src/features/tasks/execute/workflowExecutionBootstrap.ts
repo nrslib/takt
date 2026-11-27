@@ -1,3 +1,6 @@
+import { resolveToolActivityDisplayMode } from '../../../shared/ui/ToolActivityDisplay.js';
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
+import { prepareWorkflowProviderEnvironment, checkResolvedWorkflowProviders } from '../../../infra/config/runtime-provider/execution-preparation.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ProviderNeutralStructuredCaller } from '../../../agents/structured-caller.js';
@@ -21,23 +24,15 @@ import type { WorkflowOperationJournalContext } from '../../../core/workflow/typ
 import {
   inheritResumeReportSnapshot,
   RESUME_ARTIFACTS_FILE_NAME,
-  ResumeReportSnapshotSourceError,
 } from '../../../core/workflow/run/resume-report-snapshot.js';
 import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/run/resume-report-reference-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
-  loadGlobalConfig,
   loadPersonaSessions,
-  loadProjectConfig,
-  loadWorktreeSessions,
   resolveWorkflowConfigValues,
   updatePersonaSession,
   updateWorktreeSession,
 } from '../../../infra/config/index.js';
-import {
-  resolveConfigValueWithSource,
-  toProviderResolutionSource,
-} from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
   buildTraceDiscovery,
@@ -64,9 +59,6 @@ import {
   PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
   PROMPT_LOG_FILE_SUFFIX,
 } from '../../../core/logging/contracts.js';
-import {
-  resolveEffectiveAutoRouting,
-} from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
 import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
@@ -77,19 +69,13 @@ import { SessionLogger } from './sessionLogger.js';
 import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
-import {
-  resolveRuntimeEnvironment,
-} from '../../../infra/config/runtime-provider/provider-environment.js';
 import type {
   CompanionFixPolicy,
   CompanionReviewMode,
 } from '../../../core/models/companion-types.js';
 import {
   assertNoMixedWorkflowMcpConfiguration,
-  collectLegacyProviderSignals,
-  selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
-import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
 import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import { resolveRuntimeProviderOptions } from '../../../infra/config/runtime-provider/provider-options.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
@@ -104,12 +90,14 @@ const log = createLogger('workflow');
 type DisplayStreamEvent = Parameters<ReturnType<StreamDisplay['createHandler']>>[0];
 
 export interface WorkflowExecutionBootstrap {
+  toolDisplayMode: ToolActivityDisplayMode;
   interactiveUserInput: boolean;
   prefixWriter: TaskPrefixWriter | undefined;
   out: ReturnType<typeof createOutputFns>;
   displayRef: { current: StreamDisplay | null };
   handlerRef: { current: ReturnType<StreamDisplay['createHandler']> | null };
   streamHandler: (event: DisplayStreamEvent) => void;
+  flushStream: () => void;
   isRetry: boolean;
   isWorktree: boolean;
   runSlug: string;
@@ -169,7 +157,7 @@ export interface WorkflowExecutionBootstrap {
 }
 
 export interface WorkflowExecutionResumeLineage {
-  /** Best-effort report/artifact inheritance source, not operation ancestry. */
+  /** Required report/artifact inheritance source, not operation ancestry. */
   readonly sourceRunSlug?: string;
   /** Runtime-only resume source for report/artifact fallback in the engine. */
   readonly artifactResumeSource?: WorkflowExecutionOptions['resumeSource'];
@@ -371,6 +359,8 @@ export async function createWorkflowExecutionBootstrap(
     options.initialIterationOverride,
   );
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
+  const toolDisplayMode = outputMode === 'silent'
+    ? 'silent' : options.toolDisplayMode ?? resolveToolActivityDisplayMode(outputMode, process.stdout.isTTY !== true);
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
 
@@ -388,10 +378,12 @@ export async function createWorkflowExecutionBootstrap(
 
   const displayRef = { current: null as StreamDisplay | null };
   const handlerRef = { current: null as ReturnType<StreamDisplay['createHandler']> | null };
+  const prefixedHandler = outputMode !== 'silent' && prefixWriter
+    ? createPrefixedStreamHandler(prefixWriter, toolDisplayMode, isQuietMode()) : undefined;
   const streamHandler = outputMode === 'silent'
     ? (): void => {}
-    : prefixWriter
-    ? createPrefixedStreamHandler(prefixWriter)
+    : prefixedHandler
+    ? prefixedHandler
     : (event: DisplayStreamEvent): void => {
         if (!displayRef.current || event.type === 'result') {
           return;
@@ -409,8 +401,8 @@ export async function createWorkflowExecutionBootstrap(
       || options.resumePoint
       || options.restartPoint,
   );
-  const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
+  const shouldLoadSavedSessions = !isWorktree && isRetry && options.restartPoint === undefined;
   log.debug('Session mode', { isRetry, isWorktree });
 
   const { runSlug, runPaths } = runBootstrap;
@@ -422,9 +414,8 @@ export async function createWorkflowExecutionBootstrap(
   // 異なる run slug を使う。旧 run の reports/ を継承しないと {report:X}
   // 参照が壊れるため、bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
   // 決定 → target 安全検証 → source 検証 → snapshot 作成 → manifest 保存
-  // → RunMetaManager 作成 → logs/engine 初期化。source が取得不能な場合だけは
-  // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
-  // ここで失敗させる。
+  // → RunMetaManager 作成 → logs/engine 初期化。継承不能なら最初の step の
+  // 開始前に失敗させ、既存の run・task 終端処理へ例外を渡す。
   const {
     sourceRunSlug,
     publishedResumeSource,
@@ -467,18 +458,21 @@ export async function createWorkflowExecutionBootstrap(
           : { resumeReportConsumers: [resumeReportConsumer] }),
       });
     } catch (error) {
-      if (!(error instanceof ResumeReportSnapshotSourceError)) {
-        throw error;
-      }
-      log.warn('Resume report snapshot source unavailable; continuing without inherited snapshot', {
-        sourceRunSlug,
-        targetRunSlug: runSlug,
-        reason: getErrorMessage(error),
-        fallbackUsed: true,
-      });
+      const inheritanceError = new Error(
+        `Failed to inherit reports from source run "${sourceRunSlug}": ${getErrorMessage(error)}`,
+        { cause: error },
+      );
+      out.error(sanitizeTerminalText(inheritanceError.message));
+      throw inheritanceError;
     }
   }
   if (resumeArtifactsManifest) {
+    const skippedCount = resumeArtifactsManifest.skippedEntries?.length ?? 0;
+    if (skippedCount > 0) {
+      out.warn(sanitizeTerminalText(
+        `Inherited reports from source run "${resumeArtifactsManifest.sourceRunSlug}"; skipped ${skippedCount} symlink or non-regular entries`,
+      ));
+    }
     log.debug('Inherited resume report snapshot', {
       sourceRunSlug: resumeArtifactsManifest.sourceRunSlug,
       targetRunSlug: resumeArtifactsManifest.targetRunSlug,
@@ -565,61 +559,8 @@ export async function createWorkflowExecutionBootstrap(
   const shouldNotifyRateLimit = shouldNotify;
   const shouldNotifyWorkflowComplete = shouldNotify && globalConfig.notificationSoundEvents?.workflowComplete !== false;
   const shouldNotifyWorkflowAbort = shouldNotify && globalConfig.notificationSoundEvents?.workflowAbort !== false;
-  const resolvedProvider = options.provider !== undefined
-    ? {
-        value: options.provider,
-        source: options.providerSource ?? 'cli' as ProviderResolutionSource,
-      }
-    : (() => {
-        const resolved = resolveConfigValueWithSource(projectCwd, 'provider');
-        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
-      })();
-  const resolvedModel = options.model !== undefined
-    ? {
-        value: options.model,
-        source: options.modelSource ?? 'cli' as ProviderResolutionSource,
-        modelProvider: undefined,
-      }
-    : (() => {
-        const resolved = resolveConfigValueWithSource(projectCwd, 'model');
-        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
-      })();
-  const inheritedAutoRouting = resolveEffectiveAutoRouting(globalConfig.autoRouting);
-
-  // Configuration-format anti-corruption boundary (issue #1136): compile either legacy
-  // config or an active runtime.yaml provider section into the shared engine-options bundle.
-  // In legacy mode this passes the resolved legacy values through unchanged.
-  const legacyProviderEnvironment: LegacyProviderEnvironmentInput = {
-    provider: resolvedProvider.value,
-    providerSource: resolvedProvider.source,
-    model: resolvedModel.value,
-    modelSource: resolvedModel.source,
-    ...(options.model === undefined && resolvedModel.modelProvider !== undefined
-      ? { modelProvider: resolvedModel.modelProvider }
-      : {}),
-    personaProviders: options.personaProviders,
-    providerRouting: options.providerRouting,
-    autoRouting: inheritedAutoRouting,
-    providerOptions: options.providerOptions,
-    taktProviders: selectConfigTaktProviders(
-      loadProjectConfig(projectCwd).taktProviders,
-      loadGlobalConfig().taktProviders,
-    ),
-  };
-  const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
-    projectCwd,
-    executionCwd: cwd,
-    workflow: workflowConfig,
-    workflowCallResolver: options.workflowCallResolver,
-    providerOptionsSource: options.providerOptionsSource,
-    providerOptionsOriginResolver: options.providerOptionsOriginResolver,
-    legacy: legacyProviderEnvironment,
-    legacySignals: collectLegacyProviderSignals(
-      legacyProviderEnvironment,
-      options.providerOptionsSource,
-      options.providerOptionsOriginResolver,
-    ),
-  });
+  const resolvedRuntimeEnvironment = prepareWorkflowProviderEnvironment(projectCwd, cwd, workflowConfig, options);
+  await checkResolvedWorkflowProviders(projectCwd, cwd, workflowConfig, resolvedRuntimeEnvironment, options, undefined, options.abortSignal);
   const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
   const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
   // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
@@ -711,7 +652,9 @@ export async function createWorkflowExecutionBootstrap(
       },
     ]),
   );
-  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
+    workflowSystemCommandsPolicy: options.workflowSystemCommandsPolicy,
+  });
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
@@ -746,13 +689,9 @@ export async function createWorkflowExecutionBootstrap(
   );
   const structuredCaller = new ProviderNeutralStructuredCaller();
   const savedSessions = shouldLoadSavedSessions
-    ? (isWorktree
-      ? options.sessionStorageDirectory === undefined
-        ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
-        : loadWorktreeSessions(projectCwd, cwd, currentProvider, options.sessionStorageDirectory)
-      : options.sessionStorageDirectory === undefined
-        ? loadPersonaSessions(projectCwd, currentProvider)
-        : loadPersonaSessions(projectCwd, currentProvider, options.sessionStorageDirectory))
+    ? options.sessionStorageDirectory === undefined
+      ? loadPersonaSessions(projectCwd, currentProvider)
+      : loadPersonaSessions(projectCwd, currentProvider, options.sessionStorageDirectory)
     : {};
   const sessionUpdateHandler = isWorktree
     ? (personaName: string, personaSessionId: string | undefined) =>
@@ -813,11 +752,13 @@ export async function createWorkflowExecutionBootstrap(
 
   return {
     interactiveUserInput,
+    toolDisplayMode,
     prefixWriter,
     out,
     displayRef,
     handlerRef,
     streamHandler,
+    flushStream: () => prefixedHandler?.flush(),
     isRetry,
     isWorktree,
     runSlug,

@@ -1,3 +1,5 @@
+vi.mock('../infra/config/runtime-provider/execution-preparation.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../infra/config/runtime-provider/execution-preparation.js')>(), checkWorkflowProviders: vi.fn(async () => undefined) }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Integration tests for cwd propagation through GitProvider call chain.
  *
@@ -270,7 +272,9 @@ describe('cwd propagation: addTask wiring', () => {
 
     vi.mock('../infra/task/index.js', async (importOriginal) => ({
       ...(await importOriginal<Record<string, unknown>>()),
-      TaskRunner: vi.fn().mockImplementation(() => ({ addTask: vi.fn(() => ({ name: 'task-1' })) })),
+      TaskRunner: vi.fn().mockImplementation(function () {
+        return { addTask: vi.fn(() => ({ name: 'task-1' })) };
+      }),
       summarizeTaskName: vi.fn(async () => 'slug'),
       resolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => {
         if (!data) {

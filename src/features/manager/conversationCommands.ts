@@ -1,0 +1,26 @@
+import { isAbsolute } from 'node:path';
+import { z } from 'zod/v4';
+import { ConversationIdSchema, ManagerConversationAssignmentSchema } from '../../infra/conversations/schema.js';
+import { GoalSummarySchema } from '../../infra/goals/schema.js';
+
+export const CLEAR_COMMAND = '/clear';
+
+const id = z.uuid();
+const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const ConversationCommandSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('message'), text: z.string().min(1), display: z.boolean().optional(), requestProposal: z.boolean().optional(), imageAttachmentIds: z.array(id).refine((ids) => new Set(ids).size === ids.length).optional() }).strict(),
+  z.object({ kind: z.literal('approve_summary'), revision, conversationId: ConversationIdSchema, requirePending: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('dismiss_summary'), revision, conversationId: ConversationIdSchema }).strict(),
+  z.object({ kind: z.literal('propose_summary'), conversationId: ConversationIdSchema, repositoryDirectory: z.string().refine(isAbsolute).optional(), summary: GoalSummarySchema }).strict(),
+  z.object({ kind: z.literal('answer_question'), questionId: id,
+    target: z.union([
+      z.object({ goalId: id, repositoryDirectory: z.string().refine(isAbsolute) }).strict(),
+      z.object({ goalId: z.null(), owner: ManagerConversationAssignmentSchema }).strict(),
+    ]),
+    answer: z.object({ text: z.string().max(128 * 1024).optional(), decision: z.enum(['allow', 'deny']).optional(),
+      report: z.enum(['completed', 'unable']).optional(), scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional() }).strict(),
+    source: z.enum(['tui', 'slack']).optional(),
+  }).strict(),
+  ...(['pause_goal', 'resume_goal', 'abort_goal', 'delete_goal'] as const).map((kind) => z.object({ kind: z.literal(kind), goalId: id }).strict()),
+  z.object({ kind: z.literal('abort_turn'), operationId: id, generation: revision.optional() }).strict(),
+]);

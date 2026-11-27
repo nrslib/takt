@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sdk = vi.hoisted(() => {
   const startThread = vi.fn();
-  const Codex = vi.fn(() => ({ startThread }));
+  const Codex = vi.fn(function () {
+    return { startThread };
+  });
   return { Codex, startThread };
 });
 

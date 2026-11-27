@@ -6,6 +6,7 @@ import {
   attachWorkflowSourcePath as attachSourcePath,
   attachWorkflowTrustInfo as attachTrustInfo,
   buildOpaqueWorkflowRef,
+  buildBuiltinWorkflowRef,
   getAttachedWorkflowOpaqueRef as getOpaqueRef,
   getWorkflowResolvedSections as getResolvedSections,
   getAttachedWorkflowTrustInfo as getTrustInfo,
@@ -13,7 +14,7 @@ import {
 } from '../../../shared/workflowConfigMetadata.js';
 import type { ResolvedSectionMap } from './resource-resolver.js';
 
-export { buildOpaqueWorkflowRef };
+export { buildOpaqueWorkflowRef, buildBuiltinWorkflowRef };
 
 export function attachWorkflowOpaqueRef(workflow: WorkflowConfig, opaqueRef: string): WorkflowConfig {
   return attachOpaqueRef(workflow, opaqueRef);

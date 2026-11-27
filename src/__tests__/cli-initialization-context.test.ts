@@ -189,6 +189,38 @@ describe('CLI execution context', () => {
   });
 
   it.each([
+    { verbose: true, level: 'debug', trace: false },
+    { verbose: true, level: 'warn', trace: true },
+    { verbose: false, level: 'warn', trace: false },
+  ])('should suppress console output before startup logging while retaining verbose=$verbose, level=$level, trace=$trace', async ({ verbose, level, trace }) => {
+    initializationMocks.isVerboseMode.mockReturnValue(verbose);
+    initializationMocks.resolveConfigValues.mockReturnValue({
+      logging: { level, trace }, minimalOutput: false,
+    });
+    vi.spyOn(process, 'cwd').mockReturnValue('/test/project');
+    const program = { opts: () => ({ pipeline: false, quiet: false }) } as Command;
+    const { initializeCliExecutionContext, getCliExecutionContext } = await import('../app/cli/initialization.js');
+    const initialize: (command: Command, version: string, suppressVerboseConsole: boolean) => Promise<void>
+      = initializeCliExecutionContext;
+
+    await initialize(program, '1.0.0', true);
+
+    expect(initializationMocks.isVerboseMode).toHaveBeenCalledWith('/test/project');
+    expect(initializationMocks.initDebugLogger).toHaveBeenCalledExactlyOnceWith(
+      verbose ? { enabled: true, trace } : undefined, '/test/project',
+    );
+    expect(initializationMocks.setLogLevel).toHaveBeenCalledExactlyOnceWith(verbose ? 'debug' : level);
+    expect(initializationMocks.setVerboseConsole).toHaveBeenCalledExactlyOnceWith(false);
+    expect(initializationMocks.setVerboseConsole.mock.invocationCallOrder[0])
+      .toBeLessThan(initializationMocks.loggerInfo.mock.invocationCallOrder[0]!);
+    expect(initializationMocks.loggerInfo).toHaveBeenCalledWith('TAKT CLI starting', {
+      version: '1.0.0', cwd: '/test/project', verbose, pipelineMode: false, quietMode: false,
+    });
+    expect(getCliExecutionContext()).toEqual({ cwd: '/test/project', pipelineMode: false });
+    expect(initializationMocks.setQuietMode).toHaveBeenCalledWith(false);
+  });
+
+  it.each([
     [false, false, false],
     [true, false, true],
     [false, true, true],

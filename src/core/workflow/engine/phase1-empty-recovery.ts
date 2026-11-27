@@ -11,6 +11,8 @@ import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import type { RunAgentOptions } from '../../../agents/types.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 
 const MAX_PHASE1_EXECUTIONS = 3;
 
@@ -38,7 +40,7 @@ export interface Phase1Attempt {
   readonly sessionId: string | undefined;
 }
 
-interface Phase1EmptyRecoveryOptions {
+interface Phase1EmptyRecoveryOptions extends Pick<RunAgentOptions, 'workflowMeta' | 'language'> {
   readonly instruction: string;
   readonly initialSessionId: string | undefined;
   readonly execute: (attempt: Phase1Attempt) => Promise<AgentResponse>;
@@ -79,6 +81,8 @@ interface ObservedPhase1AttemptOptions {
   readonly workflowStack: WorkflowResumePointEntry[] | undefined;
   readonly sanitizeText: ((text: string) => string) | undefined;
   readonly providerInfo: StepProviderInfo;
+  readonly onPromptResolved?: (promptParts: PhasePromptParts) => void;
+  readonly onAttemptError?: (error: unknown) => void;
   readonly execute: (
     instruction: string,
     sessionId: string | undefined,
@@ -127,6 +131,7 @@ export async function executeObservedPhase1Attempt(
   let resolvedPromptParts: PhasePromptParts | undefined;
   const onPromptResolved = (promptParts: PhasePromptParts): void => {
     resolvedPromptParts = promptParts;
+    options.onPromptResolved?.(promptParts);
     options.onPhaseStart?.(
       options.eventStep,
       1,
@@ -164,6 +169,7 @@ export async function executeObservedPhase1Attempt(
       providerUsage: result.providerUsage,
     }));
   } catch (error) {
+    options.onAttemptError?.(error);
     if (resolvedPromptParts !== undefined && options.onPhaseComplete !== undefined) {
       completeObservedPhase1Attempt({
         eventStep: options.eventStep,
@@ -285,6 +291,14 @@ export async function runPhase1WithEmptyRecovery(
     return { attempt, response };
   };
 
+  const assignment = options.workflowMeta?.context?.assignment;
+  const continuationInstruction = assignment === undefined
+    ? PHASE1_EMPTY_CONTINUATION_INSTRUCTION
+    : [
+        renderPhaseContext(assignment, 1, options.language ?? 'en'),
+        PHASE1_EMPTY_CONTINUATION_INSTRUCTION,
+      ].join('\n\n');
+
   let current = await execute('initial', options.instruction, options.initialSessionId);
 
   if (
@@ -310,7 +324,7 @@ export async function runPhase1WithEmptyRecovery(
     } else {
       current = await execute(
         'empty_continuation',
-        PHASE1_EMPTY_CONTINUATION_INSTRUCTION,
+        continuationInstruction,
         current.response.sessionId,
       );
     }
@@ -318,30 +332,34 @@ export async function runPhase1WithEmptyRecovery(
 
   if (!isEmptyPhase1Response(current.response)) {
     if (
-      (current.attempt.reason === 'empty_continuation'
-        || current.attempt.reason === 'empty_fresh')
+      current.attempt.reason === 'empty_fresh'
       && isProviderErrorEligibleForFreshRetry(current.response)
       && executionCount < MAX_PHASE1_EXECUTIONS
     ) {
       options.recordSupersededAttempt?.(current.response, current.attempt);
       options.discardSession(options.initialSessionId);
       current = await execute('provider_error_fresh', options.instruction, undefined);
-    } else {
+    } else if (
+      current.attempt.reason !== 'empty_continuation'
+      || !isProviderErrorEligibleForFreshRetry(current.response)
+    ) {
       return { response: current.response, finalAttempt: current.attempt };
     }
   }
 
-  if (!isEmptyPhase1Response(current.response)) {
-    return { response: current.response, finalAttempt: current.attempt };
-  }
-
   if (
     current.attempt.reason === 'empty_continuation'
+    && current.response.sessionId !== undefined
     && executionCount < MAX_PHASE1_EXECUTIONS
   ) {
     options.recordSupersededAttempt?.(current.response, current.attempt);
-    options.discardSession(options.initialSessionId);
-    current = await execute('empty_fresh', options.instruction, undefined);
+    // The first continuation is short. If it also fails, rebuild the current instruction with its
+    // notes and delivered interventions, but keep the same session so completed tools are not fresh-replayed.
+    current = await execute(
+      'empty_continuation',
+      options.instruction,
+      current.response.sessionId,
+    );
   }
 
   if (isEmptyPhase1Response(current.response)) {

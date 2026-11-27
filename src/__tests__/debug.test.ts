@@ -24,6 +24,8 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { withoutDiagnosticLogging } from '../shared/utils/diagnostic-context.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
 
@@ -49,6 +51,25 @@ function createDebugDataWithSerializedLength(targetLength: number): Record<strin
 }
 
 describe('debug logging', () => {
+  it('keeps private async conversation diagnostics out of persisted logs without hiding a concurrent event', async () => {
+    resetDebugLogger();
+    const path = join(getGlobalConfigDir(), 'conversation-debug.log');
+    initDebugLogger({ enabled: true, logFile: path });
+    const logger = createLogger('conversation-fixture');
+    let release!: () => void;
+    const privateCall = withoutDiagnosticLogging(async () => {
+      logger.debug('あいことばキリン', { reply: '返事の本文シマウマ' });
+      await new Promise<void>((resolve) => { release = resolve; });
+      logger.error('返事の本文シマウマ');
+    });
+    try { logger.info('visible parallel event'); }
+    finally { release(); }
+    await privateCall;
+    const persisted = readFileSync(path, 'utf8');
+    expect(persisted).toContain('visible parallel event');
+    expect(persisted).not.toContain('あいことばキリン');
+    expect(persisted).not.toContain('返事の本文シマウマ');
+  });
   beforeEach(() => {
     resetDebugLogger();
   });

@@ -1,0 +1,7 @@
+{
+  "date": "2026-10-01",
+  "count": 30000,
+  "pathTemplate": "logs/2026-10-01/segment-{index:05d}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.log",
+  "firstPath": "logs/2026-10-01/segment-00000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.log",
+  "lastPath": "logs/2026-10-01/segment-29999-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.log"
+}

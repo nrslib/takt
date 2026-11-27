@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
@@ -185,6 +186,9 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(promptTextOfCall(promptAsync, 1)).not.toContain(userInstruction);
     expect(promptTextOfCall(promptAsync, 2)).toContain(userInstruction);
     expect(abort).toHaveBeenCalledTimes(3);
+    if (promptAsync.mock.invocationCallOrder[1] === undefined || promptAsync.mock.invocationCallOrder[2] === undefined) {
+      throw new Error('Expected correction and fresh-session prompt calls');
+    }
     expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
     expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
     expect(promptAsync.mock.calls.map(([payload]) => (payload as { sessionID: string }).sessionID)).toEqual([
@@ -859,6 +863,79 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(result.content).not.toContain(unavailableToolError);
   });
 
+  it('should stream every text part and join all post-tool answer parts without earlier working text', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-final-text';
+    const stream = new MockEventStream([
+      textPartUpdated(sessionId, 'note-part', 'Checked input.ts. Remaining: answer.'),
+      sensitiveToolPartUpdated(sessionId, 'tool-part', 'unused-token'),
+      textPartUpdated(sessionId, 'answer-part-1', 'final '),
+      textPartUpdated(sessionId, 'answer-part-2', 'answer'),
+      sessionIdle(sessionId),
+    ], sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const onStream = vi.fn();
+
+    const result = await new OpenCodeClient().call('coder', 'check input', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('final answer');
+    expectStreamTextOnce(onStream, 'Checked input.ts. Remaining: answer.');
+    expectStreamTextOnce(onStream, 'final ');
+    expectStreamTextOnce(onStream, 'answer');
+  });
+
+  it('should return an empty successful result with the session when the turn ends with a tool, so a note before the tool is not the answer', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-ends-with-tool';
+    const stream = new MockEventStream([
+      textPartUpdated(sessionId, 'note-part', 'Checked input.ts. Remaining: answer.'),
+      sensitiveToolPartUpdated(sessionId, 'tool-part', 'unused-token'),
+      sessionIdle(sessionId),
+    ], sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const onStream = vi.fn();
+
+    const result = await new OpenCodeClient().call('coder', 'check input', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('');
+    expect(result.sessionId).toBe(sessionId);
+    expectStreamTextOnce(onStream, 'Checked input.ts. Remaining: answer.');
+  });
+
   it('should correct an unavailable-tool loop in-session, then recover a repeated fingerprint in one fresh session', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
@@ -926,6 +1003,9 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(correctionText).not.toContain('implement it');
     const retryText = promptTextOfCall(promptAsync, 2);
     expect(retryText).toContain('implement it');
+    if (promptAsync.mock.invocationCallOrder[1] === undefined || promptAsync.mock.invocationCallOrder[2] === undefined) {
+      throw new Error('Expected correction and fresh-session prompt calls');
+    }
     expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
     expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
     expectStreamTextOnce(onStream, 'correction retry tail');
@@ -1470,13 +1550,13 @@ describe('OpenCodeClient tool loop recovery', () => {
   it('should complete normally when message cycles stay under the budget', async () => {
     process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
     try {
-      const result = await runBudgetScenario('session-under', Array.from({ length: 4 }, (_, i) => ({
+      const result = await runBudgetScenario('session-under', [...Array.from({ length: 4 }, (_, i) => ({
         type: 'message.updated',
         properties: { info: { id: `message-${i}`, sessionID: 'session-under', role: 'assistant', time: { completed: 1000 + i } } },
-      })).concat([{
+      })), {
         type: 'message.part.updated',
         properties: { part: { id: 'p-t', type: 'text', text: 'done', sessionID: 'session-under' } },
-      }] as unknown[]));
+      }]);
 
       // 予算未満（4 < 5）なら通常どおり完了する
       expect(result.status).toBe('done');
@@ -1486,7 +1566,7 @@ describe('OpenCodeClient tool loop recovery', () => {
   });
 
   it('should complete normally when rotating tool errors stay under the consecutive threshold', async () => {
-      const result = await runBudgetScenario('session-under2', ['read', 'write', 'glob', 'grep', 'list'].map((tool, i) => ({
+      const result = await runBudgetScenario('session-under2', [...['read', 'write', 'glob', 'grep', 'list'].map((tool, i) => ({
         type: 'message.part.updated',
         properties: {
           part: {
@@ -1494,10 +1574,10 @@ describe('OpenCodeClient tool loop recovery', () => {
             state: { status: 'error', error: `The ${tool} tool was called with invalid arguments: SchemaError(x)` },
           },
         },
-      })).concat([{
+      })), {
         type: 'message.part.updated',
         properties: { part: { id: 'p-t2', type: 'text', text: 'done', sessionID: 'session-under2' } },
-      }] as unknown[]));
+      }]);
 
       // 既定の consecutive=10 未満で、strict loop も同一ツール連続にならない。
       expect(result.status).toBe('done');

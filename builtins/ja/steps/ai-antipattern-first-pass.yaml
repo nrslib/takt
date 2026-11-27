@@ -1,4 +1,5 @@
 name: ai-antipattern-review-1st
+description: AI特有の実装上の問題を調べ、修正が必要な指摘を報告する
 tags:
   - review
 edit: false

@@ -40,10 +40,55 @@ vi.mock('../features/interactive/formalSpecVerification.js', async (importOrigin
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
+import { listRecords, InteractiveSessionRecords } from '../features/interactive/interactiveSessionRecords.js';
 import { SlashCommand } from '../shared/constants.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { PROVIDER_TYPES } from '../shared/types/provider.js';
 import { makeSessionContext } from './test-helpers.js';
+
+const { verificationIoFailure } = vi.hoisted(() => ({
+  verificationIoFailure: { cwd: undefined as string | undefined, ownership: false, retention: false, move: false },
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined && target.startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.retention && target.endsWith('.retain')) {
+        throw new Error('retention marker write failed');
+      }
+      return actual.writeFileSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (verificationIoFailure.cwd !== undefined && String(args[0]).startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.move && String(args[1]).endsWith('.retain')) {
+        throw new Error('retention marker move failed');
+      }
+      return actual.renameSync(...args);
+    },
+    mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined
+        && target.startsWith(verificationIoFailure.cwd)
+        && target.endsWith('specs')) {
+        throw new Error('specification setup failed');
+      }
+      return actual.mkdirSync(...args);
+    },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined
+        && target.startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.ownership && target.endsWith('.active')) {
+        throw new Error('ownership release failed');
+      }
+      return actual.rmSync(...args);
+    },
+  };
+});
 
 function createSession(cwd = '/repo', formalSpec = false, modelCheckTimeoutSeconds?: number) {
   return createConversationSession({
@@ -61,10 +106,53 @@ function createSession(cwd = '/repo', formalSpec = false, modelCheckTimeoutSecon
   });
 }
 
+describe('conversation after a declined managed installation', () => {
+  it('retains seeded context through refusal and sends it with the first successful turn only', async () => {
+    mockCallAIWithRetry.mockReset();
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'takt install pi' })
+      .mockResolvedValue({ result: { success: true, content: 'answer', sessionId: 'installed-session' }, sessionId: 'installed-session' });
+    const session = createConversationSession({
+      cwd: '/repo', ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      initialUserMessage: 'Retain this original task',
+      strategy: { systemPrompt: 'system', transformPrompt: (message) => message, modelCheckTimeoutSeconds: 300, allowedTools: undefined },
+    });
+    expect(await session.handleUserMessage({ text: 'first question' })).toMatchObject({ kind: 'error', message: 'takt install pi' });
+    expect(session.snapshotHistory()).toEqual([{ role: 'user', content: 'Retain this original task' }]);
+    expect(await session.handleUserMessage({ text: 'second question' })).toMatchObject({ kind: 'assistant_response', content: 'answer' });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toContain('Retain this original task');
+    await session.handleUserMessage({ text: 'third question' });
+    expect(mockCallAIWithRetry.mock.calls[2]?.[0]).toBe('third question');
+    expect(session.snapshotHistory()).toContainEqual({ role: 'user', content: 'Retain this original task' });
+  });
+
+  it('sends both configured context and seeded task once after a declined installation', async () => {
+    mockCallAIWithRetry.mockReset();
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'takt install pi' })
+      .mockResolvedValue({ result: { success: true, content: 'answer', sessionId: 'installed-session' }, sessionId: 'installed-session' });
+    const session = createConversationSession({
+      cwd: '/repo', ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      initialUserMessage: 'Seeded task',
+      strategy: {
+        systemPrompt: 'system', transformPrompt: (message) => message,
+        modelCheckTimeoutSeconds: 300, allowedTools: undefined,
+        initialPromptContext: 'Configured context',
+      },
+    });
+
+    expect(await session.handleUserMessage({ text: 'first question' })).toMatchObject({ kind: 'error' });
+    expect(await session.handleUserMessage({ text: 'second question' })).toMatchObject({ kind: 'assistant_response' });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[0]).toBe('Seeded task\n\n---\n\nConfigured context\n\n---\n\nsecond question');
+    await session.handleUserMessage({ text: 'third question' });
+    expect(mockCallAIWithRetry.mock.calls[2]?.[0]).toBe('third question');
+  });
+});
+
 describe('conversation session application API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCallAIWithRetry.mockResolvedValue({
+    mockCallAIWithRetry.mockReset().mockResolvedValue({
       result: {
         content: 'Assistant answer',
         sessionId: 'provider-session-1',
@@ -72,8 +160,8 @@ describe('conversation session application API', () => {
       },
       sessionId: 'provider-session-1',
     });
-    mockBuildSummaryPrompt.mockReturnValue('summary prompt');
-    mockRunFormalSpecVerification.mockResolvedValue({
+    mockBuildSummaryPrompt.mockReset().mockReturnValue('summary prompt');
+    mockRunFormalSpecVerification.mockReset().mockResolvedValue({
       verdict: 'passed',
       verificationStarted: true,
       quint: { status: 'passed' },
@@ -83,6 +171,189 @@ describe('conversation session application API', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('records the current raw input without overwriting it when an earlier turn finishes late', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    let finishFirst!: (value: unknown) => void;
+    mockCallAIWithRetry
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValueOnce({ result: { success: true, content: 'new reply', sessionId: 'current' }, sessionId: 'current' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => `wrapped: ${message}` },
+    });
+    try {
+      const first = session.handleUserMessage({ text: 'old input' });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1));
+      expect(listRecords(cwd, 'mock')).toEqual([]);
+      await session.handleUserMessage({ text: 'new input' });
+      finishFirst({ result: { success: true, content: 'old reply', sessionId: 'old' }, sessionId: 'old' });
+      await first;
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'current', inputs: ['old input', 'new input'], response: 'new reply' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('removes a failed selected session and records its input under the fresh session', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    const records = new InteractiveSessionRecords(cwd);
+    const revision = records.recordInput({ provider: 'mock', sessionId: 'selected', input: 'old input' });
+    records.recordResponse({ provider: 'mock', sessionId: 'selected', inputRevision: revision, response: 'old reply' });
+    const notices: string[] = [];
+    mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
+      const callOptions = args[5] as { onSessionResumeFailure?: () => void };
+      callOptions.onSessionResumeFailure?.();
+      return Promise.resolve({ result: { success: true, content: 'fresh reply', sessionId: 'fresh' }, sessionId: 'fresh' });
+    });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: records,
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      session.setSessionId('selected');
+      await session.handleUserMessage({ text: 'new input', onNotice: (notice) => notices.push(notice) });
+      expect(notices).toEqual([getLabel('interactive.resumeSessionFailed', 'en')]);
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'fresh', inputs: ['new input'], response: 'fresh reply' }]);
+      expect(listRecords(cwd, 'mock')).toHaveLength(1);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a resume failure callback from a superseded turn', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    const records = new InteractiveSessionRecords(cwd);
+    const revision = records.recordInput({ provider: 'mock', sessionId: 'selected', input: 'old input' });
+    records.recordResponse({ provider: 'mock', sessionId: 'selected', inputRevision: revision, response: 'old reply' });
+    let finishFirst!: (value: unknown) => void;
+    let lateFailure!: () => void;
+    mockCallAIWithRetry
+      .mockImplementationOnce((...args: unknown[]) => {
+        lateFailure = (args[5] as { onSessionResumeFailure: () => void }).onSessionResumeFailure;
+        return new Promise((resolve) => { finishFirst = resolve; });
+      })
+      .mockResolvedValueOnce({ result: { success: true, content: 'current reply', sessionId: 'current' }, sessionId: 'current' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: records,
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      session.setSessionId('selected');
+      const first = session.handleUserMessage({ text: 'old turn' });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1));
+      session.setSessionId('current');
+      await session.handleUserMessage({ text: 'current turn' });
+      lateFailure();
+      finishFirst({ result: { success: false, content: 'stale', sessionId: 'selected' }, sessionId: undefined });
+      await first;
+      expect(listRecords(cwd, 'mock')).toMatchObject([
+        { sessionId: 'current', inputs: ['current turn'], response: 'current reply' },
+        { sessionId: 'selected', inputs: ['old input', 'old turn'], response: 'old reply' },
+      ]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps inputs without a session ID until the provider returns a real ID', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'provider failed' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply two', sessionId: 'created' }, sessionId: 'created' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      expect(listRecords(cwd, 'mock')).toEqual([]);
+      await session.handleUserMessage({ text: 'two' });
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'created', inputs: ['one', 'two'], response: 'reply two' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([undefined, 'resumed'])('does not attach unidentified inputs after selecting session %s', async (selectedSessionId) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'provider failed' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply two', sessionId: 'resumed' }, sessionId: 'resumed' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      session.setSessionId(selectedSessionId);
+      await session.handleUserMessage({ text: 'two' });
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'resumed', inputs: ['two'], response: 'reply two' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['failed', 'interrupted'] as const)('keeps the latest raw input and previous reply when an existing session call is %s', async (outcome) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    const controller = new AbortController();
+    let finishSecond!: (value: unknown) => void;
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply one', sessionId: 'existing' }, sessionId: 'existing' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => `wrapped: ${message}` },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      const pending = session.handleUserMessage({ text: 'two', abortSignal: controller.signal });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2));
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'existing', inputs: ['one', 'two'], response: 'reply one' }]);
+
+      if (outcome === 'interrupted') controller.abort();
+      finishSecond(outcome === 'failed'
+        ? { result: null, sessionId: 'existing', error: 'provider failed' }
+        : { result: { success: true, content: 'late reply', sessionId: 'existing' }, sessionId: 'existing' });
+      expect(await pending).toMatchObject(outcome === 'failed'
+        ? { kind: 'error', code: 'provider_error' }
+        : { kind: 'assistant_response', content: 'late reply' });
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'existing', inputs: ['one', 'two'], response: 'reply one' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([undefined, 'other-session'])('does not accept a late reply after changing the session to %s', async (nextSessionId) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    let finishSecond!: (value: unknown) => void;
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply one', sessionId: 'existing' }, sessionId: 'existing' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      const pending = session.handleUserMessage({ text: 'two' });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2));
+      session.setSessionId(nextSessionId);
+      finishSecond({ result: { success: true, content: 'late reply', sessionId: 'existing' }, sessionId: 'existing' });
+      await pending;
+      expect(session.getSessionId()).toBe(nextSessionId);
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'existing', inputs: ['one', 'two'], response: 'reply one' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('should accept user text from the adapter without reading stdin', async () => {
@@ -388,7 +659,7 @@ describe('conversation session application API', () => {
     ]);
   });
 
-  it('reads persisted verification files during the readonly interpretation call and removes them afterward', async () => {
+  it.each(['passed', 'failed', 'error'] as const)('reads persisted verification files during interpretation and cleans according to verdict %s', async (verdict) => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-verify-interpretation-'));
     const runDirectory = join(cwd, '.takt', 'runs', 'verify-read-test');
     const specsDirectory = join(runDirectory, 'specs');
@@ -404,10 +675,11 @@ describe('conversation session application API', () => {
     writeFileSync(runLogPath, 'late violation invSafe: counterexample counter = -1', { mode: 0o600 });
     writeFileSync(runErrorPath, 'quint run diagnostic', { mode: 0o600 });
     mockRunFormalSpecVerification.mockResolvedValueOnce({
-      verdict: 'failed',
+      verdict,
       verificationStarted: true,
-      quint: { status: 'failed', run: { status: 'failed', message: 'bounded output excerpt' } },
+      quint: { status: verdict, run: { status: verdict, message: 'bounded output excerpt' } },
       alloy: { status: 'skipped' },
+      ...(verdict === 'passed' ? {} : { artifactRetention: { status: 'passed' } }),
       artifacts: {
         runDirectory,
         specifications: { quint: specificationPath },
@@ -449,7 +721,159 @@ describe('conversation session application API', () => {
       const result = await session.handleUserMessage({ text: '/verify' });
 
       expect(result).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('counterexample found') });
-      expect(existsSync(runDirectory)).toBe(false);
+      expect(existsSync(runDirectory)).toBe(verdict !== 'passed');
+      if (verdict !== 'passed') {
+        expect(result).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining(runDirectory) });
+        expect(session.snapshotHistory().at(-1)?.content).toContain(runDirectory);
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['none', 'ownership', 'write', 'move'] as const)('delivers the real directory and diagnostics after an initialization error with retention failure=%s', async (failure) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-session-retained-'));
+    const actual = await vi.importActual<typeof import('../features/interactive/formalSpecVerification.js')>(
+      '../features/interactive/formalSpecVerification.js',
+    );
+    mockRunFormalSpecVerification.mockImplementationOnce(actual.runFormalSpecVerification);
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { content: '```alloy\nrun {} for 3\n```', success: true } })
+      .mockResolvedValueOnce({ result: { content: 'interpretation without a path', success: true } });
+    verificationIoFailure.cwd = cwd;
+    const ownershipFailure = failure === 'ownership';
+    verificationIoFailure.ownership = ownershipFailure;
+    verificationIoFailure.retention = failure === 'write' || failure === 'move';
+    verificationIoFailure.move = failure === 'move';
+    try {
+      const result = await createSession(cwd, true).handleUserMessage({ text: '/verify' });
+      const verification = await (mockRunFormalSpecVerification.mock.results[0]!.value as ReturnType<typeof actual.runFormalSpecVerification>);
+      const runDirectory = verification.artifacts!.runDirectory;
+      expect(verification).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
+      expect(mockCallAIWithRetry.mock.calls[1]![0]).toContain(runDirectory);
+      const systemPrompt = String(mockCallAIWithRetry.mock.calls[1]![1]);
+      if (failure === 'move') {
+        expect(systemPrompt).toMatch(/could not be confirmed/);
+        expect(systemPrompt).toMatch(/copy any needed artifacts manually/);
+        expect(systemPrompt).not.toMatch(/artifacts are retained/);
+      } else {
+        expect(systemPrompt).toMatch(/artifacts are retained/);
+        expect(systemPrompt).toMatch(/remove them manually/);
+      }
+      expect(result).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining(runDirectory) });
+      if (verificationIoFailure.retention) {
+        expect(result).toMatchObject({ content: expect.stringContaining('retention marker write failed') });
+      }
+      if (failure === 'move') {
+        expect(result).toMatchObject({ content: expect.stringContaining('retention marker move failed') });
+        expect(verification.artifactRetention?.status).toBe('error');
+      }
+      expect(existsSync(join(runDirectory, '.retain'))).toBe(failure !== 'move');
+      expect(existsSync(join(runDirectory, '.active'))).toBe(ownershipFailure || failure === 'move');
+    } finally {
+      verificationIoFailure.cwd = undefined;
+      verificationIoFailure.ownership = false;
+      verificationIoFailure.retention = false;
+      verificationIoFailure.move = false;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['empty', 'failed'] as const)('reports the retained directory when interpretation is %s', async (failure) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-verify-interpretation-error-'));
+    const runDirectory = join(cwd, '.takt', 'runs', 'verify-failed');
+    mkdirSync(runDirectory, { recursive: true });
+    const specificationPath = join(runDirectory, 'spec.als');
+    writeFileSync(specificationPath, 'run Scenario for 3');
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'failed', verificationStarted: true,
+      quint: { status: 'skipped' }, alloy: { status: 'failed' },
+      artifactRetention: { status: 'passed' },
+      artifacts: { runDirectory, specifications: { alloy: specificationPath }, logs: {} },
+    });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { content: '```alloy\nrun Scenario for 3\n```', success: true } })
+      .mockResolvedValueOnce(failure === 'empty'
+        ? { result: null, error: 'interpretation unavailable' }
+        : { result: { content: 'interpretation rejected', success: false } });
+    try {
+      const result = await createSession(cwd, true).handleUserMessage({ text: '/verify' });
+      expect(result).toMatchObject({ kind: 'error', message: expect.stringContaining(runDirectory) });
+      expect(result).toMatchObject({ message: expect.stringContaining(failure === 'empty' ? 'interpretation unavailable' : 'interpretation rejected') });
+      expect(readFileSync(specificationPath, 'utf8')).toBe('run Scenario for 3');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { timing: 'verification', verdict: 'failed', artifacts: true },
+    { timing: 'interpretation', verdict: 'failed', artifacts: true },
+    { timing: 'interpretation', verdict: 'error', artifacts: true },
+    { timing: 'interpretation', verdict: 'timeout', artifacts: true },
+    { timing: 'interpretation-error', verdict: 'error', artifacts: true },
+    { timing: 'superseded', verdict: 'failed', artifacts: true },
+    { timing: 'interpretation', verdict: 'passed', artifacts: true },
+    { timing: 'interpretation', verdict: 'error', artifacts: false },
+  ] as const)('preserves artifact notification after $timing for $verdict with artifacts=$artifacts', async ({ timing, verdict, artifacts }) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-verify-interrupted-'));
+    const runDirectory = join(cwd, '.takt', 'runs', 'verify-interrupted');
+    mkdirSync(runDirectory, { recursive: true });
+    const specificationPath = join(runDirectory, 'spec.als');
+    writeFileSync(specificationPath, 'run Scenario for 3');
+    const controller = new AbortController();
+    const session = createSession(cwd, true);
+    session.setSessionId('original-session');
+    const history = session.snapshotHistory();
+    const verification = {
+      verdict: verdict === 'timeout' ? 'error' : verdict,
+      verificationStarted: true,
+      quint: { status: 'skipped' },
+      alloy: { status: verdict === 'timeout' ? 'error' : verdict, ...(verdict === 'timeout' ? { message: 'Process timed out', commandResults: [{ number: 0, type: 'run', label: 'Scenario', status: 'error', timedOut: true }] } : {}) },
+      ...(artifacts && verdict !== 'passed' ? { artifactRetention: { status: 'passed' } } : {}),
+      ...(artifacts ? { artifacts: { runDirectory, specifications: { alloy: specificationPath }, logs: {} } } : {}),
+    };
+    mockRunFormalSpecVerification.mockImplementationOnce(async () => {
+      if (timing === 'verification') controller.abort();
+      return verification;
+    });
+    let finishInterpretation!: (value: unknown) => void;
+    let failInterpretation!: (reason: Error) => void;
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { content: '```alloy\nrun Scenario for 3\n```', success: true }, sessionId: 'generation-session' })
+      .mockImplementationOnce(() => new Promise((resolve, reject) => {
+        finishInterpretation = resolve;
+        failInterpretation = reject;
+      }));
+    try {
+      const pending = session.handleUserMessage({ text: '/verify', abortSignal: controller.signal });
+      let expectedHistory = history;
+      if (timing !== 'verification') {
+        await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2));
+        if (timing === 'superseded') {
+          mockCallAIWithRetry.mockResolvedValueOnce({ result: { content: 'new answer', success: true }, sessionId: 'new-session' });
+          await session.handleUserMessage({ text: 'new turn' });
+          expectedHistory = session.snapshotHistory();
+        } else {
+          controller.abort();
+        }
+        if (timing === 'interpretation-error') failInterpretation(new Error('interpretation failed'));
+        else finishInterpretation({ result: { content: 'obsolete answer', success: true }, sessionId: 'obsolete-session' });
+      }
+      const result = await pending;
+      expect(result).toMatchObject({ kind: 'error', code: 'provider_error' });
+      if (artifacts && verdict !== 'passed') {
+        expect(result).toMatchObject({ message: expect.stringContaining(runDirectory), retainedArtifactsMessage: expect.stringContaining(runDirectory) });
+        expect(readFileSync(specificationPath, 'utf8')).toBe('run Scenario for 3');
+      } else {
+        expect(result).not.toHaveProperty('retainedArtifactsMessage');
+      }
+      expect(session.snapshotHistory()).toEqual(expectedHistory);
+      expect(session.getSessionId()).toBe(timing === 'superseded' ? 'new-session' : 'original-session');
+      expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
+      if (timing === 'verification') expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1);
+      if (verdict === 'passed') expect(existsSync(runDirectory)).toBe(false);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -1033,6 +1457,37 @@ describe('conversation session application API', () => {
     });
   });
 
+  describe.each(['en', 'ja'] as const)('inline /go utterance in %s', (lang) => {
+    it.each([false, true])('uses the real summary builder and preserves separate history when history=%s', async (hasHistory) => {
+      const actual = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
+        '../features/interactive/interactiveApplication.js',
+      );
+      mockBuildSummaryPrompt.mockImplementation(actual.buildConversationSummaryPrompt);
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      const history = hasHistory ? [{ role: 'user' as const, content: 'Use iOS only.' }] : [];
+      const session = createConversationSession({
+        cwd: '/repo', formalSpec: false, modelCheckTimeoutSeconds: 300,
+        initialUserMessage: hasHistory ? 'Use iOS only.' : undefined,
+        ctx: makeSessionContext({ lang }),
+        strategy: { systemPrompt: 'chat', allowedTools: ['Read'], transformPrompt: (message) => message, modelCheckTimeoutSeconds: 300 },
+      });
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: '# Generated authentication order' } });
+
+      const result = await session.handleUserMessage({ text: `/go ${note}` });
+
+      expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+      const prompt = String(mockCallAIWithRetry.mock.calls[0]?.[0]);
+      const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
+      expect(headings).toHaveLength(1);
+      if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(prompt.split(note)).toHaveLength(2);
+      expect(prompt.split('\n').filter((line) => line.startsWith('User:')).join('\n')).not.toContain(note);
+      if (hasHistory) expect(prompt).toContain('User: Use iOS only.');
+      expect(result).toMatchObject({ kind: 'workflow_execution_requested', task: '# Generated authentication order' });
+      expect(session.snapshotHistory()).toEqual(history);
+    });
+  });
+
   it.each([false, true])(
     'should pass resolved formal specification mode=%s to ACP task instruction generation',
     async (formalSpec) => {
@@ -1117,6 +1572,22 @@ describe('conversation session application API', () => {
       },
       sessionId: 'provider-session-2',
     });
+  });
+
+  it('passes the explicit source to a custom summary builder without merging the utterance into history', async () => {
+    const summaryPromptBuilder = vi.fn().mockReturnValue('custom summary prompt');
+    const session = createConversationSession({
+      cwd: '/repo', formalSpec: false, modelCheckTimeoutSeconds: 300, ctx: makeSessionContext(),
+      strategy: { systemPrompt: 'system prompt', modelCheckTimeoutSeconds: 300, allowedTools: [],
+        transformPrompt: (message) => message, summaryPromptBuilder },
+    });
+    const result = await session.createTaskInstruction({ userNote: '監査ログを追加してタスクに積んで', userNoteSource: 'acp' });
+    expect(summaryPromptBuilder).toHaveBeenCalledWith(expect.objectContaining({
+      history: [], userNote: '監査ログを追加してタスクに積んで', userNoteSource: 'acp',
+    }));
+    expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toBe('custom summary prompt');
+    expect(result.kind).toBe('workflow_execution_requested');
+    expect(session.snapshotHistory()).toEqual([]);
   });
 
   it('should include a workflow identifier from the task instruction note', async () => {

@@ -9,12 +9,14 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: fix
+description: Carry out the required fixes and verification in the fix plan and report the results and remaining gaps.
 capabilities: edit
 tags:
   - coding
 edit: true
 persona: coder
 policy:
+  - repair-strategy
   - contract-change
   - $param: fix_policy
 knowledge:

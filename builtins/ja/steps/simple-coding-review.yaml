@@ -1,0 +1,27 @@
+params:
+  review_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+  review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+description: 要求と差分を照合し、不具合や既存動作への影響、検証の不足を報告する
+tags:
+  - review
+edit: false
+persona: coding-reviewer
+policy:
+  - contract-change
+  - $param: review_policy
+knowledge:
+  $param: review_knowledge
+pass_previous_response: false
+instruction:
+  $param: review_instruction
+output_contracts:
+  report:
+    - name: coding-review.md
+      format: coding-review

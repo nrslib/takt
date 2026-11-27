@@ -45,6 +45,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Normal
   return {
     name: `${step.name}.${part.id}`,
     engineSynthesized: true,
+    internalPromptContext: { kind: 'team_part', ownerStepName: step.name, partName: part.id },
     description: part.title,
     persona: partPersona,
     personaPath: partPersonaPath,

@@ -146,6 +146,7 @@ function formatInitialTaskContext(input: InitialTaskContext): string {
 
 export interface AssistantConversationInput {
   assistantMode: AssistantInteractiveMode;
+  includeAssistantMcpServers?: boolean;
   /** Whether this front-end can hand off a running task with `/tell`. */
   enableTellCommand?: boolean;
   /** Whether this front-end can run local assistant task requeue commands. */
@@ -161,7 +162,7 @@ export interface AssistantConversationInput {
     mode: boolean;
     comments: boolean;
     modelCheckTimeoutSeconds: number;
-  }>;
+  } | null>;
   workflowContext?: WorkflowContext;
   runSessionContext?: RunSessionContext;
   /** Lightweight metadata selected by `takt list`; reports are not loaded. */
@@ -225,12 +226,12 @@ export function createAssistantConversationPlan(
 ): ConversationPlan {
   const persona = getAssistantSessionPersona(input.assistantMode);
   const baseCtx = resolveConversationSessionContext(cwd, persona, input);
-  const taskStateMcp = resolveTaskStateMcp(baseCtx.providerType, baseCtx.lang);
+  const taskStateMcp = resolveTaskStateMcp(cwd, baseCtx.providerType, baseCtx.lang, input.includeAssistantMcpServers ?? true);
   const ctx: SessionContext = {
     ...baseCtx,
     ...(taskStateMcp.servers === undefined
       ? { mcpServers: undefined, taskStateMcpServers: undefined }
-      : { mcpServers: taskStateMcp.servers, taskStateMcpServers: taskStateMcp.servers }),
+      : { mcpServers: taskStateMcp.servers, taskStateMcpServers: taskStateMcp.taskStateServers }),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.disableSessionRetry ? { disableSessionRetry: true } : {}),
@@ -265,8 +266,10 @@ export function createAssistantConversationPlan(
     }),
   });
   const resolvePromptConfiguration = input.resolveResumedFormalSpecConfiguration
-    ? async (): Promise<ConversationPromptConfiguration> =>
-      buildPromptConfiguration(await input.resolveResumedFormalSpecConfiguration!())
+    ? async (): Promise<ConversationPromptConfiguration | null> => {
+      const configuration = await input.resolveResumedFormalSpecConfiguration!();
+      return configuration === null ? null : buildPromptConfiguration(configuration);
+    }
     : undefined;
   const resolveCurrentPromptConfiguration = input.resolveRunSessionContext
     ? async (): Promise<ConversationPromptConfiguration> => buildPromptConfiguration(

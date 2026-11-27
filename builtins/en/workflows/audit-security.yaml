@@ -25,6 +25,7 @@ loop_monitors:
 
 steps:
   - name: plan
+    description: Inventory all files, including configuration and tests, and organize their roles and security risks.
     tags:
       - plan
     persona: planner
@@ -40,6 +41,7 @@ steps:
         next: audit
 
   - name: audit
+    description: Divide all target files, read each in full, and audit security issues in parallel, reporting their severity.
     tags:
       - review
     persona: security-reviewer
@@ -68,6 +70,7 @@ steps:
         next: supervise
 
   - name: supervise
+    description: Verify audit coverage for all files, methodology, and finding quality, and decide whether to complete or re-audit.
     tags:
       - review
       - supervise
@@ -89,6 +92,7 @@ steps:
         next: review
 
   - name: review
+    description: Read unaudited or insufficiently audited files in full, re-audit them, and integrate the results into the existing report.
     tags:
       - review
     persona: security-reviewer

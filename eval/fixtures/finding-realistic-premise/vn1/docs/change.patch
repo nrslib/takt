@@ -1,0 +1,23 @@
+--- a/src/summary.mjs
++++ b/src/summary.mjs
+@@ -1,3 +1,3 @@
+ export function summarize(entries) {
+-  return { count: entries.length, total: 0 };
++  return { count: entries.length, total: entries.reduce((sum, entry) => sum + entry.amount, 0) };
+ }
+--- a/src/report.mjs
++++ b/src/report.mjs
+@@ -1,3 +1,3 @@
+ export function formatReport(items) {
+-  return items.map(item => item.name).join('\n');
++  return items.map(item => `${item.id}: ${item.name}`).join('\n');
+ }
+--- a/test/report.test.mjs
++++ b/test/report.test.mjs
+@@ -2,5 +2,5 @@
+ import test from 'node:test';
+ import { formatReport } from '../src/report.mjs';
+ test('report formats entries', () => {
+-  assert.equal(formatReport([{ id: 'a', name: 'One' }]), 'One');
++  assert.equal(formatReport([{ id: 'a', name: 'One' }]), 'a: One');
+ });

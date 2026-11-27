@@ -29,6 +29,11 @@ vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
   }),
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   info: vi.fn(),
@@ -71,6 +76,10 @@ import { confirm, promptInput } from '../shared/prompt/index.js';
 import { createIssueAndSaveTask, saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
 import { getCurrentBranch, branchExists } from '../infra/task/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import { ActiveTaskTargetConflictError } from '../infra/task/activeTaskTarget.js';
+import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
+import { hasTaskDirectory } from '../infra/task/taskStateReader.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -140,6 +149,109 @@ afterEach(() => {
 });
 
 describe('saveTaskFile', () => {
+  it.each([false, true])('prepares before entering the publication scope and respects pre-publication abort (%s)', async (aborted) => {
+    const controller = new AbortController();
+    const scope = vi.fn(async (publish: (prepared: ReturnType<typeof prepareTaskSpecDirectory>) => { taskName: string; tasksFile: string }) => {
+      expect(mockSummarizeTaskName).toHaveBeenCalledOnce();
+      expectNoTaskArtifacts(testDir);
+      const prepared = prepareTaskSpecDirectory(testDir, 'Scoped task');
+      try {
+        if (aborted) controller.abort();
+        return publish(prepared);
+      } finally {
+        if (!await hasTaskDirectory(testDir, prepared.taskDir)) {
+          cleanupTaskSpecDirectory(prepared.taskDir);
+        }
+      }
+    });
+    const saving = saveTaskFile(testDir, 'Scoped task', undefined, undefined, controller.signal, scope);
+    if (aborted) {
+      await expect(saving).rejects.toThrow();
+      expectNoTaskArtifacts(testDir);
+    } else {
+      const saved = await saving;
+      expect(loadTasks(testDir).tasks[0]!.name).toBe(saved.taskName);
+    }
+    expect(scope).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { target: 'Issue', options: { issue: 1465 }, running: false },
+    { target: 'Issue', options: { issue: 1465 }, running: true },
+    { target: 'PR', options: { prNumber: 456, worktree: true, branch: 'feature/review' }, running: false },
+    { target: 'PR', options: { prNumber: 456, worktree: true, branch: 'feature/review' }, running: true },
+    { target: 'branch', options: { worktree: true, branch: 'feature/shared' }, running: false },
+    { target: 'branch', options: { worktree: true, branch: 'feature/shared' }, running: true },
+  ])('allows a human to save another $target task with running=$running', async ({ options, running }) => {
+    const first = await saveTaskFile(testDir, 'First task', options);
+    if (running) new TaskRunner(testDir).claimNextTasks(1);
+    const before = loadTasks(testDir).tasks[0];
+
+    const second = await saveTaskFile(testDir, 'Second task', options);
+
+    const tasks = loadTasks(testDir).tasks;
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toEqual(before);
+    expect(tasks[1]).toMatchObject({ status: 'pending' });
+    expect(second.taskName).not.toBe(first.taskName);
+    expect(tasks[1]?.issue).toBe(tasks[0]?.issue);
+    expect(tasks[1]?.pr_number).toBe(tasks[0]?.pr_number);
+    expect(tasks[1]?.branch).toBe(tasks[0]?.branch);
+    expect(fs.readFileSync(path.join(testDir, String(tasks[1]?.task_dir), 'order.md'), 'utf-8')).toBe('Second task');
+    expect(mockWarn).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockPromptInput).not.toHaveBeenCalled();
+  });
+
+  it('allows interactive saving for an Issue with a running task without extra prompts', async () => {
+    await saveTaskFile(testDir, 'First task', { issue: 1465 });
+    new TaskRunner(testDir).claimNextTasks(1);
+
+    await saveTaskFromInteractive(testDir, '# Fix login\n\nIssue: #1465\n\nFix the timeout.', 'default', {
+      issue: 1465,
+      presetSettings: { worktree: true, autoPr: false, draftPr: false },
+    });
+
+    expect(loadTasks(testDir).tasks.map((task) => [task.status, task.issue])).toEqual([
+      ['running', 1465], ['pending', 1465],
+    ]);
+    expect(mockSuccess).toHaveBeenCalledOnce();
+    expect(mockWarn).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockPromptInput).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { target: 'Issue', options: { issue: 1465 }, running: false },
+    { target: 'Issue', options: { issue: 1465 }, running: true },
+    { target: 'PR', options: { prNumber: 456, worktree: true, branch: 'feature/review' }, running: false },
+    { target: 'PR', options: { prNumber: 456, worktree: true, branch: 'feature/review' }, running: true },
+    { target: 'branch', options: { worktree: true, branch: 'feature/shared' }, running: false },
+    { target: 'branch', options: { worktree: true, branch: 'feature/shared' }, running: true },
+  ])('rejects automatic saving of another $target task with running=$running and cleans its spec', async ({ options, running }) => {
+    await saveTaskFile(testDir, 'First task', options);
+    if (running) new TaskRunner(testDir).claimNextTasks(1);
+    const before = loadTasks(testDir);
+    const directories = fs.readdirSync(path.join(testDir, '.takt', 'tasks'));
+
+    await expect(saveTaskFile(testDir, 'Automatic task', {
+      ...options, deduplicateActiveTargets: true,
+    })).rejects.toThrow(ActiveTaskTargetConflictError);
+
+    expect(loadTasks(testDir)).toEqual(before);
+    expect(fs.readdirSync(path.join(testDir, '.takt', 'tasks'))).toEqual(directories);
+  });
+
+  it('does not persist the automatic registration policy in task records', async () => {
+    await saveTaskFile(testDir, 'Automatic task', { issue: 1465, deduplicateActiveTargets: true });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task).toMatchObject({ issue: 1465, status: 'pending' });
+    expect(task).not.toHaveProperty('deduplicateActiveTargets');
+  });
+
   it('should append task to tasks.yaml', async () => {
     const created = await saveTaskFile(testDir, 'Implement feature X\nDetails here');
 
@@ -183,6 +295,43 @@ describe('saveTaskFile', () => {
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.workflow).toBe('review');
+  });
+
+  it('should persist runtime_assignment when runtimeAssignment is provided', async () => {
+    fs.mkdirSync(path.join(testDir, '.takt'), { recursive: true });
+    fs.writeFileSync(path.join(testDir, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '  assignments:',
+      '    slow:',
+      '      defaults:',
+      '        profile: base',
+      '',
+    ].join('\n'));
+    await saveTaskFile(testDir, 'Task', {
+      workflow: 'review',
+      runtimeAssignment: 'slow',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.runtime_assignment).toBe('slow');
+  });
+
+  it('should not write runtime_assignment when runtimeAssignment is omitted', async () => {
+    await saveTaskFile(testDir, 'Task', {
+      workflow: 'review',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task).not.toHaveProperty('runtime_assignment');
   });
 
   it('should persist base_branch when it is provided', async () => {
@@ -608,7 +757,7 @@ describe('createIssueAndSaveTask', () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
-    await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
+    const result = await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
       attachments: [attachment],
     });
 
@@ -621,18 +770,20 @@ describe('createIssueAndSaveTask', () => {
     const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
     expect(task.issue).toBe(42);
     expect(task.workflow).toBe('default');
+    expect(result).toMatchObject({ success: true, created: { issueNumber: 42, workflow: 'default' } });
+    expect(result).toMatchObject({ created: { taskName: expect.any(String) } });
     expect(orderContent).toContain('Review [Image #1].');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('issue-image');
     expect(mockCommentOnIssue).not.toHaveBeenCalled();
   });
 
-  it('should comment the created issue link on a single source issue', async () => {
+  it('saves the bound source Issue while commenting the newly created Issue link', async () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
-    await createIssueAndSaveTask(testDir, 'Create execution issue', 'default', {
+    await createIssueAndSaveTask(testDir, '# Create execution issue\n\nIssue: #7\n\nImplement the source Issue.', 'default', {
       sourceIssue: { number: 7, language: 'ja' },
     });
 
@@ -641,7 +792,7 @@ describe('createIssueAndSaveTask', () => {
       expect.stringContaining('#42 (https://github.com/owner/repo/issues/42)'),
       testDir,
     );
-    expect(loadTasks(testDir).tasks[0]?.issue).toBe(42);
+    expect(loadTasks(testDir).tasks[0]?.issue).toBe(7);
   });
 
   it('should warn and preserve the issue and task when source issue commenting fails', async () => {
@@ -650,13 +801,13 @@ describe('createIssueAndSaveTask', () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
-    await createIssueAndSaveTask(testDir, 'Create execution issue', 'default', {
+    await createIssueAndSaveTask(testDir, '# Create execution issue\n\nIssue: #7\n\nImplement the source Issue.', 'default', {
       sourceIssue: { number: 7, language: 'en' },
     });
 
     expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('source Issue #7'));
     expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
-    expect(loadTasks(testDir).tasks[0]?.issue).toBe(42);
+    expect(loadTasks(testDir).tasks[0]?.issue).toBe(7);
     expect(mockCreateIssue).toHaveBeenCalled();
   });
 
@@ -667,7 +818,7 @@ describe('createIssueAndSaveTask', () => {
     mockPromptInput.mockResolvedValueOnce('');
     mockConfirm.mockResolvedValueOnce(false);
 
-    await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
+    const result = await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
       attachments: [{
         placeholder: '[Image #1]',
         tempPath: directoryAttachment,
@@ -680,5 +831,39 @@ describe('createIssueAndSaveTask', () => {
       "#42",
     ));
     expectNoTaskArtifacts(testDir);
+    expect(result).toMatchObject({
+      success: false,
+      failure: { issueCreated: true, issueNumber: 42, taskEnqueued: false, stage: 'task_saving' },
+    });
+    expect(mockCreateIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return the issue creation failure without saving or inventing an issue number', async () => {
+    mockCreateIssue.mockReturnValue({ success: false, error: 'permission denied' });
+
+    const result = await createIssueAndSaveTask(testDir, 'Create execution issue', 'default');
+
+    expect(result).toEqual({
+      success: false,
+      failure: { issueCreated: false, taskEnqueued: false, stage: 'issue_creation', error: 'permission denied' },
+    });
+    expectNoTaskArtifacts(testDir);
+    expect(mockPromptInput).not.toHaveBeenCalled();
+    expect(mockCreateIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return a created issue with an unknown number without saving a task', async () => {
+    mockCreateIssue.mockReturnValue({ success: true, issueNumber: 0, url: 'https://github.com/owner/repo/issues/unknown' });
+
+    const result = await createIssueAndSaveTask(testDir, 'Create execution issue', 'default');
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: { issueCreated: true, taskEnqueued: false, stage: 'issue_number_parsing', error: expect.any(String) },
+    });
+    expect(result).toHaveProperty('failure');
+    expect(result).not.toHaveProperty('failure.issueNumber');
+    expectNoTaskArtifacts(testDir);
+    expect(mockCreateIssue).toHaveBeenCalledTimes(1);
   });
 });

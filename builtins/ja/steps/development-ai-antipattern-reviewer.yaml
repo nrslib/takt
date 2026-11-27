@@ -7,6 +7,7 @@ params:
     facet_kind: knowledge
   ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: ai-antipattern-review
+description: AI特有の実装上の問題を調べ、修正が必要な指摘を報告する
 capabilities: readonly
 tags: [review]
 edit: false

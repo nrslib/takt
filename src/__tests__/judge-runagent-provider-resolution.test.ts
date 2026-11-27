@@ -61,7 +61,10 @@ function expectPhase3Isolation(options: unknown): void {
 
 describe('judge runAgent provider/model resolution (#556)', () => {
   const judgeBase: JudgeStatusOptions & WithResolved = {
+    judgmentInput: 'work result',
     cwd: '/repo',
+    projectCwd: '/original-project',
+    language: 'ja',
     stepName: 'review',
     provider: 'codex',
     resolvedProvider: 'codex',
@@ -196,7 +199,12 @@ describe('judge runAgent provider/model resolution (#556)', () => {
       );
       for (const call of vi.mocked(runAgent).mock.calls) {
         expectPhase3Isolation(call[2]);
+        expect(call[2]?.projectCwd).toBe('/original-project');
       }
+      expect(vi.mocked(runAgent).mock.calls[1]?.[2]).toMatchObject({
+        language: 'ja',
+        personaPath: expect.stringContaining('/ja/facets/personas/conductor.md'),
+      });
     });
 
     it('keeps the explicit no-tools boundary when the provider profile declares tools', async () => {
@@ -211,6 +219,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         { label: 'a' },
         { label: 'b' },
       ], {
+        judgmentInput: 'work result',
         cwd: '/repo',
         stepName: 'review',
         resolvedProvider: 'claude',

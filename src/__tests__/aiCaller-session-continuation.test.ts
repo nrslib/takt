@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
@@ -49,6 +50,36 @@ describe('interactive session continuation refusal', () => {
         success: false,
         content: expect.stringContaining('next turn will start a new SDK session without the previous history'),
       },
+    });
+  });
+
+  it('reports an empty successful provider answer without retrying the original prompt fresh', async () => {
+    const providerCall = vi.fn<ProviderAgent['call']>().mockImplementation(async (_prompt, callOptions) => {
+      callOptions.onStream?.({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash', input: {} } });
+      return {
+        persona: 'interactive',
+        status: 'done',
+        content: '',
+        sessionId: 'session-after-tool',
+        timestamp: new Date(),
+      };
+    });
+    const provider = makeProvider({ setup: () => ({ call: providerCall }) });
+
+    const result = await callAIWithRetry(
+      'continue the saved conversation',
+      'system prompt',
+      [],
+      '/workspace',
+      makeSessionContext({ provider, providerType: 'devin', sessionId: 'session-after-tool' }),
+      { outputMode: 'silent', persistSession: false },
+    );
+
+    expect(providerCall).toHaveBeenCalledOnce();
+    expect(result.result).toMatchObject({
+      success: false,
+      content: 'The AI returned an empty response',
+      sessionId: 'session-after-tool',
     });
   });
 

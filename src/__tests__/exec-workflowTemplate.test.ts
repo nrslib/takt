@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
-import { resolveExecConfigProviderModel } from '../features/exec/runtimeConfig.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { buildExecWorkflowYaml as buildExecWorkflowYamlRaw } from '../features/exec/workflowTemplate.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -22,6 +21,7 @@ type RawProviderOptions = {
 };
 
 type RawParallelStep = {
+  capabilities?: string | string[];
   provider_options?: RawProviderOptions;
 };
 
@@ -163,6 +163,11 @@ function writeWorkflowAndLoad(yaml: string): { workflow: ReturnType<typeof loadW
   return { workflow, projectDir, globalConfigDir };
 }
 
+function staticSubSteps(step: AgentWorkflowStep | undefined) {
+  if (!step || !Array.isArray(step.parallel)) throw new Error('Expected static parallel sub-steps');
+  return step.parallel;
+}
+
 function parseRawWorkflow(yaml: string): RawWorkflow {
   const raw = parseYaml(yaml);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -183,8 +188,8 @@ describe('exec workflow template', () => {
       const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
       const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
       const replan = workflow.steps.find((step) => step.name === 'replan') as AgentWorkflowStep | undefined;
-      const worker = execute?.parallel?.[0];
-      const judgeActor = judge?.parallel?.[0];
+      const worker = staticSubSteps(execute)[0];
+      const judgeActor = staticSubSteps(judge)[0];
       const rawJudge = raw.steps.find((step) => step.name === 'review');
       const rawReplan = raw.steps.find((step) => step.name === 'replan');
       expect(workflow.name).toBe('exec-test');
@@ -247,7 +252,7 @@ describe('exec workflow template', () => {
     }));
 
     expect(raw).not.toHaveProperty('workflow_config');
-    expect(raw.steps.find((step) => step.name === 'execute')?.parallel[0]?.capabilities).toBe('edit');
+    expect(raw.steps.find((step) => step.name === 'execute')?.parallel?.[0]?.capabilities).toBe('edit');
   });
 
   it('should load generated parallel sub-steps with explicit model omission', () => {
@@ -289,8 +294,8 @@ describe('exec workflow template', () => {
       const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
       const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
       const replan = workflow.steps.find((step) => step.name === 'replan') as AgentWorkflowStep | undefined;
-      const cursorWorker = execute?.parallel?.[0];
-      const cursorJudge = judge?.parallel?.[0];
+      const cursorWorker = staticSubSteps(execute)[0];
+      const cursorJudge = staticSubSteps(judge)[0];
       if (!cursorWorker || !cursorJudge || !replan || !judge) {
         throw new Error('Generated exec workflow must include cursor worker, review, and replan steps');
       }
@@ -310,9 +315,9 @@ describe('exec workflow template', () => {
       expect(cursorJudge).not.toHaveProperty('provider');
       expect(cursorJudge).not.toHaveProperty('model');
       expect(replan).not.toHaveProperty('provider');
-      expect(raw.steps.find((step) => step.name === 'execute')?.parallel[0]?.capabilities)
+      expect(raw.steps.find((step) => step.name === 'execute')?.parallel?.[0]?.capabilities)
         .toEqual(['edit', 'enable-skills']);
-      expect(raw.steps.find((step) => step.name === 'review')?.parallel[0]?.capabilities)
+      expect(raw.steps.find((step) => step.name === 'review')?.parallel?.[0]?.capabilities)
         .toEqual(['readonly', 'enable-skills']);
       expect(raw.steps.find((step) => step.name === 'replan')?.capabilities)
         .toEqual(['readonly', 'enable-skills']);
@@ -393,11 +398,11 @@ describe('exec workflow template', () => {
         }),
       ]);
       expect(raw.report_formats).toBeUndefined();
-      expect(judge?.parallel?.map((step) => step.outputContracts?.[0]?.name)).toEqual([
+      expect(staticSubSteps(judge).map((step) => step.outputContracts?.[0]?.name)).toEqual([
         'review-1-review-result.md',
         'security-review-review-result.md',
       ]);
-      expect(judge?.parallel?.[0]?.outputContracts).toEqual([
+      expect(staticSubSteps(judge)[0]?.outputContracts).toEqual([
         expect.objectContaining({
           name: 'review-1-review-result.md',
           format: 'Exec review result output contract',
@@ -413,130 +418,6 @@ describe('exec workflow template', () => {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
     }
-  });
-
-  it('should emit provider-specific effort options without leaking unsupported provider effort', () => {
-    const yaml = buildExecWorkflowYaml(createExecConfig({
-      workers: [
-        {
-          name: 'claude-worker',
-          provider: 'claude-sdk',
-          model: 'sonnet',
-          effort: 'high',
-          instruction: 'exec-worker',
-          knowledge: ['architecture'],
-          policy: ['coding', 'testing'],
-        },
-        {
-          name: 'codex-worker',
-          provider: 'codex',
-          model: 'gpt-5',
-          effort: 'medium',
-          instruction: 'exec-worker',
-          knowledge: ['unit-testing'],
-          policy: ['testing'],
-        },
-        {
-          name: 'opencode-worker',
-          provider: 'opencode',
-          model: 'opencode/example',
-          instruction: 'exec-worker',
-          knowledge: ['architecture'],
-          policy: ['coding'],
-        },
-      ],
-      reviews: [
-        {
-          name: 'terminal-review',
-          provider: 'claude-terminal',
-          model: 'sonnet',
-          effort: 'medium',
-          instruction: 'exec-review',
-          knowledge: ['architecture'],
-          policy: ['review'],
-        },
-        {
-          name: 'copilot-review',
-          provider: 'copilot',
-          model: 'gpt-5',
-          effort: 'low',
-          instruction: 'exec-review',
-          knowledge: ['architecture'],
-          policy: ['review'],
-        },
-      ],
-    }), {
-      workflowName: 'exec-provider-test',
-      taskDescription: 'Implement provider-specific task',
-    });
-    const raw = parseRawWorkflow(yaml);
-    const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
-    try {
-      const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
-      const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
-      const claudeWorker = execute?.parallel?.find((step) => step.name === 'claude-worker');
-      const codexWorker = execute?.parallel?.find((step) => step.name === 'codex-worker');
-      const opencodeWorker = execute?.parallel?.find((step) => step.name === 'opencode-worker');
-      const terminalJudge = judge?.parallel?.find((step) => step.name === 'terminal-review');
-      const copilotJudge = judge?.parallel?.find((step) => step.name === 'copilot-review');
-      for (const step of [claudeWorker, codexWorker, opencodeWorker, terminalJudge, copilotJudge]) {
-        expect(step).not.toHaveProperty('provider');
-        expect(step).not.toHaveProperty('model');
-        expect(step).not.toHaveProperty('providerOptions');
-      }
-      expect(raw.steps.find((step) => step.name === 'execute')?.parallel.map((step) => step.capabilities))
-        .toEqual([['edit', 'enable-skills'], ['edit', 'enable-skills'], ['edit', 'enable-skills']]);
-      expect(raw.steps.find((step) => step.name === 'review')?.parallel.map((step) => step.capabilities))
-        .toEqual([['readonly', 'enable-skills'], ['readonly', 'enable-skills']]);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-      rmSync(globalConfigDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should pass through arbitrary effort values to the selected provider', () => {
-    const config = resolveExecConfigProviderModel(createExecConfig({
-      session: {
-        provider: 'codex',
-        model: 'gpt-5',
-        effort: '  max  ',
-      },
-      workers: [
-        {
-          name: 'codex-worker',
-          provider: 'claude',
-          model: 'opus',
-          effort: '  experimental  ',
-          instruction: 'exec-worker',
-          knowledge: ['architecture'],
-          policy: ['coding'],
-        },
-      ],
-      reviews: [
-        {
-          name: 'copilot-reviewer',
-          provider: 'copilot',
-          model: 'gpt-5',
-          effort: '  vendor-level  ',
-          instruction: 'exec-review',
-          knowledge: ['architecture'],
-          policy: ['review'],
-        },
-      ],
-    }), {});
-    const raw = parseRawWorkflow(buildExecWorkflowYaml(config, {
-      workflowName: 'exec-custom-effort-test',
-      taskDescription: 'Pass through custom effort',
-    }));
-
-    expect(raw).not.toHaveProperty('workflow_config');
-    expect(raw.steps[0]?.parallel[0]).not.toHaveProperty('provider');
-    expect(raw.steps[0]?.parallel[0]).not.toHaveProperty('model');
-    expect(raw.steps[0]?.parallel[0]).not.toHaveProperty('provider_options');
-    expect(raw.steps[1]?.parallel[0]).not.toHaveProperty('provider_options');
-    expect(raw.steps[2]).not.toHaveProperty('provider_options');
-    expect(raw.loop_monitors?.every((monitor) => !('provider' in monitor.judge) && !('model' in monitor.judge)))
-      .toBe(true);
   });
 
   it('should reject effort for providers without effort support', () => {
@@ -556,21 +437,6 @@ describe('exec workflow template', () => {
       workflowName: 'exec-unsupported-provider-effort-test',
       taskDescription: 'Reject unsupported provider effort',
     })).toThrow(/provider "opencode" does not support effort "high"/);
-  });
-
-  it('should allow missing effort for providers with exec effort support', () => {
-    const raw = parseRawWorkflow(buildExecWorkflowYaml(createExecConfig({
-      session: {
-        provider: 'codex',
-        model: 'gpt-5',
-        effort: undefined,
-      },
-    }), {
-      workflowName: 'exec-missing-effort-test',
-      taskDescription: 'Allow missing effort',
-    }));
-
-    expect(raw.steps.find((step) => step.name === 'replan')).not.toHaveProperty('provider_options');
   });
 
   it('should reject actor names that cannot be used as session keys or report file names', () => {

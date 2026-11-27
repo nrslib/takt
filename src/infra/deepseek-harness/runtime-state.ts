@@ -3,6 +3,7 @@ import { mkdir, open, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getGlobalConfigDir } from '../config/paths.js';
 import {
+  acknowledgeDeepSeekRuntimeCleanup as acknowledgeDeepSeekRuntimeCleanupLocked,
   assertDeepSeekRuntimeCreationAllowedLocked,
   DEEPSEEK_RUNTIME_BUSY_MESSAGE,
   markDeepSeekCleanupBarrierLocked,
@@ -136,8 +137,8 @@ async function assertDeepSeekRuntimeCreationAllowedUnderQueue(): Promise<void> {
   try {
     await ensureRuntimeDirectories();
     const paths = getDeepSeekRuntimePaths();
-    await withDeepSeekRuntimeStateFileLock(paths.state, () =>
-      assertDeepSeekRuntimeCreationAllowedLocked(paths.state, paths.owners, process.pid));
+    await withDeepSeekRuntimeStateFileLock(paths.state, (lock) =>
+      assertDeepSeekRuntimeCreationAllowedLocked(paths.state, paths.owners, process.pid, lock));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'DEEPSEEK_RUNTIME_BUSY') {
       throw new DeepSeekRuntimeBusyError();
@@ -175,6 +176,25 @@ export async function withDeepSeekRuntimeCreation<T>(
 /** Refuse unconfirmed cleanup and distinguish healthy foreign runtime ownership. */
 export async function assertDeepSeekRuntimeCreationAllowed(): Promise<void> {
   await withRuntimeStateLock(assertDeepSeekRuntimeCreationAllowedUnderQueue);
+}
+
+/** Acknowledge a per-runtime cleanup receipt under the same cross-process state lock. */
+export async function acknowledgeDeepSeekRuntimeCleanup(
+  cleanupConfirmationPath: string,
+): Promise<boolean | undefined | null> {
+  return withRuntimeStateLock(async () => {
+    await ensureRuntimeDirectories();
+    const paths = getDeepSeekRuntimePaths();
+    try {
+      return await acknowledgeDeepSeekRuntimeCleanupLocked(
+        paths.state,
+        paths.owners,
+        cleanupConfirmationPath,
+      );
+    } catch {
+      throw new DeepSeekRuntimeCreationBlockedError();
+    }
+  });
 }
 
 export const deepSeekContinuationMessage = (): string => CONTINUATION_MESSAGE;

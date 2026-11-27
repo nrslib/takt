@@ -71,6 +71,8 @@ function createTask(name: string): TaskInfo {
 function createMockTaskRunner() {
   return {
     getNextTask: vi.fn(() => null),
+    listTaskStateItems: vi.fn(() => []),
+    listTasksForProviderPreflight: vi.fn(() => []),
     claimNextTasks: vi.fn(() => []),
     completeTask: vi.fn(),
     failTask: vi.fn(),

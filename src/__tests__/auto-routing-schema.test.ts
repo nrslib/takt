@@ -81,6 +81,21 @@ function expectParseFailureMessage(result: { success: false; error: Error }, exp
 }
 
 describe('auto_routing config schema', () => {
+  it.each(['router', 'candidate'] as const)(
+    'rejects serializing an omitted %s model into legacy config',
+    (target) => {
+      const raw = ProjectConfigSchema.parse({ auto_routing: createAutoRoutingConfig() });
+      const config = normalizeAutoRoutingConfig(raw.auto_routing)!;
+      if (target === 'router') {
+        config.router.model = undefined;
+      } else {
+        config.candidates[0]!.model = undefined;
+      }
+
+      expect(() => denormalizeAutoRoutingConfig(config)).toThrow(/legacy.*auto_routing.*without a model/);
+    },
+  );
+
   it.each([
     ['global', GlobalConfigSchema],
     ['project', ProjectConfigSchema],

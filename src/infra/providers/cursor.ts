@@ -34,6 +34,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     usePromptTempFile: options.providerOptions?.cursor?.usePromptTempFile,
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
+    callerManagedMcp: options.callerManagedMcp,
   };
 }
 

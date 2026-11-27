@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: Develop the frontend and a backend using CQRS and event sourcing, then test, review, and fix them.
     kind: workflow_call
     call: development-core
     args:

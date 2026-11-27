@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: implement
+description: 計画に従って実装と必要な検証を行い、変更内容と結果を報告する
 capabilities: edit
 tags:
   - coding

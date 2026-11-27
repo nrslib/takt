@@ -1,10 +1,11 @@
 name: takt-default
-description: Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met.
+description: Inject TAKT-specific facets and implementation companions into the shared core review, adjudication, repair, and final requirement check.
 max_steps: 51
 initial_step: develop
 
 steps:
   - name: develop
+    description: Carry TAKT work through planning, testing, review during implementation, and fixes for findings, then confirm requirement fulfillment.
     kind: workflow_call
     call: development-core
     args:
@@ -62,6 +63,7 @@ steps:
         - takt
       testing_knowledge:
         - takt
+        - takt-test-execution
         - architecture
         - unit-testing
         - e2e-testing
@@ -75,6 +77,7 @@ steps:
         - takt
       development_knowledge:
         - takt
+        - takt-test-execution
         - architecture
         - implementation-semantics
     rules:

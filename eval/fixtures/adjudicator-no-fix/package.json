@@ -1,0 +1,9 @@
+{
+  "name": "adjudicator-no-fix-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/check.mjs",
+    "build": "node scripts/compile.mjs"
+  }
+}

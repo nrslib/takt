@@ -1,5 +1,6 @@
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
-import type { OpenCodeTransport, OpenCodeResolvedModel } from './transport.js';
+import type { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { loadManagedSdk } from '../managed-providers/loader.js';
+import type { ManagedOpenCodeTransport, OpenCodeResolvedModel } from './transport.js';
 import { registerModelSelectionSessionCleanup } from './model-selection-session-cleanup.js';
 
 const MODEL_SELECTION_CLEANUP_TIMEOUT_MS = 5_000;
@@ -19,8 +20,20 @@ function readModelRef(value: unknown): ModelRef | undefined {
   };
 }
 
-export function createV1Transport(baseUrl: string): OpenCodeTransport {
-  const client = createOpencodeClient({ baseUrl }) as V1Client & Partial<OpenCodeTransport>;
+export async function createV1Transport(baseUrl: string): Promise<ManagedOpenCodeTransport> {
+  const { modules, directory, stale } = await loadManagedSdk('opencode');
+  const { createOpencodeClient } = modules[0];
+  const client = Object.assign(createOpencodeClient({ baseUrl }), { sdkState: { directory, stale } }) as V1Client & Partial<ManagedOpenCodeTransport>;
+  client.getModelOutputLimit = async (input, options): Promise<number> => {
+    const result = await client.provider.list({ directory: input.directory }, options);
+    if (result.error !== undefined) throw new Error('OpenCode v1 provider metadata lookup failed', { cause: result.error });
+    const provider = result.data?.all?.find((candidate) => candidate.id === input.providerID);
+    const output = provider?.models?.[input.modelID]?.limit?.output;
+    if (typeof output !== 'number' || !Number.isSafeInteger(output) || output <= 0) {
+      throw new Error(`OpenCode v1 output limit is unavailable for ${input.providerID}/${input.modelID}`);
+    }
+    return output;
+  };
   client.resolveModel = async (input, options): Promise<OpenCodeResolvedModel> => {
     if (input.agent !== undefined) {
       const agents = await client.app.agents({ directory: input.directory }, options);
@@ -125,5 +138,5 @@ export function createV1Transport(baseUrl: string): OpenCodeTransport {
     if (model === undefined) throw new Error('OpenCode v1 model selection returned no model');
     return model;
   };
-  return client as OpenCodeTransport;
+  return client as ManagedOpenCodeTransport;
 }

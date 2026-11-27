@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { renderTemplate } from 'faceted-prompting';
+import { renderTemplate } from '#faceted-prompting';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import { parse } from 'yaml';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,7 +26,14 @@ function loadSourceTemplate(name, language, vars) {
   const source = readFileSync(path, 'utf8')
     .replace(/^<!-- markdownlint-disable MD041 -->\r?\n/, '')
     .replace(/<!--[\s\S]*?-->/g, '');
-  return renderTemplate(source, vars);
+  const facetsRoot = join(repoRoot, 'builtins', language, 'facets');
+  const { body } = expandFacetIncludes({
+    body: source,
+    facetsRoots: [facetsRoot],
+    repertoireDirs: [],
+    allowedRoots: [facetsRoot],
+  });
+  return renderTemplate(body, vars);
 }
 
 function withTopicBoundary(prompt, language) {

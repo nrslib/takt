@@ -34,7 +34,7 @@ Normal steps execute in up to 3 phases. Sessions persist across phases.
 | Phase | Purpose | Tools | Condition |
 |-------|---------|-------|-----------|
 | Phase 1 | Main work | Step's allowed_tools | Always |
-| Phase 2 | Report output | Write only | When output_contracts defined |
+| Phase 2 | Report output | Read-only tools | When output_contracts defined |
 | Phase 3 | Status judgment | None (judgment only) | When tag-based rules exist |
 
 ## Rule Evaluation
@@ -109,13 +109,13 @@ Same-named facets are overridden by higher-priority layers. Customize builtins b
 
 ## Test Layers and Execution Gates
 
-TAKT classifies unit, light integration, heavy integration, and E2E tests by the boundaries they actually cross, not by filename or duration. A test that starts a real child process is still heavy integration rather than E2E when it calls a local fake CLI from an internal client instead of entering through a user-facing command.
+TAKT classifies unit, light IT (tests run by `npm run test:it`), heavy IT (tests run by `npm run test:it:heavy`), and E2E tests by the boundaries they actually cross, not by filename or duration. A test that starts a real child process is still heavy IT rather than E2E when it calls a local fake CLI from an internal client instead of entering through a user-facing command.
 
 | Layer | Boundary | Standard Gate |
 |-------|----------|---------------|
 | Unit | Individual function or class; direct dependencies are test doubles, with no real process, Git, filesystem, or workflow engine | `npm test` |
-| Light integration | Real filesystem, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
-| Heavy integration | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
+| light IT | Real filesystem, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
+| heavy IT | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
 | E2E | Runs the application from a user-facing entry point such as the CLI and observes user-visible results | Provider-specific E2E gate |
 
 ### Development Execution Order
@@ -123,12 +123,14 @@ TAKT classifies unit, light integration, heavy integration, and E2E tests by the
 | State | Execution |
 |-------|-----------|
 | During implementation | Repeat the unit gate |
-| After implementation | Run the light integration gate after the unit gate |
+| After implementation | Run the light IT gate after the unit gate |
 | Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself |
-| Added or changed a heavy integration test | Run the changed file yourself as a target instead of waiting for the full heavy suite |
-| Pull request or release | Run the complete light and heavy integration suites |
+| Added or changed a heavy IT test | Run the changed file yourself as a target with `npm test -- <test-file>` |
+| PR CI or release verification | Run the complete light IT and heavy IT suites |
 
-Heavy integration runners use one worker to avoid process, Git, and synchronous I/O contention. Full local execution is serial, while pull-request CI splits heavy parallel integration across six isolated runners and isolates each serial group on its own runner. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, and E2E in order.
+Do not run the full heavy IT suite (`npm run test:it:heavy`) locally unless explicitly instructed by the user. For local heavy IT execution, run only tests added or changed, or tests that directly verify the current change, as targets with `npm test -- <test-file>`. Do not run any other heavy IT.
+
+Pull-request CI runs heavy IT with one worker per runner, splits heavy parallel across six isolated shard runners, and isolates each serial group on its own runner. Heavy parallel tests use `mkdtemp` for isolation and do not contend on shared paths such as repository files, fixed `/tmp` paths, or directory listings directly under `tmpdir()`. Tests whose contention cannot be avoided belong to a serial group. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy IT test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light IT, heavy IT, and E2E in order.
 
 ### Mock Provider
 
@@ -161,13 +163,13 @@ Provider errors propagate through: `AgentResponse.error` → session log → con
 
 ## Session Management
 
-Agent sessions are stored per-cwd and per-provider. Session resume is skipped during worktree/clone execution.
+Agent sessions are stored per-cwd and per-provider. In a worktree clone, steps with `session: continue` and no provider fallback resume a saved session for the same persona, provider, and model within the same run, without using sessions from another clone or the project root. A new attempt through retry, requeue, or instruct starts each persona with a fresh session in the existing clone; later steps resume that session.
 
 When a normal Phase 1 response merely omits `sessionId`, that alone is not a reason to discard the existing session. Paths that are allowed to continue the existing resume context should preserve the old sessionId.
 
 However, when a retry or fallback explicitly runs as a new session and succeeds, a missing `sessionId` must not continue using the old resumed session. The storage layer must be told that the new run produced no sessionId, so the old session is cleared or isolated.
 
-The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is readonly and tool-free. Report retry/fallback must preserve `permissionMode: readonly`, empty tool permission, and provider capability overrides such as turn limits.
+The Report Phase is Phase 2: it uses read-only tools to read necessary parts of the Phase 1 execution record and related files, then summarizes the results. It does not modify files, run tests or builds, or add new investigations, findings, judgments, or plans; TAKT saves the response body. Report retry/fallback preserves `permissionMode: readonly`, read-only tool restrictions, and provider capability overrides such as turn limits. Phase 3 uses no tools.
 
 
 ## Asynchronous Work and Process Boundaries

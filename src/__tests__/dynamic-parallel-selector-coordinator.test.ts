@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
-  AgentResponse,
+  NormalAgentWorkflowStep,
   DynamicParallelSubSteps,
   WorkflowState,
   WorkflowStep,
@@ -13,6 +13,8 @@ import { DynamicParallelSelectionStore } from '../core/workflow/dynamic-parallel
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { makeStep } from './engine-test-helpers.js';
+import { SelectorInputReader } from '../core/workflow/dynamic-parallel/selector-input-reader.js';
+import { buildDynamicSelectorInstruction } from '../core/workflow/dynamic-parallel/selector-input.js';
 
 vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../agents/structured-caller/transport.js')>();
@@ -34,18 +36,19 @@ vi.mock('../core/workflow/instruction/report-reference.js', async (importOrigina
   };
 });
 
-import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
+import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
 function dynamicParallelStep(selection: unknown = { mode: 'replace' }): WorkflowStep {
+  const participant = (name: string): NormalAgentWorkflowStep => ({ name, personaDisplayName: name, instruction: 'review' });
   return makeStep('reviewers', {
     parallel: {
       kind: 'dynamic',
-      fixed: [makeStep('architecture')],
+      fixed: [participant('architecture')],
       pool: [
-        { ...makeStep('frontend'), description: 'frontend review' },
-        { ...makeStep('backend'), description: 'backend review' },
+        { ...participant('frontend'), description: 'frontend review' },
+        { ...participant('backend'), description: 'backend review' },
       ],
       selection: selection as DynamicParallelSubSteps['selection'],
     },
@@ -83,6 +86,10 @@ function dependencies(
     workflowBundleResourceRoot: '/project/.takt/runs/bundle/resources',
     selectorProvider,
   };
+  const inputReader = new SelectorInputReader({ run: vi.fn() });
+  vi.spyOn(inputReader, 'readInputs').mockImplementation(async (reportDirectory, reportNames) => ({
+    reportDirectory, reportNames, changedPaths: ['src/changed.ts'],
+  }));
   return {
     engineOptions,
     failureDir: '/project/.takt/runs/run/failures',
@@ -94,23 +101,77 @@ function dependencies(
     getWorkflowReference: () => 'test-workflow',
     workflowCallPath: [],
     commitSelection: vi.fn().mockResolvedValue(undefined),
-    inputReader: {
-      readInputs: vi.fn().mockImplementation(async (reportDirectory, reportNames) => ({
-        reportDirectory,
-        reportNames,
-        changedPaths: ['src/changed.ts'],
-      })),
-    } as DynamicParallelSelectorCoordinatorDeps['inputReader'],
+    inputReader,
   };
 }
+
+describe('buildDynamicSelectorInstruction', () => {
+  it('should render reviewer roles and optional selection hints for a mixed pool', () => {
+    const instruction = buildDynamicSelectorInstruction({
+      task: 'review changes',
+      reportDirectory: '.takt/reports',
+      reportNames: [],
+      changedPaths: [],
+      pool: [
+        {
+          name: 'backend',
+          personaDisplayName: 'backend',
+          instruction: 'review',
+          description: 'API とドメインロジックをレビューする',
+        },
+        {
+          name: 'security',
+          personaDisplayName: 'security',
+          instruction: 'review',
+          description: '秘密情報と権限にかかわる変更をレビューする',
+          selectionHint: '認証・権限にかかわる変更がある場合に選ぶ',
+        },
+      ],
+      selection: { mode: 'replace' },
+    });
+
+    expect(instruction.split('\n').slice(0, 3)).toEqual([
+      'Select the pool reviewer IDs that are required for this task.',
+      'Return only the requested structured output.',
+      'Each candidate line states what the reviewer does. When a candidate has a "Selection hint", follow it to decide whether to select that candidate; otherwise decide from what the reviewer does.',
+    ]);
+    expect(instruction.split('Candidates:\n')[1]).toBe([
+      '- backend: API とドメインロジックをレビューする',
+      '- security: 秘密情報と権限にかかわる変更をレビューする',
+      '  Selection hint: 認証・権限にかかわる変更がある場合に選ぶ',
+    ].join('\n'));
+  });
+});
 
 describe('DynamicParallelSelectorCoordinator', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
+  it('should redact secrets from selection hints when the selector echoes them in an error', async () => {
+    mockedExecuteAgent.mockRejectedValueOnce(new Error('selector failed: hint-secret'));
+    const coordinator = new DynamicParallelSelectorCoordinator(dependencies());
+    const step = makeStep('reviewers', {
+      parallel: {
+        kind: 'dynamic',
+        fixed: [],
+        pool: [{
+          name: 'security',
+          personaDisplayName: 'security',
+          instruction: 'review',
+          description: 'security review',
+          selectionHint: 'Inspect token=hint-secret when reviewing authentication changes.',
+        }],
+        selection: { mode: 'replace' },
+      },
+    });
+
+    await expect(coordinator.selectParticipants(step, workflowState(), 'review changes'))
+      .rejects.toThrow('selector failed: [REDACTED]');
+  });
+
   it('should send a provider-compatible schema and validate the returned selection', async () => {
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',
@@ -184,7 +245,8 @@ describe('DynamicParallelSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['frontend'], rationale: 'frontend changes are present' },
     });
     const onActivity = vi.fn();
-    const deps = { ...dependencies(), onActivity };
+    const baseDeps = dependencies();
+    const deps = { ...baseDeps, onActivity, engineOptions: { ...baseDeps.engineOptions } };
     const coordinator = new DynamicParallelSelectorCoordinator(deps);
     const step = dynamicParallelStep({
       mode: 'replace',
@@ -250,7 +312,7 @@ describe('DynamicParallelSelectorCoordinator', () => {
   });
 
   it('should run the selector when run-local state has no resume selection', async () => {
-    const response: AgentResponse = {
+    const response: StructuredAgentResponse<Record<string, unknown>> = {
       persona: 'selector',
       status: 'done',
       content: '',

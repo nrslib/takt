@@ -66,6 +66,7 @@ vi.mock('../infra/resources/index.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
+    getResourcesDir: () => pathsState.resourcesRoot,
     getLanguageResourcesDir: (lang: string) => join(pathsState.resourcesRoot, lang),
   };
 });

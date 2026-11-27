@@ -1,10 +1,11 @@
 name: default
-description: Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met.
+description: Default coding workflow using dynamic implementation companions and the shared core review, adjudication, repair, and final requirement check.
 max_steps: 51
 initial_step: develop
 
 steps:
   - name: develop
+    description: Plan, write tests, and implement with dynamic facets based on requirement scenarios, then confirm requirements through review and fixes.
     kind: workflow_call
     call: development-core
     args:

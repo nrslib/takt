@@ -11,10 +11,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const PROJECT_ROOT = resolve('.');
 const SOURCE_CLI = resolve(PROJECT_ROOT, 'src/__tests__/helpers/companion-entrypoint-runner.ts');
-const VITE_NODE = resolve(PROJECT_ROOT, 'node_modules/.bin/vite-node');
 
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf-8' }).trim();
@@ -137,8 +137,9 @@ describe('CT-COMP-12 worktree companion runtime continuity', () => {
       },
     ]));
 
-    const stdout = execFileSync(VITE_NODE, [
-      '--script',
+    const stdout = execFileSync(process.execPath, [
+      '--import',
+      TSX_ESM_LOADER,
       SOURCE_CLI,
       '--task',
       'Implement a valid exported value',

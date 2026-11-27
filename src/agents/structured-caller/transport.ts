@@ -40,6 +40,7 @@ export interface StructuredAgentCallOptions {
   readonly abortSignal?: AbortSignal;
   readonly sessionId?: string;
   readonly executionPhase?: RunAgentOptions['executionPhase'];
+  readonly edit?: RunAgentOptions['edit'];
   readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly failureDir?: RunAgentOptions['failureDir'];
   readonly onStream?: RunAgentOptions['onStream'];
@@ -53,6 +54,7 @@ export interface StructuredAgentCallOptions {
   readonly mcpServers?: RunAgentOptions['mcpServers'];
   readonly mcpAssignment?: RunAgentOptions['mcpAssignment'];
   readonly mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
+  readonly openCodeExternalDirectories?: RunAgentOptions['openCodeExternalDirectories'];
   readonly outputSchema?: RunAgentOptions['outputSchema'];
 }
 
@@ -132,6 +134,9 @@ async function executeFreshAgent(
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
     ...(options.mcpAssignment === undefined ? {} : { mcpAssignment: options.mcpAssignment }),
     ...(options.mcpServerIdentity === undefined ? {} : { mcpServerIdentity: options.mcpServerIdentity }),
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { openCodeExternalDirectories: options.openCodeExternalDirectories }),
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
@@ -144,6 +149,7 @@ async function executeFreshAgent(
     ...(options.workflowMeta === undefined ? {} : { workflowMeta: options.workflowMeta }),
     ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }),
     sessionId: options.sessionId,
+    edit: options.edit,
     ...(options.executionPhase === undefined ? {} : { executionPhase: options.executionPhase }),
   });
 }

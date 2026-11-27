@@ -1,0 +1,26 @@
+{
+  "isolated": true,
+  "historical": false,
+  "files": {
+    "fix-plan/project/reports/.takt-report-internal/executions/index.json": "edbf0676d0fb30cf1157594eeee42f6fe567233d812455259fbaeaf6a8250917",
+    "fix-plan/project/reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md": "ea7bf8074c17621de5d1461082215dac2ee7e04655c5491f0914749e51721170",
+    "fix-plan/project/reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md": "bb1bb5f6db9581537e05ef7788322622544c8b3148418f9226d7edc06cb01176",
+    "fix-plan/project/reports/.takt-report-internal/history/1e866ea80b7034bcdc77d53884c3b95f067569d584ececdc6dd5930942888c9c/writer/review-resolution.md.20261023T060756Z": "ea7bf8074c17621de5d1461082215dac2ee7e04655c5491f0914749e51721170",
+    "fix-plan/project/reports/review-resolution.md": "bb1bb5f6db9581537e05ef7788322622544c8b3148418f9226d7edc06cb01176",
+    "loop-monitor/project/reports/.takt-report-internal/executions/index.json": "5c9f2156145c1b382f3f7fa2541293784e351f2d3e35f0d28a69e17962957ad4",
+    "loop-monitor/project/reports/.takt-report-internal/executions/versions/57175643-365b-4676-a8aa-5404094ebcc5/fix-report.md": "758734e6b97f510be7536473b71add44a805cf4a8a3d59b84a92b352a4711244",
+    "loop-monitor/project/reports/.takt-report-internal/executions/versions/61bd966a-0738-4fe2-bd62-51c465a64d48/fix-report.md": "b8280524e8cdf162f8fde8945ddce6a811f56310de56882ff13ac54a071bf06d",
+    "loop-monitor/project/reports/.takt-report-internal/history/fb320b1204488aaa31930e33c245d3d797779735a699ddfd260089529d5d4008/writer/fix-report.md.20261023T060931Z": "b8280524e8cdf162f8fde8945ddce6a811f56310de56882ff13ac54a071bf06d",
+    "loop-monitor/project/reports/fix-report.md": "758734e6b97f510be7536473b71add44a805cf4a8a3d59b84a92b352a4711244",
+    "fix-plan.invocation.json": "0714b8c56115f3b1692a092c64c63b7cb69ce1c52957a927c1cb1136584352b6",
+    "fix-plan.prompt.md": "81380814818dfb1a6608f10a988249f3fa78f069bed08b8f685b8fdefff7cc82",
+    "fix-plan.output.md": "fd1a54bc2d31caebe4efa10cf5ff25d2901dd76fb9b13308d2e38b0d6500b9a6",
+    "fix-plan.trace.json": "8a1bffd7328038971f52f09249b75cc72cd0ad4ce16ce39595ffaf867f1f89de",
+    "loop-monitor.invocation.json": "c95779996a94e48daac24c898b4ab2e3e40be47af48409131af17b60b093694e",
+    "loop-monitor.prompt.md": "11f266754260da898faf72985e7255b659f193ce4badc9d14fdbff89f3fa307f",
+    "loop-monitor.output.md": "87c895011b92ae3cd9bbe9db04e49438ca7eb2c3bc78270b1b25a66180b4f70f",
+    "loop-monitor.trace.json": "837b26fcb81da816144e42bfa2293e0dd6d4d893d9ab39079b9c30b44365acb0",
+    "summary.json": "407575a76dea77eb49bdf0b477898f195ae6e1260c234817e9f923beec9f72dd",
+    "receipt-verification.json": "574fe4b738783d24b615af74229d36449dd88ae53083fa001caa53c8ade9aa8a"
+  }
+}

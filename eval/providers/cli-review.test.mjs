@@ -505,3 +505,139 @@ test('invalid provider timeout returns an error without creating an isolated fix
   assert.match(result.error, /timeout_ms must be 0/);
   assert.deepEqual(leaked, []);
 });
+
+test('Codex saves JSONL events on initial and resume calls while returning final text', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const recorded = [];
+  const session = createCliReviewSession({ cli: 'codex', model: 'offline', reasoning_effort: 'low' }, {
+    cwd: '/tmp', onEvent: (event) => recorded.push(event),
+    processRunner: async (cli, args) => {
+      invocations.push({ cli, args });
+      writeFileSync(args[args.indexOf('-o') + 1], `answer-${invocations.length}`);
+      return [
+        { type: 'thread.started', thread_id: 'same-thread' },
+        { type: 'item.completed', item: { id: 'command', type: 'command_execution', command: 'head -n 2 record', aggregated_output: 'two lines' } },
+        { type: 'turn.completed' },
+      ].map((event) => JSON.stringify(event)).join('\n');
+    },
+  });
+  assert.equal(await session.run('phase 1'), 'answer-1');
+  assert.equal(await session.run('phase 2'), 'answer-2');
+  assert.equal(recorded.length, 6);
+  for (const { cli, args } of invocations) {
+    assert.equal(cli, 'codex');
+    assert.ok(args.includes('--json'));
+  }
+  assert.deepEqual(invocations[1].args.slice(0, 3), ['exec', 'resume', 'same-thread']);
+  assert.ok(invocations[1].args.includes('sandbox_mode="read-only"'));
+});
+
+test('Claude preserves text output on initial and resume calls without event capture', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const outputs = ['[]\n', '{"type":"result","result":"literal"}\n'];
+  const session = createCliReviewSession({ cli: 'claude', model: 'opus' }, {
+    cwd: '/tmp',
+    processRunner: async (cli, args) => {
+      invocations.push({ cli, args });
+      return outputs[invocations.length - 1];
+    },
+  });
+  assert.equal(await session.run('phase 1'), outputs[0]);
+  assert.equal(await session.run('phase 2'), outputs[1]);
+  for (const { cli, args } of invocations) {
+    assert.equal(cli, 'claude');
+    assert.equal(args.includes('--output-format'), false);
+    assert.equal(args.includes('--verbose'), false);
+    assert.equal(args[args.indexOf('--allowed-tools') + 1], 'Read,Glob,Grep');
+  }
+  const sessionId = invocations[0].args[invocations[0].args.indexOf('--session-id') + 1];
+  assert.equal(invocations[1].args[invocations[1].args.indexOf('--resume') + 1], sessionId);
+});
+
+test('Claude saves stream-json events on initial and resume calls while returning final text', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const recorded = [];
+  const session = createCliReviewSession({ cli: 'claude', model: 'opus' }, {
+    cwd: '/tmp', onEvent: (event) => recorded.push(event),
+    processRunner: async (cli, args) => {
+      invocations.push({ cli, args });
+      return [
+        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', id: 'read', input: { limit: 2 } }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read', content: 'two lines' }] } },
+        { type: 'result', subtype: 'success', result: `answer-${invocations.length}` },
+      ].map((event) => JSON.stringify(event)).join('\n');
+    },
+  });
+  assert.equal(await session.run('phase 1'), 'answer-1');
+  assert.equal(await session.run('phase 2'), 'answer-2');
+  assert.equal(recorded.length, 6);
+  for (const { cli, args } of invocations) {
+    assert.equal(cli, 'claude');
+    assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
+    assert.ok(args.includes('--verbose'));
+    assert.equal(args[args.indexOf('--allowed-tools') + 1], 'Read,Glob,Grep');
+  }
+  const sessionId = invocations[0].args[invocations[0].args.indexOf('--session-id') + 1];
+  assert.equal(invocations[1].args[invocations[1].args.indexOf('--resume') + 1], sessionId);
+});
+
+test('Claude event capture rejects missing, invalid and failed stream results', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  for (const output of [
+    '[]\n',
+    '{"type":"result","result":null}\n',
+    '{"type":"result","result":"failed","is_error":true}\n',
+  ]) {
+    const session = createCliReviewSession({ cli: 'claude', model: 'opus' }, {
+      cwd: '/tmp', onEvent: () => {}, processRunner: async () => output,
+    });
+    await assert.rejects(session.run('phase 2'));
+  }
+});
+
+test('eval sandbox override reaches initial and resumed Codex CLI without changing its default', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const session = createCliReviewSession({ cli: 'codex', model: 'offline', reasoning_effort: 'medium' }, {
+    cwd: '/tmp', sandboxMode: 'workspace-write', onInvocation: (value) => invocations.push(value),
+    processRunner: async (_cli, args) => {
+      writeFileSync(args[args.indexOf('-o') + 1], 'answer');
+      return '{"type":"thread.started","thread_id":"offline"}\n';
+    },
+  });
+  await session.run('first');
+  await session.run('second');
+  assert.equal(invocations[0].args[invocations[0].args.indexOf('-s') + 1], 'workspace-write');
+  assert.ok(invocations[1].args.includes('sandbox_mode="workspace-write"'));
+});
+
+for (const cli of ['claude', 'codex']) {
+  test(`${cli} preserves failed process events and stdout for adjudicator audit`, async () => {
+    const { createCliReviewSession } = await import('./cli-review.mjs');
+    const events = [];
+    const outputs = [];
+    const raw = '{"type":"error","message":"partial"}\n';
+    const session = createCliReviewSession({ cli, model: 'offline', reasoning_effort: 'low' }, {
+      cwd: '/tmp', onEvent: (event) => events.push(event), onOutput: (output) => outputs.push(output),
+      processRunner: async () => { throw Object.assign(new Error('timeout'), { stdout: raw, stderr: 'diagnostic' }); },
+    });
+    await assert.rejects(session.run('prompt'), /timeout/);
+    assert.deepEqual(events, [{ type: 'error', message: 'partial' }]);
+    assert.deepEqual(outputs, [{ stdout: raw, stderr: 'diagnostic' }]);
+  });
+}
+
+test('runProcess preserves partial stdout when a CLI exits unsuccessfully', async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'console.log("partial"); process.exitCode = 7'], {
+    cwd: EVAL_DIR, input: '', timeoutMs: 0,
+  }), (error) => error.stdout === 'partial\n' && error.message.includes('code 7'));
+});
+
+test('runProcess preserves partial event stdout on timeout', { timeout: 10000 }, async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'console.log(JSON.stringify({ type: "turn.started" })); setInterval(() => {}, 1000)'], {
+    cwd: EVAL_DIR, input: '', timeoutMs: 2000,
+  }), (error) => error.message.includes('timed out') && JSON.parse(error.stdout).type === 'turn.started');
+});

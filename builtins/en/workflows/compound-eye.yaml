@@ -5,10 +5,12 @@ max_steps: 10
 initial_step: evaluate
 steps:
   - name: evaluate
+    description: Review the same request in parallel from two independent perspectives and produce a result for each.
     tags:
       - review
     parallel:
       - name: eye1
+        description: Independently review the request and record findings, evidence, risks, and recommended actions in a report.
         tags:
           - review
         edit: false
@@ -45,6 +47,7 @@ steps:
                 - {action}
                 ```
       - name: eye2
+        description: Independently review the request and record findings, evidence, risks, and recommended actions in a report.
         tags:
           - review
         edit: false
@@ -86,6 +89,7 @@ steps:
       - condition: any("done")
         next: synthesize
   - name: synthesize
+    description: Compare agreements, disagreements, and unique findings from both reviews and report a synthesized conclusion.
     tags:
       - review
     edit: false

@@ -3,39 +3,45 @@ import type {
   WorkflowResumePoint,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
-import { getWorkflowReference } from '../workflow-reference.js';
-import { parseWorkflowCallInvocationIdentity } from '../workflow-execution-identity-codec.js';
+import {
+  parseWorkflowCallInvocationIdentity,
+  serializeWorkflowExecutionIdentity,
+} from '../workflow-execution-identity-codec.js';
 import type { ResumeReportSnapshotManifest } from './resume-report-snapshot.js';
 import { parseWorkflowCallNamespaceSegment } from '../workflow-call-namespace.js';
+import { getWorkflowReference } from '../workflow-reference.js';
 
 function logicalCallSiteKey(
-  workflowReference: string,
+  workflow: string,
   stepName: string,
-  workflowCallPath: readonly Pick<WorkflowResumePointEntry, 'workflow_ref' | 'step' | 'kind'>[],
+  workflowCallPath: readonly { workflow: string; step: string; kind: WorkflowResumePointEntry['kind'] }[],
 ): string {
   return JSON.stringify({
-    workflow: workflowReference,
+    workflow,
     step: stepName,
     calls: workflowCallPath.map((entry) => ({
-      workflow: entry.workflow_ref,
+      workflow: entry.workflow,
       step: entry.step,
       kind: entry.kind,
     })),
   });
 }
 
-function invocationLogicalCallSiteKey(identity: string): string | undefined {
+function invocationCallSiteKeys(
+  identity: string,
+  workflowNamesByReference: ReadonlyMap<string, string>,
+): { reference: string; workflowName: string } | undefined {
   const parsed = parseWorkflowCallInvocationIdentity(identity);
   if (parsed === undefined) return undefined;
-  return JSON.stringify({
-    workflow: parsed.workflow,
-    step: parsed.step,
-    calls: parsed.calls.map((call) => ({
-      workflow: call.workflow,
-      step: call.step,
-      kind: call.kind,
-    })),
-  });
+  const workflowName = (reference: string) => workflowNamesByReference.get(reference) ?? reference;
+  return {
+    reference: logicalCallSiteKey(parsed.workflow, parsed.step, parsed.calls),
+    workflowName: logicalCallSiteKey(
+      workflowName(parsed.workflow),
+      parsed.step,
+      parsed.calls.map((call) => ({ ...call, workflow: workflowName(call.workflow) })),
+    ),
+  };
 }
 
 function namespaceSignature(stepName: string, workflowName: string, siteDigest?: string): string {
@@ -48,36 +54,67 @@ function legacyNamespaceSignature(stepName: string, workflowName: string): strin
 
 export class ResumeArtifactOccurrenceIndex {
   readonly #maxByCallSite = new Map<string, number>();
+  readonly #maxByWorkflowNameCallSite = new Map<string, number>();
   readonly #artifactNamespacePaths = new Set<string>();
 
   constructor(
     manifest: ResumeReportSnapshotManifest | undefined,
     sourceResumePoint: WorkflowResumePoint | undefined,
   ) {
+    const workflowNamesByReference = new Map(
+      sourceResumePoint?.stack.map((entry) => [entry.workflow_ref, entry.workflow]),
+    );
+    const invocations = sourceResumePoint?.workflow_call_invocations ?? {};
+    for (const identity of Object.keys(invocations)) {
+      const parsed = parseWorkflowCallInvocationIdentity(identity);
+      const parentCall = parsed === undefined
+        ? undefined
+        : [...parsed.calls].reverse().find((call) => call.kind === 'workflow_call');
+      if (parsed === undefined || parentCall === undefined) continue;
+      const parentIdentity = serializeWorkflowExecutionIdentity({
+        workflow: parentCall.workflow,
+        step: parentCall.step,
+        calls: parsed.calls.slice(0, parsed.calls.indexOf(parentCall)),
+      });
+      const parentRecord = invocations[parentIdentity];
+      if (parentRecord === undefined) continue;
+      const parentNamespace = parseWorkflowCallNamespaceSegment(
+        parentRecord.report_namespace_segment,
+      );
+      if (parentNamespace !== undefined) {
+        workflowNamesByReference.set(parsed.workflow, parentNamespace.workflowName);
+      }
+    }
+    const workflowNameByCallSite = new Map<string, string>();
+    const uniqueCallSitesByWorkflowName = new Map<string, string | null>();
     const callSitesByNamespace = new Map<string, string>();
     const callSitesBySignature = new Map<string, Set<string>>();
     const callSitesByLegacySignature = new Map<string, Set<string>>();
-    for (const [identity, record] of Object.entries(
-      sourceResumePoint?.workflow_call_invocations ?? {},
-    )) {
-      const callSite = invocationLogicalCallSiteKey(identity);
+    for (const [identity, record] of Object.entries(invocations)) {
+      const keys = invocationCallSiteKeys(identity, workflowNamesByReference);
       const namespace = parseWorkflowCallNamespaceSegment(record.report_namespace_segment);
-      if (callSite === undefined || namespace === undefined || namespace.iteration === '*') continue;
-      callSitesByNamespace.set(record.report_namespace_segment, callSite);
+      if (keys === undefined || namespace === undefined || namespace.iteration === '*') continue;
+      workflowNameByCallSite.set(keys.reference, keys.workflowName);
+      const uniqueCallSite = uniqueCallSitesByWorkflowName.get(keys.workflowName);
+      uniqueCallSitesByWorkflowName.set(
+        keys.workflowName,
+        uniqueCallSite === undefined || uniqueCallSite === keys.reference ? keys.reference : null,
+      );
+      callSitesByNamespace.set(record.report_namespace_segment, keys.reference);
       const signature = namespaceSignature(
         namespace.stepName,
         namespace.workflowName,
         namespace.siteDigest,
       );
       const callSites = callSitesBySignature.get(signature) ?? new Set<string>();
-      callSites.add(callSite);
+      callSites.add(keys.reference);
       callSitesBySignature.set(signature, callSites);
       const legacySignature = legacyNamespaceSignature(
         namespace.stepName,
         namespace.workflowName,
       );
       const legacyCallSites = callSitesByLegacySignature.get(legacySignature) ?? new Set<string>();
-      legacyCallSites.add(callSite);
+      legacyCallSites.add(keys.reference);
       callSitesByLegacySignature.set(legacySignature, legacyCallSites);
     }
 
@@ -110,6 +147,13 @@ export class ResumeArtifactOccurrenceIndex {
           callSite,
           Math.max(this.#maxByCallSite.get(callSite) ?? 0, parsed.iteration),
         );
+        const workflowNameCallSite = workflowNameByCallSite.get(callSite)!;
+        if (uniqueCallSitesByWorkflowName.get(workflowNameCallSite) === callSite) {
+          this.#maxByWorkflowNameCallSite.set(
+            workflowNameCallSite,
+            Math.max(this.#maxByWorkflowNameCallSite.get(workflowNameCallSite) ?? 0, parsed.iteration),
+          );
+        }
       }
     }
   }
@@ -119,8 +163,14 @@ export class ResumeArtifactOccurrenceIndex {
     stepName: string,
     workflowCallPath: readonly WorkflowResumePointEntry[],
   ): number | undefined {
-    return this.#maxByCallSite.get(logicalCallSiteKey(
+    const exact = this.#maxByCallSite.get(logicalCallSiteKey(
       getWorkflowReference(workflow),
+      stepName,
+      workflowCallPath.map((entry) => ({ ...entry, workflow: entry.workflow_ref })),
+    ));
+    if (exact !== undefined) return exact;
+    return this.#maxByWorkflowNameCallSite.get(logicalCallSiteKey(
+      workflow.name,
       stepName,
       workflowCallPath,
     ));

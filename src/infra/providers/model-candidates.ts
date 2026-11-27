@@ -19,6 +19,7 @@ const EXEC_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = 
   // There is no provider-independent model name that is safe to suggest here.
   pi: [],
   'deepseek-harness': [DEEPSEEK_HARNESS_DEFAULT_MODEL],
+  devin: ['swe-2-max', 'swe-2-high', 'swe-2-medium'],
   mock: ['mock-model'],
 };
 

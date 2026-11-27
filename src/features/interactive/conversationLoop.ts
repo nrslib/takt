@@ -3,25 +3,24 @@
  *
  * Extracts the common patterns:
  * - Provider/session initialization
- * - Session state display/clear
  * - Conversation loop (slash commands, AI messaging, /go summary)
  */
 
 import chalk from 'chalk';
 import {
-  takeSessionState,
   updatePersonaSession,
 } from '../../infra/config/index.js';
 import {
   createLogger,
   getErrorMessage,
-  hasInteractiveTerminal,
   sanitizeTerminalText,
 } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
+import { InteractiveSessionRecords } from './interactiveSessionRecords.js';
+import { interactiveSessionExists } from './interactiveSessionExistence.js';
 import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
 import {
   resolveFormalSpecCommandAvailability,
@@ -37,7 +36,6 @@ import {
   type PostSummaryAction,
   buildSummaryPrompt,
   selectPostSummaryAction,
-  formatSessionStatus,
 } from './interactive.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
@@ -45,13 +43,14 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { resolvePreviousOrder } from './conversationPlan.js';
-import { prependInitialPromptContext } from './promptSections.js';
+import { prependInitialPromptContext, type InlineUtteranceSource } from './promptSections.js';
 import { UndeliveredMessages } from './undeliveredMessages.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import { runTellCommand } from './tellCommand.js';
 import { resolveIssueCommand } from './issueCommand.js';
 import type { ConversationDispatchOutcome } from './actionDispatcher.js';
+import { createOperationMessage, prependOperationResults, runConversationOperation } from './operationFeedback.js';
 import { runAssistantRetryCommand } from './assistantRetryCommand.js';
 import {
   buildInteractiveResultWithAttachments,
@@ -70,55 +69,27 @@ import {
   buildFormalSpecInterpretationPrompt,
   buildFormalSpecInterpretationSystemPrompt,
   getFormalSpecVerificationArtifactPaths,
+  getFormalSpecRetainedArtifactsMessage,
 } from './formalSpecPrompts.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
 const log = createLogger('conversation-loop');
 
-function resolveGoSummaryInput(
-  history: ConversationMessage[],
-  hasSessionContext: boolean,
-  hasSourceContext: boolean,
-  inlineTaskText: string,
-): { summaryHistory: ConversationMessage[]; userNote: string } {
-  if (history.length > 0 || hasSessionContext || hasSourceContext || !inlineTaskText) {
-    return {
-      summaryHistory: history,
-      userNote: inlineTaskText,
-    };
-  }
-
-  return {
-    summaryHistory: [{ role: 'user', content: inlineTaskText }],
-    userNote: '',
-  };
-}
-
 function findLatestAssistantMessage(history: ConversationMessage[]): ConversationMessage | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
-    if (message?.role === 'assistant') {
+    if (message?.role === 'assistant' && !message.operationResult) {
       return message;
     }
   }
   return undefined;
 }
 
-export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = takeSessionState(cwd);
-  if (hasInteractiveTerminal() || !sessionState) {
-    return;
-  }
-
-  const statusLabel = formatSessionStatus(sessionState, lang);
-  info(statusLabel);
-  blankLine();
-}
-
 export type { PostSummaryAction } from './interactive.js';
 
 export interface SummaryPromptOptions {
+  readonly userNoteSource?: InlineUtteranceSource;
   readonly history: ConversationMessage[];
   readonly hasSession: boolean;
   readonly lang: 'en' | 'ja';
@@ -162,7 +133,7 @@ export interface ConversationStrategy {
   /** Timeout for Quint model checking and Alloy verification stages, in seconds. */
   modelCheckTimeoutSeconds: number;
   /** Resolve prompt configuration after the user selects another session. */
-  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration>;
+  resolveResumedSessionConfiguration?: () => Promise<ConversationPromptConfiguration | null>;
   /** Resolve the prompt again immediately before a regular turn or /go summary. */
   resolveCurrentPromptConfiguration?: () => ConversationPromptConfiguration | Promise<ConversationPromptConfiguration>;
   /** Use the current conversation system prompt as /go's system prompt. */
@@ -229,7 +200,10 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
+  const records = new InteractiveSessionRecords(cwd);
+  await records.clean((provider, sessionId) => interactiveSessionExists(cwd, provider, sessionId));
   const initialUserMessage = initialInput?.userMessage;
+  let shouldSendSeededContext = initialUserMessage !== undefined && ctx.sessionId === undefined;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
   const undeliveredMessages = new UndeliveredMessages();
   const history: ConversationMessage[] = initialUserMessage
@@ -240,6 +214,8 @@ export async function runConversationLoop(
   let referenceRunSlug = strategy.initialReferenceRunSlug;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
+  let unidentifiedInputs: string[] = [];
+  let selectedResumePending = false;
   let activePromptConfiguration: ConversationPromptConfiguration = {
     systemPrompt: strategy.systemPrompt,
     formalSpec: strategy.formalSpec,
@@ -301,6 +277,7 @@ export async function runConversationLoop(
         persistSession?: boolean | (() => boolean);
         onAbort?: () => void;
         commitSession?: boolean;
+        onSessionResumeFailure?: () => void;
       } = {},
       callSessionId = sessionId,
     ): Promise<ConversationAICall> {
@@ -336,6 +313,7 @@ export async function runConversationLoop(
             : { readonlyFileReadPaths: callOptions.readonlyFileReadPaths }),
           ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
           ...(callOptions.onAbort === undefined ? {} : { onAbort: callOptions.onAbort }),
+          ...(callOptions.onSessionResumeFailure === undefined ? {} : { onSessionResumeFailure: callOptions.onSessionResumeFailure }),
         },
       );
       if (callOptions.commitSession !== false) {
@@ -368,7 +346,7 @@ export async function runConversationLoop(
       while (true) {
         const selectedAction = actionSelector
           ? await actionSelector(normalized.task, ctx.lang)
-          : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
+          : await selectPostSummaryAction(normalized.task, ui.proposed, ui, ctx.lang);
         if (selectedAction === 'continue' || selectedAction === null) {
           if (selectedAction === 'continue' && source === 'go') {
             history.push({ role: 'assistant', content: normalized.task });
@@ -382,9 +360,12 @@ export async function runConversationLoop(
           { action: selectedAction, task: normalized.task, ...sourceMetadata },
           normalized.attachments,
         );
-        const dispatchOutcome = await strategy.dispatch?.(result);
-        if (dispatchOutcome?.kind === 'cancelled') {
-          continue;
+        const dispatch = strategy.dispatch;
+        if (dispatch !== undefined) {
+          const dispatchOutcome = await runConversationOperation(result.action, ctx.lang, () => dispatch(result));
+          history.push(createOperationMessage(dispatchOutcome.notice));
+          info(dispatchOutcome.notice);
+          return null;
         }
         return result;
       }
@@ -451,6 +432,7 @@ export async function runConversationLoop(
             updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
           }
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           history.push({ role: 'assistant', content: generated.content });
           info(verification.message ?? 'Formal specification verification failed.');
           blankLine();
@@ -459,7 +441,7 @@ export async function runConversationLoop(
 
         const interpretationCall = await callConversationAI(
           buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang),
-          buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+          buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
           ['Read'],
           {
             permissionMode: 'readonly',
@@ -487,12 +469,18 @@ export async function runConversationLoop(
           updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
         }
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history.push(
           { role: 'assistant', content: generated.content },
           { role: 'assistant', content: interpreted.content },
         );
         blankLine();
       } finally {
+        const retainedArtifactsMessage = getFormalSpecRetainedArtifactsMessage(verification, ctx.lang);
+        if (retainedArtifactsMessage !== undefined) {
+          info(sanitizeTerminalText(retainedArtifactsMessage));
+          blankLine();
+        }
         cleanupFormalSpecVerificationArtifacts(verification);
       }
     }
@@ -533,6 +521,13 @@ export async function runConversationLoop(
           info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
           continue;
         }
+        let recordedSessionId = sessionId;
+        let inputRevision: number | undefined;
+        if (recordedSessionId === undefined) {
+          unidentifiedInputs = [...unidentifiedInputs, input].slice(-3);
+        } else {
+          inputRevision = records.recordInput({ provider: ctx.providerType, sessionId: recordedSessionId, input });
+        }
         if (strategy.resolveCurrentPromptConfiguration !== undefined) {
           await refreshPromptConfiguration();
         }
@@ -546,9 +541,14 @@ export async function runConversationLoop(
         info(getLabel('interactive.ui.thinking', ctx.lang));
 
         const promptWithTransform = prependInitialPromptContext(
-          strategy.transformPrompt(delivery.prompt, sourceContext),
-          shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+          prependInitialPromptContext(
+            prependOperationResults(strategy.transformPrompt(delivery.prompt, sourceContext), history, ctx.lang),
+            shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+          ),
+          shouldSendSeededContext ? initialUserMessage : undefined,
         );
+        let resumeFailed = false;
+        const selectedSessionId = selectedResumePending ? sessionId : undefined;
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -557,19 +557,45 @@ export async function runConversationLoop(
             commitSession: false,
             persistSession: () => !delivery.interrupted,
             onAbort: () => delivery.interrupt(),
+            ...(selectedSessionId === undefined ? {} : { onSessionResumeFailure: () => {
+              if (delivery.interrupted || !selectedResumePending || sessionId !== selectedSessionId) return;
+              resumeFailed = true;
+              records.discard({ provider: ctx.providerType, sessionId: selectedSessionId });
+              unidentifiedInputs = [...unidentifiedInputs, input].slice(-3);
+              info(getLabel('interactive.resumeSessionFailed', ctx.lang));
+            } }),
           },
         );
         if (delivery.interrupted) {
           continue;
         }
         sessionId = newSessionId;
+        selectedResumePending = false;
+        if (sessionId !== undefined && recordedSessionId !== sessionId) {
+          recordedSessionId = sessionId;
+          if (unidentifiedInputs.length > 0) {
+            for (const pendingInput of unidentifiedInputs) {
+              inputRevision = records.recordInput({ provider: ctx.providerType, sessionId, input: pendingInput });
+            }
+            unidentifiedInputs = [];
+          } else {
+            inputRevision = records.recordInput({ provider: ctx.providerType, sessionId, input });
+          }
+        }
         if (result) {
           shouldSendInitialPromptContext = false;
+          shouldSendSeededContext = false;
           if (result.referenceRunSlug !== undefined) {
             referenceRunSlug = result.referenceRunSlug;
           }
           if (!result.success) {
             delivery.fail();
+            if (resumeFailed) {
+              error(result.content);
+              blankLine();
+              history.pop();
+              continue;
+            }
             error(result.content);
             blankLine();
             history.pop();
@@ -577,6 +603,9 @@ export async function runConversationLoop(
           }
           delivery.complete();
           history.push({ role: 'assistant', content: result.content });
+          if (sessionId !== undefined && inputRevision !== undefined) {
+            records.recordResponse({ provider: ctx.providerType, sessionId, inputRevision, response: result.content });
+          }
           blankLine();
         } else {
           delivery.fail();
@@ -611,7 +640,7 @@ export async function runConversationLoop(
               lang: ctx.lang,
               command: 'retry',
               inlineText: match.text,
-              history,
+              history: [...history],
               sessionContext: { ...ctx, sessionId },
               workflowContext,
               ...(sourceContext === undefined ? {} : { sourceContext }),
@@ -624,11 +653,13 @@ export async function runConversationLoop(
               noTranscriptNote: noTranscript,
             });
             info(notice);
+            history.push(createOperationMessage(notice));
             continue;
           }
           const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
           if (retryOrder === undefined) {
             info(ui.retryNoOrder);
+            history.push(createOperationMessage(ui.retryNoOrder));
             continue;
           }
           log.info('Retry command — using previous order.md');
@@ -647,7 +678,7 @@ export async function runConversationLoop(
             lang: ctx.lang,
             command: 'requeue',
             inlineText: match.text,
-            history,
+            history: [...history],
             sessionContext: { ...ctx, sessionId },
             workflowContext,
             ...(sourceContext === undefined ? {} : { sourceContext }),
@@ -660,6 +691,7 @@ export async function runConversationLoop(
             noTranscriptNote: noTranscript,
           });
           info(notice);
+          history.push(createOperationMessage(notice));
           continue;
         }
 
@@ -667,15 +699,10 @@ export async function runConversationLoop(
           if (strategy.resolveCurrentPromptConfiguration !== undefined) {
             await refreshPromptConfiguration();
           }
-          const { summaryHistory, userNote } = resolveGoSummaryInput(
-            history,
-            !!sessionId,
-            !!sourceContext,
-            match.text,
-          );
-          let summaryPrompt = strategy.summaryPromptBuilder
+          const userNote = match.text;
+          const summaryPrompt = strategy.summaryPromptBuilder
             ? strategy.summaryPromptBuilder({
-              history: summaryHistory,
+              history,
               hasSession: !!sessionId,
               lang: ctx.lang,
               noTranscriptNote: noTranscript,
@@ -688,7 +715,7 @@ export async function runConversationLoop(
               userNote,
             })
             : buildSummaryPrompt(
-              summaryHistory,
+              history,
               !!sessionId,
               ctx.lang,
               noTranscript,
@@ -698,13 +725,11 @@ export async function runConversationLoop(
               strategy.summaryPromptContext,
               activePromptConfiguration.formalSpec,
               activePromptConfiguration.formalSpecComments ?? true,
+              userNote,
             );
           if (!summaryPrompt) {
             info(ui.noConversation);
             continue;
-          }
-          if (userNote && !strategy.summaryPromptBuilder) {
-            summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
           }
           process.stdin.pause();
           info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
@@ -788,25 +813,40 @@ export async function runConversationLoop(
             cwd,
             lang: ctx.lang,
             inlineText: match.text,
-            history,
+            history: [...history],
             sessionContext: ctx,
             ...(referenceRunSlug === undefined ? {} : { preferredRunSlug: referenceRunSlug }),
           });
           info(notice);
+          history.push(createOperationMessage(notice));
           continue;
         }
 
         case SlashCommand.Resume: {
-          const selectedId = await selectRecentSession(cwd, ctx.lang);
+          const selectedId = await selectRecentSession(cwd, ctx.lang, ctx.providerType, records);
           if (selectedId) {
-            sessionId = selectedId;
+            if (await interactiveSessionExists(cwd, ctx.providerType, selectedId) === false) {
+              records.discard({ provider: ctx.providerType, sessionId: selectedId });
+              sessionId = undefined;
+              unidentifiedInputs = [];
+              selectedResumePending = false;
+              info(getLabel('interactive.resumeSessionFailed', ctx.lang));
+              continue;
+            }
             if (strategy.resolveResumedSessionConfiguration) {
-              activePromptConfiguration = await strategy.resolveResumedSessionConfiguration();
+              const configuration = await strategy.resolveResumedSessionConfiguration();
+              if (configuration === null) {
+                continue;
+              }
+              activePromptConfiguration = configuration;
               commandAvailability = resolveFormalSpecCommandAvailability(
                 commandAvailability,
                 activePromptConfiguration.formalSpec,
               );
             }
+            sessionId = selectedId;
+            unidentifiedInputs = [];
+            selectedResumePending = true;
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;

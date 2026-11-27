@@ -1,0 +1,344 @@
+ja:
+  lang: ja
+  expectedQuestionType: choice
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  tasks: []
+  user: |-
+    部署がまだ決まっていない作業のログを、今は画面にメモするだけなので、画面を閉じると集計に使えなくなる。
+    部署に紐付かない作業ログを記録するAPIを足し、CSVでも取り出せるようにしたい。
+    取り込んだ後は、集計処理が未処理分から続けられること。
+    CSVの対応経路は、作業量や運用への影響を見て決めたい。
+  readResults:
+    - tool: takt_list_goals
+      arguments:
+        cwd: /workspace/project
+      result:
+        goals: []
+        collection: goals
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments: {}
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: rg -n 'UnassignedLogStore|unassigned|department|importedAt|exportCsv|readSelection|encodeCsv|nightlyCsv|Snapshot|CSV|import-csv' src docs
+        description: 作業ログの保存とCSV出力の入口を探す
+      result: |-
+        src/storage/unassigned-log-store.ts:14:export class UnassignedLogStore {
+        src/storage/unassigned-log-store.ts:19:  async create(input: WorkLogInput): Promise<WorkLog>
+        src/storage/unassigned-log-store.ts:40:  async listPending(cursor: string | null): Promise<LogPage>
+        src/storage/unassigned-log-store.ts:72:  async markImported(ids: string[]): Promise<void>
+        src/storage/work-log.ts:8:  departmentId: string | null;
+        src/storage/work-log.ts:15:  importedAt: string | null;
+        src/http/log-routes.ts:12:router.get('/unassigned-logs', listUnassignedLogs);
+        src/http/log-routes.ts:13:router.delete('/unassigned-logs/:id', removeUnassignedLog);
+        src/http/log-routes.ts:14:router.post('/departments/:id/logs', createDepartmentLog);
+        src/ui/log-table.ts:84:const csv = await exportCsv({ departmentId: selection.departmentId });
+        src/exports/csv-download.ts:21:export async function exportCsv(selection: LogSelection)
+        src/exports/csv-download.ts:27:  return encodeCsv(await repository.readSelection(selection));
+        src/jobs/nightly-csv.ts:17:export async function nightlyCsv(config: ExportConfig)
+        src/jobs/nightly-csv.ts:21:  for (const department of await departments.list()) {
+        src/jobs/nightly-csv.ts:22:    await writeDepartmentSnapshot(department.id, config.destination);
+        docs/exports.md:12:画面のCSVダウンロードは選択中の一覧をファイルにする。
+        docs/exports.md:20:夜間CSVは画面を開かない利用者の定期集計にも使われる。
+        docs/exports.md:26:どちらのCSV出力も exports.csv.enabled に従う。
+        docs/import.md:9:CSVの取り込みは import-csv コマンドで行う。
+    - tool: Bash
+      arguments:
+        command: sed -n '1,120p' src/storage/unassigned-log-store.ts src/http/log-routes.ts src/exports/csv-download.ts src/storage/log-repository.ts src/jobs/nightly-csv.ts
+        description: 部署なしの保存経路と二つのCSV出力経路を読む
+      result: |-
+        // src/storage/unassigned-log-store.ts
+        export class UnassignedLogStore {
+          async create(input: WorkLogInput): Promise<WorkLog> {
+            return this.files.append({ ...input, departmentId: null, importedAt: null });
+          }
+          async listPending(cursor: string | null): Promise<LogPage> {
+            return this.files.page({ cursor, imported: false });
+          }
+          async markImported(ids: string[]): Promise<void> {
+            await this.files.update(ids, { importedAt: this.clock.now() });
+          }
+        }
+        // src/http/log-routes.ts
+        router.get('/unassigned-logs', listUnassignedLogs);
+        router.delete('/unassigned-logs/:id', removeUnassignedLog);
+        router.post('/departments/:id/logs', createDepartmentLog);
+        // src/exports/csv-download.ts
+        export async function exportCsv(selection: LogSelection) {
+          if (!config.exports.csv.enabled) throw new ExportDisabledError();
+          const rows = await repository.readSelection(selection);
+          return encodeCsv(rows);
+        }
+        // src/storage/log-repository.ts
+        async readSelection(selection: LogSelection) {
+          return selection.departmentId === null
+            ? this.unassigned.list(selection)
+            : this.departments.listLogs(selection.departmentId, selection);
+        }
+        // src/jobs/nightly-csv.ts
+        export async function nightlyCsv(config: ExportConfig) {
+          if (!config.csv.enabled) return;
+          for (const department of await departments.list()) {
+            await writeDepartmentSnapshot(department.id, config.destination);
+          }
+        }
+        async function writeDepartmentSnapshot(departmentId: string, destination: string) {
+          const rows = await repository.readSelection({ departmentId });
+          await snapshots.write(destination, departmentId, encodeCsv(rows));
+        }
+    - tool: Bash
+      arguments:
+        command: rg -n 'Imported|import|aggregation|aggregate|department|UnassignedLogStore|unassigned|exports.csv|CSV|夜間|認証情報|取り込み|Job-only|Credentials' src/import src/aggregation src/http src/__tests__ docs
+        description: 取り込み後の集計再開と設定・既存テストを確認する
+      result: |-
+        src/import/import-csv.ts:33:const target = resolveImportTarget(row.departmentId);
+        src/import/import-csv.ts:47:await target.saveImported(row);
+        src/import/import-csv.ts:52:if (target.departmentId !== null) await enqueueAggregation(target.departmentId);
+        src/import/unassigned-target.ts:18:await store.markImported([row.id]);
+        src/aggregation/events.ts:6:type AggregationReady = { kind: 'aggregation_ready'; departmentId: string; cursor: string };
+        src/aggregation/worker.ts:28:const state = await checkpoints.load(event.departmentId);
+        src/aggregation/worker.ts:35:await aggregateFrom(state.cursor);
+        src/http/log-routes.ts:12:router.get('/unassigned-logs', listUnassignedLogs);
+        src/__tests__/unassigned-log-store.test.ts:21:it('preserves logs with a null department');
+        src/__tests__/csv-download.test.ts:48:it('exports the unassigned selection');
+        src/__tests__/nightly-csv.test.ts:37:it('writes a snapshot for each department');
+        src/__tests__/import-csv.test.ts:66:it('resumes aggregation for a department import');
+        src/__tests__/import-csv.test.ts:89:it('saves imported unassigned rows');
+        docs/exports.md:26:どちらのCSV出力も exports.csv.enabled に従う。
+        docs/exports.md:31:夜間ジョブだけを使う構成には、画面からのダウンロード操作はない。
+        docs/exports.md:39:夜間出力先は既存のジョブ設定で解決する。認証情報は出力内容に含めない。
+        docs/import.md:22:取り込み済みIDは再実行時に重複保存しない。
+    - tool: Agent
+      arguments:
+        subagent_type: Explore
+        description: 作業ログからCSVと集計へ至る経路を調べる
+        prompt: |-
+          /workspace/project の保存、API、CSVダウンロード、夜間CSV、取り込み、集計再開を読み取り専用で調査する。
+          部署に紐付かないログについて、既存の経路と欠けている接続をファイルと行番号付きで報告する。
+          設定、呼び出し元、関連テストも確認する。コードは変更しない。
+      result: |-
+        調査担当の報告。以下はコードと資料を読んだ結果であり、人の追加依頼ではない。
+
+        1. 保存モデルと作成元
+        src/storage/work-log.ts:5-18 の WorkLog は departmentId を string | null として持つ。ID、発生時刻、作業種別、所要時間、本文、取り込み時刻を保存する。部署が未定のログをメモリだけに保持する必要はなく、永続化の型は既に存在する。src/storage/unassigned-log-store.ts:14-88 は create、list、listPending、get、remove、markImported を実装している。create は departmentId を null としてファイルへ追記し、同じファイルロックとID採番を通常の部署ログと共有する。
+        本番のHTTPルートを確認すると、部署なしログの一覧と削除はあるが、作成の登録はない。src/http/log-routes.ts:12-18 の POST は /departments/:id/logs だけであり、検証器も部署IDを必須にする。以前の画面内メモは src/ui/draft-log.ts:11-42 にあり、画面状態を更新するだけで UnassignedLogStore.create を呼ばない。テスト以外の create の呼び出しは見つからない。
+
+        2. 画面の一覧とダウンロード
+        src/ui/log-table.ts:35-92 は「部署未定」の一覧を departmentId: null で読み出す。部署の選択を切り替えても行IDは維持され、CSVボタンは同じ選択条件を src/exports/csv-download.ts:21-35 に渡す。src/storage/log-repository.ts:44-62 は null のとき UnassignedLogStore を読むため、ログが保存されれば画面に表示でき、現在のCSVダウンロードにも含まれる。
+        CSVの列は id、department_id、occurred_at、duration、body で共通である。部署なしの department_id は空欄として書く。引用符、改行、カンマのエスケープは src/exports/csv-codec.ts:18-73 に集約されている。CSV生成器は部署名の存在を要求しない。文字コードも通常の部署ログと同じである。既存のダウンロード経路に別形式を追加する必要は見つからない。
+
+        3. 夜間CSVの列挙
+        src/jobs/nightly-csv.ts:17-41 は登録済み部署の一覧を取得し、その部署ごとにスナップショットを出力する。保存済みの部署なしログは部署一覧の要素ではないため、このループでは読まれない。writeDepartmentSnapshot の引数は string であり、null の対象を表せない。保存自体に成功していても、夜間処理の出力ディレクトリには部署なしログのCSVは現れない。
+        スナップショットの書き込みは一時ファイルからの置換で行われ、通常のCSVと同じ encodeCsv を使う。出力時刻、既存ファイルの置換、失敗時の記録は src/exports/snapshot-writer.ts:12-64 が担う。部署なしログ用に同じ仕組みを呼ぶことはできるが、現状の呼び出し元にその経路はない。画面からダウンロードしたCSVが夜間出力先へ自動でコピーされる処理もない。
+
+        4. 配布形態と設定
+        docs/exports.md:12-39 は、画面でその都度CSVを落とす使い方と、夜間ジョブのCSVを定期集計へ渡す使い方を説明している。後者の構成は画面を開かずに使われており、夜間出力がファイル取得の経路になっている。両方とも既存の exports.csv.enabled に従う。夜間ジョブは全体の実行設定に加え、このフラグを確認してから出力する。出力先は既存設定で解決され、今回その値を新たに決める必要はない。
+        CSVの有効化が部署なしログの夜間出力まで含むという記述は現行資料にはない。現在は対象の部署一覧を前提にした説明になっている。画面ダウンロードと夜間ジョブは別々の入口で、一方を呼んでも他方は実行されない。夜間出力を増やす場合は、定期集計の入力ファイルも増えることになる。既存の部署別ファイル名と列形式は維持できる。
+
+        5. 取り込みと重複の扱い
+        src/import/import-csv.ts:21-63 はCSVを読み、department_id が空なら src/import/unassigned-target.ts の保存先を選ぶ。行IDを既存レコードと照合するので、同じCSVを二度取り込んでもログが増え続ける構造ではない。src/import/unassigned-target.ts:12-25 は保存と markImported を行い、ログを取り込んだ事実を残す。通常部署の取り込みも同じID照合を利用する。
+        CSVダウンロードと夜間CSVはいずれも同じ取り込み器で読める。現行のスキーマに出力元を識別する新しい列は不要である。部署なしログの取り込みを弾く検証はなく、取り込みが保存まで到達することは既存テストでも確認されている。ただし「保存された」と「集計が再開された」は異なる状態であり、現在のテストは前者を確認している。
+
+        6. 集計再開の接続
+        通常部署の取り込み後は src/import/import-csv.ts:52 から enqueueAggregation を呼ぶ。この呼び出しは target.departmentId !== null の分岐内にある。部署なしログの取り込みでは分岐を通らず、集計開始イベントは積まれない。src/aggregation/events.ts:6-12 の aggregation_ready は departmentId: string を必須とし、src/aggregation/worker.ts:28-40 もそのIDでチェックポイントを読む。
+        部署なしログにも処理済みカーソルを保存する型は src/aggregation/checkpoints.ts:9-32 にある。保存と再読込はできるが、取り込みからworkerへその対象を伝える接続がない。部署IDを架空の値で埋める処理は存在しない。再開には取り込み側、イベント、workerの対象解決を一貫させる必要がある。出力経路だけを直しても、取り込み後の集計再開は完了しない。
+
+        7. APIと権限の境界
+        通常のログ作成APIは src/http/create-log.ts:15-56 で入力の形、作業種別、所要時間を検証してから保存する。認証済み利用者の所属組織はHTTP境界で解決される。部署なしログのストアも組織単位に生成されるので、部署がないことを組織がないことに置き換える必要はない。既存の一覧・削除もこの組織境界の内側で動く。
+        作成の公開口を追加する場合は通常の作成と同じ入力検証を使える。CSVのダウンロード権限は作成権限と別で、現在のCSVルートで確認される。夜間ジョブは既存ジョブの実行主体で動く。今回の調査では権限不足や設定値の欠落によってCSV経路が止まっている証拠はない。問題は対象を列挙する実装の違いである。
+
+        8. 関連テストと未接続の範囲
+        src/__tests__/unassigned-log-store.test.ts は部署なしログの保存、ページング、削除、取り込み済み状態を確認する。csv-download.test.ts:48-71 は null の選択でCSVが作られ、空の部署列でもIDと本文が維持されることを確認する。nightly-csv.test.ts:37-66 は登録部署のファイルだけを検査する。部署なしログを夜間出力へ含めるテストはない。
+        import-csv.test.ts:66-103 は部署ありでは集計キューが増えること、部署なしでは保存できることを別々に検査する。後者はworkerの再開を確認していない。新規の作成APIから保存、CSV、再取り込み、カーソルを保った集計再開までを通す結合テストもない。画面を開かない構成については docs/exports.md の運用説明があり、その構成では既存のCSVダウンロードを利用しない。
+
+        現在つながっているのは、部署なしログの保存器、一覧、画面CSV、CSV取り込みの保存部分である。作成API、夜間出力の対象列挙、取り込みから集計へのイベント接続が欠けている。調査中にコードや設定は変更していない。
+en:
+  lang: en
+  expectedQuestionType: choice
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  tasks: []
+  user: |-
+    Work logs without a department are currently just screen notes, so closing the screen makes them unavailable for aggregation.
+    Add an API for recording work logs without a department, and make them available as CSV too.
+    After import, aggregation must continue from the unprocessed entries.
+    I want to decide which CSV export paths to support after understanding the work involved and operational impact.
+  readResults:
+    - tool: takt_list_goals
+      arguments:
+        cwd: /workspace/project
+      result:
+        goals: []
+        collection: goals
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments: {}
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: rg -n 'UnassignedLogStore|unassigned|department|importedAt|exportCsv|readSelection|encodeCsv|nightlyCsv|Snapshot|CSV|import-csv' src docs
+        description: Locate work log storage and CSV entry points
+      result: |-
+        src/storage/unassigned-log-store.ts:14:export class UnassignedLogStore {
+        src/storage/unassigned-log-store.ts:19:  async create(input: WorkLogInput): Promise<WorkLog>
+        src/storage/unassigned-log-store.ts:40:  async listPending(cursor: string | null): Promise<LogPage>
+        src/storage/unassigned-log-store.ts:72:  async markImported(ids: string[]): Promise<void>
+        src/storage/work-log.ts:8:  departmentId: string | null;
+        src/storage/work-log.ts:15:  importedAt: string | null;
+        src/http/log-routes.ts:12:router.get('/unassigned-logs', listUnassignedLogs);
+        src/http/log-routes.ts:13:router.delete('/unassigned-logs/:id', removeUnassignedLog);
+        src/http/log-routes.ts:14:router.post('/departments/:id/logs', createDepartmentLog);
+        src/ui/log-table.ts:84:const csv = await exportCsv({ departmentId: selection.departmentId });
+        src/exports/csv-download.ts:21:export async function exportCsv(selection: LogSelection)
+        src/exports/csv-download.ts:27:  return encodeCsv(await repository.readSelection(selection));
+        src/jobs/nightly-csv.ts:17:export async function nightlyCsv(config: ExportConfig)
+        src/jobs/nightly-csv.ts:21:  for (const department of await departments.list()) {
+        src/jobs/nightly-csv.ts:22:    await writeDepartmentSnapshot(department.id, config.destination);
+        docs/exports.md:12:Screen CSV downloads export the selected list.
+        docs/exports.md:20:Nightly CSV is also used for recurring aggregation without opening the screen.
+        docs/exports.md:26:Both CSV outputs follow exports.csv.enabled.
+        docs/import.md:9:CSV files are imported with import-csv.
+    - tool: Bash
+      arguments:
+        command: sed -n '1,120p' src/storage/unassigned-log-store.ts src/http/log-routes.ts src/exports/csv-download.ts src/storage/log-repository.ts src/jobs/nightly-csv.ts
+        description: Read storage and both CSV output paths
+      result: |-
+        // src/storage/unassigned-log-store.ts
+        export class UnassignedLogStore {
+          async create(input: WorkLogInput): Promise<WorkLog> {
+            return this.files.append({ ...input, departmentId: null, importedAt: null });
+          }
+          async listPending(cursor: string | null): Promise<LogPage> {
+            return this.files.page({ cursor, imported: false });
+          }
+          async markImported(ids: string[]): Promise<void> {
+            await this.files.update(ids, { importedAt: this.clock.now() });
+          }
+        }
+        // src/http/log-routes.ts
+        router.get('/unassigned-logs', listUnassignedLogs);
+        router.delete('/unassigned-logs/:id', removeUnassignedLog);
+        router.post('/departments/:id/logs', createDepartmentLog);
+        // src/exports/csv-download.ts
+        export async function exportCsv(selection: LogSelection) {
+          if (!config.exports.csv.enabled) throw new ExportDisabledError();
+          const rows = await repository.readSelection(selection);
+          return encodeCsv(rows);
+        }
+        // src/storage/log-repository.ts
+        async readSelection(selection: LogSelection) {
+          return selection.departmentId === null
+            ? this.unassigned.list(selection)
+            : this.departments.listLogs(selection.departmentId, selection);
+        }
+        // src/jobs/nightly-csv.ts
+        export async function nightlyCsv(config: ExportConfig) {
+          if (!config.csv.enabled) return;
+          for (const department of await departments.list()) {
+            await writeDepartmentSnapshot(department.id, config.destination);
+          }
+        }
+        async function writeDepartmentSnapshot(departmentId: string, destination: string) {
+          const rows = await repository.readSelection({ departmentId });
+          await snapshots.write(destination, departmentId, encodeCsv(rows));
+        }
+    - tool: Bash
+      arguments:
+        command: rg -n 'Imported|import|aggregation|aggregate|department|UnassignedLogStore|unassigned|exports.csv|CSV|夜間|認証情報|取り込み|Job-only|Credentials' src/import src/aggregation src/http src/__tests__ docs
+        description: Check aggregation resumption, configuration and existing tests
+      result: |-
+        src/import/import-csv.ts:33:const target = resolveImportTarget(row.departmentId);
+        src/import/import-csv.ts:47:await target.saveImported(row);
+        src/import/import-csv.ts:52:if (target.departmentId !== null) await enqueueAggregation(target.departmentId);
+        src/import/unassigned-target.ts:18:await store.markImported([row.id]);
+        src/aggregation/events.ts:6:type AggregationReady = { kind: 'aggregation_ready'; departmentId: string; cursor: string };
+        src/aggregation/worker.ts:28:const state = await checkpoints.load(event.departmentId);
+        src/aggregation/worker.ts:35:await aggregateFrom(state.cursor);
+        src/http/log-routes.ts:12:router.get('/unassigned-logs', listUnassignedLogs);
+        src/__tests__/unassigned-log-store.test.ts:21:it('preserves logs with a null department');
+        src/__tests__/csv-download.test.ts:48:it('exports the unassigned selection');
+        src/__tests__/nightly-csv.test.ts:37:it('writes a snapshot for each department');
+        src/__tests__/import-csv.test.ts:66:it('resumes aggregation for a department import');
+        src/__tests__/import-csv.test.ts:89:it('saves imported unassigned rows');
+        docs/exports.md:26:Both CSV outputs follow exports.csv.enabled.
+        docs/exports.md:31:Job-only installations do not perform screen downloads.
+        docs/exports.md:39:Existing job configuration resolves the output directory. Credentials are not included in exported data.
+        docs/import.md:22:Already imported IDs are not duplicated on reruns.
+    - tool: Agent
+      arguments:
+        subagent_type: Explore
+        description: Trace work logs through CSV and aggregation
+        prompt: |-
+          Read /workspace/project without changing it. Trace storage, API creation, screen CSV, nightly CSV, import and aggregation resumption.
+          Report existing paths and missing connections for logs without a department, with file and line references.
+          Check configuration, callers and related tests. Do not change code.
+      result: |-
+        Investigation report. These are observations from code and documentation, not additional requests from the person.
+
+        1. Storage model and creation callers
+        WorkLog in src/storage/work-log.ts:5-18 has departmentId: string | null, along with an ID, occurrence time, activity type, duration, body and import time. There is already a persistent representation for logs whose department is not yet known. src/storage/unassigned-log-store.ts:14-88 implements create, list, listPending, get, remove and markImported. Creation writes departmentId: null using the same file locking and ID allocation as department logs.
+        The production HTTP routes expose list and delete for unassigned logs, but no creation endpoint. The only POST in src/http/log-routes.ts:12-18 is /departments/:id/logs, whose validator requires a department ID. The screen note in src/ui/draft-log.ts:11-42 only updates local screen state and never calls UnassignedLogStore.create. No creation caller was found outside tests.
+
+        2. Screen list and download
+        src/ui/log-table.ts:35-92 reads the unassigned view using departmentId: null. It retains row IDs when switching selection, and passes the same selection to src/exports/csv-download.ts:21-35 for the CSV button. src/storage/log-repository.ts:44-62 reads UnassignedLogStore for null, so persisted unassigned logs can already appear in that view and its CSV download.
+        Both kinds of logs use the columns id, department_id, occurred_at, duration and body. Unassigned logs write an empty department_id. Quoting, newlines and comma escaping are centralized in src/exports/csv-codec.ts:18-73. The encoder does not require a department name and uses the same encoding for both kinds of log. This path needs no additional CSV format to handle unassigned rows.
+
+        3. Nightly CSV enumeration
+        src/jobs/nightly-csv.ts:17-41 enumerates registered departments and writes one snapshot for each. Unassigned logs are not departments, so the loop never reads them. writeDepartmentSnapshot takes a string and cannot represent a null target. Even successfully saved unassigned logs therefore produce no CSV in the nightly output directory.
+        Snapshot writing uses atomic file replacement and the same encodeCsv as screen downloads. src/exports/snapshot-writer.ts:12-64 owns output timestamps, replacement and failure records. That writer could be called for unassigned logs, but there is no such caller today. Downloading a CSV from the screen does not copy it to the nightly output directory or trigger the scheduled job.
+
+        4. Deployment modes and configuration
+        docs/exports.md:12-39 describes both manual downloads and recurring aggregation fed by nightly CSV files. The latter installations operate without opening the screen; nightly output is their file retrieval path. Both CSV entry points follow exports.csv.enabled. The job checks this flag in addition to the existing scheduler setting. Existing configuration resolves the output destination, so its value is already known.
+        Current documentation does not define CSV enablement as including unassigned logs in nightly output; its examples assume an enumerated department. Screen download and nightly export have separate entry points, and neither executes the other. Adding nightly output would add a new input file for recurring aggregation. Existing department filenames and CSV columns can remain intact.
+
+        5. Import and duplicate handling
+        src/import/import-csv.ts:21-63 selects src/import/unassigned-target.ts when department_id is empty. It compares row IDs against persisted records, so importing the same file twice does not keep adding copies. src/import/unassigned-target.ts:12-25 saves rows and calls markImported to persist import state. Department imports use the same ID reconciliation.
+        Files from both CSV outputs are readable by this importer. The current schema does not need an extra column identifying the export entry point. No validator rejects unassigned rows; existing tests show imports reaching storage. However, saving imported data and resuming aggregation are different states. The unassigned import tests currently establish only the former.
+
+        6. Aggregation resumption connection
+        Department imports call enqueueAggregation from src/import/import-csv.ts:52 inside target.departmentId !== null. Unassigned imports never enter that branch and enqueue no aggregation event. aggregation_ready in src/aggregation/events.ts:6-12 requires departmentId: string. src/aggregation/worker.ts:28-40 uses that ID to read the checkpoint.
+        src/aggregation/checkpoints.ts:9-32 already has a persisted cursor representation for unassigned logs. It can save and reload the cursor, but no connection carries that target from import to worker. There is no code inventing a department ID to fill the gap. Resumption requires a consistent target across import, event and worker resolution. Correcting export alone would not complete import-triggered aggregation resumption.
+
+        7. API and authorization boundaries
+        The department creation API in src/http/create-log.ts:15-56 validates input shape, activity type and duration before saving. The HTTP boundary resolves the authenticated user's organization. UnassignedLogStore is also instantiated per organization, so absence of a department does not mean absence of an organization. Existing list and delete endpoints operate inside this same organization boundary.
+        A creation endpoint can reuse that input validation. CSV download authorization is separate from creation and is checked by the current CSV route. The scheduled job runs as its existing job identity. No observed credential failure or missing configuration explains the output gap. The two paths differ in how they enumerate their targets.
+
+        8. Tests and missing end-to-end connections
+        src/__tests__/unassigned-log-store.test.ts covers persistence, paging, deletion and imported state. csv-download.test.ts:48-71 verifies CSV output for a null selection, retaining IDs and body with an empty department column. nightly-csv.test.ts:37-66 checks only registered department files. There is no test for unassigned rows in nightly output.
+        import-csv.test.ts:66-103 separately verifies department imports enqueue aggregation and unassigned imports reach storage. The latter does not check worker resumption. No integration test traces a new creation API through storage, CSV, reimport and resumption with the retained cursor. The headless usage described in docs/exports.md does not use the existing screen download route.
+
+        Existing connected components are the unassigned store, list, screen CSV and import persistence. Missing connections are creation through the API, nightly target enumeration and the import-to-aggregation event. No code or configuration was changed during this investigation.

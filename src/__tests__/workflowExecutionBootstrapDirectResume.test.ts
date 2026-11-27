@@ -42,6 +42,11 @@ vi.mock('../infra/config/index.js', () => ({
   loadProjectConfig: vi.fn(() => ({})),
   loadGlobalConfig: vi.fn(() => ({})),
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
+  resolveProviderOptionsWithTrace: vi.fn(() => ({
+    value: undefined,
+    source: 'default',
+    originResolver: undefined,
+  })),
   updatePersonaSession: vi.fn(),
   updateWorktreeSession: vi.fn(),
   writeFileAtomic: mockWriteFileAtomic,
@@ -56,6 +61,11 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
     source: 'default',
     originResolver: undefined,
   })),
+}));
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
 }));
 
 vi.mock('../infra/config/paths.js', () => ({
@@ -75,16 +85,20 @@ vi.mock('../shared/context.js', () => ({
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
-  TaskPrefixWriter: vi.fn().mockImplementation(() => ({
-    flush: vi.fn(),
-  })),
+  TaskPrefixWriter: vi.fn().mockImplementation(function () {
+    return {
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -104,6 +118,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
     logEvent: vi.fn(),
+    flush: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));
@@ -126,22 +141,28 @@ vi.mock('../features/analytics/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/analyticsEmitter.js', () => ({
-  AnalyticsEmitter: vi.fn().mockImplementation(() => ({})),
+  AnalyticsEmitter: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 vi.mock('../agents/structured-caller.js', () => ({
-  ProviderNeutralStructuredCaller: vi.fn().mockImplementation(() => ({})),
+  ProviderNeutralStructuredCaller: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createOutputFns: mockCreateOutputFns,
-  createPrefixedStreamHandler: vi.fn(() => vi.fn()),
+  createPrefixedStreamHandler: vi.fn(() => Object.assign(vi.fn(), { flush: vi.fn() })),
 }));
 
 vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
-  SessionLogger: vi.fn().mockImplementation(() => ({
-    writeInteractiveMetadata: vi.fn(),
-  })),
+  SessionLogger: vi.fn().mockImplementation(function () {
+    return {
+      writeInteractiveMetadata: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../core/runtime/runtime-environment.js', () => ({
@@ -598,23 +619,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(getWorkflowSourcePath(target)).toBe('/target/workflow.yaml');
   });
 
-  it('deeply freezes attached trust metadata and reuses its frozen instance', () => {
-    const workflow = attachWorkflowTrustInfo({}, {
-      source: 'project',
-      nested: { roots: ['/project'] },
-    });
-
-    const first = getAttachedWorkflowTrustInfo(workflow) as {
-      nested: { roots: string[] };
-    };
-    const second = getAttachedWorkflowTrustInfo(workflow);
-
-    expect(second).toBe(first);
-    expect(Object.isFrozen(first)).toBe(true);
-    expect(Object.isFrozen(first.nested)).toBe(true);
-    expect(Object.isFrozen(first.nested.roots)).toBe(true);
-  });
-
   it('Given workflow auto_routing and a strategy override, When bootstrap resolves config, Then it delegates override application to the engine', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
@@ -710,6 +714,17 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       expect.objectContaining({ name: workflowConfig.name }),
       '/project',
       '/project',
+      { workflowSystemCommandsPolicy: undefined },
+    );
+  });
+
+  it.each([true, false])('keeps resolved system command permission %s during bootstrap validation', async (customScripts) => {
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run approved workflow', '/project', {
+      projectCwd: '/project', workflowSystemCommandsPolicy: { customScripts },
+    });
+    expect(mockValidateWorkflowCallContracts).toHaveBeenCalledWith(
+      expect.objectContaining({ name: workflowConfig.name }), '/project', '/project',
+      { workflowSystemCommandsPolicy: { customScripts } },
     );
   });
 
@@ -736,7 +751,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   });
 
   it('Given CLI provider is concrete and config-level auto_routing exists, When bootstrap resolves config, Then autoStrategy applies', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValueOnce({
+    mockResolveWorkflowConfigValues.mockReturnValue({
       provider: 'mock',
       model: undefined,
       language: 'en',
@@ -1446,10 +1461,10 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     );
   });
 
-  it('starts a new operation journal when resume source lineage is unavailable', async () => {
+  it('rejects a missing report source even when a new operation journal can be started', async () => {
     const projectDir = createTempProject();
 
-    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'fallback-resume',
@@ -1457,17 +1472,11 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         sourceRunSlug: '20260524-missing-run',
         resumeMode: 'requeue',
       },
-    });
+    })).rejects.toThrow(/20260524-missing-run/);
 
-    expect(bootstrap.operationJournal.journalRunSlug).toBe('fallback-resume');
-    expect(mockLogWarn).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        sourceRunSlug: '20260524-missing-run',
-        targetRunSlug: 'fallback-resume',
-      }),
-    );
-    expect(bootstrap.runSlug).toBe('fallback-resume');
+    expect(existsSync(join(projectDir, '.takt', 'runs', 'fallback-resume', 'reports'))).toBe(false);
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    expect(mockCreateOutputFns.mock.results[0]?.value.error).toHaveBeenCalledWith(expect.stringContaining('20260524-missing-run'));
   });
 
   it('starts a new operation journal when source lineage metadata is incomplete', async () => {

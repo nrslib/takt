@@ -18,8 +18,6 @@ export interface StatePaths {
   readonly worktreeMetadataDirectory: string;
   readonly eventsDirectory: string;
   readonly locksDirectory: string;
-  /** Fingerprint persisted by the central state owner for the runs root. */
-  readonly runsRootFingerprint?: Readonly<{ readonly dev: number; readonly ino: number }>;
 }
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;

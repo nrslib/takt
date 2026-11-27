@@ -91,6 +91,50 @@ describe('ArpeggioRunner live intervention integration', () => {
     }
   });
 
+  it('passes instructions delivered in an earlier step exactly once to every later batch', async () => {
+    const csvPath = join(projectCwd, 'history.csv');
+    const templatePath = join(projectCwd, 'history-template.md');
+    writeFileSync(csvPath, 'name\nAlice\nBob', 'utf8');
+    writeFileSync(templatePath, 'Process {line:1}', 'utf8');
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const content = 'docs は変えない';
+    await store.issue(content);
+    const config: WorkflowConfig = {
+      name: 'history-arpeggio', maxSteps: 4, initialStep: 'implement',
+      steps: [
+        makeStep('implement', { rules: [makeRule('done', 'process')] }),
+        makeStep('process', {
+          arpeggio: {
+            source: 'csv', sourcePath: csvPath, templatePath, batchSize: 1, concurrency: 1,
+            merge: { strategy: 'concat' }, maxRetries: 0, retryDelayMs: 0,
+          },
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      markProviderDispatch(persona, instruction, options);
+      return makeResponse({ content: 'done', sessionId: `${persona}-session` });
+    });
+    engine = new WorkflowEngine(config, projectCwd, 'test task', {
+      projectCwd, reportDirName: REPORT_DIR, provider: 'mock', liveIntervention: store,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    const deliveries = readFileSync(store.getFilePath(), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'delivered');
+    expect(deliveries).toHaveLength(1);
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1 });
+    for (const [index, call] of calls.entries()) {
+      expect.soft(call[1].split(content).length - 1, `prompt ${index}`).toBe(1);
+    }
+  });
+
   it('keeps completed and running batches unchanged and injects history only into later batches', async () => {
     const csvPath = join(projectCwd, 'data.csv');
     const templatePath = join(projectCwd, 'batch-template.md');

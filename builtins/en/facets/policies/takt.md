@@ -16,8 +16,8 @@ Provide one source of truth for independent judgments about takt.
 
 ### Provider Integration
 
-| Criteria | Judgment |
-|----------|----------|
+| Rule | Decision |
+|---|---|
 | SDK-specific error handling leaking outside Provider | REJECT |
 | Errors not propagated to AgentResponse.error | REJECT |
 | Session key collision between providers | REJECT |
@@ -74,4 +74,4 @@ Provide one source of truth for independent judgments about takt.
 | Session key missing provider identifier | REJECT (cross-provider contamination) |
 | Session broken between phases that should continue context | REJECT (context loss) |
 | Old resumed session remains after successful new-session retry | REJECT (unintended resume) |
-| Report retry/fallback drops readonly mode, tool-free execution, or capability overrides | REJECT |
+| Report retry/fallback drops readonly mode, read-only tool restrictions, or capability overrides | REJECT |

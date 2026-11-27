@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 /**
  * Claude SDK executor layer tests.
  *
@@ -8,14 +9,16 @@
  * - sdkMessageToStreamEvent — SDK message → stream event conversion
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
 import type { ClaudeSpawnOptions, StreamEvent } from '../infra/claude/types.js';
+import type { HookInput, Options, SDKUserMessage, SDKSystemMessage } from '@anthropic-ai/claude-agent-sdk';
 
 const {
   queryMock,
   interruptMock,
   AbortErrorMock,
+  warnMock,
 } = vi.hoisted(() => {
   class AbortErrorMock extends Error {
     constructor(message?: string) {
@@ -27,11 +30,13 @@ const {
   return {
     queryMock: vi.fn(),
     interruptMock: vi.fn(async () => {}),
+    warnMock: vi.fn(),
     AbortErrorMock,
   };
 });
 
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@anthropic-ai/claude-agent-sdk')>(),
   query: queryMock,
   AbortError: AbortErrorMock,
 }));
@@ -43,6 +48,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
     createLogger: vi.fn().mockReturnValue({
       debug: vi.fn(),
       info: vi.fn(),
+      warn: warnMock,
       error: vi.fn(),
     }),
   };
@@ -52,9 +58,325 @@ import { QueryExecutor } from '../infra/claude/executor.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
+import { ClaudeProvider } from '../infra/providers/claude.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
+describe('SDK permission mode negotiation', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const init = (permissionMode: SDKSystemMessage['permissionMode']): SDKSystemMessage => ({
+    type: 'system', subtype: 'init', permissionMode,
+    session_id: 'test-session', uuid: '00000000-0000-4000-8000-000000000001',
+    apiKeySource: 'none', claude_code_version: 'test', cwd: '/tmp/project',
+    tools: ['Bash'], mcp_servers: [], model: 'test', slash_commands: [],
+    output_style: 'default', skills: [], plugins: [],
+  });
+  const result = { type: 'result', subtype: 'success', result: 'done' };
+
+  function requestTool(options: Options, toolName: string) {
+    const barrier = options.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+    expect(barrier).toBeTypeOf('function');
+    expect(options.hooks?.PreToolUse?.some(({ matcher }) => matcher === 'AskUserQuestion')).toBe(true);
+    return Promise.resolve(barrier!({
+      hook_event_name: 'PreToolUse', session_id: 'test-session', transcript_path: '/tmp/transcript',
+      cwd: '/tmp/project', tool_name: toolName, tool_input: {}, tool_use_id: 'tool',
+    }, 'tool', { signal: new AbortController().signal }));
+  }
+
+  it.each([undefined, 'saved-session'].flatMap((sessionId) => [false, true].map((rejects) => ({ sessionId, rejects }))))(
+    'blocks an independent CLI tool request until negotiation settles (resume: $sessionId, rejects: $rejects)', async ({ sessionId, rejects }) => {
+    const q = createMockQuery([init('default'), result]);
+    let startSwitch!: () => void;
+    const switching = new Promise<void>((resolve) => { startSwitch = resolve; });
+    let finishSwitch!: () => void;
+    const switched = new Promise<void>((resolve) => { finishSwitch = resolve; });
+    const order: string[] = [];
+    q.setPermissionMode.mockImplementationOnce(async () => {
+      startSwitch(); await switched;
+      order.push('switch settled');
+      if (rejects) throw new Error('auto disabled by policy');
+    });
+    const executeTool = vi.fn();
+    let toolRequest!: Promise<void>;
+    queryMock.mockImplementationOnce(({ options }: { options: Options }) => {
+      // SDK control callbacks run independently of the SDK message iterator.
+      toolRequest = Promise.all(['Bash', 'Read', 'mcp__takt__get_goal'].map((name) => requestTool(options, name)))
+        .then((outputs) => { order.push('tool released'); executeTool(outputs); });
+      return q;
+    });
+    const running = new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full', sessionId });
+    try {
+      await switching;
+      expect(q.setPermissionMode).toHaveBeenCalledExactlyOnceWith('auto');
+      expect(executeTool).not.toHaveBeenCalled();
+      expect(warnMock).toHaveBeenCalledWith(expect.any(String), {
+        requestedMode: 'bypassPermissions', actualMode: 'default', targetMode: 'auto',
+      });
+      expect(queryMock.mock.calls[0]![0].options.resume).toBe(sessionId);
+    } finally { finishSwitch(); }
+    expect(await running).toMatchObject({ success: true, content: 'done' });
+    await toolRequest;
+    expect(executeTool).toHaveBeenCalledExactlyOnceWith([{ continue: true }, { continue: true }, { continue: true }]);
+    expect(order).toEqual(['switch settled', 'tool released']);
+  });
+
+  it('releases the CLI hook at a bypass init without waiting for query completion', async () => {
+    let toolRequest!: Promise<unknown>;
+    const q = {
+      setPermissionMode: vi.fn(), interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator]() {
+        yield init('bypassPermissions');
+        expect(await toolRequest).toEqual({ continue: true });
+        yield result;
+      },
+    };
+    queryMock.mockImplementationOnce(({ options }: { options: Options }) => {
+      toolRequest = requestTool(options, 'Bash');
+      return q;
+    });
+    expect(await new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full' })).toMatchObject({ success: true });
+    expect(q.setPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['result', 'eof', 'stream-error', 'startup-error', 'abort'] as const)('releases pending CLI hooks when %s ends a query without init', async (outcome) => {
+    let toolRequest!: Promise<unknown>;
+    let queryStarted!: () => void;
+    const started = new Promise<void>((resolve) => { queryStarted = resolve; });
+    const controller = new AbortController();
+    const q = {
+      setPermissionMode: vi.fn(), interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator]() {
+        if (outcome === 'eof') return;
+        if (outcome === 'stream-error') throw new Error('stream failed');
+        if (outcome === 'abort') await toolRequest;
+        yield result;
+      },
+    };
+    queryMock.mockImplementationOnce(({ options }: { options: Options }) => {
+      toolRequest = requestTool(options, 'Bash');
+      queryStarted();
+      if (outcome === 'startup-error') throw new Error('startup failed');
+      return q;
+    });
+    const running = new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full', abortSignal: controller.signal });
+    await started;
+    if (outcome === 'abort') controller.abort();
+    const response = await running;
+    expect(response.success).toBe(outcome === 'result');
+    expect(await toolRequest).toEqual({ continue: true });
+    expect(q.setPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { options: { permissionMode: 'full' as const }, actual: 'bypassPermissions' as const },
+    { options: { permissionMode: 'readonly' as const }, actual: 'default' as const },
+    { options: { permissionMode: 'edit' as const }, actual: 'acceptEdits' as const },
+    { options: {}, actual: 'default' as const },
+  ])('leaves the permission mode unchanged when no bypass downgrade occurred: %j', async ({ options, actual }) => {
+    const q = createMockQuery([init(actual), result]);
+    queryMock.mockReturnValue(q);
+    expect(await new QueryExecutor().execute('run', { cwd: '/tmp/project', ...options })).toMatchObject({ success: true });
+    expect(q.setPermissionMode).not.toHaveBeenCalled();
+    expect(warnMock).not.toHaveBeenCalled();
+    if (options.permissionMode !== 'full') {
+      expect(queryMock.mock.calls[0]![0].options.hooks.PreToolUse.every(({ matcher }: { matcher?: string }) => matcher !== undefined)).toBe(true);
+    }
+  });
+
+  it('uses the resolved SDK mode for an explicit bypass request', async () => {
+    const q = createMockQuery([init('acceptEdits'), result]);
+    queryMock.mockReturnValue(q);
+    await new QueryExecutor().execute('run', { cwd: '/tmp/project', bypassPermissions: true });
+    expect(q.setPermissionMode).toHaveBeenCalledExactlyOnceWith('auto');
+  });
+
+  it('logs an auto mode rejection and continues consuming the original session', async () => {
+    const q = createMockQuery([init('default'), result]);
+    q.setPermissionMode.mockRejectedValueOnce(new Error('auto disabled by policy'));
+    queryMock.mockReturnValue(q);
+    expect(await new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full' })).toMatchObject({
+      success: true, content: 'done', sessionId: 'test-session',
+    });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(warnMock).toHaveBeenCalledTimes(2);
+    expect(warnMock).toHaveBeenLastCalledWith(expect.any(String), {
+      requestedMode: 'bypassPermissions', actualMode: 'default', targetMode: 'auto', error: 'auto disabled by policy',
+    });
+  });
+});
+
+it.each(['claude', 'claude-sdk'] as const)('auto-approves manager MCP tools without restricting other tools through %s', async (providerType) => {
+  const structured = { message: 'reply', summary: null };
+  queryMock.mockReset().mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success', structured_output: structured }]));
+  const executor = createManagerTurnExecutor('/tmp/project', {
+    ctx: { providerType, provider: new ClaudeProvider(), lang: 'en', model: undefined,
+      mcpServers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'http', url: 'http://127.0.0.1:12345/mcp' },
+        external: { command: 'external-server' } } },
+    strategy: { systemPrompt: 'manager' },
+  });
+  expect(await executor.execute({ prompt: 'run', sessionId: undefined, abortSignal: new AbortController().signal,
+    assignment: undefined })).toMatchObject(structured);
+  const sdk = queryMock.mock.calls[0]![0].options;
+  expect(sdk.allowedTools).toEqual([
+    ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+  ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
+  expect(sdk.tools).toBeUndefined();
+  expect(sdk.mcpServers).toHaveProperty('external');
+  expect(sdk.permissionMode).toBe('bypassPermissions');
+});
+
+describe('strict manager tool restrictions', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it.each(['strictToolAllowlist', 'mcpOnlySideEffects'] as const)('transfers %s from the provider to the SDK and rejects other tools', async (restriction) => {
+    const structured = { message: 'question', summary: null };
+    queryMock.mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success', result: 'done', structured_output: structured }]));
+    const serverName = 'takt-mgr_session';
+    const tools = ['Read', ...['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `mcp__${serverName}__${name}`)];
+    const agent = new ClaudeProvider().setup({ name: 'manager', systemPrompt: 'manager' });
+    const response = await agent.call('consult', {
+      cwd: '/tmp/project', permissionMode: 'readonly', [restriction]: tools,
+      allowedTools: tools, mcpServers: { [serverName]: { command: 'node', args: ['mcp.js'] } },
+      outputSchema: { type: 'object' },
+    });
+    expect(response.structuredOutput).toEqual(structured);
+    const sdk = queryMock.mock.calls[0]![0].options;
+    expect(sdk).toMatchObject({ tools: ['Read'], allowedTools: tools, settingSources: [], skills: [], plugins: [], agents: {}, strictMcpConfig: true, sandbox: { enabled: true, allowUnsandboxedCommands: false } });
+    expect(sdk.mcpServers).toEqual({ [serverName]: { command: 'node', args: ['mcp.js'] } });
+    if (restriction === 'mcpOnlySideEffects') expect(sdk).not.toHaveProperty('canUseTool');
+    for (const tool of [...tools, 'StructuredOutput', 'Bash', 'Edit', 'WebFetch', 'WebSearch', `mcp__${serverName}__takt_enqueue_task`, 'Task']) {
+      const allowed = tools.includes(tool) || tool === 'StructuredOutput';
+      if (restriction === 'strictToolAllowlist') {
+        expect(await sdk.canUseTool(tool, {})).toMatchObject({ behavior: allowed ? 'allow' : 'deny' });
+      }
+      const hook = sdk.hooks.PreToolUse.find(({ matcher }: { matcher?: string }) => matcher === undefined)?.hooks[0];
+      expect(hook).toBeTypeOf('function');
+      expect(await hook({ tool_name: tool })).toMatchObject({ hookSpecificOutput: { permissionDecision: allowed ? 'allow' : 'deny' } });
+    }
+  });
+
+  it('omits an interactive permission callback in manager mode while preserving it in normal execution', () => {
+    const handler = vi.fn();
+    const options = { cwd: '/tmp/project', permissionMode: 'readonly' as const, allowedTools: ['Read'], onPermissionRequest: handler };
+    expect(buildSdkOptions({ ...options, mcpOnlySideEffects: ['Read'] })).not.toHaveProperty('canUseTool');
+    expect(buildSdkOptions(options).canUseTool).toBeTypeOf('function');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not allow a native output collector when no output schema was requested', async () => {
+    const sdk = buildSdkOptions({ cwd: '/tmp/project', permissionMode: 'readonly', mcpOnlySideEffects: ['Read'] });
+    const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+    expect(hook).toBeDefined();
+    const result = await hook!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  it.each([
+    { permissionMode: 'edit' as const, strictToolAllowlist: ['Read'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['Bash'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__*'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__mgr__get_run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt__get__run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['mcp__takt___get_run'] },
+    { permissionMode: 'readonly' as const, strictToolAllowlist: ['Read'], bypassPermissions: true },
+  ])('rejects invalid strict tool controls before SDK invocation: %j', (options) => {
+    expect(() => buildSdkOptions({ cwd: '/tmp/project', ...options })).toThrow('Strict tool');
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
 const EXIT_CODE_MESSAGE = 'Claude Code process exited with code 1';
+
+it('keeps a caller-owned conversation resume failure to one SDK attempt through the provider adapter', async () => {
+  queryMock.mockReset().mockReturnValue(createMockQuery([], new Error(EXIT_CODE_MESSAGE)));
+  const result = await new ClaudeProvider().setup({ name: 'manager', systemPrompt: 'manager' }).call('private conversation', {
+    cwd: '/tmp/project', sessionId: 'saved-session', callerManagedSession: true,
+  });
+  expect(result.status).toBe('error');
+  expect(queryMock).toHaveBeenCalledOnce();
+  expect(queryMock.mock.calls[0]![0].options.resume).toBe('saved-session');
+  expect(result.failureCategory).toBeUndefined();
+});
+
+it.each([false, true].flatMap((custom) => [false, true].map((throws) => ({ custom, throws }))))('propagates a rejected resume through the Claude provider (custom: $custom, exception: $throws)', async ({ custom, throws }) => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  const error = `No conversation found with session ID: ${sessionId}`;
+  queryMock.mockReset().mockReturnValue(createMockQuery([
+    { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: sessionId, errors: [error] },
+  ], throws ? new Error(`Claude Code returned an error result: ${error}`) : undefined));
+  const response = await new ClaudeProvider().setup({ name: 'manager', ...(custom ? { systemPrompt: 'manager' } : {}) }).call('continue', {
+    cwd: '/tmp/project', sessionId, callerManagedSession: true,
+  });
+  expect(response).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
+it.each(['authentication failed', 'network unavailable', 'No conversation found with session ID: another-session'])('does not classify an unrelated SDK failure: %s', async (error) => {
+  queryMock.mockReset().mockReturnValue(createMockQuery([
+    { type: 'result', subtype: 'error_during_execution', is_error: true, errors: [error] },
+  ]));
+  const response = await new QueryExecutor().execute('continue', { cwd: '/tmp/project', sessionId: 'saved-session', callerManagedSession: true });
+  expect(response.success).toBe(false);
+  expect(response).not.toHaveProperty('failureCategory', 'session_continuation_unsupported');
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('recovers through the real Claude adapter only before tool execution (tools: %s)', async (tools) => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  const error = `No conversation found with session ID: ${sessionId}`;
+  queryMock.mockReset().mockReturnValueOnce(createMockQuery([
+    ...(tools ? [{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } }] : []),
+    { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: sessionId, errors: [error] },
+  ], new Error(`Claude Code returned an error result: ${error}`)));
+  const invalidateSession = vi.fn(async () => {});
+  if (!tools) queryMock.mockImplementationOnce(({ prompt, options }) => {
+    expect(invalidateSession).toHaveBeenCalledOnce();
+    expect(options.resume).toBeUndefined();
+    expect(prompt).toContain('pending revision 4; current goals');
+    return createMockQuery([{ type: 'result', subtype: 'success', structured_output: { message: 'fresh reply', summary: null }, session_id: 'fresh-session' }]);
+  });
+  const executor = createManagerTurnExecutor('/tmp/project', {
+    ctx: { providerType: 'claude', provider: new ClaudeProvider(), lang: 'en', model: undefined },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const result = executor.execute({ prompt: 'continue', sessionId, abortSignal: new AbortController().signal,
+    assignment: { kind: 'repository', repositoryDirectory: '/tmp/project' },
+    recovery: { context: 'pending revision 4; current goals', invalidateSession } });
+  if (tools) await expect(result).rejects.toMatchObject({ failureCategory: 'session_continuation_unsupported' });
+  else expect(await result).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
+  expect(invalidateSession).toHaveBeenCalledOnce();
+  expect(queryMock).toHaveBeenCalledTimes(tools ? 1 : 2);
+});
+
+it('does not classify successful assistant content as a rejected Claude session', async () => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  queryMock.mockReset().mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success',
+    result: `No conversation found with session ID: ${sessionId}`, structured_output: { message: 'session_continuation_unsupported', summary: null } }]));
+  const response = await new ClaudeProvider().setup({ name: 'manager' }).call('continue', { cwd: '/tmp/project', sessionId, callerManagedSession: true });
+  expect(response.status).toBe('done');
+  expect(response.failureCategory).toBeUndefined();
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
+it('classifies the exact resume diagnostic on SDK stderr before any result arrives', async () => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  queryMock.mockReset().mockImplementation(({ options }) => {
+    options.stderr(`No conversation found with session ID: ${sessionId}\n`);
+    return createMockQuery([], new Error(EXIT_CODE_MESSAGE));
+  });
+  const response = await new QueryExecutor().execute('continue', { cwd: '/tmp/project', sessionId, callerManagedSession: true });
+  expect(response).toMatchObject({ success: false, failureCategory: 'session_continuation_unsupported' });
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
 type RateLimitStatus = 'allowed' | 'allowed_warning' | 'rejected';
 
 function createMockQuery(
@@ -63,6 +385,7 @@ function createMockQuery(
 ) {
   return {
     interrupt: vi.fn(async () => {}),
+    setPermissionMode: vi.fn(async (_mode: SDKSystemMessage['permissionMode']) => {}),
     async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
       for (const message of messages) {
         yield message;
@@ -166,6 +489,20 @@ function createResultMessage(
 }
 
 describe('SdkOptionsBuilder — outputFormat 変換', () => {
+  it('does not restore original servers after the prepared MCP set has excluded every server', () => {
+    const sdkOptions = buildSdkOptions({
+      cwd: '/tmp',
+      mcpServers: { datadog: {
+        type: 'http', url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}' },
+      } },
+      preparedMcp: { dispose: async () => {}, sdkOptions: { mcpServers: {}, strictMcpConfig: true } },
+    });
+
+    expect(sdkOptions.strictMcpConfig).toBe(true);
+    expect(Object.keys(sdkOptions.mcpServers ?? {})).toEqual([]);
+  });
+
   it('effort が SDK options に直接反映される', () => {
     const sdkOptions = buildSdkOptions({ cwd: '/tmp', effort: 'medium' });
 
@@ -343,6 +680,33 @@ describe('QueryExecutor — structuredOutput 抽出', () => {
     expect(result.structuredOutput).toEqual({ step: 1, reason: 'approved' });
   });
 
+  it('成功 result が空なら、進捗メモを含む前の assistant message ではなく最後の message を content にする', async () => {
+    queryMock.mockReturnValue(createMockQuery([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checked input.ts. Remaining: answer.' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: 'a.ts' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'ok' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: '{"step": 1}' }] } },
+      { type: 'result', subtype: 'success', result: '', structured_output: { step: 1 } },
+    ]));
+
+    const result = await new QueryExecutor().execute('test', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ success: true, content: '{"step": 1}', structuredOutput: { step: 1 } });
+  });
+
+  it('成功 result が空でツール呼び出しの後に本文がなければ、ツール前の進捗メモを content にせず空にする', async () => {
+    queryMock.mockReturnValue(createMockQuery([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note: editing retry.ts.' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'edit-1', name: 'Edit', input: { file_path: 'retry.ts' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'edit-1', content: 'ok' }] } },
+      { type: 'result', subtype: 'success', result: '' },
+    ]));
+
+    const result = await new QueryExecutor().execute('test', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ success: true, content: '' });
+  });
+
   it('result メッセージの usage を providerUsage として抽出する', async () => {
     queryMock.mockReturnValue(createMockQuery([
       {
@@ -414,6 +778,41 @@ describe('QueryExecutor abortSignal wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     queryMock.mockImplementation(() => createInterruptibleQuery());
+  });
+
+  it('中断対象のqueryだけを停止し同時実行中の別queryを最後まで実行する', async () => {
+    const controller = new AbortController();
+    const siblingController = new AbortController();
+    let finishSibling!: () => void;
+    const siblingGate = new Promise<void>((resolve) => { finishSibling = resolve; });
+    const target = createInterruptibleQuery();
+    const sibling = {
+      interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
+        await siblingGate;
+        yield { type: 'result', subtype: 'success', result: 'sibling completed' };
+      },
+    };
+    queryMock.mockReturnValueOnce(target).mockReturnValueOnce(sibling);
+    const activeBefore = getActiveQueryCount();
+    const executor = new QueryExecutor();
+    const execution = executor.execute('target', { cwd: '/tmp/project', abortSignal: controller.signal });
+    const siblingExecution = executor.execute('sibling', { cwd: '/tmp/project', abortSignal: siblingController.signal });
+    try {
+      await vi.waitFor(() => expect(getActiveQueryCount()).toBe(activeBefore + 2));
+      controller.abort();
+      expect((await execution).interrupted).toBe(true);
+      expect(target.interrupt).toHaveBeenCalledOnce();
+      expect(sibling.interrupt).not.toHaveBeenCalled();
+      expect(siblingController.signal.aborted).toBe(false);
+      finishSibling();
+      expect(await siblingExecution).toMatchObject({ success: true, content: 'sibling completed' });
+      expect(getActiveQueryCount()).toBe(activeBefore);
+    } finally {
+      controller.abort();
+      finishSibling();
+      await Promise.allSettled([execution, siblingExecution]);
+    }
   });
 
   it('abortSignal 発火時に query.interrupt() を呼ぶ', async () => {
@@ -523,7 +922,7 @@ describe('QueryExecutor abortSignal wiring', () => {
         abortSignal: controller.signal,
       });
 
-      expect(getActiveQueryCount()).toBe(activeBefore + 1);
+      await vi.waitFor(() => expect(getActiveQueryCount()).toBe(activeBefore + 1));
       controller.abort();
       for (let attempt = 0; attempt < 10 && vi.getTimerCount() === 0; attempt += 1) {
         await Promise.resolve();
@@ -542,12 +941,215 @@ describe('QueryExecutor abortSignal wiring', () => {
   });
 });
 
+describe('QueryExecutor transient throttling', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    vi.useFakeTimers();
+  });
+
+  it.each(['result', 'exception', 'assistant'] as const)(
+    'tool_use後の%sによる429では同じpromptを再実行しない', async (channel) => {
+      const toolUse = {
+        type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] },
+        session_id: 'failed-session',
+      };
+      const failure = channel === 'result'
+        ? createMockQuery([toolUse, createResultMessage({ subtype: 'error_during_execution', is_error: true, errors: ['HTTP 429: Too Many Requests'] })])
+        : channel === 'exception'
+          ? createMockQuery([toolUse], new Error('HTTP 429: Too Many Requests'))
+          : createMockQuery([toolUse, createAssistantRateLimitMessage()]);
+      queryMock.mockReturnValueOnce(failure).mockReturnValue(createMockQuery([createResultMessage({ result: 'unexpected retry' })]));
+
+      const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pending).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+      expect(queryMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('本文中のtool_use文字列だけなら429を再試行する', async () => {
+    queryMock.mockReturnValueOnce(createMockQuery([
+      createAssistantTextMessage('The literal string tool_use appears here.'),
+      createAssistantRateLimitMessage(),
+    ])).mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['exception', 'result', 'assistant', 'rate_limit_event'] as const)(
+    '%s の429を2回再試行し実行制約と成功結果を保持する', async (channel) => {
+      const makeFailure = () => {
+        if (channel === 'exception') return createMockQuery([], new Error('HTTP 429: Too Many Requests'));
+        if (channel === 'result') return createMockQuery([createResultMessage({
+          subtype: 'error_during_execution', is_error: true, errors: ['HTTP 429: Too Many Requests'],
+        })]);
+        if (channel === 'assistant') return createMockQuery([createAssistantRateLimitMessage()]);
+        return createMockQuery([{
+          type: 'rate_limit_event', session_id: 'failed-session', uuid: 'throttled',
+          rate_limit_info: { status: 'rejected' },
+        }]);
+      };
+      queryMock.mockReturnValueOnce(makeFailure()).mockReturnValueOnce(makeFailure()).mockReturnValueOnce(
+        createMockQuery([createAssistantTextMessage('final answer'), createResultMessage({
+          result: 'final answer', session_id: 'final-session', structured_output: { ok: true },
+        })]),
+      );
+      const activeBefore = getActiveQueryCount();
+      const onStream = vi.fn();
+      const options: ClaudeSpawnOptions = {
+        cwd: '/tmp/project', model: 'sonnet', sessionId: 'original-session',
+        permissionMode: 'readonly', allowedTools: ['Read'], skillsEnabled: false,
+        outputSchema: { type: 'object' }, mcpServers: { test: { command: 'node', args: ['mcp.js'] } },
+        onStream,
+      };
+      const pending = new QueryExecutor().execute('original prompt', options);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(getActiveQueryCount()).toBe(activeBefore);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queryMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(queryMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({
+        success: true, content: 'final answer', sessionId: 'final-session', structuredOutput: { ok: true },
+      });
+      expect(queryMock).toHaveBeenCalledTimes(3);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+      expect(getActiveQueryCount()).toBe(activeBefore);
+      for (const [request] of queryMock.mock.calls) {
+        expect(request.prompt).toBe('original prompt');
+        expect(request.options).toMatchObject({
+          cwd: '/tmp/project', model: 'sonnet', resume: 'original-session',
+          allowedTools: ['Read'], skills: [], outputFormat: { type: 'json_schema', schema: options.outputSchema },
+          mcpServers: options.mcpServers,
+        });
+        expect(request.options.permissionMode).not.toBe('bypassPermissions');
+      }
+    },
+  );
+
+  it.each([
+    'usage_limit_exceeded',
+    'HTTP 429: Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set in your workspace. Increase your spend cap to continue. HTTP 429',
+  ])('失敗resultの使い切りは再試行しない: %s', async (message) => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({
+      subtype: 'error_during_execution', is_error: true, errors: [message],
+    })]));
+    const result = await new QueryExecutor().execute('prompt', { cwd: '/tmp/project', sessionId: 'resume' });
+    expect(result).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('429の再試行中に使い切りを受けたら追加queryを作らない', async () => {
+    queryMock.mockReturnValueOnce(createMockQuery([], new Error('HTTP 429: Too Many Requests')))
+      .mockReturnValue(createMockQuery([createRateLimitEventMessage({ status: 'rejected' })]));
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ success: false, errorKind: 'rate_limit' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('429の待機中に中断したらqueryを追加せず登録を解放する', async () => {
+    queryMock.mockReturnValue(createMockQuery([], new Error('HTTP 429: Too Many Requests')));
+    const controller = new AbortController();
+    const activeBefore = getActiveQueryCount();
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project', abortSignal: controller.signal });
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ success: false, interrupted: true });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(getActiveQueryCount()).toBe(activeBefore);
+  });
+});
+
 describe('QueryExecutor rate limit cause preservation', () => {
+  it('通常のis_error resultに含まれる既存の構造化出力を保持する', async () => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({
+      is_error: true, result: 'partial answer', structured_output: { partial: true },
+    })]));
+    const result = await new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    expect(result).toMatchObject({ success: false, content: 'partial answer', structuredOutput: { partial: true } });
+    expect(result.errorKind).toBeUndefined();
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it('is_error resultの429は予算後の終端イベントでも失敗として返す', async () => {
+    vi.useFakeTimers();
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ is_error: true, result: 'HTTP 429: Too Many Requests' })]));
+    const onStream = vi.fn();
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project', onStream });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+    expect(queryMock).toHaveBeenCalledTimes(9);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+    expect(onStream).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'result', data: expect.objectContaining({
+      result: '', success: false, error: 'HTTP 429: Too Many Requests',
+    }) }));
+    vi.useRealTimers();
+  });
+
+  it('api_error_statusだけの429を再試行して成功する', async () => {
+    vi.useFakeTimers();
+    queryMock.mockReturnValueOnce(createMockQuery([createResultMessage({ is_error: true, api_error_status: 429, result: 'request rejected' })]))
+      .mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(queryMock).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('api_error_statusの429に使い切りが伴う場合は即終了する', async () => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ is_error: true, api_error_status: 429, result: 'usage_limit_exceeded' })]));
+    expect(await new QueryExecutor().execute('prompt', { cwd: '/tmp/project' })).toMatchObject({ success: false, errorKind: 'rate_limit' });
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it('成功resultのapi_error_statusは失敗入力として分類しない', async () => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ is_error: false, api_error_status: 429, result: 'final answer' })]));
+    expect(await new QueryExecutor().execute('prompt', { cwd: '/tmp/project' })).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it('本文の引用と後続の空のrate_limit属性を混同せず再試行する', async () => {
+    vi.useFakeTimers();
+    queryMock.mockReturnValueOnce(createMockQuery([
+      createAssistantTextMessage('説明: usage_limit_exceeded'), createAssistantRateLimitMessage(),
+    ])).mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(queryMock).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+  it('最終result callbackの失敗を応答に保持してquery登録を解放する', async () => {
+    const activeBefore = getActiveQueryCount();
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ result: 'done' })]));
+    const result = await new QueryExecutor().execute('prompt', { cwd: '/tmp/project', onStream: (event) => {
+      if (event.type === 'result') throw new Error('stream callback failed');
+    } });
+    expect(result).toMatchObject({ success: false, error: 'stream callback failed' });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(getActiveQueryCount()).toBe(activeBefore);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('assistant.error が rate_limit の場合は exit code 1 より優先して RateLimit 文言を返す', async () => {
+  it('assistant.error の rate_limit は8回再試行後に exit code 1 より優先する', async () => {
+    vi.useFakeTimers();
     // Given
     queryMock.mockReturnValue(
       createMockQuery([createAssistantRateLimitMessage()], new Error(EXIT_CODE_MESSAGE)),
@@ -555,13 +1157,15 @@ describe('QueryExecutor rate limit cause preservation', () => {
     const executor = new QueryExecutor();
 
     // When
-    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+    const pending = executor.execute('test prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
 
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toBe(RATE_LIMIT_MESSAGE);
     expect(result.errorKind).toBe('rate_limit');
-    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledTimes(9);
   });
 
   it('rate_limit_event が観測された場合は SDK event の詳細を返す', async () => {
@@ -656,7 +1260,8 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('Claude SDK の HTTP 429 エラーは sdk_error の rate_limited として返す', async () => {
+  it('Claude SDK の HTTP 429 は8回の待機後に sdk_error の rate_limited を返す', async () => {
+    vi.useFakeTimers();
     // Given
     queryMock.mockReturnValue(
       createMockQuery([], new Error('HTTP 429: rate limit exceeded')),
@@ -664,7 +1269,15 @@ describe('QueryExecutor rate limit cause preservation', () => {
     const executor = new QueryExecutor();
 
     // When
-    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+    const pending = executor.execute('test prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(queryMock).toHaveBeenCalledTimes(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queryMock).toHaveBeenCalledTimes(index + 2);
+    }
+    const result = await pending;
 
     // Then
     expect(result.success).toBe(false);
@@ -672,7 +1285,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(result.error).toBe('HTTP 429: rate limit exceeded');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.rateLimitInfo?.source).toBe('sdk_error');
-    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledTimes(9);
   });
 
   it('assistant text のみで rate limit が示された場合はその文面を返す', async () => {
@@ -799,7 +1412,8 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('sessionId 付き実行で RateLimit を観測した場合は no-resume retry を行わない', async () => {
+  it('sessionId 付きの一時的な RateLimit は resume を保持して8回再試行する', async () => {
+    vi.useFakeTimers();
     // Given
     queryMock.mockImplementation(() => (
       createMockQuery([createAssistantRateLimitMessage()], new Error(EXIT_CODE_MESSAGE))
@@ -807,18 +1421,20 @@ describe('QueryExecutor rate limit cause preservation', () => {
     const executor = new QueryExecutor();
 
     // When
-    const result = await executor.execute('test prompt', {
+    const pending = executor.execute('test prompt', {
       cwd: '/tmp/project',
       sessionId: 'resume-session-1',
     });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
 
     // Then
     expect(result.error).toBe(RATE_LIMIT_MESSAGE);
     expect(result.errorKind).toBe('rate_limit');
-    expect(queryMock).toHaveBeenCalledTimes(1);
-    expect(
-      (queryMock.mock.calls[0]?.[0] as { options?: { resume?: string } }).options?.resume,
-    ).toBe('resume-session-1');
+    expect(queryMock).toHaveBeenCalledTimes(9);
+    for (const [request] of queryMock.mock.calls) {
+      expect(request.options.resume).toBe('resume-session-1');
+    }
   });
 
   it('sessionId 付き実行で rejected の rate_limit_event を観測した場合も no-resume retry を行わない', async () => {
@@ -873,6 +1489,25 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(
       (queryMock.mock.calls[1]?.[0] as { options?: { resume?: string } }).options?.resume,
     ).toBeUndefined();
+  });
+
+  it('tool_use後のexit code errorではsessionを外して同じpromptを再実行しない', async () => {
+    const toolUse = {
+      type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] },
+      session_id: 'resume-session-1',
+    };
+    queryMock.mockReturnValueOnce(createMockQuery([toolUse], new Error(EXIT_CODE_MESSAGE)))
+      .mockImplementation(() => { throw new Error('unexpected retry'); });
+    const onActivity = vi.fn();
+
+    const result = await new QueryExecutor().execute('prompt', {
+      cwd: '/tmp/project', sessionId: 'resume-session-1', onActivity,
+    });
+
+    expect(result).toMatchObject({ success: false, content: '', error: EXIT_CODE_MESSAGE });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(queryMock.mock.calls[0]?.[0].options.resume).toBe('resume-session-1');
+    expect(onActivity).toHaveBeenCalledOnce();
   });
 
   it('Skills 無効の resume 失敗を再試行するときも、SDK の空の Skill allowlist を維持する', async () => {
@@ -932,6 +1567,59 @@ describe('QueryExecutor rate limit cause preservation', () => {
 });
 
 describe('sdkMessageToStreamEvent', () => {
+  it.each([
+    { name: 'multiple blocks', metadata: {}, ids: ['A', 'B'], expected: { id: 'A', completedToolIds: ['A', 'B'] } },
+    { name: 'reversed blocks', metadata: {}, ids: ['B', 'A'], expected: { id: 'B', completedToolIds: ['B', 'A'] } },
+    { name: 'metadata before blocks', metadata: { tool_use_id: 'C', toolUseId: 'ignored' }, ids: ['A', 'B'], expected: { id: 'C', completedToolIds: ['C', 'A', 'B'] } },
+    { name: 'camel case metadata', metadata: { toolUseId: 'B' }, ids: ['A', 'B'], expected: { id: 'B', completedToolIds: ['B', 'A'] } },
+    { name: 'duplicate ids', metadata: { tool_use_id: 'A' }, ids: ['A', 'A'], expected: { id: 'A' } },
+    { name: 'single block', metadata: {}, ids: ['A'], expected: { id: 'A' } },
+    { name: 'no ids', metadata: {}, ids: [], expected: {} },
+  ])('should preserve the result fields and emit one event for $name', ({ metadata, ids, expected }) => {
+    const callback = vi.fn<(event: StreamEvent) => void>();
+    const message: SDKUserMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: ids.map((id) => ({ type: 'tool_result', tool_use_id: id, content: 'B' })),
+      },
+      tool_use_result: { ...metadata, stdout: 'normal output', stderr: 'failed output', is_error: true },
+      session_id: 'session-1',
+      parent_tool_use_id: null,
+    };
+
+    sdkMessageToStreamEvent(message, callback, true);
+
+    expect(callback.mock.calls).toEqual([[{
+      type: 'tool_result',
+      data: { ...expected, content: 'failed output', isError: true },
+    }]]);
+  });
+
+  it.each([undefined, null, { content: 'result body' }])('should preserve tool_use_result presence and content handling for %j', (toolUseResult) => {
+    const callback = vi.fn<(event: StreamEvent) => void>();
+    const message: SDKUserMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'A', content: 'first' },
+          { type: 'tool_result', tool_use_id: 'B', content: 'second' },
+        ],
+      },
+      tool_use_result: toolUseResult,
+      session_id: 'session-1',
+      parent_tool_use_id: null,
+    };
+
+    sdkMessageToStreamEvent(message, callback, true);
+
+    expect(callback.mock.calls).toEqual(toolUseResult === undefined ? [] : [[{
+      type: 'tool_result',
+      data: { id: 'A', completedToolIds: ['A', 'B'], content: toolUseResult === null ? '' : 'result body', isError: false },
+    }]]);
+  });
+
   it('assistant.error を assistant_error イベントとして流す', () => {
     const callback = vi.fn<(event: StreamEvent) => void>();
 

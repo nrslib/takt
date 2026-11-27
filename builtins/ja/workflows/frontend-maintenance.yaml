@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: 既存の画面や契約を尊重してフロントエンドを変更し、テスト・レビューと修正で要件の充足を確認する
     kind: workflow_call
     call: development-core
     args:

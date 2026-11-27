@@ -3,10 +3,13 @@ import type { TaskFailure, TaskStatus } from './schema.js';
 import type { RunResumeMode } from '../../core/workflow/run/run-meta.js';
 
 export interface TaskInfo {
+  workerName?: string;
+  waitingReason?: string;
   filePath: string;
   name: string;
   slug?: string;
   runSlug?: string;
+  executionId?: string;
   sourceRunSlug?: string;
   resumeMode?: RunResumeMode;
   summary?: string;
@@ -15,10 +18,12 @@ export interface TaskInfo {
   createdAt: string;
   status: TaskStatus;
   worktreePath?: string;
+  prUrl?: string;
   data: TaskFileData | null;
 }
 
 export interface TaskResult {
+  completion?: import('../goals/schema.js').GoalTaskResult;
   task: TaskInfo;
   success: boolean;
   response: string;
@@ -75,6 +80,9 @@ export interface SummarizeOptions {
 }
 
 export interface TaskListItem {
+  remoteAssignment?: import('../../core/worker-pool/remoteProtocol.js').RemoteAssignment;
+  executionId?: string;
+  goalId?: string;
   kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   name: string;
   createdAt: string;
@@ -102,6 +110,15 @@ export interface TaskListItem {
 
 /** Task metadata used by state readers that must not resolve task content. */
 export interface TaskState {
+  remoteArtifacts?: import('../../core/worker-pool/remoteExecutionProtocol.js').RemoteArtifacts;
+  remoteAssignment?: import('../../core/worker-pool/remoteProtocol.js').RemoteAssignment;
+  workerName?: string;
+  waitingReason?: string;
+  executionId?: string;
+  goalId?: string;
+  goalPurpose?: string;
+  goalWorkKey?: string;
+  completion?: import('../goals/schema.js').GoalTaskResult;
   kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   status: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   name: string;
@@ -115,7 +132,9 @@ export interface TaskState {
   branch?: string;
   worktree?: boolean | string;
   worktreePath?: string;
+  mergeTask?: boolean;
   workflow?: string;
+  runtimeAssignment?: string;
   prUrl?: string;
   failure?: TaskFailure;
   startedAt?: string;

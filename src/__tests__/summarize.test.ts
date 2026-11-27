@@ -1,8 +1,10 @@
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 /**
  * Tests for summarizeTaskName
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeProvider } from './test-helpers.js';
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(),
@@ -30,19 +32,20 @@ import {
   resolveNonWorkflowProviderOptions,
 } from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
-const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+const mockResolveConfigValues = vi.mocked(resolveConfigValues<'branchNameStrategy' | 'provider' | 'model'>);
 const mockResolveNonWorkflowProviderModel = vi.mocked(resolveNonWorkflowProviderModel);
 const mockResolveNonWorkflowProviderOptions = vi.mocked(resolveNonWorkflowProviderOptions);
 
 const mockProviderCall = vi.fn();
 const mockGetRuntimeInstructions = vi.fn(() => null);
 const mockProviderSetup = vi.fn(() => ({ call: mockProviderCall }));
-const mockProvider = {
+const mockProvider = makeProvider({
   getRuntimeInstructions: mockGetRuntimeInstructions,
   setup: mockProviderSetup,
-};
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,6 +68,16 @@ beforeEach(() => {
 });
 
 describe('summarizeTaskName', () => {
+  it('composes the progress notes guidance into the summarizer system prompt', async () => {
+    mockProviderCall.mockResolvedValue({ persona: 'summarizer', status: 'done', content: 'add-auth', timestamp: new Date() });
+
+    await summarizeTaskName('long task name for testing', { cwd: '/project' });
+
+    const [agentSetup] = mockProviderSetup.mock.calls[0] as unknown as [{ systemPrompt: string }];
+    expect(agentSetup.systemPrompt.startsWith(`${loadTemplate('progress_notes', 'en')}\n\n`)).toBe(true);
+    expect(agentSetup.systemPrompt.endsWith(loadTemplate('score_slug_system_prompt', 'en'))).toBe(true);
+  });
+
   it('should return AI-generated slug for task name', async () => {
     // Given: AI returns a slug for input
     mockProviderCall.mockResolvedValue({

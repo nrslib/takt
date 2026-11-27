@@ -38,6 +38,13 @@ describe('command quality gates', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('preserves rejection when spawn throws synchronously for an invalid command', async () => {
+    await expect(runCommandQualityGate({
+      gate: { type: 'command', command: 'printf \0' },
+      projectRoot: createTempDir(),
+    })).rejects.toThrow();
+  });
+
   it('should fail with command, cwd, exit code, stdout, and stderr when the command exits non-zero', async () => {
     const projectRoot = createTempDir();
 

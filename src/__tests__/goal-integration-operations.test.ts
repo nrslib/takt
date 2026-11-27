@@ -1,0 +1,241 @@
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn() }));
+import { beforeEach,expect,it,vi } from 'vitest';
+import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask,mergeTaktGoalPr,reopenTaktGoal,updateTaktGoalBranches } from '../features/mcp/goalIntegrationOperations.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+import { firstTextContent } from './helpers/mcp-content.js';
+import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), mergePr: vi.fn(), complete: vi.fn(), check: vi.fn(), reopen: vi.fn(), updateBranches: vi.fn(), notify: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
+vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { update = vi.fn(async (_id, transform) => transform(waitingGoal)); get = doubles.get; } }));
+vi.mock('../infra/goals/integration.js', () => ({ integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check, reopenGoal: doubles.reopen, updateGoalBranches: doubles.updateBranches }));
+vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
+vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: doubles.resolve }));
+vi.mock('../features/mcp/operations.js', async (original) => ({ ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: vi.fn() }));
+vi.mock('../features/manager/notifications.js', () => ({ resolveManagerNotificationOptions: doubles.config, sendSavedGoalNotifications: doubles.notify }));
+const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
+const input = { cwd: '/project', goalId: goalRecord().id };
+const signal = new AbortController().signal;
+const waitingGoal = { ...goalRecord(), status: 'awaiting_merge' as const,
+  completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'evidence',
+    instructions: [], changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+  pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' },
+};
+it.each(['auto', 'approve'])('allows explicit PR merge instructions independently of the %s automatic completion policy', async (mainMerge) => {
+  doubles.config.mockReturnValue({ mainMerge, policy });
+  doubles.get.mockResolvedValue(waitingGoal);
+  doubles.mergePr.mockResolvedValue({ taskName: 'merge-pr-1950', status: 'pending' });
+  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950, until: 'merge' }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, waitingGoal, 'merge', signal);
+});
+it.each(['created', 'completed', 'missing PR', 'wrong PR', 'paused', 'aborted'])('rejects %s before calling the PR merge runner', async (condition) => {
+  const number = condition === 'wrong PR' ? 1951 : 1950;
+  doubles.get.mockResolvedValue({ ...waitingGoal, status: condition === 'created' || condition === 'completed' ? condition : 'awaiting_merge',
+    executionStatus: condition === 'paused' || condition === 'aborted' ? condition : 'active',
+    ...(condition === 'completed' ? { completion: { ...waitingGoal.completion, targetSha: 'b'.repeat(40) } } : {}),
+    pullRequest: condition === 'missing PR' ? undefined : { number, url: `https://github.com/example/project/pull/${number}` } });
+  expect((await mergeTaktGoalPr({ ...input, prNumber: 1950, until: 'merge' }, {}, signal)).isError).toBe(true);
+  expect(doubles.mergePr).not.toHaveBeenCalled();
+});
+it.each(['ja', 'en'])('passes human verification steps and resolved language %s to completion', async (language) => {
+  doubles.resolve.mockReturnValue(language);
+  const completion = { ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks: '  Open the result\nCheck its content  ' };
+
+  const result = await completeTaktGoal(completion, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.complete).toHaveBeenCalledOnce();
+  expect(doubles.complete.mock.calls[0]).toEqual(expect.arrayContaining([completion.humanChecks, language]));
+});
+beforeEach(() => { vi.resetAllMocks(); doubles.get.mockResolvedValue(goalRecord()); doubles.config.mockReturnValue({ mainMerge: 'approve', preserveGoalWorktree: false, policy }); doubles.resolve.mockReturnValue('ja'); doubles.merge.mockResolvedValue({ status: 'merged' }); doubles.complete.mockResolvedValue({ status: 'awaiting_merge' }); doubles.check.mockResolvedValue({ included: true }); });
+it.each(['paused', 'aborted'] as const)('rejects writes against a %s goal before invoking tools', async (executionStatus) => {
+  doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus });
+  for (const result of [await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal), await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal), await checkTaktGoalCompletion(input, {}, signal), await reopenTaktGoal({ ...input, reason: '追加の修正' }, {}, signal), await updateTaktGoalBranches({ ...input, integrationBranch: 'integration/takt-mcp', reason: '宛先が変わったため' }, {}, signal)]) expect(result.isError).toBe(true);
+  expect(doubles.merge).not.toHaveBeenCalled(); expect(doubles.complete).not.toHaveBeenCalled(); expect(doubles.check).not.toHaveBeenCalled();
+  expect(doubles.reopen).not.toHaveBeenCalled(); expect(doubles.updateBranches).not.toHaveBeenCalled(); expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it.each([undefined, '', ' \n\t ', 'a'.repeat(128 * 1024 + 1)])('rejects an invalid reopen reason before invoking integration', async (reason) => {
+  const result = await reopenTaktGoal({ ...input, reason: reason as string }, {}, signal);
+  expect(result.isError).toBe(true);
+  expect(doubles.get).not.toHaveBeenCalled();
+  expect(doubles.reopen).not.toHaveBeenCalled();
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it('corrects branches on a created goal and returns the saved integration branch', async () => {
+  const integrationBranch = 'integration/takt-mcp';
+  const reason = '宛先が変わったため';
+  const previous = goalRecord();
+  const saved = { ...previous, integrationBranch, workLog: [{ id: '550e8400-e29b-41d4-a716-446655440001', summary: reason, recordedAt: '2026-10-15T00:00:00Z' }] };
+  doubles.get.mockResolvedValue(previous);
+  doubles.updateBranches.mockImplementation(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return { goal: saved, workLogEntryId: saved.workLog[0]!.id };
+  });
+
+  const result = await updateTaktGoalBranches({ ...input, integrationBranch, reason }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.updateBranches).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, integrationBranch, reason, signal);
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    workLogEntryId: saved.workLog[0]!.id, goal: { id: saved.id, integrationBranch },
+  });
+});
+
+it('passes the reason and cancellation through integration and notifies using the saved goal before responding', async () => {
+  const previous = goalRecord();
+  const saved = { ...previous, workLog: [{ id: '550e8400-e29b-41d4-a716-446655440001', summary: '  追加の修正  ', recordedAt: '2026-10-15T00:00:00Z' }] };
+  doubles.get.mockResolvedValue(previous);
+  doubles.reopen.mockImplementation(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return { goal: saved, workLogEntryId: saved.workLog[0]!.id };
+  });
+  doubles.notify.mockImplementation(async (_cwd, before, current) => {
+    expect(before).toEqual(previous);
+    expect(current).toEqual(saved);
+    expect(await doubles.get()).toEqual(saved);
+  });
+  const result = await reopenTaktGoal({ ...input, reason: saved.workLog[0]!.summary }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(doubles.reopen).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, saved.workLog[0]!.summary, signal);
+  expect(doubles.notify).toHaveBeenCalledOnce();
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: {
+    id: saved.id, status: 'created', executionStatus: 'active', branch: saved.branch, integrationBranch: saved.integrationBranch,
+  }, workLogEntryId: saved.workLog[0]!.id });
+});
+it.each([false, true])('passes reviewed SHA, notification policy, cancellation, and preserveGoalWorktree=%s directly to integration', async (preserveGoalWorktree) => {
+  doubles.config.mockReturnValue({ mainMerge: 'approve', preserveGoalWorktree, policy });
+  await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal);
+  expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, policy, 'ja', preserveGoalWorktree);
+});
+it('returns clone cleanup diagnostics without changing the successful MCP merge response', async () => {
+  const sha = 'a'.repeat(40);
+  const cleanupWarning = { path: '/takt-worktrees/task-clone', reason: 'permission denied' };
+  doubles.merge.mockResolvedValueOnce({ status: 'merged', sha, cleanupWarning, goal: goalRecord() });
+
+  const result = await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: sha }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha, cleanupWarning });
+});
+it.each(['auto', 'approve'] as const)('uses the configured %s completion policy', async (mainMerge) => {
+  doubles.config.mockReturnValue({ mainMerge, policy });
+  await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, policy, undefined, 'ja');
+});
+it('returns the checked completion state and target SHA and notifies with the saved goal', async () => {
+  const previous = { ...goalRecord(), status: 'awaiting_merge' as const };
+  const targetSha = 'b'.repeat(40);
+  const saved = { ...previous, status: 'completed' as const, completion: {
+    goalBranch: previous.branch, goalSha: 'a'.repeat(40), targetBranch: previous.integrationBranch, targetSha,
+    summary: 'evidence', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  doubles.get.mockResolvedValue(previous);
+  doubles.check.mockImplementation(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return { included: true, targetSha, goal: saved };
+  });
+
+  const result = await checkTaktGoalCompletion(input, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.check).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, signal, policy);
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith(input.cwd, previous, saved, undefined);
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    included: true, targetSha, goal: { id: saved.id, status: 'completed', completion: { goalSha: 'a'.repeat(40), targetSha } },
+  });
+});
+it.each(['completed', 'awaiting_merge'] as const)('returns the saved %s completion request and notifies with that goal', async (status) => {
+  const previous = goalRecord();
+  const goalSha = 'a'.repeat(40);
+  const targetSha = 'b'.repeat(40);
+  const saved = { ...previous, status, completion: {
+    goalBranch: previous.branch, goalSha, targetBranch: previous.integrationBranch,
+    ...(status === 'completed' ? { targetSha } : {}),
+    summary: 'evidence', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  doubles.get.mockResolvedValue(previous);
+  const operation = { status: status === 'completed' ? 'merged' : 'awaiting_merge',
+    ...(status === 'completed' ? { sha: targetSha } : {}), completion: saved.completion, goal: saved };
+  doubles.complete.mockImplementationOnce(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return operation;
+  });
+
+  const result = await completeTaktGoal({ ...input, expectedSha: goalSha, summary: 'evidence' }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    ...operation, goal: { id: saved.id, status, completion: saved.completion },
+  });
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith(input.cwd, previous, saved, undefined);
+});
+
+it('returns an unincluded completion check with the saved approval', async () => {
+  const saved = { ...goalRecord(), status: 'awaiting_merge' as const, completion: {
+    goalBranch: goalRecord().branch, goalSha: 'c'.repeat(40), targetBranch: 'main',
+    summary: 'updated evidence', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  doubles.get.mockResolvedValue(saved);
+  doubles.check.mockResolvedValueOnce({ included: false, goal: saved });
+
+  const result = await checkTaktGoalCompletion(input, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ included: false, goal: {
+    id: saved.id, status: 'awaiting_merge', completion: saved.completion,
+  } });
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith(input.cwd, saved, saved, undefined);
+});
+
+it('returns a completion request error without notifying when the approval changed', async () => {
+  doubles.complete.mockRejectedValueOnce(new Error('Approved goal SHA changed during the completion check.'));
+
+  const result = await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, policy, undefined, 'ja');
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(doubles.get).toHaveBeenCalledOnce();
+});
+
+it('returns a completion check error without notifying when the approval changed', async () => {
+  doubles.check.mockRejectedValueOnce(new Error('Approved goal SHA changed during the completion check.'));
+
+  const result = await checkTaktGoalCompletion(input, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(doubles.check).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, signal, policy);
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(doubles.get).toHaveBeenCalledOnce();
+});
+it.each(['merge', 'complete', 'check'] as const)('bounds %s results while retaining saved state and completion instructions', async (kind) => {
+  const completion = { goalBranch: 'goal', goalSha: 'a'.repeat(40), targetBranch: 'main',
+    summary: '完成根拠'.repeat(20000), instructions: ['git merge ' + 'a'.repeat(40)], reason: 'human merge',
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } };
+  const goal = { ...goalRecord(), status: 'awaiting_merge', completion,
+    workLog: Array.from({ length: 200 }, () => ({ summary: '履歴'.repeat(20000) })) };
+  doubles[kind].mockResolvedValue({ status: kind === 'merge' ? 'merged' : 'awaiting_merge', included: false, sha: 'b'.repeat(40), completion, goal });
+  const result = kind === 'merge' ? await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal)
+    : kind === 'complete' ? await completeTaktGoal({ ...input, summary: 'evidence', expectedSha: 'a'.repeat(40) }, {}, signal)
+      : await checkTaktGoalCompletion(input, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  const output = JSON.parse(firstTextContent(result.content));
+  expect(output).toMatchObject({ status: kind === 'merge' ? 'merged' : 'awaiting_merge', included: false, sha: 'b'.repeat(40),
+    goal: { status: 'awaiting_merge' }, completion: { goalSha: 'a'.repeat(40), targetBranch: 'main', instructions: completion.instructions, reason: 'human merge', truncated: true } });
+  expect(output.goal).not.toHaveProperty('workLog');
+  expect(output.completion.omissions[0].totalBytes).toBe(Buffer.byteLength(completion.summary));
+});
+
+it.each(['direct human instruction', 'event'])('allows PR merge tool calls from a %s turn without an authorization callback', async (_source) => {
+  doubles.get.mockResolvedValue(waitingGoal);
+  doubles.mergePr.mockResolvedValue({ taskName: 'merge-pr-1950', status: 'pending' });
+  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950, until: 'merge' }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, waitingGoal, 'merge', signal);
+});

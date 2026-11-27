@@ -8,6 +8,11 @@ export interface InkInputGuard {
   detach(): void;
 }
 
+export interface InkMountOptions {
+  /** Opt in only for the conversation's IME input; other views keep Ink defaults. */
+  readonly anchorLiveFrame?: boolean;
+}
+
 /**
  * Surfaces the first failure. A teardown that also failed rides along as the
  * cause so it stays observable without hiding what actually went wrong.
@@ -57,6 +62,7 @@ export async function mountInk<T>(
   }) => ReactElement,
   exitedEarlyMessage: string,
   inputGuard?: InkInputGuard,
+  options: InkMountOptions = {},
 ): Promise<T> {
   let settle!: (value: T) => void;
   let fail!: (error: unknown) => void;
@@ -70,6 +76,7 @@ export async function mountInk<T>(
   let primaryError: unknown;
   let hasPrimaryError = false;
   const teardownErrors: unknown[] = [];
+  /** Keeps the first failure primary and retains later failures for teardown reporting. */
   const recordFailure = (error: unknown): void => {
     if (hasPrimaryError) {
       teardownErrors.push(error);
@@ -91,6 +98,7 @@ export async function mountInk<T>(
   let outcome: { readonly value: T } | undefined;
   try {
     let instance: Instance | undefined;
+    let exitPromise: ReturnType<Instance['waitUntilExit']> | undefined;
     try {
       // Readline prompts leave stdin paused when they release the terminal. Ink
       // can then mount without receiving any keypresses unless the next owner
@@ -117,10 +125,20 @@ export async function mountInk<T>(
         // terminal (`hasInteractiveTerminal`) and owns it, so that decision is
         // handed to Ink rather than re-made from the environment.
         interactive: true,
+        // Only the conversation's IME input opts into the anchored renderer.
+        // Keep other views on Ink's default rendering and resize paths.
+        ...(options.anchorLiveFrame === true ? {
+          // A height reduction must not archive old input/status rows.
+          anchorLiveFrame: true,
+          // Terminal.app rewraps the cursor's group and keeps the rows below the
+          // cursor on a height reduction; xterm.js terminals do neither.
+          reflowsCursorGroup: process.env.TERM_PROGRAM === 'Apple_Terminal',
+        } : {}),
       });
 
       // An Ink teardown before the view settles would leave this pending.
-      instance.waitUntilExit().then(
+      exitPromise = instance.waitUntilExit();
+      exitPromise.then(
         () => fail(new Error(exitedEarlyMessage)),
         (error: unknown) => fail(error),
       );
@@ -141,7 +159,7 @@ export async function mountInk<T>(
         await teardown(() => mounted.clear());
         await teardown(() => mounted.unmount());
         await teardown(async () => {
-          await mounted.waitUntilExit();
+          await exitPromise;
         });
       }
       await teardown(() => {

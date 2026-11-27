@@ -5,6 +5,7 @@ import { createReadToolDefinition, type ExtensionAPI } from '@earendil-works/pi-
 
 export const COMPAT_MODEL = 'takt-compat-test/offline';
 export const EXECUTION_FILE = 'tool-executions.txt';
+export const TURN_END_FILE = 'turn-end-events.txt';
 
 /** Extracts text consistently from user, assistant, and tool-result messages. */
 function messageText(message: Message): string {
@@ -31,6 +32,9 @@ export default function registerCompatibilityProbe(pi: ExtensionAPI): void {
   });
   registerProbe('allowed_probe');
   registerProbe('write');
+  pi.on('turn_end', (_event, ctx) => {
+    appendFileSync(join(ctx.cwd, TURN_END_FILE), 'completed\n');
+  });
   pi.registerTool({
     name: 'orchestrator',
     label: 'orchestrator',
@@ -51,20 +55,46 @@ export default function registerCompatibilityProbe(pi: ExtensionAPI): void {
   pi.registerProvider(model.provider);
   pi.on('session_shutdown', () => undefined);
   pi.on('before_agent_start', (event) => {
+    if (event.messageType !== 'user') return;
+
     registerProbe('dynamic_probe');
-    pi.setActiveTools(['orchestrator', 'write', 'ambient_deferred', 'ambient_codemode']);
+    if (!event.prompt.includes('codemode')) {
+      pi.setActiveTools(['orchestrator', 'write', 'ambient_deferred', 'ambient_codemode']);
+    }
     if (event.prompt.startsWith('remember:')) {
       model.setResponses([fauxAssistantMessage(`saved:${event.prompt.slice('remember:'.length)}`)]);
     } else if (event.prompt === 'recall') {
       model.setResponses([(context) => fauxAssistantMessage(JSON.stringify(
         context.messages
           .filter((message) => message.role === 'user' || message.role === 'assistant')
-          .map(messageText),
+          .map((message) => ({ role: message.role, text: messageText(message) })),
       ))]);
     } else if (event.prompt === 'selected tools') {
       model.setResponses([
         fauxAssistantMessage(fauxToolCall('write', { path: 'probe' })),
         fauxAssistantMessage('selected tool executed'),
+      ]);
+    } else if (event.prompt === 'codemode policy') {
+      model.setResponses([
+        fauxAssistantMessage(fauxToolCall('codemode', {
+          code: 'const results = await Promise.allSettled([tools.allowed_probe({ path: "allowed" }), tools.ambient_codemode({ path: "denied" })]); return JSON.stringify(results.map((result) => result.status));',
+        })),
+        (context) => {
+          const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
+          if (result === undefined) throw new Error('Missing SDK tool result');
+          return fauxAssistantMessage(messageText(result));
+        },
+      ]);
+    } else if (event.prompt === 'codemode result selection') {
+      model.setResponses([
+        fauxAssistantMessage(fauxToolCall('codemode', {
+          code: 'await tools.allowed_probe({ path: "first" }); return await tools.dynamic_probe({ path: "selected" });',
+        })),
+        (context) => {
+          const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
+          if (result === undefined) throw new Error('Missing SDK tool result');
+          return fauxAssistantMessage(messageText(result));
+        },
       ]);
     } else {
       model.setResponses([

@@ -12,12 +12,8 @@
 
 import type { AssistantInteractiveMode, Language } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
+import { getLabelObject } from '../../shared/i18n/index.js';
 import {
-  type SessionState,
-} from '../../infra/config/index.js';
-import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import {
-  displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
 import { createAssistantConversationPlan } from './conversationPlan.js';
@@ -27,6 +23,7 @@ import {
   buildSummaryPrompt as buildInteractiveSummaryPrompt,
   type InteractiveModeAction,
   type SummaryActionValue,
+  type InteractiveSummaryUIText,
   createPostSummaryActionSelector,
 } from './interactive-summary.js';
 import { buildConversationSummaryPrompt } from './interactiveApplication.js';
@@ -36,7 +33,7 @@ import { resolveFormalSpecConfiguration } from './taskInstructionFormat.js';
 import type { ConversationDispatchOutcome } from './actionDispatcher.js';
 
 /** Shape of interactive UI text */
-export interface InteractiveUIText {
+export interface InteractiveUIText extends InteractiveSummaryUIText {
   intro: string;
   introGrillMe: string;
   resume: string;
@@ -44,54 +41,10 @@ export interface InteractiveUIText {
   summarizeFailed: string;
   continuePrompt: string;
   proposed: string;
-  actionPrompt: string;
-  actions: {
-    execute: string;
-    createIssue: string;
-    saveTask: string;
-    continue: string;
-  };
   cancelled: string;
   acceptNoAssistant: string;
   retryNoOrder: string;
   pasteImageUnavailable: string;
-}
-
-/**
- * Format session state for display
- */
-export function formatSessionStatus(state: SessionState, lang: 'en' | 'ja'): string {
-  const lines: string[] = [];
-
-  // Status line
-  if (state.status === 'success') {
-    lines.push(getLabel('interactive.previousTask.success', lang));
-  } else if (state.status === 'error') {
-    lines.push(
-      getLabel('interactive.previousTask.error', lang, {
-        error: state.errorMessage!,
-      }),
-    );
-  } else if (state.status === 'user_stopped') {
-    lines.push(getLabel('interactive.previousTask.userStopped', lang));
-  }
-
-  // Workflow name
-  lines.push(
-    getLabel('interactive.previousTask.workflow', lang, {
-      workflowName: state.workflowName,
-    }),
-  );
-
-  // Timestamp
-  const timestamp = new Date(state.timestamp).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US');
-  lines.push(
-    getLabel('interactive.previousTask.timestamp', lang, {
-      timestamp,
-    }),
-  );
-
-  return lines.join('\n');
 }
 
 export function resolveLanguage(lang?: Language): 'en' | 'ja' {
@@ -129,6 +82,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec?: boolean,
   formalSpecComments?: boolean,
+  userNote?: string,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -141,6 +95,7 @@ export function buildSummaryPrompt(
   promptContext?: string,
   formalSpec?: boolean,
   formalSpecComments?: boolean,
+  userNote?: string,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -155,6 +110,7 @@ export function buildSummaryPrompt(
       formalSpec,
       false,
       formalSpecComments,
+      userNote,
     );
   }
 
@@ -216,7 +172,7 @@ export async function interactiveMode(
     formalSpec: initialFormalSpec.mode,
     formalSpecComments: initialFormalSpec.comments,
     modelCheckTimeoutSeconds: initialFormalSpec.modelCheckTimeoutSeconds,
-    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd),
+    resolveResumedFormalSpecConfiguration: () => resolveFormalSpecConfiguration(cwd, { allowCancel: true }),
     ...(workflowContext ? { workflowContext } : {}),
     ...(runSessionContext ? { runSessionContext } : {}),
     ...(options?.provider ? { provider: options.provider } : {}),
@@ -224,13 +180,11 @@ export async function interactiveMode(
     ...(sessionId ? { sessionId } : {}),
   });
 
-  displayAndClearSessionState(cwd, ctx.lang);
-
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
 
   const excludeActions = options?.excludeActions;
   const selectAction = excludeActions?.length
-    ? createPostSummaryActionSelector(ui.proposed, ui, excludeActions)
+    ? createPostSummaryActionSelector(ui.proposed, ui, ctx.lang, excludeActions)
     : undefined;
 
   return runConversationLoop(cwd, ctx, {

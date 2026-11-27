@@ -12,6 +12,7 @@ const {
   mockCheckGhCli,
   mockFetchIssue,
   mockListOpenIssues,
+  mockListOpenPrs,
   mockCreateIssue,
   mockCloseIssue,
   mockCommentOnIssue,
@@ -21,10 +22,14 @@ const {
   mockCreatePullRequest,
   mockFetchPrReviewComments,
   mockMergePr,
+  mockFetchPrStatus,
+  mockFetchPrDetails,
+  mockFetchPrSelectionData,
 } = vi.hoisted(() => ({
   mockCheckGhCli: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockListOpenIssues: vi.fn(),
+  mockListOpenPrs: vi.fn(),
   mockCreateIssue: vi.fn(),
   mockCloseIssue: vi.fn(),
   mockCommentOnIssue: vi.fn(),
@@ -34,6 +39,9 @@ const {
   mockCreatePullRequest: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
   mockMergePr: vi.fn(),
+  mockFetchPrStatus: vi.fn(),
+  mockFetchPrDetails: vi.fn(),
+  mockFetchPrSelectionData: vi.fn(),
 }));
 
 vi.mock('../infra/github/issue.js', () => ({
@@ -46,24 +54,99 @@ vi.mock('../infra/github/issue.js', () => ({
 }));
 
 vi.mock('../infra/github/pr.js', () => ({
+  listOpenPrs: (...args: unknown[]) => mockListOpenPrs(...args),
   findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
   commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
   closePr: (...args: unknown[]) => mockClosePr(...args),
   createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
   fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
   mergePr: (...args: unknown[]) => mockMergePr(...args),
+  fetchPrStatus: (...args: unknown[]) => mockFetchPrStatus(...args),
+  fetchPrDetails: (...args: unknown[]) => mockFetchPrDetails(...args),
+  fetchPrSelectionData: (...args: unknown[]) => mockFetchPrSelectionData(...args),
 }));
 
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
 import type { CommentResult, IssueCommentResult, PrReviewData } from '../infra/git/index.js';
+import type { PrListItem } from '../infra/git/types.js';
 import { createIssueSuccess } from './helpers/createIssueResult.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('GitHubProvider', () => {
+  it('binds merge PR operations to one published target without changing the default provider', async () => {
+    const target = parseGitHubPullRequestTarget('https://ghe.example.test/acme/target/pull/123');
+    const defaultProvider = getGitProvider();
+    const provider = new GitHubProvider(target);
+    await provider.fetchPrDetails(123, '/source');
+    await provider.fetchPrStatus(123, '/source');
+    provider.fetchPrReviewComments(123, '/source');
+    provider.commentOnPr(123, 'reviewed', '/source');
+    provider.mergePr(123, '/source', 'squash', 'head');
+    provider.closePr(123, '/source');
+    expect(mockFetchPrDetails).toHaveBeenCalledWith(123, '/source', undefined, target);
+    expect(mockFetchPrStatus).toHaveBeenCalledWith(123, '/source', undefined, target);
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(123, '/source', target);
+    expect(mockCommentOnPr).toHaveBeenCalledWith(123, 'reviewed', '/source', target);
+    expect(mockMergePr).toHaveBeenCalledWith(123, '/source', 'squash', 'head', target);
+    expect(mockClosePr).toHaveBeenCalledWith(123, '/source', target);
+    expect(getGitProvider()).toBe(defaultProvider);
+    expect(() => provider.mergePr(456, '/source')).toThrow('does not match');
+    expect(mockMergePr).toHaveBeenCalledOnce();
+  });
+
+  it('選別材料取得を指定番号とcwdで委譲し取得結果を返す', async () => {
+    const data = { number: 10, title: 'Guide', body: 'Instructions', files: ['docs/guide.md'] };
+    mockFetchPrSelectionData.mockReturnValue(data);
+    const provider = new GitHubProvider();
+    const fetch = Reflect.get(provider, 'fetchPrSelectionData');
+    expect(fetch).toBeTypeOf('function');
+    expect(await Reflect.apply(fetch, provider, [10, '/project'])).toEqual(data);
+    expect(mockFetchPrSelectionData).toHaveBeenCalledWith(10, '/project');
+  });
+
+  it('選別材料取得の失敗を正常な空一覧へ変換しない', async () => {
+    mockFetchPrSelectionData.mockImplementation(() => { throw new Error('selection data unavailable'); });
+    const provider = new GitHubProvider();
+    const fetch = Reflect.get(provider, 'fetchPrSelectionData');
+    expect(fetch).toBeTypeOf('function');
+    await expect(async () => Reflect.apply(fetch, provider, [10, '/project'])).rejects.toThrow();
+    expect(mockFetchPrSelectionData).toHaveBeenCalledWith(10, '/project');
+  });
+
+  it.each([undefined, { allPages: true }])('PR一覧の取得指定%jをそのまま委譲する', (options) => {
+    mockListOpenPrs.mockReturnValue([]);
+    expect(new GitHubProvider().listOpenPrs('/project', options)).toEqual([]);
+    expect(mockListOpenPrs).toHaveBeenCalledWith('/project', options);
+  });
+  it('一括一覧の遅延消費を保ってadapterの項目を渡す', () => {
+    const consumed = vi.fn();
+    const item: PrListItem = { number: 123, author: 'alice', base_branch: 'main', head_branch: 'feature/123',
+      managed_by_takt: false, labels: [], same_repository: true, draft: false, updated_at: '2026-10-08T00:00:00Z' };
+    mockListOpenPrs.mockReturnValue((function* () {
+      consumed();
+      yield item;
+    })());
+    const prs = new GitHubProvider().listOpenPrs('/project', { allPages: true });
+    expect(consumed).not.toHaveBeenCalled();
+    expect(Array.from(prs)).toEqual([item]);
+    expect(consumed).toHaveBeenCalledOnce();
+    expect(mockListOpenPrs).toHaveBeenCalledWith('/project', { allPages: true });
+  });
+  it('PR metadataと状態取得を指定番号とcwdで委譲する', async () => {
+    const provider = new GitHubProvider();
+    mockFetchPrDetails.mockResolvedValue({ number: 123, baseBranch: 'main', sameRepository: true });
+    mockFetchPrStatus.mockResolvedValue({ number: 123, merged: false });
+    expect(await provider.fetchPrDetails(123, '/project')).toEqual({ number: 123, baseBranch: 'main', sameRepository: true });
+    const options = { timeoutMs: 100, signal: new AbortController().signal };
+    expect(await provider.fetchPrStatus(123, '/project', options)).toEqual({ number: 123, merged: false });
+    expect(mockFetchPrDetails).toHaveBeenCalledWith(123, '/project', undefined);
+    expect(mockFetchPrStatus).toHaveBeenCalledWith(123, '/project', options);
+  });
   describe('checkCliStatus', () => {
     it('checkGhCli() の結果をそのまま返す', () => {
       // Given
@@ -76,7 +159,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockCheckGhCli).toHaveBeenCalledWith(process.cwd());
-      expect(result).toBe(status);
+      expect(result).toEqual(status);
     });
 
     it('gh CLI が利用不可の場合は available: false を返す', () => {
@@ -90,6 +173,7 @@ describe('GitHubProvider', () => {
       // Then
       expect(mockCheckGhCli).toHaveBeenCalledWith(process.cwd());
       expect(result.available).toBe(false);
+      if (result.available) throw new Error('Expected unavailable CLI');
       expect(result.error).toBe('gh is not installed');
     });
 
@@ -104,7 +188,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockCheckGhCli).toHaveBeenCalledWith('/worktree/clone');
-      expect(result).toBe(status);
+      expect(result).toEqual(status);
     });
 
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
@@ -132,7 +216,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFetchIssue).toHaveBeenCalledWith(42, process.cwd());
-      expect(result).toBe(issue);
+      expect(result).toEqual(issue);
     });
 
     it('cwd を指定した場合は fetchIssue にそのまま転送する', () => {
@@ -146,7 +230,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFetchIssue).toHaveBeenCalledWith(10, '/worktree/clone');
-      expect(result).toBe(issue);
+      expect(result).toEqual(issue);
     });
 
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
@@ -174,7 +258,7 @@ describe('GitHubProvider', () => {
       const result = provider.listOpenIssues();
 
       expect(mockListOpenIssues).toHaveBeenCalledWith(process.cwd());
-      expect(result).toBe(issues);
+      expect(result).toEqual(issues);
     });
 
     it('cwd を指定した場合は listOpenIssues にそのまま転送する', () => {
@@ -187,7 +271,7 @@ describe('GitHubProvider', () => {
       const result = provider.listOpenIssues('/worktree/clone');
 
       expect(mockListOpenIssues).toHaveBeenCalledWith('/worktree/clone');
-      expect(result).toBe(issues);
+      expect(result).toEqual(issues);
     });
   });
 
@@ -204,7 +288,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockCreateIssue).toHaveBeenCalledWith(opts, process.cwd());
-      expect(result).toBe(issueResult);
+      expect(result).toEqual(issueResult);
     });
 
     it('ラベルを含む場合、opts をそのまま委譲する', () => {
@@ -256,7 +340,7 @@ describe('GitHubProvider', () => {
       const result = provider.closeIssue(938, 'Compensation comment', '/project');
 
       expect(mockCloseIssue).toHaveBeenCalledWith(938, 'Compensation comment', '/project');
-      expect(result).toBe(closeResult);
+      expect(result).toEqual(closeResult);
     });
 
     it('失敗時はエラー結果を委譲して返す', () => {
@@ -290,7 +374,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFindExistingPr).toHaveBeenCalledWith('feat/my-feature', '/project');
-      expect(result).toBe(pr);
+      expect(result).toEqual(pr);
     });
 
     it('PR が存在しない場合は undefined を返す', () => {
@@ -316,7 +400,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFindExistingPr).toHaveBeenCalledWith('feat/branch', '/worktree/clone');
-      expect(result).toBe(pr);
+      expect(result).toEqual(pr);
     });
 
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
@@ -345,7 +429,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockCreatePullRequest).toHaveBeenCalledWith(opts, '/project');
-      expect(result).toBe(prResult);
+      expect(result).toEqual(prResult);
     });
 
     it('draft: true の場合、opts をそのまま委譲する', () => {
@@ -399,7 +483,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockCommentOnPr).toHaveBeenCalledWith(42, 'Updated!', '/project');
-      expect(result).toBe(commentResult);
+      expect(result).toEqual(commentResult);
     });
 
     it('コメント失敗時はエラー結果を委譲して返す', () => {
@@ -496,7 +580,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, process.cwd());
-      expect(result).toBe(prReview);
+      expect(result).toEqual(prReview);
     });
 
     it('cwd を指定した場合は fetchPrReviewComments にそのまま転送する', () => {
@@ -519,7 +603,7 @@ describe('GitHubProvider', () => {
 
       // Then
       expect(mockFetchPrReviewComments).toHaveBeenCalledWith(100, '/worktree/clone');
-      expect(result).toBe(prReview);
+      expect(result).toEqual(prReview);
     });
 
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
@@ -552,7 +636,7 @@ describe('GitHubProvider', () => {
 
       const result = provider.mergePr(42, '/project');
 
-      expect(mockMergePr).toHaveBeenCalledWith(42, '/project');
+      expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, '/project']);
       expect(result).toEqual({ success: true });
     });
 
@@ -571,7 +655,7 @@ describe('GitHubProvider', () => {
 
       provider.mergePr(42);
 
-      expect(mockMergePr).toHaveBeenCalledWith(42, process.cwd());
+      expect(mockMergePr.mock.calls[0]?.slice(0, 2)).toEqual([42, process.cwd()]);
     });
   });
 

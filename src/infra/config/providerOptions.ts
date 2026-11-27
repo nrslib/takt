@@ -4,6 +4,7 @@ import type {
   CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
+  KiroEffort,
   DeepSeekReasoningEffort,
   DeepSeekHarnessProviderOptions,
   OpenCodeGuardProfile,
@@ -12,7 +13,7 @@ import type {
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
 import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
-import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
+import { assertCodexPermissionControlOptions } from '../../core/models/workflow-provider-options.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -35,6 +36,7 @@ type RawProviderOptions = {
     network_access?: boolean;
     permission_control?: CodexPermissionControl;
     config_profile?: string;
+    readonly_permission_base?: string;
     reasoning_effort?: CodexReasoningEffort;
     fast_mode?: boolean;
     guards?: RawProviderGuardOptions;
@@ -70,6 +72,10 @@ type RawProviderOptions = {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
     };
+    permissions?: {
+      deny?: string[];
+      import_user_read_deny?: boolean;
+    };
   };
   claude_terminal?: {
     backend?: ClaudeTerminalProviderOptions['backend'];
@@ -86,10 +92,14 @@ type RawProviderOptions = {
   kiro?: {
     use_prompt_temp_file?: boolean;
     agent?: string;
+    effort?: KiroEffort;
     guards?: RawProviderGuardOptions;
   };
   cursor?: {
     use_prompt_temp_file?: boolean;
+    guards?: RawProviderGuardOptions;
+  };
+  devin?: {
     guards?: RawProviderGuardOptions;
   };
   deepseek_harness?: {
@@ -98,6 +108,7 @@ type RawProviderOptions = {
     request_timeout_ms?: number;
     shutdown_timeout_ms?: number;
     reasoning_effort?: DeepSeekReasoningEffort;
+    plugins?: DeepSeekHarnessProviderOptions['plugins'];
   };
   pi?: {
     guards?: RawProviderGuardOptions;
@@ -224,6 +235,22 @@ function assertAllowedDeepSeekHarnessReasoningEffort(
   );
 }
 
+/** Reject executable plugins from project/workflow settings while preserving trusted user configuration. */
+function assertAllowedDeepSeekHarnessPlugins(
+  path: string,
+  plugins: DeepSeekHarnessProviderOptions['plugins'],
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (plugins === undefined || plugins.length === 0) return;
+  const origin = options.getOrigin?.(path);
+  if (!shouldRequireLoopbackBaseUrl(path, options) && origin !== 'local' && origin !== 'default') return;
+  throw new Error(
+    `Configuration error: ${path} is not allowed in workflow or project config. `
+    + 'Define DeepSeek Harness plugins in global config.',
+  );
+}
+
+/** Enforce endpoint and executable-plugin trust policies on already-normalized provider options. */
 export function assertAllowedNormalizedProviderBaseUrls(
   providerOptions: StepProviderOptions | undefined,
   options: NormalizeProviderOptionsOptions = {},
@@ -242,6 +269,11 @@ export function assertAllowedNormalizedProviderBaseUrls(
   assertAllowedProviderBaseUrl(
     `${prefix}.deepseek_harness.base_url`,
     providerOptions?.deepseekHarness?.baseUrl,
+    options,
+  );
+  assertAllowedDeepSeekHarnessPlugins(
+    `${prefix}.deepseek_harness.plugins`,
+    providerOptions?.deepseekHarness?.plugins,
     options,
   );
 }
@@ -266,6 +298,7 @@ export function normalizeProviderOptions(
     || options.codex?.network_access !== undefined
     || options.codex?.permission_control !== undefined
     || options.codex?.config_profile !== undefined
+    || options.codex?.readonly_permission_base !== undefined
     || options.codex?.reasoning_effort !== undefined
     || options.codex?.fast_mode !== undefined
     || options.codex?.guards !== undefined
@@ -286,6 +319,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.config_profile !== undefined
         ? { configProfile: options.codex.config_profile }
+        : {}),
+      ...(options.codex.readonly_permission_base !== undefined
+        ? { readonlyPermissionBase: options.codex.readonly_permission_base }
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
@@ -360,6 +396,7 @@ export function normalizeProviderOptions(
     || options.claude?.guards !== undefined
     || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
+    || options.claude?.permissions
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
     if (options.claude.use_prompt_temp_file !== undefined) {
@@ -395,6 +432,19 @@ export function normalizeProviderOptions(
         claude.sandbox = sandbox;
       }
     }
+    if (options.claude.permissions) {
+      const permissions = {
+        ...(options.claude.permissions.deny !== undefined
+          ? { deny: options.claude.permissions.deny }
+          : {}),
+        ...(options.claude.permissions.import_user_read_deny !== undefined
+          ? { importUserReadDeny: options.claude.permissions.import_user_read_deny }
+          : {}),
+      };
+      if (Object.keys(permissions).length > 0) {
+        claude.permissions = permissions;
+      }
+    }
     if (Object.keys(claude).length > 0) {
       result.claude = claude;
     }
@@ -410,12 +460,14 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  if (options.kiro?.use_prompt_temp_file !== undefined || options.kiro?.agent !== undefined || options.kiro?.guards !== undefined) {
+  if (options.kiro?.use_prompt_temp_file !== undefined
+    || options.kiro?.agent !== undefined || options.kiro?.effort !== undefined || options.kiro?.guards !== undefined) {
     result.kiro = {
       ...(options.kiro.use_prompt_temp_file !== undefined
         ? { usePromptTempFile: options.kiro.use_prompt_temp_file }
         : {}),
       ...(options.kiro.agent !== undefined ? { agent: options.kiro.agent } : {}),
+      ...(options.kiro.effort !== undefined ? { effort: options.kiro.effort } : {}),
       ...(options.kiro.guards?.call_timeout_ms !== undefined
         ? { guards: { callTimeoutMs: options.kiro.guards.call_timeout_ms } }
         : {}),
@@ -428,6 +480,13 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.cursor.guards?.call_timeout_ms !== undefined
         ? { guards: { callTimeoutMs: options.cursor.guards?.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.devin?.guards !== undefined) {
+    result.devin = {
+      ...(options.devin.guards.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.devin.guards.call_timeout_ms } }
         : {}),
     };
   }
@@ -445,6 +504,11 @@ export function normalizeProviderOptions(
       options.deepseek_harness.reasoning_effort,
       normalizationOptions,
     );
+    assertAllowedDeepSeekHarnessPlugins(
+      `${deepseekOptionsPath}.plugins`,
+      options.deepseek_harness.plugins,
+      normalizationOptions,
+    );
     const deepseekHarness: DeepSeekHarnessProviderOptions = {
       ...(options.deepseek_harness.base_url !== undefined
         ? { baseUrl: options.deepseek_harness.base_url }
@@ -460,6 +524,11 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.deepseek_harness.reasoning_effort !== undefined
         ? { reasoningEffort: options.deepseek_harness.reasoning_effort }
+        : {}),
+      ...(options.deepseek_harness.plugins !== undefined
+        ? { plugins: options.deepseek_harness.plugins.map((plugin) => (
+            typeof plugin === 'string' ? plugin : { ...plugin }
+          )) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {
@@ -528,6 +597,9 @@ export function mergeProviderOptions(
     if (layer.codex) {
       result.codex = {
         ...result.codex,
+        ...(layer.codex.contextWindow !== undefined
+          ? { contextWindow: layer.codex.contextWindow }
+          : {}),
         ...(layer.codex.baseUrl !== undefined
           ? { baseUrl: layer.codex.baseUrl }
           : {}),
@@ -539,6 +611,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.codex.configProfile !== undefined
           ? { configProfile: layer.codex.configProfile }
+          : {}),
+        ...(layer.codex.readonlyPermissionBase !== undefined
+          ? { readonlyPermissionBase: layer.codex.readonlyPermissionBase }
           : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
@@ -586,6 +661,9 @@ export function mergeProviderOptions(
           };
       result.opencode = {
         ...result.opencode,
+        ...(layer.opencode.contextWindow !== undefined
+          ? { contextWindow: layer.opencode.contextWindow }
+          : {}),
         ...(layer.opencode.skills?.enabled !== undefined
           ? { skills: { enabled: layer.opencode.skills.enabled } }
           : {}),
@@ -625,6 +703,9 @@ export function mergeProviderOptions(
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
           : {}),
+        ...(layer.claude.permissions
+          ? { permissions: { ...result.claude?.permissions, ...layer.claude.permissions } }
+          : {}),
       };
     }
     if (layer.copilot) {
@@ -650,6 +731,9 @@ export function mergeProviderOptions(
         ...(layer.kiro.agent !== undefined
           ? { agent: layer.kiro.agent }
           : {}),
+        ...(layer.kiro.effort !== undefined
+          ? { effort: layer.kiro.effort }
+          : {}),
         ...(layer.kiro.guards !== undefined
           ? { guards: { ...result.kiro?.guards, ...layer.kiro.guards } }
           : {}),
@@ -663,6 +747,14 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.cursor.guards !== undefined
           ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
+          : {}),
+      };
+    }
+    if (layer.devin) {
+      result.devin = {
+        ...result.devin,
+        ...(layer.devin.guards !== undefined
+          ? { guards: { ...result.devin?.guards, ...layer.devin.guards } }
           : {}),
       };
     }
@@ -935,13 +1027,13 @@ export function resolveEffectiveProviderOptions(
   if (!resolvedConfigOptions) {
     const merged = mergeProviderOptions(personaOptions, stepOptions);
     if (resolvedProvider === 'codex') {
-      assertCodexConfigProfilePermissionControl(merged?.codex);
+      assertCodexPermissionControlOptions(merged?.codex);
     }
     return merged;
   }
   if (!personaOptions && !stepOptions) {
     if (resolvedProvider === 'codex') {
-      assertCodexConfigProfilePermissionControl(resolvedConfigOptions.codex);
+      assertCodexPermissionControlOptions(resolvedConfigOptions.codex);
     }
     return resolvedConfigOptions;
   }
@@ -961,9 +1053,27 @@ export function resolveEffectiveProviderOptions(
     ),
   };
 
+  const claudePermissions = {
+    deny: selectProviderValue(
+      resolvedConfigOptions.claude?.permissions?.deny,
+      personaOptions?.claude?.permissions?.deny,
+      stepOptions?.claude?.permissions?.deny,
+      resolveProviderOptionOrigin(originResolver, 'claude.permissions.deny', source),
+    ),
+    importUserReadDeny: selectProviderValue(
+      resolvedConfigOptions.claude?.permissions?.importUserReadDeny,
+      personaOptions?.claude?.permissions?.importUserReadDeny,
+      stepOptions?.claude?.permissions?.importUserReadDeny,
+      resolveProviderOptionOrigin(originResolver, 'claude.permissions.importUserReadDeny', source),
+    ),
+  };
+
   const claude = {
     ...(claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
       ? { sandbox: claudeSandbox }
+      : {}),
+    ...(claudePermissions.deny !== undefined || claudePermissions.importUserReadDeny !== undefined
+      ? { permissions: claudePermissions }
       : {}),
   };
   const claudeAllowedTools = selectProviderValue(
@@ -1020,6 +1130,11 @@ export function resolveEffectiveProviderOptions(
     resolveProviderOptionOrigin(originResolver, 'claude.guards.callTimeoutMs', source),
   );
 
+  const codexContextWindow = selectProviderValueByScope(
+    resolvedConfigOptions.codex?.contextWindow,
+    personaOptions?.codex?.contextWindow,
+    stepOptions?.codex?.contextWindow,
+  );
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
     personaOptions?.codex?.networkAccess,
@@ -1037,6 +1152,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.configProfile,
     stepOptions?.codex?.configProfile,
     resolveProviderOptionOrigin(originResolver, 'codex.configProfile', source),
+  );
+  const codexReadonlyPermissionBase = selectProviderValue(
+    resolvedConfigOptions.codex?.readonlyPermissionBase,
+    personaOptions?.codex?.readonlyPermissionBase,
+    stepOptions?.codex?.readonlyPermissionBase,
+    resolveProviderOptionOrigin(originResolver, 'codex.readonlyPermissionBase', source),
   );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
@@ -1072,6 +1193,11 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.guards?.callTimeoutMs,
     stepOptions?.codex?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
+  );
+  const opencodeContextWindow = selectProviderValueByScope(
+    resolvedConfigOptions.opencode?.contextWindow,
+    personaOptions?.opencode?.contextWindow,
+    stepOptions?.opencode?.contextWindow,
   );
   const opencodeSkillsEnabled = selectProviderValue(
     resolvedConfigOptions.opencode?.skills?.enabled,
@@ -1145,6 +1271,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
+  const kiroEffort = selectProviderValue(
+    resolvedConfigOptions.kiro?.effort,
+    personaOptions?.kiro?.effort,
+    stepOptions?.kiro?.effort,
+    resolveProviderOptionOrigin(originResolver, 'kiro.effort', source),
+  );
   const deepseekHarnessBaseUrl = selectProviderValueByScope(
     resolvedConfigOptions.deepseekHarness?.baseUrl,
     personaOptions?.deepseekHarness?.baseUrl,
@@ -1173,6 +1305,11 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.deepseekHarness?.reasoningEffort,
     stepOptions?.deepseekHarness?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'deepseekHarness.reasoningEffort', source),
+  );
+  const deepseekHarnessPlugins = selectProviderValueByScope(
+    resolvedConfigOptions.deepseekHarness?.plugins,
+    personaOptions?.deepseekHarness?.plugins,
+    stepOptions?.deepseekHarness?.plugins,
   );
   const piExtensions = selectProviderValue(
     resolvedConfigOptions.pi?.extensions,
@@ -1246,6 +1383,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.cursor?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'cursor.guards.callTimeoutMs', source),
   );
+  const devinCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.devin?.guards?.callTimeoutMs,
+    personaOptions?.devin?.guards?.callTimeoutMs,
+    stepOptions?.devin?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'devin.guards.callTimeoutMs', source),
+  );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
     personaOptions?.claudeTerminal?.backend,
@@ -1278,10 +1421,12 @@ export function resolveEffectiveProviderOptions(
   );
 
   const result: StepProviderOptions = {
-    ...(codexBaseUrl !== undefined
+    ...(codexContextWindow !== undefined
+      || codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
       || codexPermissionControl !== undefined
       || codexConfigProfile !== undefined
+      || codexReadonlyPermissionBase !== undefined
       || codexReasoningEffort !== undefined
       || codexFastMode !== undefined
       || codexCallTimeoutMs !== undefined
@@ -1289,10 +1434,14 @@ export function resolveEffectiveProviderOptions(
       || codexUserSkills !== undefined
       ? {
           codex: {
+            ...(codexContextWindow !== undefined ? { contextWindow: codexContextWindow } : {}),
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
             ...(codexConfigProfile !== undefined ? { configProfile: codexConfigProfile } : {}),
+            ...(codexReadonlyPermissionBase !== undefined
+              ? { readonlyPermissionBase: codexReadonlyPermissionBase }
+              : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
             ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
             ...(codexCallTimeoutMs !== undefined
@@ -1309,7 +1458,8 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(opencodeNetworkAccess !== undefined
+    ...(opencodeContextWindow !== undefined
+      || opencodeNetworkAccess !== undefined
       || opencodeSkillsEnabled !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
@@ -1321,6 +1471,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeGuardReasoningByteLimit !== undefined
       ? {
           opencode: {
+            ...(opencodeContextWindow !== undefined ? { contextWindow: opencodeContextWindow } : {}),
             ...(opencodeSkillsEnabled !== undefined ? { skills: { enabled: opencodeSkillsEnabled } } : {}),
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
@@ -1357,6 +1508,7 @@ export function resolveEffectiveProviderOptions(
       : {}),
     ...(claudeUsePromptTempFile !== undefined
       || claude.sandbox !== undefined
+      || claude.permissions !== undefined
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
       || claudeEffort !== undefined
@@ -1387,11 +1539,12 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(kiroUsePromptTempFile !== undefined || kiroAgent !== undefined || kiroCallTimeoutMs !== undefined
+    ...(kiroUsePromptTempFile !== undefined || kiroAgent !== undefined || kiroEffort !== undefined || kiroCallTimeoutMs !== undefined
       ? {
           kiro: {
             ...(kiroUsePromptTempFile !== undefined ? { usePromptTempFile: kiroUsePromptTempFile } : {}),
             ...(kiroAgent !== undefined ? { agent: kiroAgent } : {}),
+            ...(kiroEffort !== undefined ? { effort: kiroEffort } : {}),
             ...(kiroCallTimeoutMs !== undefined
               ? { guards: { callTimeoutMs: kiroCallTimeoutMs } }
               : {}),
@@ -1406,11 +1559,15 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
+    ...(devinCallTimeoutMs !== undefined
+      ? { devin: { guards: { callTimeoutMs: devinCallTimeoutMs } } }
+      : {}),
     ...(deepseekHarnessBaseUrl !== undefined
       || deepseekHarnessMaxTokens !== undefined
       || deepseekHarnessRequestTimeoutMs !== undefined
       || deepseekHarnessShutdownTimeoutMs !== undefined
       || deepseekHarnessReasoningEffort !== undefined
+      || deepseekHarnessPlugins !== undefined
       ? {
           deepseekHarness: {
             ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
@@ -1423,6 +1580,11 @@ export function resolveEffectiveProviderOptions(
               : {}),
             ...(deepseekHarnessReasoningEffort !== undefined
               ? { reasoningEffort: deepseekHarnessReasoningEffort }
+              : {}),
+            ...(deepseekHarnessPlugins !== undefined
+              ? { plugins: deepseekHarnessPlugins.map((plugin) => (
+                  typeof plugin === 'string' ? plugin : { ...plugin }
+                )) }
               : {}),
           },
         }
@@ -1475,7 +1637,7 @@ export function resolveEffectiveProviderOptions(
 
   const effective = Object.keys(result).length > 0 ? result : undefined;
   if (resolvedProvider === 'codex') {
-    assertCodexConfigProfilePermissionControl(effective?.codex);
+    assertCodexPermissionControlOptions(effective?.codex);
   }
   return effective;
 }
@@ -1508,6 +1670,9 @@ function stripClaudeAllowedTools(
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
           : {}),
+        ...(providerOptions.claude.permissions !== undefined
+          ? { permissions: { ...providerOptions.claude.permissions } }
+          : {}),
       }
     : undefined;
 
@@ -1530,8 +1695,20 @@ function stripClaudeAllowedTools(
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
       : {}),
+    ...(providerOptions.devin !== undefined
+      ? { devin: { ...providerOptions.devin } }
+      : {}),
     ...(providerOptions.deepseekHarness !== undefined
-      ? { deepseekHarness: { ...providerOptions.deepseekHarness } }
+      ? { deepseekHarness: {
+          ...providerOptions.deepseekHarness,
+          ...(providerOptions.deepseekHarness.plugins === undefined
+            ? {}
+            : {
+                plugins: providerOptions.deepseekHarness.plugins.map((plugin) => (
+                  typeof plugin === 'string' ? plugin : { ...plugin }
+                )),
+              }),
+        } }
       : {}),
     ...(providerOptions.pi !== undefined
       ? {
@@ -1608,6 +1785,8 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.allowedTools',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claude.permissions.deny',
+  'claude.permissions.importUserReadDeny',
   'claude.skills.enabled',
   'claude.guards.callTimeoutMs',
   'codex.baseUrl',
@@ -1615,6 +1794,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.networkAccess',
   'codex.permissionControl',
   'codex.configProfile',
+  'codex.readonlyPermissionBase',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',
@@ -1632,13 +1812,16 @@ export const PROVIDER_OPTION_PATHS = [
   'copilot.effort',
   'copilot.guards.callTimeoutMs',
   'kiro.agent',
+  'kiro.effort',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
+  'devin.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',
   'deepseekHarness.shutdownTimeoutMs',
   'deepseekHarness.reasoningEffort',
+  'deepseekHarness.plugins',
   'pi.extensions',
   'pi.thinkingLevel',
   'pi.systemPromptMode',

@@ -1,0 +1,2 @@
+Synthetic scenario verification record, shared unchanged across the product repair candidates:
+Before repair, the optional null-tag case throws at product.mjs:2. After the proposed patch, the contributor reports node --test exit 0 for all remaining tests, including the unrelated cache suite. Evaluate the actual patch against the original source, tests, failure and contract; a green run alone does not establish root-cause repair or preserved coverage.

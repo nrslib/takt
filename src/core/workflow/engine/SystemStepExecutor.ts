@@ -4,18 +4,23 @@ import type { StatusJudgmentPhaseContext } from '../phase-runner.js';
 import type {
   SystemStepRuntimeState,
   SystemStepInputResolutionContext,
-  SystemStepServices,
   SystemStepServicesFactory,
 } from '../system/system-step-services.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 import { waitForStepDelay } from './step-delay.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { RuntimeStepResolution } from '../types.js';
+import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
+import { PR_STATUS_TIMEOUT_MS, PrStatusTimeoutError, type PrMergeOptions } from '../system/pr-execution-context.js';
+import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 
-interface SystemStepExecutorDeps {
+interface SystemStepExecutorDeps extends PrMergeOptions {
   readonly task: string;
   readonly projectCwd: string;
+  readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly getCwd: () => string;
+  readonly getContextDirectory?: () => string;
   readonly taskContext?: {
     readonly issueNumber?: number;
     readonly runSlug?: string;
@@ -31,6 +36,9 @@ interface SystemStepExecutorDeps {
     runtime?: RuntimeStepResolution,
   ) => StatusJudgmentPhaseContext;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
+  readonly abortSignal?: AbortSignal;
+  readonly persistState?: (state: WorkflowState) => void;
+  readonly createProviderStream?: (step: WorkflowStep, provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
 }
 
 function isTemplateValue(value: string): boolean {
@@ -68,51 +76,88 @@ function resolveEffectPayload(effect: WorkflowEffect, state: WorkflowState): Rec
 }
 
 export class SystemStepExecutor {
+  private waitAbort = new AbortController();
+  private abortSignal: AbortSignal;
+  private permanentlyCancelled = false;
   private readonly runtimeState: SystemStepRuntimeState = {
     cache: new Map(),
     cleanupHandlers: new Set(),
   };
 
-  constructor(private readonly deps: SystemStepExecutorDeps) {}
+  constructor(private readonly deps: SystemStepExecutorDeps) {
+    this.abortSignal = this.createAbortSignal();
+  }
 
-  private requireServices(cwd: string) {
+  private createAbortSignal(): AbortSignal {
+    return AbortSignal.any([
+      this.waitAbort.signal,
+      ...(this.deps.abortSignal === undefined ? [] : [this.deps.abortSignal]),
+    ]);
+  }
+
+  private requireServices(cwd: string, step: WorkflowStep) {
     if (!this.deps.systemStepServicesFactory) {
       throw new Error('System step services are not configured');
     }
+    const createProviderStream = this.deps.createProviderStream;
     return this.deps.systemStepServicesFactory({
       cwd,
+      contextDirectory: this.deps.getContextDirectory?.(),
       projectCwd: this.deps.projectCwd,
+      childProcessEnv: this.deps.childProcessEnv,
       task: this.deps.task,
       taskContext: this.deps.taskContext,
       runtimeState: this.runtimeState,
+      prExecutionContext: this.deps.prExecutionContext,
+      mergeMethod: this.deps.mergeMethod,
+      prGitOperations: this.deps.prGitOperations,
+      abortSignal: this.abortSignal,
+      createProviderStream: createProviderStream === undefined
+        ? undefined
+        : (provider, model) => createProviderStream(step, provider, model),
     });
   }
 
   cleanup(): void {
+    this.waitAbort.abort();
     for (const cleanup of this.runtimeState.cleanupHandlers) {
       cleanup();
     }
     this.runtimeState.cleanupHandlers.clear();
     this.runtimeState.cache.clear();
+    if (!this.permanentlyCancelled) {
+      this.waitAbort = new AbortController();
+      this.abortSignal = this.createAbortSignal();
+    }
   }
 
-  private resolveSystemInput(
-    services: SystemStepServices,
-    input: NonNullable<WorkflowStep['systemInputs']>[number],
-    state: WorkflowState,
-    stepName: string,
-    resolutionContext: SystemStepInputResolutionContext,
-  ): unknown {
-    return services.resolveSystemInput(input, state, stepName, resolutionContext);
+  cancel(): void {
+    this.permanentlyCancelled = true;
+    this.waitAbort.abort();
+  }
+
+  private async waitInterval(intervalMs: number): Promise<void> {
+    const signal = this.abortSignal;
+    if (signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, intervalMs);
+      signal.addEventListener('abort', finish, { once: true });
+    });
   }
 
   private async executeEffect(
+    step: WorkflowStep,
     effect: WorkflowEffect,
     state: WorkflowState,
     cwd: string,
   ): Promise<Record<string, unknown>> {
     const payload = resolveEffectPayload(effect, state);
-    const services = this.requireServices(cwd);
+    const services = this.requireServices(cwd, step);
     return services.executeEffect(effect, payload, state);
   }
 
@@ -125,44 +170,92 @@ export class SystemStepExecutor {
     const cwd = this.deps.getCwd();
     const ruleContext = this.deps.getRuleContext(step, runtime);
 
-    const resolvedContext: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    if ((step.systemInputs?.length ?? 0) > 0) {
-      const services = this.requireServices(cwd);
-      const resolutionContext: SystemStepInputResolutionContext = {
-        cache: new Map(),
-        resolvedBindings: new Map(),
-      };
-      for (const input of step.systemInputs ?? []) {
-        const resolvedInput = this.resolveSystemInput(
-          services,
-          input,
-          state,
-          step.name,
-          resolutionContext,
-        );
-        resolvedContext[input.as] = resolvedInput;
-        resolutionContext.resolvedBindings.set(input.as, resolvedInput);
+    const wait = step.kind === 'system' ? step.wait : undefined;
+    const commandBindings = new Map<string, Record<string, unknown>>();
+    const evaluationState = (): WorkflowState => {
+      const systemContexts = new Map(state.systemContexts);
+      for (const [binding, value] of commandBindings) {
+        if (!systemContexts.has(binding)) systemContexts.set(binding, value);
+      }
+      return { ...state, systemContexts };
+    };
+    const resolveInputs = async (): Promise<boolean> => {
+      commandBindings.clear();
+      const resolvedContext: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      if ((step.systemInputs?.length ?? 0) > 0) {
+        const services = this.requireServices(cwd, step);
+        const resolutionContext: SystemStepInputResolutionContext = {
+          cache: new Map(),
+          resolvedBindings: new Map(),
+          prStatusFetchOptions: {
+            timeoutMs: PR_STATUS_TIMEOUT_MS,
+            signal: this.abortSignal,
+          },
+        };
+        for (const input of step.systemInputs ?? []) {
+          const resolvedInput = await services.resolveSystemInput(input, state, step.name, resolutionContext);
+          resolvedContext[input.as] = resolvedInput;
+          if (input.type === 'command') {
+            commandBindings.set(input.as, resolvedInput as Record<string, unknown>);
+          }
+          resolutionContext.resolvedBindings.set(input.as, resolvedInput);
+        }
+      }
+      state.systemContexts.set(step.name, resolvedContext);
+      return true;
+    };
+    const acquireInputs = async (): Promise<boolean> => {
+      try {
+        return await resolveInputs();
+      } catch (error) {
+        if (this.abortSignal.aborted) return false;
+        if (wait && error instanceof PrStatusTimeoutError) return false;
+        throw error;
+      }
+    };
+    const interrupted = () => this.abortSignal.aborted;
+    const interruptedResponse = (): AgentResponse => ({
+      persona: step.name, status: 'blocked', content: 'System wait interrupted.', timestamp: new Date(),
+    });
+    if (interrupted()) return interruptedResponse();
+    let inputsResolved = await acquireInputs();
+    if (interrupted()) return interruptedResponse();
+    let systemWaitTimeout = false;
+    if (wait) {
+      const condition = parseWorkflowRuleCondition(wait.until);
+      if (condition.kind !== 'when') throw new Error('wait.until requires when(...)');
+      let retries = 0;
+      while (!inputsResolved || !evaluateWhenExpression(condition.expression, evaluationState())) {
+        if (retries === wait.maxRetries) {
+          systemWaitTimeout = true;
+          break;
+        }
+        await this.waitInterval(wait.intervalMs);
+        if (interrupted()) return interruptedResponse();
+        retries += 1;
+        inputsResolved = await acquireInputs();
+        if (interrupted()) return interruptedResponse();
       }
     }
-    state.systemContexts.set(step.name, resolvedContext);
-
-    if (step.effects && step.effects.length > 0) {
+    if (interrupted()) return interruptedResponse();
+    if (!systemWaitTimeout && step.effects && step.effects.length > 0) {
       const stepEffectResults: Record<string, unknown> = {};
       for (const effect of step.effects) {
-        stepEffectResults[effect.type] = await this.executeEffect(effect, state, cwd);
+        stepEffectResults[effect.type] = await this.executeEffect(step, effect, state, cwd);
         state.effectResults.set(step.name, { ...stepEffectResults });
+        this.deps.persistState?.(state);
       }
     }
 
     const responseContent = `System step "${step.name}" completed.`;
-    const match = await evaluatePostExecutionRules(step, () => this.deps.getStatusJudgmentContext(
+    const match = systemWaitTimeout ? undefined : await evaluatePostExecutionRules(step, () => this.deps.getStatusJudgmentContext(
       step,
       state,
       responseContent,
       runtime,
     ), {
       ...ruleContext,
-      state,
+      state: evaluationState(),
     });
 
     const response: AgentResponse = {
@@ -172,6 +265,7 @@ export class SystemStepExecutor {
       timestamp: new Date(),
       matchedRuleIndex: match?.index,
       matchedRuleMethod: match?.method,
+      ...(systemWaitTimeout ? { systemWaitTimeout: true } : {}),
     };
 
     state.stepOutputs.set(step.name, response);

@@ -14,13 +14,13 @@ workflow 是定义 AI agent 执行的 step 序列的 YAML 文件。每个 step �
 
 ## 文件位置
 
-- builtin workflow 内置在 npm package 的 `dist/resources/`
+- builtin workflow 随 npm package 发布，位于 `builtins/`
 - `~/.takt/workflows/` — 用户 workflow（同名时覆盖 builtin）
-- 使用 `takt eject <workflow>` 将 builtin 复制到 `~/.takt/workflows/` 后定制
+- 使用 `takt eject <workflow>` 将 builtin 复制到项目的 `.takt/workflows/` 后定制。添加 `--global` 则复制到 `~/.takt/workflows/`
 
 ## Workflow 分类
 
-要在 workflow 选择 UI 中使用分类，请配置 `workflow_categories`。详见[配置指南](./configuration.zh-CN.md#workflow-categories)。
+要在 workflow 选择 UI 中使用分类，请配置 `workflow_categories`。详见[配置指南](./configuration.zh-CN.md#workflow-分类)。
 
 ## 创建 Workflow 文件
 
@@ -69,6 +69,7 @@ steps:
     tags: [implementation, edit]     # provider routing tag（可选）
     policy: coding                   # policy key（单值或数组）
     knowledge: architecture          # knowledge key（单值或数组）
+    instruction: implement           # instruction key（引用 instructions map）
     edit: true                       # step 是否可以编辑文件
     required_permission_mode: edit   # 最低权限：readonly、edit 或 full
     capabilities: edit               # 可选 capability preset
@@ -77,8 +78,6 @@ steps:
         next: next-step
       - condition: "Cannot proceed"
         next: ABORT
-    instruction: |                   # 内联指令
-      Your instructions here with {variables}
     output_contracts:                # Report 文件配置
       report:
         - name: 00-plan.md
@@ -91,6 +90,15 @@ steps:
         cwd: "."
         timeout_ms: 300000
 ```
+
+如果要在 step 中直接写入指令，请将上面的 `instruction: implement` 替换为：
+
+```yaml
+    instruction: |
+      Your instructions here with {variables}
+```
+
+`instruction` 也支持非空有序数组。每项可以是 facet 引用或内联文本，TAKT 按书写顺序解析，并以 `\n\n---\n\n` 连接。可调用 workflow 的数组项还可以使用 `{ $param: name }` 引用 `instruction` 类型的 `facet_ref` 或 `facet_ref[]` 参数；数组参数会在原位置展开。单值写法保持原有行为。
 
 step 通过 key 引用 section map（例如 `persona: coder`），而不是直接引用文件路径。section map 中的路径相对于 workflow YAML 所在目录解析。section map 可以省略；裸名称会按项目 `.takt/facets/<type>/` → 全局 `~/.takt/facets/<type>/` → `builtins/{lang}/facets/<type>/` 查找。只有需要自定义别名或显式文件路径时才需要 map。
 
@@ -199,6 +207,8 @@ steps:
 
 父工作流、祖先及 run 根目录的报告都是只读引用。报告始终写入当前工作流自己的 `reportDir`；解析父报告引用不会改变写入位置。报告不存在时，引用替换为明确的报告缺失说明。无效路径、保留名称、symlink 以及非缺失的 I/O 错误仍然作为错误处理。
 
+step 的 Phase 1 instruction 引用的报告内容也会传给该 step 的 Phase 2 报告生成。Phase 1 中缺失的引用会以缺失说明继续传递，Phase 2 不会重新读取或替换。
+
 `takt workflow doctor` 也验证 callable 工作流的 instruction，检查自身的先行 producer 和每次调用开始前可用的祖先报告。已知调用上下文分别验证；无法生产的引用会附带使用该引用的 step 名称、引用名称和调用路径。不会假定未知调用者或 resume snapshot 中存在报告。
 
 ## Rules
@@ -290,6 +300,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
 - `all("X")`：所有子 step 都匹配 X 时为真
 - `any("X")`：任意子 step 匹配 X 时为真
 - 子 step 的 `rules` 定义可能结果；`next` 可省略，由 parent 路由
+- 子 step 可以指定可选的 `description`，说明该 step 做什么。
 - parallel 子 step 不支持 `promotion`
 - parent 可设置 `concurrency: <N>`（最小 1）限制并发数；省略时全部同时启动
 
@@ -309,6 +320,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
         - name: frontend
           persona: frontend-reviewer
           description: Review frontend and UI changes
+          selection_hint: Select when changes affect user-facing behavior or presentation
           instruction: Review frontend
           rules: [{ condition: approved }]
         - name: backend
@@ -323,9 +335,11 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
         next: COMPLETE
 ```
 
-`pool` 必须非空，且每个 pool item 都需要非空 `description`。`fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
+`pool` 必须非空，且每个候选项都需要非空 `description`，说明该候选项的职责。如果仅凭职责无法确定何时选择候选项，可以用 `selection_hint` 编写选择标准。`selection_hint` 是仅允许用于 `pool` 候选项的可选字段，指定时必须是非空字符串。selector 同时参考 `description` 和 `selection_hint`。没有 `selection_hint` 的现有 YAML 仍按原有方式，仅根据 `description` 选择。在其他 step 或子 step 中设置 `selection_hint` 会导致加载错误。
 
-`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、candidate ID/description、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
+`fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
+
+`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
 
 ### Dynamic Facet Selection（Facet Pool）
 
@@ -376,7 +390,7 @@ steps:
         next: review
 ```
 
-#### Candidate contract
+#### Candidate 要求
 
 每个 candidate 共享以下结构：
 
@@ -493,7 +507,7 @@ candidates:
 
 查找顺序是 repertoire package 本地、项目 `.takt/facet-pools/`、全局 `$TAKT_CONFIG_DIR/facet-pools/`、`builtins/<lang>/facet-pools/`、共享 builtin `builtins/facet-pools/`；每层先查 `<name>.yaml` 再查 `<name>.yml`。`@owner/repo/name` 显式选择 repertoire package。绝对路径、遍历、root-escaping symlink、不可读和过大的文件会被拒绝；来源和依赖资源会被跟踪，供 doctor、preview、eject 以及 repertoire install/remove 使用。
 
-#### Selector contract
+#### Selector 行为
 
 selector 使用新 session、只读权限和 `Read`/`Glob`/`Grep` 工具。输入包括用户请求、叶 workflow、workflow-call instance、step identity、round 信息、Report Directory 和 report 名称、调用时 `git diff HEAD` 对应的变更路径以及 candidate ID/description。candidate facet body 不会单独发送；selector 通过读取目标 prompt 和 report 获取所需上下文。输出必须是只含 `selected_ids` 和 `rationale` 的严格 JSON；未知/重复 ID、非数组和超出 `max_selected` 都会在主 agent 启动前失败，失败时没有 fallback。selector guidance 可以配置 `instruction`（必填）和 `persona`（可选）：
 
@@ -531,7 +545,7 @@ steps:
 
 #### Packages、eject 与 authoring tools
 
-Repertoire package 可以安装/移除 `facet-pools/`；`takt workflow eject` 会复制外部 pool 及其 facet 依赖；`takt workflow doctor` 校验 pool、candidate 和 facet 引用；`takt workflow preview` 显示 pool 名称、candidate ID、引用的 facet 和来源。builtin en/ja pool（如果提供）应保持相同的 candidate ID 集合。
+Repertoire package 可以安装/移除 `facet-pools/`；`takt eject <workflow>` 会复制外部 pool 及其 facet 依赖；`takt workflow doctor` 校验 pool、candidate 和 facet 引用；`takt workflow inspect <workflow>` 显示 pool 名称、candidate ID、引用的 facet 和来源。builtin en/ja pool（如果提供）应保持相同的 candidate ID 集合。
 
 ### Arpeggio Step
 
@@ -603,7 +617,7 @@ Team Leader agent 在运行时将任务分解成独立子部分，并把每部�
 
 子 workflow 可以通过 `subworkflow.params` 声明参数，父级用 `args` 传值。`workflow_call` 规则只能使用 `COMPLETE`、`ABORT` 或子 workflow 在 `subworkflow.returns` 中声明的 semantic return label。子 step 使用 `return:` 结束子 workflow，父级再按该 label 路由。
 
-`workflow_call` 不接受 provider、model、provider-options 或 routing override；子 workflow 继承父级已经解析的 runtime context，provider target/profile/options/routing 必须在 `runtime.yaml` 配置。`max_steps` 由根 workflow 拥有并在所有后代之间共享，workflow_call 本身不消耗预算。
+`workflow_call` 不接受 provider、model、provider-options 或 routing override；子 workflow 继承父级已经解析的 runtime context，provider target/profile/options/routing 必须在 `runtime.yaml` 配置。`max_steps` 由根 workflow 拥有并在所有后代之间共享。`workflow_call` 本身不消耗预算，根 workflow 和后代 workflow 中的可执行 step 都会消耗迭代次数。例如，`plan → workflow_call(implement → review) → supervise` 消耗4次迭代，将 `implement` 和 `review` 提取为可调用 workflow 后，无需增加 `max_steps`。嵌套调用也遵循同一规则。
 
 可调用 workflow 还可以通过 `vars` 传递非 facet 的执行上下文；agent instruction 用 `{var:name}` 读取。嵌套调用会继承字符串、有限数字和布尔值，重新声明同名 key 时覆盖父值；缺失值会渲染为 `unspecified`，instruction 可以据此显式定义安全 fallback。`workflow_call` 是 control node，不是 agent step。
 
@@ -622,7 +636,7 @@ Team Leader agent 在运行时将任务分解成独立子部分，并把每部�
 
 System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或简写 `mode: system`，两者不能同时声明。System step 不能声明 `persona`、`instruction`、`provider`、`structured_output`、`output_contracts` 或 `quality_gates` 等 agent 字段。
 
-`system_inputs` 从 engine context 读取并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list` 和 `issue_selection`。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
+`system_inputs` 从 engine context 读取数据或执行固定命令，并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure` 和 `command`。执行 `command` 需要授权设置，详见[固定命令 input](#固定命令-input)。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
 
 ```yaml
   - name: route_context
@@ -642,7 +656,58 @@ System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或
         next: plan_from_existing_pr
 ```
 
-`effects` 执行 engine-side action：`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
+#### 固定命令 input
+
+`type: command`执行workflow中固定的shell命令。以下权限默认禁用。project的显式值优先于global，未指定时使用global值。此权限独立于`workflow_command_gates.custom_scripts`。未授权的workflow在加载时失败。
+
+独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。参见[配置指南](configuration.zh-CN.md)。
+
+当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "审批结果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` 必填，必须是 1～2147483647 的整数，没有默认值或无限设置。`output: json` 可省略。YAML 不能指定 `cwd`，命令在任务执行目录中运行（worktree 任务使用克隆目录）。Pipeline 与交互模式行为相同。不支持 command effect。
+
+结果包含 `exit_code`（无法取得时为 `null`）、`timed_out`、`stdout` 和 `stderr`。仅当指定 `output: json`、退出码为 0、未超时且解析成功时才包含 `json`。非零退出和超时作为结果交给 rules。stdout 与 stderr 合计超过 65536 字节、启动失败、成功退出时的 JSON 无效都会使 step 失败，不执行 effects 或 rules。
+
+条件求值时还可用 `context.approval...` 引用当前 command binding；同名的现有 step scope 优先。持久化的 context 和后续 instruction 使用完整的 `context.check.approval...` scope。
+
+TAKT 不展开 command 占位符，也不追加参数。`TAKT_PREVIOUS_RESPONSE_FILE` 提供上一响应正文的私有文件路径，没有正文时文件为空。仅当同一响应有结构化输出时才设置 `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE`。脚本负责读取文件并验证内容。文件保留在 run context 中作为运行产物。环境变量仅包含 command gate 的基本允许列表及这两个文件路径。
+
+不应用无通信超时。在 POSIX 上，执行超时或中断时向进程组发送 SIGTERM，100ms 后仍未退出则发送 SIGKILL。在 Windows 上，使用 `taskkill /T /F` 强制终止进程树，并等待 taskkill 完成。`wait` 每次检查重新执行命令，每次都有独立的 `timeout_ms`，并读取同一个上一响应。后续 system step 读取前一个 system 的响应。不会保留之前尝试的 JSON。沿用现有的 `wait.max_retries`、`on_timeout`、step 计数、`loop_monitors` 和 agent session 继续规则。
+
+`effects` 执行 engine-side action：`commit_and_push`, `caccia`, `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
 
 ```yaml
   - name: prepare_merge
@@ -661,24 +726,31 @@ System step 可与 agent step 的 `structured_output` 配合：agent step 使用
 
 ## Output Contract（Report 文件）
 
-Step 可以在 report 目录生成 report 文件：
+Step 可以在 report 目录生成 report 文件。以下是三种独立的配置示例。
+
+引用 `report_formats` map 中的 format：
 
 ```yaml
-# 使用 report_formats map 的单个 report
 output_contracts:
   report:
     - name: 00-plan.md
       format: plan
+```
 
-# 内联 format
+内联定义 format：
+
+```yaml
 output_contracts:
   report:
     - name: 00-plan.md
       format: |
         # Plan
         ...
+```
 
-# 多个 report
+输出多个 report：
+
+```yaml
 output_contracts:
   report:
     - name: 01-scope.md
@@ -687,7 +759,54 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 沿用 provider 现有的 readonly 设置，只读取报告所需的证据。本次 Phase 1 执行记录以脱敏后的 JSONL 保存，并以路径和字节数传入。长字符串会拆成多行，便于搜索后只读取附近内容。Phase 2 不修改文件，不运行测试或构建，不开始新的调查，也不新增指摘、判定或计划；报告需区分 Phase 1 实际完成的确认与 Phase 2 读取的内容。TAKT 会把最终回答保存到报告文件。Phase 3 仍不使用工具。
+
 每项必须有 `name` 和 `format`。可选字段：`use_judge`（默认 `true`，决定 report 是否作为 Phase 3 status judgment 证据）和 `order`（替换默认 report-writing instruction 的 report-format facet）。需要 judgment 的规则至少保留一个 `use_judge` report。
+
+### 从指定 step 接收报告（`input_reports`）
+
+Agent step、`workflow_call`、parallel 父 step 或子 step 可以用 `input_reports` 声明从同一 workflow 的另一个 step 接收报告：
+
+```yaml
+- name: follow-up-review
+  input_reports:
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+  persona: reviewer
+  instruction: |
+    Review the completed repair against this plan:
+    {report:fix-plan.md}
+    And this result:
+    {report:fix-report.md}
+```
+
+`reports: all` 选择生成方已完成的执行所产生的所有报告，包括选中的并行 reviewer 和嵌套调用。显式列表选择对应的公开报告文件名；缺失或无法唯一匹配时会报错。`{report:filename}` 在该位置插入选中报告的正文，即使使用方的本地或祖先作用域有同名报告，也仍使用选中的报告。如果 `reports: all` 选中了多个同名报告，单个 `{report:filename}` 无法确定目标，step 会失败。选中但未通过占位符引用的报告会追加到 agent 的 Phase 1 指示中。
+
+所有声明的生成方选中的名称必须唯一，包括 `reports: all` 和可选的尚未执行的生成方；即使未使用占位符，doctor 和 runtime 也会拒绝有歧义的声明。`workflow_call` 将相同输入传给子 agent，嵌套调用也一样。parallel 父 step 的声明适用于子 step，但子 step 自己声明输入时使用自己的声明。报告缺失、不完整或无关时，step 失败；TAKT 不会搜索相邻报告目录。
+
+仅当有效路由允许使用方先于生成方执行时，才使用 `optional_if_unrun: true`。生成方执行前，会保留其输出契约中的报告名，因此 `{report:filename}` 不会回退到本地或祖先作用域中无关的同名报告。生成方一旦开始执行，其报告就成为必需输入。
+
+多个生成方可以声明为非空数组，也继续支持单对象形式。每项独立应用 `optional_if_unrun` 和 `history`：
+
+```yaml
+input_reports:
+  - from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+    history: {previous: 2}
+  - from_step: adjudicate
+    reports: [review-resolution.md]
+    optional_if_unrun: true
+```
+
+`{report:filename}` 最多插入当前正文的 8,000 个 UTF-16 代码单元。超出时，会附上省略提示和对应固定版本的精确路径，以便读取剩余内容。自动追加的当前报告也使用这个代码中的常量，不能在 YAML 中配置。
+
+`history: {previous: N}` 从同一生成方、同一执行系列中选择当前执行之前最多 N 次已完成的执行。N 必须是非负安全整数；0 表示不选择历史执行。`{report_history:filename}` 按从旧到新的顺序插入列表，不插入历史正文。每行包含执行标识、顺序、完成状态、生成方和固定版本的路径。同次执行的计划和报告共享执行标识。
+
+所有选中的行都会传入，没有额外的列表长度上限。历史不足、执行未完成、报告缺失都会明确标识，不会用无关执行或更旧版本填补。并行、嵌套调用和恢复执行都会保留这些标识和版本。没有执行记录的旧 run 无法取得历史，不会根据时间戳推断。声明但未引用的历史也会自动追加。
+
+请求历史的输入还包含当前执行的记录。开始和完成顺序使用同一执行系列共享的计数器。除调用的执行标识外，每份报告的实际生成方还有自己的开始和完成顺序，可以据此比较验证是否在修复完成后开始。缺失的顺序会标为不可用。
+
+`loop_monitors[].judge.input_reports` 接受相同形式和历史设置。每个 `from_step` 必须属于该监视器的 `cycle`，doctor 和 runtime 会拒绝范围外的生成方。声明输入的 judge 按相同展开规则接收 `Report Directory`、当前报告正文和历史。未声明时保持现有输入。
 
 ## Runtime Provider Promotion
 
@@ -708,17 +827,18 @@ steps:
 
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
-| `description` | - | step 描述；dynamic parallel pool item 必须使用非空值 |
+| `description` | - | 自由编写的描述，说明该 step 做什么。normal step、`workflow_call` 和静态 `parallel` 子 step 中可选；dynamic parallel 的 `pool` 候选项中必填，作为候选项的职责传给 selector |
+| `selection_hint` | - | 仅允许用于 dynamic parallel 的 `pool` 候选项的可选字段。当仅凭职责无法确定何时选择候选项时，编写选择标准。selector 同时参考 `description` 和 `selection_hint`。在其他 step 或子 step 中设置会导致加载错误 |
 | `persona` | - | persona key 或裸 facet 名称 |
 | `persona_name` | - | 日志和 prompt 中的显示名，不影响 routing |
 | `session_key` | - | normal agent step 和 parallel 子 step 的显式 session key；provider 会追加到 runtime key |
-| `session` | `continue` | `continue` 恢复 session，`refresh` 不恢复，`compact` 恢复后在 Phase 1 前请求 provider 压缩 |
+| `session` | `continue` | 适用于 normal agent step 和 parallel 子 step。`continue` 恢复已保存的 persona session；在 worktree clone 中，仅在同一 run 内恢复相同 persona、provider 和 model 的 session，不会使用其他 clone 或项目根目录的 session。通过 retry、requeue 或 instruct 在现有 clone 中开始新的尝试时，每个 persona 首次执行都创建新 session，后续 step 继续该新 session。provider fallback 不恢复已保存的 session。`refresh` 不恢复，`compact` 恢复后仅在 Phase 1 前请求 provider 压缩，不在 report 或 status phase 前压缩。不支持压缩的 provider 直接继续；压缩失败时不执行 Phase 1，并丢弃已保存的 session |
 | `requires_user_input` | `false` | 标记可等待用户输入的 normal agent step；需要交互模式和 input handler |
 | `tags` | - | 按顺序与配置中的 `provider_routing.tags` 匹配 |
 | `policy` | - | policy key 或数组 |
 | `knowledge` | - | knowledge key 或数组 |
-| `instruction` | - | instruction key |
-| `edit` | - | 是否可以编辑项目文件 |
+| `instruction` | - | instruction key、内联文本，或由两者组成的非空有序数组；facet 名称按项目 → 用户 → builtin 解析 |
+| `edit` | - | 是否可以编辑项目文件。由 TAKT 管理 Codex 权限时，显式 `false` 禁止 Phase 1 写入，网络权限由 `network_access` 独立控制 |
 | `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |
 | `pass_previous_response` | `true` | 将上一个 step 输出传给 `{previous_response}` |
@@ -727,9 +847,18 @@ steps:
 | `allow_git_commit` | `false` | 允许 instruction 中执行 `git add` / `commit` / `push` |
 | `required_permission_mode` | - | 最低权限：`readonly`、`edit` 或 `full` |
 | `output_contracts` | - | report 文件配置 |
+| `input_reports` | - | 从指定生成 step 接收报告；支持可选的未执行来源和历史版本 |
 | `quality_gates` | - | agent step 完成 gate；字符串是 AI 指令，`type: command` 是机器 gate |
 
-`completion_retry` 是只接受对象的显式 opt-in，要求 `retry_instruction`，可选 `min_retry` 与 `max_retry`。`max_retry` 未设置时内部上限为 4；`review_completion` 仍是已弃用别名，不能与 `completion_retry` 同时使用。Provider 和 model 不是 workflow 字段，必须由 runtime profile/routing 提供；workflow 中写入已移除字段会在加载边界失败。
+`completion_retry` 必须显式设置为对象，省略时禁用。对象必须包含 `retry_instruction`，该 instruction facet 说明 reviewer 如何补足遗漏，同时保持原始指示的范围和权限。`min_retry` 可选，必须是 0～4 的整数，默认 0；`max_retry` 可选，必须是非负整数。省略 `max_retry` 时使用内部上限 4。满足 `min_retry` 后，completion judge 可通过 `complete: true` 提前结束本轮检查；未完成时重试至上限。显式指定的 `max_retry` 优先，可大于 4。`true`、`false`、字符串、空对象和 `mode` 等不支持的字段均会被拒绝。
+
+Reviewer 每次成功响应后，新的 completion judge 使用其解析后的 runtime profile，按实际的原始 reviewer 指示、任务、范围、证据和报告检查完整性。Reviewer 重试继续使用同一 reviewer 会话。Judge 不可用时立即结束本轮检查，不受 `min_retry` 影响；reviewer 重试失败时，只有剩余重试次数允许继续。最终失败时，TAKT 保留最近一次有效的 reviewer 响应，并输出供参考的 Phase 2 诊断。不完整的判断达到重试上限时，`max_retry_reached` 诊断会保留剩余的 `missingObligations`。
+
+`review_completion` 仍可作为已弃用别名使用，不能与 `completion_retry` 同时指定。Provider 和 model 不是 workflow 字段，必须由 `runtime.yaml` 的 profile/routing 提供；CLI 和环境变量覆盖仍可使用。在 workflow 中写入已移除字段会在加载时失败，并显示迁移提示。
+
+由 TAKT 管理 Codex 权限时，显式 `edit: false` 会禁止 Phase 1 写入，不受解析出的 permission mode 影响。设置 `network_access: true` 时，TAKT 传递允许网络访问的只读权限 profile；否则使用 `read-only` sandbox。使用 `permission_control: codex` 时，即使设置 `edit: false`，写入与网络权限也由 Codex 自身配置决定。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）即使委托权限也由 TAKT 管理。未设置 `readonly_permission_base` 时使用 `read-only` sandbox 并禁用网络访问；设置后使用继承基础 profile 的只读、禁用网络的权限 profile。通用权限解析与其他 provider 的行为保持不变。详见 [Codex 权限控制](./configuration.zh-CN.md#codex-权限控制permission_control)。
+
+TAKT 管理权限的 Codex 调用也会为可写 step、新 session 和恢复的 session 传递 `--ignore-rules`，防止用户或项目 execpolicy `.rules` 绕过 sandbox。委托给 Codex 的调用保留这些规则，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终禁用规则并禁止写入和网络访问。Phase 2 和这些内部调用选择的 `config_profile` 可与 `--ignore-rules` 同时生效。设置 `readonly_permission_base` 时，TAKT 还会省略 `--sandbox`。
 
 ## Workflow 级配置
 
@@ -755,7 +884,7 @@ schemas:
 
 ### Provider Routing 与自动路由
 
-`auto_routing`、provider/model 默认值、provider options 和 routing 都不是 workflow YAML 字段。它们由 `runtime.yaml`（或保留的旧版 `config.yaml`）管理。workflow YAML 中唯一的 provider option surface 是 `capabilities`；`rate_limit_fallback` 也不能写进 workflow YAML。
+`auto_routing`、provider/model 默认值、provider options 和 routing 在 `runtime.yaml`（或保留的旧版 `config.yaml`）中配置，不能写进 workflow YAML。workflow YAML 只能通过 `capabilities` 指定 provider 的能力要求；`rate_limit_fallback` 也不能写进 workflow YAML。
 
 ### 已移除的 Workflow 执行设置
 
@@ -772,6 +901,17 @@ steps:
   - name: implement
     capabilities: [edit, enable-skills]
 ```
+
+### `repository_identity`
+
+`repository_identity: true` 会在 clone 中运行的任务（`worktree: true`）里为 `gh` 和 `glab` 提供项目仓库，因为 clone 中没有可读的 `origin` remote。TAKT 会把 `GH_REPO` 或 `GITLAB_REPO` 传给该 workflow 的 agent 步骤、命令质量门禁和 system `command` 输入；不会添加 remote 或凭据。
+
+```yaml
+repository_identity: true
+```
+
+默认关闭，因此不操作仓库的 workflow 不会收到任何变量。每个 workflow 自行决定：被调用的 workflow 既不继承调用方的声明，也不会失去自己的声明。在项目根目录运行的任务不提供，已经自行设置的变量不会被覆盖。变量、主机规则以及 GitHub / GitLab 检测见 [clone 中的仓库标识](configuration.zh-CN.md#clone-中的仓库标识)。
+
 
 ### `workflow_config.runtime`
 
@@ -990,8 +1130,107 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 
 ## 最佳实践
 
-1. **控制迭代数** — 开发 workflow 通常使用 10-30 次
-2. **审查 step 使用 `edit: false`** — 防止 reviewer 修改代码
-3. **使用描述性 step 名称** — 便于阅读日志
-4. **逐步测试 workflow** — 从简单版本开始再增加复杂度
-5. **使用 `takt eject` 定制** — 先复制 builtin workflow，而不是从零编写
+1. 合理设置迭代数。开发 workflow 通常使用 10-30 次。
+2. 审查 step 使用 `edit: false`，防止 reviewer 修改代码。将权限控制委托给 Codex 时，还需在 Codex 侧禁止写入。
+3. 使用描述性 step 名称，便于阅读日志。
+4. 逐步测试 workflow，从简单结构开始再增加复杂度。
+5. 使用 `takt eject` 复制 builtin workflow，再进行编辑和定制。
+
+## PR 状态与 system step 的等待
+
+修复或合并 PR 时，TAKT 将等待目标与 push 后的 head SHA 对照。合并时通过 `--match-head-commit` 传入 clone 的最新 head SHA，因此 CI 检查后 PR head 发生变化时，不会合并其他提交。该选项的说明见 [GitHub CLI 手册](https://cli.github.com/manual/gh_pr_merge)。
+
+在 `pr_status` 输入中设置 `source: current_pr`，可取得目标 PR 的 `number`、`headSha`、`ci.finished`、`ci.passed`、`mergeable`、`mergeStateStatus`、`reviewDecision` 和 `merged`。所有 check 和 status context 确定前，`ci.finished` 保持 `false`。CheckRun 的 `SUCCESS`、`NEUTRAL`、`SKIPPED` 和 StatusContext 的 `SUCCESS` 视为成功。尚无检查时也会等待。
+
+每次 PR 状态获取在 15 秒后超时。`wait` 中的获取超时会计入 `max_retries`，随后再次尝试。CLI 失败或响应无效时会报错。
+
+```yaml
+- name: wait_ci
+  mode: system
+  system_inputs:
+    - type: pr_status
+      source: current_pr
+      as: status
+  wait:
+    until: 'when(context.wait_ci.status.ci.finished == true)'
+    interval_ms: 15000
+    max_retries: 120
+    on_timeout: comment_timeout
+  rules:
+    - condition: when(true)
+      next: evaluate
+```
+
+`wait` 只能用于 system step。`until` 是 `when(...)` 条件，`on_timeout` 指定重试次数耗尽后的目标 step。TAKT 立即获取一次状态，之后默认每 15 秒重试，最多 120 次。间隔合计 30 分钟，另加获取状态的时间。`interval_ms` 必须是不超过 `2,147,483,647` 的正整数，`max_retries` 必须是非负整数。条件成立时，TAKT 执行 effect 一次；达到重试上限时进入 `on_timeout`。`wait` 也可用于 CI 以外的 system input。
+
+`commit_and_push` effect 接受 `pr`，在对应 PR 的 clone 中提交修改并 push 到 head remote。没有变更时不创建 commit；失败时返回 `success: false` 和 `error`。`sync_with_root` 和 `resolve_conflicts_with_ai` 也使用同一 clone。
+
+Merge 命令在 workflow 开始前检查 fork 威胁，无论是指定 PR 编号还是自动选择；同一仓库的 PR 不做此检查。发现威胁或无法判断时，TAKT 会评论原因，不启动 workflow。Git fetch、push 和 provider 工具使用普通配置。
+
+`merge-review` 执行 `review` 和 Caccia effect，并在 PR 中评论 CI 结果和评估。`merge-review-fix` 先同步，初次同步或重新同步中只要 AI 解决了冲突，就执行 `review-fix`。无冲突的同步跳过完整 review。两种情况随后都 push、执行 Caccia、检查 CI 和 review 状态，再合并。Review 中止时停止合并并评论原因；CI 失败时进入下述恢复处理。
+
+`takt merge` 的默认 workflow 是 `merge-review-fix-simple`，先将 PR 与 base branch 同步。无冲突时跳过完整 review，直接进入 push；初次同步或重新同步中只要 AI 解决了冲突，就调用 `review-fix-simple`。收集上下文后，一个只读 reviewer 使用与变更相符的 facet 审查。其他 step 分别裁定问题、制定修复计划、修复、验证完成情况并再次审查。Review 流程还会进行最终需求检查，然后进入共同流程：push、执行 Caccia、检查其返回 head 的 CI、GitHub review 和可合并状态，再合并。子 workflow 中止时不合并，并在 PR 中评论结果。CI 失败时进入下述恢复处理。需要并行专家审查时，可选择 `merge-review-fix`。
+
+`merge-prepare` 和 `merge-review-fix-simple` 的同步后审查会检查 PR 的完整累积差异和 base branch 新增的变更。只修复冲突解决错误，以及两侧变更组合后产生的缺陷，包括无冲突文件中的缺陷。与同步无关的既有问题会记录原因并留待后续处理，不触发修复计划、修复或最终检查的退回。无冲突同步仍跳过完整审查，常规开发的审查和裁定标准保持不变。
+
+### 仅审查 CI 已成功的 PR
+
+`merge-review-ci` 只在显式选择时运行。首个 system step 读取现有 `pr_status`，仅当 `ci.finished` 和 `ci.passed` 都为真时，才通过 `workflow_call` 调用 `merge-review`。成功定义与现有逻辑相同，包括 `SUCCESS`、`NEUTRAL` 和 `SKIPPED`。检查未完成、失败或尚未创建时，以 `COMPLETE` 结束，不执行 review、Caccia 或评估评论。初次检查不等待、不重试，也不新增配置项或 CLI 选项。
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+只做 review 和评论，不修改代码、commit、push 或合并时，使用现有的 `.takt/config.yaml` 设置：
+
+```yaml
+caccia:
+  enabled: false
+```
+
+通过初次检查后，现有 `merge-review` 负责 review、Caccia、后续 CI 检查、评估及 `TAKT evaluation: approved={true|false}. {reason}` 评论，并保留其 `COMPLETE` 或 `ABORT` 结果。Workflow 前的 fork 选择和威胁检查不变：批量选择默认排除 fork，除非显式包含；指定编号时跳过选择条件，但仍执行威胁检查。拒绝时沿用现有的停止评论。`merge-review`、`merge-review-fix`、`merge-review-fix-simple` 的直接执行行为和默认值保持不变。
+
+### CI恢复输入与效果
+
+`merge-review-fix` 和 `merge-review-fix-simple` 在 CI 完成后发现 PR 为 `CONFLICTING` 时，会重新与 base branch 同步，并按需解决冲突。初次同步和重新同步中，无冲突时跳过完整 review，继续 push → Caccia → 新 HEAD 的 CI → 合并判断；每次 AI 解决冲突后，都先 review 和修复再 push。仅为 `BEHIND` 的 PR 不重新同步，继续检查已有的 review 和合并条件。重新同步最多 `max(2, runtime concurrency - 1)` 次：并发数为 2 或 3 时最多2次，为 4 时最多3次；不计初次同步。运行时并发数（包括 CLI 的 `--concurrency` 覆盖）保存到任务中，并由 Requeue 和 Retry 保留。达到上限仍有冲突时，TAKT 评论原因并以 ABORT 结束，不合并。重新同步不会重置已用的 CI 修复和重跑次数。
+
+重跑前会获取当前PR HEAD，若与证据的HEAD不同则拒绝重跑。接受重跑后若HEAD变化，恢复流程立即退出等待，保留原HEAD的失败检查和日志，评论说明HEAD不匹配后ABORT。`pr_status`的system input始终提供`rerunHeadChanged`和`rerunHeadChangeReason`；普通polling返回`false`和空字符串。run、repository和attempt验证继续生效。
+
+`comment_pr`支持可选的`body_format: plain_text`。整个插值后的正文使用代码块输出，反引号分隔符比正文中的最长连续反引号更长。CI恢复停止及push失败评论使用该格式，使检查名、job名、调查摘要和错误保持为字面文本。未指定时继续按原样传递Markdown正文。
+
+恢复输入`pr_ci_failure`接受`source: current_pr`和完整的HEAD状态引用`head_sha`，返回PR、HEAD、完整性、包含run/attempt/job及日志的`checks`、`unavailable`、`fixRounds`、`rerunCount`及评论用`details`。commit status、第三方check等没有Actions日志的失败列在`external`中；它们仍视为失败，但不会使其他check的证据变为不完整。只有应当存在的证据进入`unavailable`，或没有任何可判断的Actions check时，`complete`才为`false`。`rerun_ci` effect接受`pr`和完整证据引用`failure`，仅在证据完整且调查判断为外部原因时对失败run去重并重跑一次。其`rerun`结果保存PR、HEAD及旧attempt；将完整引用传给`pr_status.rerun_from`即可等待新attempt。重跑step执行前，该可选引用保持普通polling。计数属于同一次workflow执行。
+
+### Caccia system effect
+
+在 GitHub 上，effect 验证开始时的 head 后，检查由 `coderabbitai` 发起且尚未解决的线程。没有符合条件的线程时，不等待审查，直接返回 `skipped`，原因为 `skipReason: no_review_threads`。合并 workflow 继续进入 `wait_ci`，等待返回 head 的 CI 完成。有符合条件的线程时，执行既有的审查处理循环。独立命令 `takt caccia` 和 PR 发布后的自动 Caccia 保留初次审查等待。
+
+此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时跳过 CodeRabbit 审查等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
+
+在 GitHub 上执行前，effect 将 PR head 与 clone 开始时的 HEAD 比较。不一致时每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。同一次 PR 信息获取中观测到不同 head 时，也在同一期限内重试。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后观测到的 SHA 的 `error`。如果最后一次观测不一致，还会显示冲突的两个 SHA。PR 身份信息变化、认证失败等其他获取异常或取消都会立即导致失败。如果存在执行元数据和 push 记录器，记录跳过结果前也会执行相同检查，因此关闭或未配置时仍可能等待 GitHub head 更新。此固定等待独立于 `wait_timeout_ms` 控制的审查等待，不适用于非 GitHub 的跳过检查或执行结束后的 head 验证。
+
+```yaml
+  - name: caccia
+    mode: system
+    effects:
+      - type: caccia
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.caccia.caccia.success == false)
+        next: error_comment
+      - condition: when(effect.caccia.caccia.outcome == "limit")
+        next: limit_comment
+      - condition: when(true)
+        next: wait_ci
+```
+
+正常结果包含 `success: true`、`failed: false`、`outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason` 和 `reason`；不适用的原因字段为 `null`。条件使用 `effect.<step>.caccia.*`，模板使用 `{effect:<step>.caccia.<field>}`。跳过原因包括 `config_disabled`、`github_unavailable`、`no_review_threads`、`initial_review_unavailable`、`review_rate_limited` 和 `review_skipped`。失败返回 `success: false`、`failed: true` 与 `error`，不保证 head。读取正常字段前先判断失败。
+
+修复 push 后验证 SHA 并对同一个 clone 进行 fast-forward。CI 将 PR status 的 head 与 `effect.caccia.caccia.headSha` 对照，合并使用 clone 当前 HEAD 作为 expected SHA。此前 push effect 的结果作为历史记录保留。
+
+GitLab 也提供 MR 详情和 CI 状态，原因是 `github_unavailable` 的 `skipped` 会继续等待返回 head 的 CI。合并方式和 head 限制仍不受支持，传入这些参数的 `merge_pr` 会失败。
+
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `sync → commit_and_push → caccia → wait_ci → merge_pr` 执行。初次同步和重新同步均遵循相同条件：无冲突时跳过完整审查，直接进入 push → Caccia → 返回 head 的 CI 等待；AI 解决冲突后，必须先完成审查和修复，再执行 `commit_and_push`。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。Git push 本身不会启动 Caccia。PR 发布后的自动 Caccia 遵循[配置参考](./configuration.md#caccia-review-loop)中的启用条件、排除条件和执行顺序。
+
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。CI 首次通过时不执行恢复流程，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。

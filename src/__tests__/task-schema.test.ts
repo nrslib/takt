@@ -1,5 +1,6 @@
 import { MAX_PERSISTED_FAILURE_ERROR_BYTES } from '../shared/utils/persistedFailureText.js';
 import { describe, it, expect } from 'vitest';
+import { toTaskState } from '../infra/task/mapper.js';
 import {
   TaskRecordSchema,
   TaskFileSchema,
@@ -65,6 +66,49 @@ function makePrFailedRecord() {
 }
 
 const taskIdFields = ['issue', 'pr_number', 'context_pr_number'] as const;
+
+describe('worker pool task metadata', () => {
+  it('round-trips the execution worker with the running task identity', () => {
+    const task = { ...makeRunningRecord(), execution_id: 'execution-a', worker_name: 'builtin' };
+    expect(TaskRecordSchema.parse(serializeTaskRecord(TaskRecordSchema.parse(task)))).toEqual(task);
+  });
+
+  it('round-trips a waiting reason while preserving pending status and absent ownership', () => {
+    const task = { ...makePendingRecord(), waiting_reason: 'No executable worker is available' };
+    const restored = TaskRecordSchema.parse(serializeTaskRecord(TaskRecordSchema.parse(task)));
+    expect(restored).toEqual(task);
+    expect(restored).not.toHaveProperty('owner_pid');
+    expect(restored).not.toHaveProperty('execution_id');
+  });
+
+  it('maps the saved worker name to the running task state', () => {
+    const task = { ...makeRunningRecord(), execution_id: 'execution-a', worker_name: 'builtin' };
+    expect(toTaskState('/repo/.takt/tasks.yaml', task)).toMatchObject({
+      status: 'running', executionId: 'execution-a', workerName: 'builtin',
+    });
+  });
+
+  it('maps the saved waiting reason without marking the pending task as running', () => {
+    const task = { ...makePendingRecord(), waiting_reason: 'No executable worker is available' };
+    expect(toTaskState('/repo/.takt/tasks.yaml', task)).toMatchObject({
+      status: 'pending', waitingReason: task.waiting_reason,
+    });
+  });
+});
+
+describe('task stop request persistence', () => {
+  it('round-trips execution identity and the saved request', () => {
+    const task = { ...makeRunningRecord(), execution_id: 'run-a',
+      stop_request: { execution_id: 'run-a', requested_at: '2026-10-21T00:00:00.000Z' } };
+    expect(TaskRecordSchema.parse(serializeTaskRecord(TaskRecordSchema.parse(task)))).toEqual(task);
+  });
+  it.each([
+    { execution_id: '' }, { stop_request: { execution_id: '', requested_at: '2026-10-21T00:00:00.000Z' } },
+    { stop_request: { execution_id: 'run-a' } }, { stop_request: { execution_id: 'run-a', requested_at: 'invalid' } },
+  ])('rejects malformed stop metadata: %j', (changes) => {
+    expect(TaskRecordSchema.safeParse({ ...makeRunningRecord(), ...changes }).success).toBe(false);
+  });
+});
 const invalidTaskIdValues = [
   ['zero', 0],
   ['negative', -1],
@@ -73,6 +117,40 @@ const invalidTaskIdValues = [
 ] as const;
 
 describe('TaskExecutionConfigSchema', () => {
+  it('validates from_pr push identity independently from the selected diff base', () => {
+    const saved = { headSha: 'b'.repeat(40), baseBranch: 'main', headRepositoryUrl: '/head',
+      headRepositoryPushUrls: ['/push'] };
+    const task = { source: 'pr_review', pr_number: 123, branch: 'feature/pr', base_branch: 'review-base',
+      caccia_execution_source: 'from_pr', caccia_pushed_head: saved };
+    expect(TaskExecutionConfigSchema.parse(task)).toEqual(task);
+    for (const changes of [{ caccia_execution_source: undefined }, { source: 'manual' },
+      { pr_number: undefined }, { branch: undefined }, { merge_task: true }]) {
+      expect(TaskExecutionConfigSchema.safeParse({ ...task, ...changes }).success).toBe(false);
+    }
+    for (const changes of [{ headSha: 'bad' }, { baseBranch: '../bad' }, { headRepositoryUrl: '' },
+      { headRepositoryPushUrls: [] }, { headRepositoryPushUrls: [''] }, { headSha: undefined }]) {
+      expect(TaskExecutionConfigSchema.safeParse({ ...task, caccia_pushed_head: { ...saved, ...changes } }).success).toBe(false);
+    }
+  });
+  it('accepts from_pr execution source only with the saved PR review identity', () => {
+    const identity = { source: 'pr_review', pr_number: 123, branch: 'feature/pr', base_branch: 'main' };
+    expect(TaskExecutionConfigSchema.parse({ ...identity, caccia_execution_source: 'from_pr' }))
+      .toMatchObject({ ...identity, caccia_execution_source: 'from_pr' });
+    for (const data of [{}, { ...identity, source: 'manual' }, { ...identity, pr_number: undefined },
+      { ...identity, branch: undefined }]) {
+      expect(TaskExecutionConfigSchema.safeParse({ ...data, caccia_execution_source: 'from_pr' }).success).toBe(false);
+    }
+    expect(TaskExecutionConfigSchema.safeParse({ ...identity, caccia_execution_source: 'merge' }).success).toBe(false);
+  });
+
+  it.each(['caccia', 'manual'])('requires both recorded SHAs for push source %s', (source) => {
+    const record = { merge_pushed_head_sha: 'b'.repeat(40), merge_push_base_head_sha: 'a'.repeat(40),
+      merge_push_source: source };
+    expect(TaskExecutionConfigSchema.parse(record)).toEqual(record);
+    expect(TaskExecutionConfigSchema.safeParse({ ...record, merge_pushed_head_sha: undefined }).success).toBe(false);
+    expect(TaskExecutionConfigSchema.safeParse({ ...record, merge_push_base_head_sha: undefined }).success).toBe(false);
+  });
+
   it('should accept valid config with all optional fields', () => {
     const config = {
       worktree: true,
@@ -145,6 +223,20 @@ describe('TaskExecutionConfigSchema', () => {
 
     expect(config.workflow).toBe('unit-test');
     expect(config.start_step).toBe('plan');
+  });
+
+  it('should accept a non-empty runtime_assignment and preserve it', () => {
+    const config = TaskExecutionConfigSchema.parse({
+      runtime_assignment: 'slow',
+    }) as Record<string, unknown>;
+
+    expect(config.runtime_assignment).toBe('slow');
+  });
+
+  it('should reject an empty runtime_assignment', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      runtime_assignment: '',
+    })).toThrow();
   });
 
   it('should read the legacy start_movement key as start_step', () => {
@@ -418,6 +510,19 @@ describe('TaskExecutionConfigSchema', () => {
       managed_pr: true,
     });
   });
+
+  it('should preserve runtime_assignment in task config serialization', () => {
+    const record = TaskRecordSchema.parse({
+      ...makePendingRecord(),
+      runtime_assignment: 'slow',
+    });
+
+    const serialized = serializeTaskRecord(record);
+
+    expect(serialized).toMatchObject({
+      runtime_assignment: 'slow',
+    });
+  });
 });
 
 describe('TaskFileSchema', () => {
@@ -573,8 +678,41 @@ describe('TaskRecordSchema', () => {
   });
 
   describe('failed status', () => {
+    function makeUnstartedGoalFailure() {
+      return {
+        ...makeFailedRecord(),
+        goal_id: '550e8400-e29b-41d4-a716-446655440000',
+        started_at: null,
+        completed_at: null,
+        failure: { error: 'Goal was aborted', retryable: false },
+      };
+    }
+
     it('should accept valid failed record', () => {
       expect(() => TaskRecordSchema.parse(makeFailedRecord())).not.toThrow();
+    });
+
+    it('should preserve null timestamps for an unstarted non-retryable goal failure', () => {
+      const parsed = TaskRecordSchema.parse(makeUnstartedGoalFailure());
+      expect(parsed).toMatchObject({
+        status: 'failed',
+        goal_id: '550e8400-e29b-41d4-a716-446655440000',
+        started_at: null,
+        completed_at: null,
+        failure: { error: 'Goal was aborted', retryable: false },
+      });
+    });
+
+    it.each([
+      { condition: 'no goal', updates: { goal_id: undefined } },
+      { condition: 'retryable failure', updates: { failure: { error: 'Goal was aborted', retryable: true } } },
+      { condition: 'unspecified retryability', updates: { failure: { error: 'Goal was aborted' } } },
+      { condition: 'missing failure', updates: { failure: undefined } },
+      { condition: 'only started_at set', updates: { started_at: '2026-10-10T00:00:00Z' } },
+      { condition: 'only completed_at set', updates: { completed_at: '2026-10-10T00:01:00Z' } },
+      { condition: 'owner PID remaining', updates: { owner_pid: 1234 } },
+    ])('should reject an unstarted goal failure with $condition', ({ updates }) => {
+      expect(() => TaskRecordSchema.parse({ ...makeUnstartedGoalFailure(), ...updates })).toThrow();
     });
 
     it('should reject failed record without started_at', () => {

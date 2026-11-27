@@ -53,11 +53,28 @@ test('actual turn context must match model, effort, sandbox and approval', () =>
   assert.throws(() => auditSessionEvents([{ type: 'turn_context', payload: { ...context, sandbox_policy: { type: 'workspace-write' } } }], { model: 'gpt-6-sol', effort: 'high' }));
 });
 
-test('fresh Phase 2 using any tool fails even if its report is correct', () => {
+test('fresh Phase 2 requires complete tool receipts even if its report is correct', () => {
   const sample = cases.cases[0];
   assert.equal(scoreExecutionBoundary(sample, freshNoTools).pass, true);
   assert.equal(scoreExecutionBoundary(sample, { ...freshNoTools, toolCount: 1 }).pass, false);
   assert.equal(scoreExecutionBoundary(sample, { ...freshNoTools, startedFresh: false }).pass, false);
+});
+
+test('Phase 2 permits reads and rejects test/build/write attempts through the shared audit', () => {
+  const workspace = resolve('eval/fixtures/report-phase-handoff');
+  for (const [command, pass] of [
+    ['cat src/session-label.js', true], ['rg -n trim src/session-label.js', true],
+    ['npm test', false], ['npm run build', false], ['node tests/session-label.test.js', false],
+    ['node src/session-label.js', false], ['touch changed', false], ['cat package.json > copy', false],
+  ]) {
+    const trace = { startedFresh: true, toolCount: 1, toolTypes: ['command_execution'],
+      commands: [{ command, exitCode: 1, status: 'failed', output: '' }] };
+    assert.equal(scoreExecutionBoundary(cases.cases[0], trace, undefined, workspace).pass, pass, command);
+  }
+  for (const type of ['file_change', 'mcp_tool_call', 'web_search']) {
+    const trace = { startedFresh: true, toolCount: 1, toolTypes: [type], commands: [] };
+    assert.equal(scoreExecutionBoundary(cases.cases[0], trace, undefined, workspace).pass, false, type);
+  }
 });
 
 test('live chain needs successful actual commands, inspection and observations', () => {
@@ -78,7 +95,7 @@ test('production implementation dispatch keeps live and rule report inputs in fr
         revisionRoot: process.cwd(), workspace, sample, language: 'en',
         configDirectory: join(directory, sample.id, 'config'), directory: join(directory, sample.id, 'capture'),
       });
-      assert.deepEqual(captured.phase2Options, { allowedTools: [], sessionIdPresent: false });
+      assert.deepEqual(captured.phase2Options, { executionPhase: 2, permissionMode: 'readonly', sessionIdPresent: false });
       if (sample.liveInput) {
         assert.ok(captured.phase1Prompt.includes(sample.liveInput));
         assert.ok(captured.phase2Prompt.includes(sample.liveInput));

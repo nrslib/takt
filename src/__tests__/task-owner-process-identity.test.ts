@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TaskRecord, TasksFileData } from '../infra/task/schema.js';
+import { randomUUID } from 'node:crypto';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 const { inspect } = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('node:child_process', async (importOriginal) => ({
@@ -11,6 +14,140 @@ beforeEach(() => {
   inspect.mockReset().mockReturnValue('Mon Oct  5 12:00:00 2026\n');
   vi.stubGlobal('process', { ...process, platform: 'linux' });
   vi.spyOn(process, 'kill').mockReturnValue(true);
+});
+
+describe('interrupted task recovery outside the update lock', () => {
+  const birthTime = 'Mon Oct  5 12:00:00 2026';
+  let state: TasksFileData;
+  let store: import('../infra/task/store.js').TaskStore;
+  let lifecycle: import('../infra/task/taskLifecycleService.js').TaskLifecycleService;
+
+  beforeEach(async () => {
+    const { TaskStore } = await import('../infra/task/store.js');
+    const { TaskLifecycleService } = await import('../infra/task/taskLifecycleService.js');
+    const { TaskRecordSchema, TasksFileSchema } = await import('../infra/task/schema.js');
+    state = { tasks: [TaskRecordSchema.parse({
+      name: 'task-a', content: 'Task', status: 'running', owner_pid: 12345,
+      owner_start_time: birthTime, created_at: '2026-10-06T00:00:00Z',
+      started_at: '2026-10-06T00:00:00Z', completed_at: null,
+    })] };
+    store = new TaskStore('/project');
+    vi.spyOn(store, 'read').mockImplementation(() => structuredClone(state));
+    vi.spyOn(store, 'update').mockImplementation((mutator) => {
+      const next = mutator(state);
+      if (next !== undefined) state = TasksFileSchema.parse(next);
+      return state;
+    });
+    lifecycle = new TaskLifecycleService('/project', store.getTasksFilePath(), store);
+  });
+
+  it('does not update when every owner is alive with the recorded birth time', () => {
+    const before = structuredClone(state);
+    const onRecovered = vi.fn();
+
+    expect(lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(store.read).toHaveBeenCalledOnce();
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(store.update).not.toHaveBeenCalled();
+    expect(state).toEqual(before);
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it('leaves remote ownership and lease expiry to the remote assignment owner without inspecting a PID', () => {
+    const assignment = RemoteAssignmentSchema.parse({ projectId: '/project', taskName: 'task-a', workerId: 'w1', workerName: 'w1',
+      registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+      originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 0,
+      lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+    state.tasks[0] = { ...state.tasks[0]!, owner_pid: null, owner_start_time: null, worker_name: 'w1',
+      execution_id: assignment.executionId, remote_assignment: assignment, assignment_generation: 1 };
+    const original = structuredClone(state);
+    expect(lifecycle.failInterruptedRunningTasks()).toBe(0);
+    expect(state).toEqual(original);
+    expect(store.update).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it('checks owners before updating and notifies only after saving the recovered task', () => {
+    inspect.mockReturnValue('different birth time');
+    const update = vi.mocked(store.update).getMockImplementation()!;
+    let inUpdate = false;
+    vi.mocked(store.update).mockImplementationOnce((mutator) => {
+      expect(inspect).toHaveBeenCalledTimes(1);
+      inUpdate = true;
+      try { return update(mutator); }
+      finally { inUpdate = false; }
+    });
+    inspect.mockImplementation(() => {
+      expect(inUpdate).toBe(false);
+      return 'different birth time';
+    });
+    vi.mocked(process.kill).mockImplementation(() => {
+      expect(inUpdate).toBe(false);
+      return true;
+    });
+    const onRecovered = vi.fn(() => {
+      expect(inUpdate).toBe(false);
+      expect(state.tasks[0]?.status).toBe('failed');
+    });
+
+    expect(lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toBe(1);
+
+    expect(store.update).toHaveBeenCalledOnce();
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(process.kill).toHaveBeenCalledTimes(1);
+    expect(state.tasks[0]).toMatchObject({ status: 'failed', owner_pid: null, owner_start_time: null,
+      failure: { error: expect.stringContaining('interrupted') }, completed_at: expect.any(String) });
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'task-a', status: 'failed' }));
+  });
+
+  it.each(['status', 'owner_pid', 'owner_start_time'] as const)('preserves a concurrent change to %s', (field) => {
+    const original = state.tasks[0]!;
+    if (field === 'status') {
+      state = { tasks: [{ ...original, owner_pid: null, owner_start_time: null }] };
+    }
+    inspect.mockReturnValue('different birth time');
+    const onRecovered = vi.fn();
+    let changed: TaskRecord;
+    vi.mocked(store.update).mockImplementationOnce((mutator) => {
+      const task = state.tasks[0]!;
+      changed = field === 'status'
+        ? { ...task, status: 'completed', completed_at: '2026-10-06T00:01:00Z' }
+        : { ...task, [field]: field === 'owner_pid' ? 23456 : 'new owner birth time' };
+      state = { tasks: [changed] };
+      expect(mutator(state)).toBeUndefined();
+      return state;
+    });
+
+    expect(lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(store.update).toHaveBeenCalledOnce();
+    expect(state.tasks).toEqual([changed!]);
+    expect(state.tasks[0]?.status).toBe(field === 'status' ? 'completed' : 'running');
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it.each(['goalTasksOnly', 'goalId'] as const)('inspects and recovers only the scope selected by %s', async (scope) => {
+    const { TaskLifecycleService } = await import('../infra/task/taskLifecycleService.js');
+    const goalId = '650e8400-e29b-41d4-a716-446655440000';
+    const original = state.tasks[0]!;
+    state = { tasks: [
+      { ...original, goal_id: goalId },
+      { ...original, name: 'ordinary', owner_pid: 23456 },
+      { ...original, name: 'other-goal', owner_pid: 34567, goal_id: '650e8400-e29b-41d4-a716-446655440001' },
+      { ...original, name: 'pending', status: 'pending', started_at: null, owner_pid: null, owner_start_time: null },
+    ] };
+    inspect.mockReturnValue('different birth time');
+    lifecycle = new TaskLifecycleService('/project', store.getTasksFilePath(), store, undefined, scope === 'goalTasksOnly');
+
+    expect(lifecycle.failInterruptedRunningTasks(scope === 'goalId' ? goalId : undefined)).toBe(scope === 'goalId' ? 1 : 2);
+
+    expect(inspect.mock.calls.map((call) => call[1])).toEqual(scope === 'goalId'
+      ? [['-o', 'lstart=', '-p', '12345']]
+      : [['-o', 'lstart=', '-p', '12345'], ['-o', 'lstart=', '-p', '34567']]);
+    expect(state.tasks.map(({ status }) => status)).toEqual(scope === 'goalId'
+      ? ['failed', 'running', 'running', 'pending'] : ['failed', 'running', 'failed', 'pending']);
+  });
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -29,15 +166,18 @@ describe('ordinary task owner process identity', () => {
   });
 
   it('keeps the existing central lock inspector and its cache separate', async () => {
-    inspect.mockReturnValueOnce('existing lock identity').mockReturnValueOnce('task identity');
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+    inspect.mockReturnValueOnce('Mon Oct  5 12:00:00 2026\n').mockReturnValueOnce('task identity');
     const { getSelfProcessIdentity } = await import('../infra/task/process.js');
     const { getSelfTaskProcessIdentity } = await import('../infra/task/taskProcessIdentity.js');
-    expect(getSelfProcessIdentity()).toEqual({ startTime: 'existing lock identity' });
+    const lockIdentity = { startTime: 'darwin-start-v2:1791201600' };
+    expect(getSelfProcessIdentity()).toEqual(lockIdentity);
     expect(getSelfTaskProcessIdentity()).toEqual({ startTime: 'task identity' });
-    expect(getSelfProcessIdentity()).toEqual({ startTime: 'existing lock identity' });
+    expect(getSelfProcessIdentity()).toEqual(lockIdentity);
     expect(getSelfTaskProcessIdentity()).toEqual({ startTime: 'task identity' });
     expect(inspect).toHaveBeenCalledTimes(2);
-    expect(inspect.mock.calls[0]?.[2].env).toBeUndefined();
+    expect(inspect.mock.calls[0]?.[0]).toBe('/bin/ps');
+    expect(inspect.mock.calls[1]?.[0]).toBe('ps');
   });
 
   it('preserves a live owner with the same recorded birth time', async () => {

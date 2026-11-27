@@ -12,9 +12,12 @@ import {
   type WorkflowContext,
   type InteractiveModeResult,
   type InteractiveSeedInput,
+  type InteractiveUIText,
+  type SummaryActionValue,
+  createPostSummaryActionSelector,
 } from './interactive.js';
+import { getLabelObject } from '../../shared/i18n/index.js';
 import {
-  displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
 import { createPersonaConversationPlan } from './conversationPlan.js';
@@ -22,6 +25,7 @@ import { resolveFormalSpecConfigurationWithoutPrompt } from './taskInstructionFo
 import type { ConversationDispatchOutcome } from './actionDispatcher.js';
 
 export interface PersonaModeOptions {
+  excludeActions?: readonly SummaryActionValue[];
   dispatch?: (result: InteractiveModeResult) => Promise<ConversationDispatchOutcome>;
 }
 
@@ -50,10 +54,15 @@ export async function personaMode(
     modelCheckTimeoutSeconds: formalSpecConfiguration.modelCheckTimeoutSeconds,
   });
 
-  displayAndClearSessionState(cwd, ctx.lang);
+  const excludeActions = options?.excludeActions;
+  const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
+  const selectAction = excludeActions?.length
+    ? createPostSummaryActionSelector(ui.proposed, ui, ctx.lang, excludeActions)
+    : undefined;
 
   return runConversationLoop(cwd, ctx, {
     ...strategy,
+    selectAction,
     ...(options?.dispatch === undefined ? {} : { dispatch: options.dispatch }),
   }, workflowContext, initialInput);
 }

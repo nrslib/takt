@@ -10,6 +10,7 @@ describe('serializeTaskListItemForJson', () => {
       filePath: '/tmp/.takt/tasks.yaml',
       content: 'Failed content',
       summary: 'summary',
+      goalId: '550e8400-e29b-41d4-a716-446655440000',
       branch: 'feature/test',
       worktreePath: '/tmp/worktree',
       prUrl: 'https://example.com/pr/1',
@@ -32,9 +33,7 @@ describe('serializeTaskListItemForJson', () => {
       },
     };
 
-    const serialized = serializeTaskListItemForJson(task) as Record<string, unknown>;
-    const serializedData = serialized.data as Record<string, unknown>;
-    const serializedFailure = serialized.failure as Record<string, unknown>;
+    const serialized = serializeTaskListItemForJson(task);
 
     expect(serialized).toEqual({
       kind: 'failed',
@@ -43,6 +42,7 @@ describe('serializeTaskListItemForJson', () => {
       filePath: '/tmp/.takt/tasks.yaml',
       content: 'Failed content',
       summary: 'summary',
+      goal_id: '550e8400-e29b-41d4-a716-446655440000',
       branch: 'feature/test',
       worktreePath: '/tmp/worktree',
       prUrl: 'https://example.com/pr/1',
@@ -147,6 +147,27 @@ describe('serializeTaskListItemForJson', () => {
     expect(serialized.data).toMatchObject({
       task: 'local work',
       should_publish_branch_to_origin: false,
+    });
+  });
+
+  it('maps runtime_assignment into json data', () => {
+    const task = {
+      kind: 'pending',
+      name: 'runtime-assignment-task',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/runtime.yaml',
+      content: 'body',
+      data: {
+        task: 'runtime work',
+        runtime_assignment: 'slow',
+      },
+    } as unknown as TaskListItem;
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data).toMatchObject({
+      task: 'runtime work',
+      runtime_assignment: 'slow',
     });
   });
 

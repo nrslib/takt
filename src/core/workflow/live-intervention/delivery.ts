@@ -54,19 +54,21 @@ export function createLiveInterventionDeliveryCommitter(
  */
 export function createScopedLiveInterventionChannel(
   parent: LiveInterventionChannel,
-  delivery: PreparedLiveInterventionDelivery,
-  parentCommitter: LiveInterventionDeliveryCommitter,
+  delivery: PreparedLiveInterventionDelivery | undefined,
+  parentCommitter: LiveInterventionDeliveryCommitter | undefined,
 ): LiveInterventionChannel {
-  const deliveryIds = new Set(delivery.instructionIds);
+  const deliveryIds = new Set(delivery?.instructionIds ?? []);
   let dispatched = false;
 
   const readScopedState = (): LiveInterventionState => {
     const parentState = parent.read();
     const instructions = parentState.instructions
-      .filter((instruction) => deliveryIds.has(instruction.instructionId))
-      .map((instruction) => dispatched
-        ? instruction
-        : { ...instruction, state: 'pending' as const });
+      .filter((instruction) => deliveryIds.has(instruction.instructionId)
+        || instruction.state === 'deliveredSameSession'
+        || instruction.state === 'deliveredNextStep')
+      .map((instruction) => !dispatched && deliveryIds.has(instruction.instructionId)
+        ? { ...instruction, state: 'pending' as const }
+        : instruction);
     const pending = dispatched
       ? 0
       : instructions.filter((instruction) => instruction.state === 'pending').length;
@@ -84,8 +86,16 @@ export function createScopedLiveInterventionChannel(
 
   return {
     read: readScopedState,
-    prepareDelivery: async () => delivery,
+    prepareDelivery: async () => {
+      if (delivery === undefined) {
+        throw new Error('No pending live intervention instructions');
+      }
+      return delivery;
+    },
     commitDelivery: async () => {
+      if (parentCommitter === undefined) {
+        throw new Error('No parent live intervention delivery to commit');
+      }
       if (!dispatched) {
         dispatched = true;
         parentCommitter.onDispatch(undefined);

@@ -1,4 +1,6 @@
-import { Box, Text, useInput, useWindowSize } from 'ink';
+import { Box, Text, useInput, usePaste, useWindowSize } from 'ink';
+import stringWidth from 'string-width';
+import { formatElapsedTime, truncateStatusText } from './statusText.js';
 import {
   useCallback,
   useEffect,
@@ -9,6 +11,15 @@ import {
   type ReactElement,
 } from 'react';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
+import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
+import { getLabel } from '../../shared/i18n/index.js';
+import { ToolActivityView } from './ToolActivityView.js';
+import { MAX_QUEUE_ROWS, QueueView } from './QueueView.js';
+import { MARKER_WIDTH, THINKING_MARKER } from './transcriptOutput.js';
+import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
+import { completedToolTranscript, createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from './toolActivityViewState.js';
+import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
 import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
@@ -24,6 +35,7 @@ import {
 } from './editorState.js';
 import { layoutPromptRows, resolvePromptContentWidth } from './promptLayout.js';
 import { resolveSlashCompletions } from './slashCompletion.js';
+import { useSlashCompletion } from './useSlashCompletion.js';
 import type {
   InteractiveResultSource,
   TuiConversation,
@@ -34,6 +46,8 @@ import { drainPendingWork, useImagePaste, type PendingWork } from './useImagePas
 
 export interface ConversationUiText {
   thinking: string;
+  extendedThinking: string;
+  responding: string;
   hint: string;
   placeholder: string;
   /** Shown under the queued lines while the assistant is still answering. */
@@ -42,6 +56,9 @@ export interface ConversationUiText {
   queuedMore: string;
   /** Appended to the status row while a call can still be interrupted. */
   interruptHint: string;
+  /** Used when the activity, elapsed time and full hint exceed the row width. */
+  interruptHintCompact: string;
+  interruptHintMinimal: string;
   /** System line left behind when Esc stops an answer. */
   responseInterrupted: string;
   /** System line left behind when Esc stops `/go`. */
@@ -121,8 +138,9 @@ export interface ConversationViewProps {
 
 const CANCELLED: InteractiveModeResult = { action: 'cancel', task: '' };
 
-/** Queued lines shown above the prompt; the rest are counted in one row. */
-const MAX_QUEUE_ROWS = 3;
+interface Activity {
+  readonly kind: 'waiting' | 'thinking' | 'responding' | 'tool';
+}
 
 /** `/go` asks the session for a task instruction rather than for a reply. */
 function isInstructionRequest(text: string): boolean {
@@ -134,6 +152,7 @@ function transcriptEntry(role: TranscriptEntry['role'], content: string): Transc
   return { role, content: toDisplayText(content) };
 }
 
+/** Owns the editable conversation frame, queued turns and terminal handoffs. */
 export function ConversationView({
   ui,
   lang,
@@ -165,9 +184,20 @@ export function ConversationView({
     history: initialHistory,
   });
   const [editor, setEditorView] = useState<EditorState>(editorRef.current);
-  const [completionIndex, setCompletionIndex] = useState(0);
   const [streamingRaw, setStreamingRaw] = useState('');
-  const [isBusy, setIsBusy] = useState(false);
+  /**
+   * The thinking text of the segment in progress. It is shown live and enters
+   * the transcript once, when the segment ends. The ref is what the stream
+   * handlers read and commit, the state is its render mirror.
+   */
+  const thinkingRef = useRef('');
+  const [thinkingRaw, setThinkingRaw] = useState('');
+  const [turn, setTurn] = useState<{ readonly id: number; readonly startedAt: number } | null>(null);
+  const [activity, setActivity] = useState<Activity>({ kind: 'waiting' });
+  const [toolDisplay, setToolDisplay] = useState(() => new ToolActivityDisplay('silent', false, () => undefined, false));
+  const [toolView, setToolView] = useState(createToolActivityViewState);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const isBusy = turn !== null;
   /**
    * Lines submitted while the assistant was still answering. The ref is what the
    * key handlers and the drain read, the state is its render mirror — the same
@@ -189,8 +219,6 @@ export function ConversationView({
   const submissionCountRef = useRef(0);
   /** True from the moment this view decides to hand the terminal to a selector. */
   const [isFinishing, setIsFinishing] = useState(false);
-  /** Set by Esc so the completion list closes without touching the draft. */
-  const [completionsHidden, setCompletionsHidden] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const liveStatusRef = useRef('');
   const liveStatusListenersRef = useRef(new Set<() => void>());
@@ -212,6 +240,16 @@ export function ConversationView({
   const finalExitRef = useRef(false);
   const cancellingRef = useRef(false);
 
+  useEffect(() => {
+    if (turn === null) return;
+    const interval = setInterval(() => {
+      if (!exitedRef.current && !cancellingRef.current && inFlightRef.current?.id === turn.id) {
+        setElapsedSeconds(Math.floor((performance.now() - turn.startedAt) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [turn]);
+
   const { columns, rows } = useWindowSize();
   useEffect(() => {
     if (liveStatusReader === undefined) {
@@ -232,34 +270,79 @@ export function ConversationView({
     return () => clearInterval(interval);
   }, [liveStatusReader, liveStatusRefreshIntervalMs]);
   // Resolved once per render: the keys and the box must agree on the row width.
-  const contentWidth = resolvePromptContentWidth(columns);
+  // The IME caret must fit the reported width, even below the legacy minimum.
+  const contentWidth = resolvePromptContentWidth(columns, 1);
   const allCompletions = useMemo(
     () => resolveSlashCompletions(editor.text, lang, conversation.commandAvailability),
     [conversation.commandAvailability, editor.text, lang],
   );
-  const completions = completionsHidden ? [] : allCompletions;
+  const slashCompletion = useSlashCompletion(allCompletions);
+  const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
+  /** The live thinking row shows the latest line, like the status row does for the reply. */
+  const thinkingLine = useMemo(
+    () => toDisplayText(thinkingRaw.trim()).split('\n').filter((line) => line.trim() !== '').at(-1) ?? '',
+    [thinkingRaw],
+  );
+  const elapsed = formatElapsedTime(elapsedSeconds);
+  const allToolGroups = toolDisplay.groups().map((group) => ({
+    ...group,
+    entries: turn === null ? group.entries.filter((entry) => entry.status !== 'running') : group.entries,
+  })).filter((group) => group.entries.length > 0);
+  const toolGroups = allToolGroups.flatMap((group) => {
+    if (toolView.expanded) return [group];
+    const entries = group.entries.filter((entry) => entry.status === 'running');
+    return entries.length === 0 ? [] : [{ ...group, summary: toolActivityGroupSummary(entries[0]!, entries.length), entries }];
+  });
+  const activeTool = activity.kind === 'tool'
+    ? toolGroups.flatMap((group) => group.entries).filter((entry) => entry.status === 'running').at(-1) : undefined;
+  const activityLabel = activeTool !== undefined ? activeTool.tool
+    : activity.kind === 'thinking' ? ui.extendedThinking
+    : activity.kind === 'responding' ? ui.responding : ui.thinking;
+  // Reserve the spinner and its following space before choosing the hint.
+  let interruptHint = stringWidth(`${activityLabel} ${elapsed} ${ui.interruptHint}`) + 2 > columns
+    ? ui.interruptHintCompact : ui.interruptHint;
+  const activityStart = segmentGraphemes(activityLabel).slice(0, 1).join('');
+  if (stringWidth(`${activityStart} ${elapsed} ${interruptHint}`) + 2 > columns) {
+    interruptHint = ui.interruptHintMinimal;
+  }
+  const statusSuffix = `${elapsed} ${interruptHint}`;
+  const activityColumns = columns - 2 - stringWidth(statusSuffix) - 1;
+  let displayedActivity = activityColumns > 0
+    ? truncateStatusText(activityLabel, activityColumns)
+    : '';
+  if (displayedActivity === '…' && stringWidth(activityStart) <= activityColumns) {
+    displayedActivity = activityStart;
+  }
+  const requiredStatus = displayedActivity === '' ? statusSuffix : `${displayedActivity} ${statusSuffix}`;
+  const rawInputSummary = activeTool !== undefined
+    ? truncateStatusText(toSingleLineText(activeTool.input), columns - 2 - stringWidth(requiredStatus) - 1)
+    : '';
+  const inputSummary = rawInputSummary === '…' ? '' : rawInputSummary;
+  const statusLabel = `${requiredStatus}${inputSummary === '' ? '' : ` ${inputSummary}`}`;
   // The model name comes from config or `--model`, so it crosses the display
   // boundary like any other outside text before it reaches a fixed-height row.
   // A submission can lazily replace the session before this component renders
   // its response, so read the current value on every render.
   const modelRow = toSingleLineText(modelLabel());
-  const promptRowCount = layoutPromptRows(editor.text, editor.cursor, contentWidth).rows.length;
+  const promptLayout = layoutPromptRows(editor.text, editor.cursor, contentWidth);
+  const promptRowCount = promptLayout.rows.length - promptLayout.cursorRow
+    + Number(promptLayout.cursorRow > 0);
 
-  // Ink redraws this frame on every update and writes a trailing line break.
-  // Leave one terminal row free so cursor advance cannot scroll the buffer.
-  let remainingLiveRows = Math.max(1, (rows || 24) - 1);
-  const showStatusLine = remainingLiveRows > 1;
+  // The running area and the queue sit between the transcript and the input,
+  // the order in which they happen; the prompt's caret row is offset by them.
+  // Leave one terminal row free for Ink's trailing line break.
+  let remainingLiveRows = Math.max(1, (rows || 24) - 1) - 1;
+  const showStatusLine = remainingLiveRows > 0;
   if (showStatusLine) {
     remainingLiveRows -= 1;
   }
-  // Keep one editor row before optional content is assigned.
-  remainingLiveRows -= 1;
   const showNotice = notice !== null && remainingLiveRows > 0;
   if (showNotice) {
     remainingLiveRows -= 1;
   }
-  const showPromptBorder = remainingLiveRows >= 2;
+  // A notice and a queued-input summary take priority over the two border rows.
+  const showPromptBorder = remainingLiveRows > 1 + Number(queue.length > 0);
   if (showPromptBorder) {
     remainingLiveRows -= 2;
   }
@@ -295,9 +378,30 @@ export function ConversationView({
     : 0;
   remainingLiveRows -= visibleCompletionCount - visibleCompletionRows;
   const showModelRow = remainingLiveRows > 0;
-  const queuedSummary = queue.length > visibleQueueRows
-    ? `${ui.queuedHint}  ${ui.queuedMore.replace('{count}', String(queue.length - visibleQueueRows))}`
-    : ui.queuedHint;
+  remainingLiveRows -= Number(showModelRow);
+  const showThinkingRow = thinkingLine !== '' && remainingLiveRows > 0;
+  remainingLiveRows -= Number(showThinkingRow);
+  const toolHistoryHeight = allToolGroups.length === 0 ? 0
+    : toolGroups.length === 0 ? Math.min(1, Math.max(0, remainingLiveRows)) : Math.max(0, remainingLiveRows);
+  const toolLabels = {
+    compact: getLabel('tui.ui.toolHistoryCompact', lang),
+    expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
+    more: getLabel('tui.ui.toolHistoryMore', lang),
+    end: getLabel('tui.ui.toolHistoryEnd', lang),
+    completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+    running: getLabel('tui.ui.toolHistoryRunning', lang),
+  };
+  const toolPageColumns = columns - MARKER_WIDTH;
+  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, toolView, toolPageColumns,
+    Math.max(0, toolHistoryHeight - 1), toolLabels);
+  const queuedSummary = [
+    getLabel('tui.ui.queuedCount', lang, { count: String(queue.length) }),
+    ui.queuedHint,
+    ...(queue.length > visibleQueueRows ? [ui.queuedMore.replace('{count}', String(queue.length - visibleQueueRows))] : []),
+  ].join('  ');
+  const rowsAbovePrompt = Number(showThinkingRow)
+    + (toolHistoryHeight > 0 ? toolPage.rows.length + 1 : 0)
+    + (showQueueSummary ? 1 + visibleQueueRows : 0);
 
   /**
    * Every exit ends this mount, but not always the run: a hand-off gives the
@@ -314,6 +418,7 @@ export function ConversationView({
       return;
     }
     exitedRef.current = true;
+    setTurn(null);
     exitReportedRef.current = true;
     if (isFinalExit(requested)) {
       // Sealed synchronously with the settle: a capture that finishes afterwards
@@ -355,10 +460,8 @@ export function ConversationView({
 
   const updateEditor = useCallback((next: EditorState) => {
     writeEditor(next);
-    setCompletionIndex(0);
-    // Editing the draft is what brings a dismissed list back.
-    setCompletionsHidden(false);
-  }, [writeEditor]);
+    resetCompletion();
+  }, [writeEditor, resetCompletion]);
 
   const writeQueue = useCallback((next: readonly string[]) => {
     queueRef.current = next;
@@ -371,6 +474,20 @@ export function ConversationView({
     setTranscriptView(next);
   }, []);
 
+  /**
+   * Ends the thinking segment in progress: what was shown live goes into the
+   * transcript once, at the point where the segment ended. A provider that sends
+   * no thinking text leaves nothing here, and the status row's label is all the
+   * user sees of it.
+   */
+  const commitThinking = useCallback(() => {
+    if (thinkingRef.current === '') return;
+    const text = thinkingRef.current.trim();
+    thinkingRef.current = '';
+    setThinkingRaw('');
+    if (text !== '') appendTranscript(transcriptEntry('thinking', text));
+  }, [appendTranscript]);
+
   const trackPendingWork = useCallback((work: PendingWork) => {
     pendingRef.current.add(work);
     void work.completion.finally(() => pendingRef.current.delete(work));
@@ -380,6 +497,7 @@ export function ConversationView({
     text: string,
     controller: AbortController,
     submissionId: number,
+    display: ToolActivityDisplay,
   ): Promise<void> => {
     /** False once this call was interrupted or the view moved on. */
     const isCurrent = (): boolean =>
@@ -394,23 +512,60 @@ export function ConversationView({
           if (!isCurrent()) {
             return;
           }
+          commitThinking();
           setStreamingRaw((streamed) => streamed + chunk);
+          setActivity((current) => ({ ...current, kind: 'responding' }));
+        },
+        onStreamEvent: (event: StreamEvent) => {
+          if (!isCurrent()) return;
+          switch (event.type) {
+            case 'thinking':
+              thinkingRef.current += event.data.thinking;
+              setThinkingRaw(thinkingRef.current);
+              setActivity((current) => ({ ...current, kind: 'thinking' }));
+              break;
+            case 'tool_use':
+              commitThinking();
+              display.handle(event);
+              setActivity({ kind: 'tool' });
+              break;
+            case 'tool_result': {
+              const completed = display.history.entries().filter((entry) => entry.status !== 'running');
+              for (const entry of display.handle(event)) {
+                if (entry.status !== 'running' && !completed.some((previous) => previous.key === entry.key)) {
+                  appendTranscript(transcriptEntry('tool', completedToolTranscript(entry, columns, toolLabels)));
+                }
+              }
+              setActivity((current) => ({
+                kind: current.kind === 'tool' && !display.groups().some((group) => group.entries.some((entry) => entry.status === 'running'))
+                  ? 'waiting' : current.kind,
+              }));
+              break;
+            }
+            case 'tool_output':
+              display.handle(event);
+              setActivity((current) => ({ ...current }));
+              break;
+          }
         },
       };
       const outcome = submitMode === 'summarize'
         ? await conversation.createInstruction(submitInput)
         : await conversation.submit(submitInput);
       if (!isCurrent()) {
-        // Interrupted: the user is back at the prompt, and this answer is theirs
-        // to ask for again.
+        if (!exitedRef.current && outcome.kind === 'error' && outcome.retainedArtifactsMessage !== undefined) {
+          appendTranscript(transcriptEntry('system', outcome.retainedArtifactsMessage));
+        }
         return;
       }
       inFlightRef.current = null;
       // Past the interruption check, so an adapter that keeps a transcript of its
       // own records exactly the turns the view accepted.
       outcome.commit?.();
+      // The finished work goes in ahead of the reply or the failure it led to.
+      commitThinking();
       setStreamingRaw('');
-      setIsBusy(false);
+      setTurn(null);
       // What the call would have told a terminal it does not own — the provider
       // taking images as paths, for one — belongs above the answer it came with.
       const notices = outcome.notices ?? [];
@@ -443,7 +598,7 @@ export function ConversationView({
       inFlightRef.current = null;
       exit({ kind: 'failed', error });
     }
-  }, [appendTranscript, conversation, exit, submitMode]);
+  }, [appendTranscript, commitThinking, columns, conversation, exit, submitMode, lang]);
 
   /**
    * Opens a turn for `text`, leaving the prompt alone.
@@ -460,16 +615,21 @@ export function ConversationView({
     }
     setNotice(null);
     setStreamingRaw('');
-    setIsBusy(true);
     const controller = new AbortController();
     submissionCountRef.current += 1;
     const submissionId = submissionCountRef.current;
+    setTurn({ id: submissionId, startedAt: performance.now() });
+    setElapsedSeconds(0);
+    setActivity({ kind: 'waiting' });
+    const display = new ToolActivityDisplay('silent', false, () => undefined, false);
+    setToolDisplay(display);
+    setToolView(createToolActivityViewState());
     inFlightRef.current = {
       id: submissionId,
       controller,
       isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
     };
-    trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId) });
+    trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId, display) });
   }, [appendTranscript, runSubmission, submitMode, trackPendingWork]);
 
   /**
@@ -490,8 +650,10 @@ export function ConversationView({
     }
     inFlightRef.current = null;
     inFlight.controller.abort();
+    // What was already thought stays, and the interruption is recorded after it.
+    commitThinking();
     setStreamingRaw('');
-    setIsBusy(false);
+    setTurn(null);
     setNotice(null);
     appendTranscript(transcriptEntry('system', inFlight.isInstruction
       ? ui.instructionInterrupted
@@ -500,7 +662,7 @@ export function ConversationView({
     // then the queued line, then the answer to it.
     drainQueueRef.current();
     return true;
-  }, [appendTranscript, ui.instructionInterrupted, ui.responseInterrupted]);
+  }, [appendTranscript, commitThinking, ui.instructionInterrupted, ui.responseInterrupted]);
 
   /**
    * Every exit drains the in-flight work first. A clipboard capture writes a
@@ -510,6 +672,7 @@ export function ConversationView({
    */
   const finishRun = useCallback(async (next: ConversationExit): Promise<void> => {
     cancellingRef.current = true;
+    setTurn(null);
     // The terminal is about to belong to a selector, so the prompt stops taking
     // keys at the moment the decision is made rather than when the tree goes.
     setIsFinishing(true);
@@ -523,13 +686,25 @@ export function ConversationView({
     updateEditor(applyEditorKey(editorRef.current, { kind: 'insert', text }));
   }, [updateEditor]);
 
-  const { routeInput: routeImagePasteInput, captureClipboard: captureClipboardImage } = useImagePaste({
+  const {
+    routeInput: routeImagePasteInput,
+    flushPending: flushPendingImagePasteText,
+    captureClipboard: captureClipboardImage,
+  } = useImagePaste({
     sink: conversation,
     lang,
     insertAtCaret,
     setNotice,
     track: trackPendingWork,
     isStopped: () => exitedRef.current || cancellingRef.current,
+  });
+
+  usePaste((text) => {
+    if (exitedRef.current || cancellingRef.current) {
+      return;
+    }
+    flushPendingImagePasteText();
+    updateEditor(applyEditorKey(editorRef.current, { kind: 'paste', text }));
   });
 
   const applyLocalCommand = useCallback((command: TuiLocalCommand, text: string) => {
@@ -581,11 +756,16 @@ export function ConversationView({
         captureClipboardImage();
         drainQueueRef.current();
         return;
-      case 'notice':
+      case 'notice': {
         appendTranscript(transcriptEntry('user', text));
-        setNotice(toSingleLineText(command.message));
+        const notice = toSingleLineText(command.message);
+        setNotice(notice);
+        if (command.operationResult) {
+          conversation.recordOperationResult?.(notice);
+        }
         drainQueueRef.current();
         return;
+      }
     }
   }, [appendTranscript, captureClipboardImage, finishRun]);
 
@@ -685,33 +865,25 @@ export function ConversationView({
       return;
     }
 
-    if (key.escape) {
-      // An open completion list is what Esc closes first; only then does Esc
-      // reach the call that is running.
-      if (completions.length > 0) {
-        setCompletionsHidden(true);
-        return;
+    if (key.ctrl && input === 'o') {
+      setToolView((state) => toggleToolActivityView(state));
+      return;
+    }
+    if (key.pageUp || key.pageDown) {
+      if (toolHistoryHeight > 1) {
+        setToolView((state) => moveToolActivityView(state,
+          toolActivityViewPage(toolDisplay, toolGroups, state, toolPageColumns, Math.max(0, toolHistoryHeight - 1), toolLabels),
+          key.pageUp ? 'previous' : 'next'));
       }
-      interruptSubmission();
       return;
     }
 
-    if (completions.length > 0) {
-      if (key.downArrow) {
-        setCompletionIndex((index) => (index + 1) % completions.length);
-        return;
-      }
-      if (key.upArrow) {
-        setCompletionIndex((index) => (index + completions.length - 1) % completions.length);
-        return;
-      }
-      if (key.tab) {
-        const selected = completions[completionIndex];
-        if (selected) {
-          updateEditor(replaceEditorText(editorRef.current, `${selected.command} `));
-        }
-        return;
-      }
+    if (slashCompletion.handleInput(key, (text) => {
+      updateEditor(replaceEditorText(editorRef.current, text));
+    })) return;
+    if (key.escape) {
+      interruptSubmission();
+      return;
     }
 
     // Shift+Enter and Option+Enter insert a line break; plain Enter submits.
@@ -799,8 +971,7 @@ export function ConversationView({
       return;
     }
     // Ctrl+V pastes the clipboard image, the same gesture the readline editor
-    // offered. A terminal's own text paste arrives as ordinary input and is
-    // inserted with its line breaks intact, so it never reaches this branch.
+    // offered. Terminal text pastes arrive on the separate usePaste channel.
     if (key.ctrl && input === 'v') {
       captureClipboardImage();
       return;
@@ -815,29 +986,17 @@ export function ConversationView({
     <>
       <TranscriptView entries={transcript} userMessageColors={userMessageColors} />
       <Box flexDirection="column">
+        {showThinkingRow && <Text dimColor wrap="truncate-end">{`${THINKING_MARKER}${thinkingLine}`}</Text>}
+        <ToolActivityView page={toolPage} state={toolView} labels={toolLabels} height={toolHistoryHeight} />
         {showQueueSummary && (
-          <Box flexDirection="column">
-            <Text dimColor wrap="truncate-end">{queuedSummary}</Text>
-            {queue.slice(queue.length - visibleQueueRows).map((line, index) => (
-              <Text key={index} dimColor wrap="truncate-end">{`❯ ${toSingleLineText(line)}`}</Text>
-            ))}
-          </Box>
+          <QueueView heading={queuedSummary} lines={queue.slice(queue.length - visibleQueueRows)} />
         )}
-        {showStatusLine && (
-          <StatusLine
-            busy={isBusy}
-            label={`${ui.thinking} ${ui.interruptHint}`}
-            streamed={streamingPreview}
-          />
-        )}
-        {showLiveStatus && (
-          <Text dimColor wrap="truncate-end">{liveStatus || ' '}</Text>
-        )}
-        {showNotice && <Text color="red" wrap="truncate-end">{notice ?? ' '}</Text>}
         <PromptInput
           text={editor.text}
           cursor={editor.cursor}
           contentWidth={contentWidth}
+          cursorRowOffset={rowsAbovePrompt}
+          cursorFirst
           placeholder={ui.placeholder}
           hint={ui.hint}
           completions={completions}
@@ -845,9 +1004,22 @@ export function ConversationView({
           disabled={isFinishing}
           maxVisibleRows={visiblePromptRows}
           maxVisibleCompletions={visibleCompletionCount}
-          showHint={showPromptHint}
+          showHint={false}
           showBorder={showPromptBorder}
         />
+        {showStatusLine && (
+          <StatusLine
+            busy={isBusy}
+            label={statusLabel}
+            streamed={activity.kind === 'responding' && stringWidth(statusLabel) + 2 < columns
+              ? streamingPreview : ''}
+          />
+        )}
+        {showLiveStatus && (
+          <Text dimColor wrap="truncate-end">{liveStatus || ' '}</Text>
+        )}
+        {showNotice && <Text color="red" wrap="truncate-end">{notice ?? ' '}</Text>}
+        {showPromptHint && <Text dimColor wrap="truncate-end">{ui.hint}</Text>}
         {showModelRow && <Text dimColor wrap="truncate-end">{modelRow}</Text>}
       </Box>
     </>

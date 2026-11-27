@@ -47,7 +47,7 @@ import {
   resolveRuntimeProfileResourceContext,
   type RuntimeProviderResolutionContext,
 } from './resolution-context.js';
-import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
+import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile, type RuntimeProviderAssignmentOrigins } from './policy.js';
 import { hasActiveProviderContent, type McpSection } from './schema.js';
 import { hasActiveMcpAssignments } from './mode.js';
 import type {
@@ -129,6 +129,7 @@ export type ProviderConfigModel =
       section: RuntimeProviderSection | undefined;
       mcp: McpSection | undefined;
       resolutionContext?: RuntimeProviderResolutionContext;
+      assignmentOrigins?: RuntimeProviderAssignmentOrigins;
     };
 
 /** Factory/registry: pick the matching compiler for the loaded configuration format. */
@@ -139,7 +140,7 @@ export function compileProviderEnvironment(
     case 'legacy':
       return compileLegacyProviderEnvironment(model.legacy);
     case 'runtime-v1':
-      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext, model.mcp);
+      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext, model.mcp, model.assignmentOrigins);
   }
 }
 
@@ -177,6 +178,7 @@ export function compileRuntimeProviderEnvironment(
   section: RuntimeProviderSection | undefined,
   resolutionContext?: RuntimeProviderResolutionContext,
   mcp?: McpSection,
+  assignmentOrigins?: RuntimeProviderAssignmentOrigins,
 ): CompiledProviderEnvironment {
   if (section === undefined || !hasActiveProviderContent(section)) {
     return {
@@ -197,8 +199,8 @@ export function compileRuntimeProviderEnvironment(
   }
 
   // Reuse the runtime section's up-front validation: unknown profile/pool references,
-  // cyclic `extends`, and profiles missing provider/model all throw here.
-  validateRuntimeProviderSection(section);
+  // cyclic `extends`, missing providers, and OpenCode profiles missing models all throw here.
+  validateRuntimeProviderSection(section, assignmentOrigins);
 
   const flatProfiles = flattenProfiles(section.profiles ?? {});
 
@@ -372,7 +374,7 @@ function buildInternalAgents(
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {
-    const seat = seats[key];
+    const seat = Object.hasOwn(seats, key) ? seats[key] : undefined;
     if (seat === undefined) {
       throw new Error(
         `runtime.yaml \`provider.targets.internal_agents\` supports only ${Object.keys(seats)
@@ -452,7 +454,7 @@ function buildAutoRoutingConfig(
     strategy,
     router: {
       provider: router.provider as ProviderType,
-      model: router.model as string,
+      model: router.model,
       ...(router.providerOptions !== undefined ? { providerOptions: router.providerOptions } : {}),
       ...(router.permissionMode !== undefined ? { permissionMode: router.permissionMode } : {}),
     },
@@ -482,7 +484,7 @@ function registerCandidate(
   candidates.set(profileName, {
     name: profileName,
     provider: entry.provider as ProviderType,
-    model: entry.model as string,
+    model: entry.model,
     routingTier: tier,
     ...(entry.providerOptions !== undefined ? { providerOptions: entry.providerOptions } : {}),
     ...(entry.permissionMode !== undefined ? { permissionMode: entry.permissionMode } : {}),
@@ -561,7 +563,7 @@ function requireRoutingTier(
 }
 
 /**
- * Resolve a profile reference into provider/model/options. Presence of provider/model on
+ * Resolve a profile reference into provider/model/options. Presence of provider on
  * referenced profiles was asserted by `validateRuntimeProviderSection`; a flat profile
  * `options` bag is nested under the profile's provider and normalized into `StepProviderOptions`.
  */
@@ -571,15 +573,16 @@ function resolveProfileEntry(
   resolutionContext?: FacetResolutionContext,
 ): ProviderRoutingEntry {
   const profile = flatProfiles.get(profileName);
-  if (profile?.provider === undefined || profile.model === undefined) {
+  if (profile?.provider === undefined) {
     throw new Error(
-      `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\`/\`model\``,
+      `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\``,
     );
   }
   const options = resolveProfileProviderOptions(profileName, profile, resolutionContext);
   return {
     provider: profile.provider as ProviderType,
     model: profile.model,
+    ...(profile.model === undefined ? { modelSpecified: true } : {}),
     ...(options !== undefined ? { providerOptions: options } : {}),
     ...(profile.permissionMode !== undefined ? { permissionMode: profile.permissionMode } : {}),
   };
@@ -597,6 +600,7 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   kiro: 'kiro',
   pi: 'pi',
   'deepseek-harness': 'deepseek_harness',
+  devin: 'devin',
 };
 
 /** Merge capabilities with validated profile options, trusting non-loopback URLs only in global profiles. */
@@ -620,8 +624,15 @@ function resolveProfileProviderOptions(
         capabilityContext?.workflowDir ?? capabilityContext?.projectDir ?? '',
         capabilityContext,
       );
+  const contextWindowOptions: StepProviderOptions | undefined = profile.contextWindow === undefined
+    ? undefined
+    : profile.provider === 'codex'
+      ? { codex: { contextWindow: profile.contextWindow } }
+      : profile.provider === 'opencode'
+        ? { opencode: { contextWindow: profile.contextWindow } }
+        : undefined;
   if (profile.options === undefined) {
-    return capabilityOptions;
+    return mergeProviderOptions(capabilityOptions, contextWindowOptions);
   }
   const rawKey = PROVIDER_OPTIONS_RAW_KEY[profile.provider as ProviderType];
   if (rawKey === undefined) {
@@ -644,6 +655,6 @@ function resolveProfileProviderOptions(
       };
   const validatedProfileOptions = StepProviderOptionsObjectSchema.parse({ [rawKey]: profile.options });
   const profileOptions = normalizeProviderOptions(validatedProfileOptions, normalizationOptions);
-  const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions);
+  const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions, contextWindowOptions);
   return mergedOptions;
 }

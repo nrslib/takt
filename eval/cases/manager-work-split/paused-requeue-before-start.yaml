@@ -1,0 +1,262 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: pause-replay
+  mainMerge: auto
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 月次帳票を PDF として出力する
+    outOfScope:
+      - 外部サービスの変更
+    acceptanceCriteria:
+      - 月次帳票の PDF 出力を実装する。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/report-output
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000001
+        recordedAt: 2026-11-01T00:10:00.000Z
+        summary: 人の依頼でゴールを一時停止しました。
+      - id: 650e8400-e29b-41d4-a716-000000000002
+        recordedAt: 2026-11-01T00:20:00.000Z
+        summary: 人がゴールを再開しました。
+    questions: []
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: report-output
+    runSlug: setup-650e8400-e29b-41d4-a716-446655440099
+    result: &a1
+      success: false
+      interrupted: true
+      workflowResult: error
+      failureReason: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      shaUnavailableReason: Workflow execution did not start
+    createdAt: 2026-11-01T00:10:00.000Z
+  tasks:
+    - name: report-output
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: failed
+      status: failed
+      createdAt: 2026-11-01T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      goalWorkKey: report-output
+      goalPurpose: 月次帳票の PDF 出力を実装する。
+      workflow: pause-replay
+      startedAt: 2026-11-01T00:02:00.000Z
+      completedAt: 2026-11-01T00:10:00.000Z
+      failure:
+        error: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      completion: *a1
+      goalIntegration: not_integrated
+      executionId: 650e8400-e29b-41d4-a716-446655440081
+      worktree: true
+      taskDir: .takt/tasks/report-output
+      summary: 月次帳票の PDF 出力を実装する。
+      baseBranch: takt/goal/report-output
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      ownerStartTime: null
+      ownerPid: null
+      slug: report-output
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/git-state.txt
+      result: ゴールのブランチ takt/goal/report-output は main から分岐し、先端は aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。clone の作成前に止まったため、タスクの成果と作業場所はまだありません。
+    - tool: takt_list_goal_questions
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        questions: []
+        collection: questions
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/report-output
+        goalSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        targetBranch: main
+        targetSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        included: true
+        ahead: 0
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: pause-replay
+            description: plan、implement、review の順に進め、最初のステップは plan。
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: test -e /workspace/project/.takt/worktrees/report-output
+      result: |-
+        exit code: 1
+        stdout:
+        stderr:
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: pause-replay
+  mainMerge: auto
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Export monthly reports as PDF
+    outOfScope:
+      - Changes to external services
+    acceptanceCriteria:
+      - Implement monthly report PDF export.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/report-output
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000001
+        recordedAt: 2026-11-01T00:10:00.000Z
+        summary: Paused the goal at the human's request.
+      - id: 650e8400-e29b-41d4-a716-000000000002
+        recordedAt: 2026-11-01T00:20:00.000Z
+        summary: The human resumed the goal.
+    questions: []
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: report-output
+    runSlug: setup-650e8400-e29b-41d4-a716-446655440099
+    result: &a1
+      success: false
+      interrupted: true
+      workflowResult: error
+      failureReason: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      shaUnavailableReason: Workflow execution did not start
+    createdAt: 2026-11-01T00:10:00.000Z
+  tasks:
+    - name: report-output
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: failed
+      status: failed
+      createdAt: 2026-11-01T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      goalWorkKey: report-output
+      goalPurpose: Implement monthly report PDF export.
+      workflow: pause-replay
+      startedAt: 2026-11-01T00:02:00.000Z
+      completedAt: 2026-11-01T00:10:00.000Z
+      failure:
+        error: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      completion: *a1
+      goalIntegration: not_integrated
+      executionId: 650e8400-e29b-41d4-a716-446655440081
+      worktree: true
+      taskDir: .takt/tasks/report-output
+      summary: Implement monthly report PDF export.
+      baseBranch: takt/goal/report-output
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      ownerStartTime: null
+      ownerPid: null
+      slug: report-output
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/git-state.txt
+      result: Goal branch takt/goal/report-output branches from main at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Execution stopped before the clone was created, so there is no task result or working location yet.
+    - tool: takt_list_goal_questions
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        questions: []
+        collection: questions
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/report-output
+        goalSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        targetBranch: main
+        targetSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        included: true
+        ahead: 0
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: pause-replay
+            description: Steps are plan, implement, review; the first step is plan.
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: test -e /workspace/project/.takt/worktrees/report-output
+      result: |-
+        exit code: 1
+        stdout:
+        stderr:

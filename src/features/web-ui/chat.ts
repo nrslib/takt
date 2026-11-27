@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { InteractiveMode } from '../../core/models/index.js';
+import type { InteractiveMode, WorkflowResumePoint } from '../../core/models/index.js';
 import { getWorkflowDescription } from '../../infra/config/index.js';
 import {
   createAssistantConversationPlan,
@@ -70,6 +70,7 @@ export interface WebTaskActionContext {
     readonly id: string;
     readonly selection: TaskRetryStartSelection;
   }[];
+  readonly retrySourceResumePoint?: WorkflowResumePoint;
   readonly failure?: {
     readonly code: string;
     readonly message: string;
@@ -278,6 +279,13 @@ function createPlan(
   };
 }
 
+/** The Web UI has no separate notice channel, so a capability notice travels with the intro the user reads first. */
+function withMcpUnavailableNotice(strategy: ConversationPlan['strategy']): string {
+  return strategy.mcpUnavailableNotice === undefined
+    ? strategy.introMessage
+    : `${strategy.mcpUnavailableNotice}\n\n${strategy.introMessage}`;
+}
+
 function toWebReply(
   result: ConversationSessionResult,
   taskAction?: WebTaskActionReference,
@@ -407,7 +415,7 @@ function buildConversation(
     id,
     ...request,
     intro: taskActionContext === undefined
-      ? plan.strategy.introMessage
+      ? withMcpUnavailableNotice(plan.strategy)
       : `${taskActionContext.action === 'retry' ? '## 既存タスクのリトライ' : '## 既存タスクへの指示'}\n\n${plan.strategy.introMessage}`,
     provider: plan.ctx.providerType,
     ...(plan.ctx.model === undefined ? {} : { model: plan.ctx.model }),

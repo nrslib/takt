@@ -3,6 +3,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 import { keepsPiToolWithoutEdit, PI_READONLY_TOOLS } from './pi-tool-policy.js';
+import { resumeCompactedSession } from './compaction-recovery.js';
 
 const log = createLogger('pi-provider');
 
@@ -16,9 +17,6 @@ async function callPiLazy(
 }
 
 function toPiOptions(options: ProviderCallOptions, systemPrompt?: string): PiCallOptions {
-  if (options.readonlyFileReadPaths !== undefined) {
-    throw new Error('Provider "pi" cannot restrict file reads to the specified verification artifacts');
-  }
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Pi provider maps allowedTools to Pi SDK tool names');
   }
@@ -71,10 +69,9 @@ export class PiProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    return {
-      call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
-        callPiLazy(name, prompt, toPiOptions(options, systemPrompt)),
-    };
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
+      callPiLazy(name, prompt, toPiOptions(options, systemPrompt));
+    return { call, recoverFromCompaction: resumeCompactedSession(name, call) };
   }
 
 }

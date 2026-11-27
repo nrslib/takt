@@ -4,6 +4,9 @@ import { getErrorMessage } from '../../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExceededInfo, WorkflowExecutionResult } from './types.js';
+import type { GoalTaskResult } from '../../../infra/goals/schema.js';
+import { TaskStoppedError } from '../../../infra/task/taskStop.js';
+import { GoalAbortedError } from './goalAbortMonitor.js';
 
 interface BuildTaskResultParams {
   task: TaskInfo;
@@ -31,6 +34,7 @@ interface PersistTaskResultOptions {
 }
 
 interface PersistTaskErrorOptions {
+  completion?: GoalTaskResult;
   emitStatusLog?: boolean;
   responsePrefix?: string;
 }
@@ -123,7 +127,7 @@ export function persistExceededTaskResult(
   taskRunner: TaskRunner,
   task: TaskInfo,
   exceeded: ExceededInfo,
-  context?: { worktreePath?: string; branch?: string },
+  context?: { worktreePath?: string; branch?: string; completion?: GoalTaskResult },
   options?: PersistTaskResultOptions,
 ): void {
   taskRunner.exceedTask(task.name, {
@@ -133,6 +137,7 @@ export function persistExceededTaskResult(
     ...(exceeded.resumePoint ? { resumePoint: exceeded.resumePoint } : {}),
     ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
     ...(context?.branch ? { branch: context.branch } : {}),
+    ...(context?.completion === undefined ? {} : { completion: context.completion }),
   });
   if (options?.emitStatusLog !== false) {
     info(`Task "${sanitizeTerminalText(task.name)}" exceeded iteration limit at step "${exceeded.currentStep}"`);
@@ -153,9 +158,11 @@ export function persistTaskError(
     task,
     success: false,
     response: `${responsePrefix}${getErrorMessage(err)}`,
+    ...(err instanceof TaskStoppedError || err instanceof GoalAbortedError ? { failureRetryable: false } : {}),
     executionLog: [],
     startedAt,
     completedAt,
+    ...(options?.completion === undefined ? {} : { completion: options.completion }),
     ...(task.data?.branch ? { branch: task.data.branch } : {}),
     ...(task.worktreePath ? { worktreePath: task.worktreePath } : {}),
   });

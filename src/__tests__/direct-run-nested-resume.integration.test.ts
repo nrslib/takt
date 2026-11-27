@@ -27,9 +27,16 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
+import type { WorkflowResumePoint } from '../core/models/index.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
-import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
+import {
+  invalidateAllResolvedConfigCache,
+  invalidateGlobalConfigCache,
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
+} from '../infra/config/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { resumeDirectRun } from '../features/tasks/resume/index.js';
 import { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
@@ -236,5 +243,76 @@ describe('direct run nested checkpoint persistence', () => {
       'parent-repair',
       'child-review',
     ]);
+  });
+
+  it.each([
+    {
+      scenario: 'missing step',
+      overrides: { step: 'removed' },
+      location: 'nested/revisit/removed',
+    },
+    {
+      scenario: 'step kind change',
+      overrides: { kind: 'system' as const },
+      location: 'nested/revisit/child-fix',
+    },
+    {
+      scenario: 'workflow name mismatch',
+      overrides: { workflow: 'other-workflow' },
+      location: 'other-workflow/child-fix',
+    },
+  ])('should reject a direct nested engine resume with a $scenario before starting an agent', async ({ overrides, location }) => {
+    const workflow = loadWorkflowByIdentifier('root-revisit', projectDir);
+    if (workflow === null) {
+      throw new Error('root-revisit workflow was not loaded');
+    }
+    const engineOptions = {
+      projectCwd: projectDir,
+      provider: 'mock' as const,
+      model: 'test-model',
+      workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }: Parameters<
+        NonNullable<ConstructorParameters<typeof WorkflowEngine>[3]['workflowCallResolver']>
+      >[0]) => resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
+    };
+    setAgentResponses([
+      makeResponse({ persona: 'child-review', content: 'needs fix' }),
+      new Error('child fix exploded'),
+    ]);
+    setRuleMatches([0]);
+    const source = new WorkflowEngine(workflow, projectDir, 'Save nested resume', {
+      ...engineOptions,
+      reportDirName: 'invalid-nested-resume-source',
+    });
+    await source.run();
+    const savedResumePoint = source.getResumePoint();
+    const savedChildEntry = savedResumePoint?.stack[1];
+    if (savedResumePoint === undefined || savedChildEntry === undefined) {
+      throw new Error('Expected a saved nested resume position');
+    }
+    const resumePoint: WorkflowResumePoint = {
+      ...savedResumePoint,
+      stack: [savedResumePoint.stack[0]!, { ...savedChildEntry, ...overrides }],
+    };
+
+    vi.mocked(runAgent).mockReset();
+    mockRuleEvaluation.mockReset();
+    setAgentResponses([makeResponse({ persona: 'child-review', content: 'done' })]);
+    setRuleMatches([1]);
+    const engine = new WorkflowEngine(workflow, projectDir, 'Reject invalid nested resume', {
+      ...engineOptions,
+      reportDirName: 'invalid-nested-resume',
+      startStep: 'parent-call',
+      resumePoint,
+    });
+    let abortReason: string | undefined;
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    expect(abortReason).toContain(`Saved resume position "${location}"`);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 });

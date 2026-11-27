@@ -1,4 +1,5 @@
 name: request-replan
+description: 現在の修正方針で収束できない根拠を確認し、タスク全体の再計画を要求する
 tags:
   - plan
 edit: false

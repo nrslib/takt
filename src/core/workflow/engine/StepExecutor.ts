@@ -1,3 +1,4 @@
+import { reportInputEntries } from '../../models/workflow-report-input.js';
 /**
  * Executes a single workflow step through the 3-phase model.
  *
@@ -7,7 +8,9 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { redactExecutionSecrets } from '../../../shared/utils/execution-secrets.js';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { renderPhaseContext, stripPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -23,7 +26,7 @@ import type {
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
-import { isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
+import { getAllParallelSubSteps, isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -43,7 +46,10 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
+import { extractReportReferences } from '../instruction/report-reference.js';
+import { getReportFiles } from '../output-contract-files.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
+import type { DeclaredReportInputs, InjectedReport, Phase1ReportInputs, PreparedStepInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
@@ -95,6 +101,7 @@ import type { InstructionBuildTransaction } from './instruction-build-transactio
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
+import { composeRecoveryInstruction } from '../progress-notes.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   completeObservedPhase1Attempt,
@@ -141,6 +148,12 @@ import type {
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
 import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
+import {
+  Phase1ExecutionLog,
+  savePhase1ExecutionLog,
+  type Phase1ExecutionLogReference,
+} from '../phase1-execution-log.js';
 
 const log = createLogger('step-executor');
 
@@ -183,21 +196,36 @@ function buildCompanionExecutionUnitKey(input: {
 }
 
 export interface StepExecutorDeps {
+  readonly goalSpecificationPaths?: readonly string[];
   readonly reportReferenceObserver?: ReportReferenceObserver;
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
   readonly getProjectCwd: () => string;
   readonly getReportDir: () => string;
   readonly getRunPaths: () => RunPaths;
+  readonly reportGenerationIndex?: import('../report-generation-index.js').ReportGenerationIndex;
+  readonly isResumedReportInputStep?: (step: WorkflowStep, occurrence: number) => boolean;
   readonly getFailureDir: () => string;
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
-  readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
+  readonly getWorkflowSteps: () => ReadonlyArray<{
+    name: string;
+    description?: string;
+    instruction?: string;
+    inputReports?: WorkflowStep['inputReports'];
+    parallel?: WorkflowStep['parallel'];
+  }>;
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
-  readonly getWorkflowDescription: () => string | undefined;
+  readonly getWorkflowAssignment?: (step: WorkflowStep) => import('../workflow-prompt-context.js').WorkflowAssignment | undefined;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
+  readonly resolveDeclaredReportInputs: (
+    step: Pick<WorkflowStep, 'name' | 'inputReports'>,
+    state: WorkflowState,
+    reportDir: string,
+  ) => DeclaredReportInputs | undefined;
+  readonly getInheritedReportInputs: () => DeclaredReportInputs | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
   /** Changed file set for this task. Recomputed per instruction build (the working tree moves). */
@@ -268,8 +296,11 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly phase1Instruction: string;
+  readonly instructionWithoutLiveIntervention: string;
   readonly injectedReports: readonly InjectedReport[];
+  readonly requiredReferenceContents?: readonly string[];
   readonly reportInputs?: Phase1ReportInputs;
+  readonly reviewScope: TaskReviewScope;
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
   readonly liveInterventionDelivery?: PreparedLiveInterventionDelivery;
@@ -319,6 +350,7 @@ export class StepExecutor {
   async completeReviewerResponse(input: {
     readonly step: AgentWorkflowStep;
     readonly originalInstruction: string;
+    readonly getReviewRequirementsInstruction: () => string;
     readonly initialResponse: AgentResponse;
     readonly executeRetry: (
       instruction: string,
@@ -336,6 +368,10 @@ export class StepExecutor {
         reviewerSessionId: input.initialResponse.sessionId,
       };
     }
+    const workflowMeta = this.deps.optionsBuilder.buildWorkflowMeta(input.step);
+    const language = this.deps.getLanguage() ?? 'en';
+    const assignment = workflowMeta.context?.assignment;
+    const phase1Context = assignment === undefined ? undefined : renderPhaseContext(assignment, 1, language).trimStart();
     const priorJudgeGapPaths = new Set<string>();
     const result = await runCompletionRetryEpisode({
       config,
@@ -367,6 +403,10 @@ export class StepExecutor {
         }
       },
       judge: async (reviewResponse, attemptIndex) => {
+        const requirementsInstruction = input.getReviewRequirementsInstruction();
+        const reviewRequirements = phase1Context !== undefined
+          ? stripPhaseContext(requirementsInstruction, phase1Context)
+          : requirementsInstruction;
         const judgeStep = buildCompletionRetryJudgeStep({
           reviewerStepName: input.step.name,
           internalAgentSeats: this.deps.internalAgentSeats,
@@ -375,7 +415,7 @@ export class StepExecutor {
         const prompt = buildCompletionRetryJudgePrompt({
           language: this.deps.getLanguage(),
           task: this.deps.getTask(),
-          reviewerInstruction: input.originalInstruction,
+          reviewerInstruction: reviewRequirements,
           reviewScope,
           evidence: collectCompletionRetryEvidence({
             cwd: this.deps.getCwd(),
@@ -393,6 +433,10 @@ export class StepExecutor {
             COMPLETION_RETRY_JUDGE_NAME,
           );
           const judgeOptions = this.deps.optionsBuilder.buildAgentOptions(judgeStep);
+          const judgeInstruction = assignment === undefined ? prompt.instruction : [
+            renderPhaseContext(assignment, 3, language, false),
+            prompt.instruction,
+          ].join('\n\n');
           this.deps.emitEvent('review_completion:judge:start', {
             step: input.step.name,
             attempt: attemptIndex,
@@ -409,7 +453,7 @@ export class StepExecutor {
               providerInfo: judgeProviderInfo,
             },
             () => executeStructuredAgent(
-              prompt.instruction,
+              judgeInstruction,
               judgeStep.structuredOutput!.schema,
               {
                 name: COMPLETION_RETRY_JUDGE_NAME,
@@ -417,9 +461,14 @@ export class StepExecutor {
                 projectCwd: this.deps.getProjectCwd(),
                 systemPrompt: prompt.systemPrompt,
                 language: this.deps.getLanguage(),
+                workflowMeta,
+                executionPhase: 3,
                 abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
+                ...(judgeOptions.openCodeExternalDirectories === undefined
+                  ? {}
+                  : { openCodeExternalDirectories: judgeOptions.openCodeExternalDirectories }),
                 onStream: judgeOptions.onStream,
                 onActivity: judgeOptions.onActivity,
                 mcpServers: judgeOptions.mcpServers,
@@ -637,6 +686,9 @@ export class StepExecutor {
   }
 
   async completeCompanionReview(input: {
+    readonly phase1Instruction: string;
+    /** Accumulated Phase 1 and follow-up instructions, excluding replaceable live history. */
+    readonly phase1RecoveryInstruction: string;
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly state: WorkflowState;
@@ -646,9 +698,11 @@ export class StepExecutor {
     readonly companionRuntime: CompanionStepRuntime | undefined;
     readonly providerInfo: StepProviderInfo;
     readonly nextSequence: () => number;
+    readonly phase1ExecutionLog?: Phase1ExecutionLog;
+    readonly phase1LogSource?: string;
     readonly onSingleFixSettled?: () => void;
     readonly abortSignal: AbortSignal | undefined;
-    readonly afterPhase1Response?: (response: AgentResponse) => Promise<CompanionFollowUpResult>;
+    readonly afterPhase1Response?: (response: AgentResponse, recoveryInstruction: string) => Promise<CompanionFollowUpResult>;
     readonly recordUsage?: (
       success: boolean,
       usage: AgentResponse['providerUsage'],
@@ -665,6 +719,7 @@ export class StepExecutor {
           usage,
         );
       });
+    let phase1RecoveryInstruction = input.phase1RecoveryInstruction;
     const fixResult = await runCompanionFixPolicy({
       policy: fixPolicy,
       initialResponse: input.initialResponse,
@@ -689,8 +744,15 @@ export class StepExecutor {
           phaseAttempts.set(recoveryAttempt.sequence, created);
           return created;
         };
+        phase1RecoveryInstruction = composeRecoveryInstruction(
+          phase1RecoveryInstruction,
+          this.buildPhase1FollowUpInstruction(attempt.instruction, attempt.options),
+        );
+        const followUpInstruction = this.appendLiveInterventionInstruction(phase1RecoveryInstruction, undefined);
         const recovery = await runPhase1WithEmptyRecovery({
-          instruction: attempt.instruction,
+          workflowMeta: attempt.options.workflowMeta,
+          language: attempt.options.language,
+          instruction: followUpInstruction,
           initialSessionId: attempt.sessionId,
           execute: async (recoveryAttempt) => {
             const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
@@ -706,16 +768,25 @@ export class StepExecutor {
                 workflowStack: this.deps.getCurrentWorkflowStack?.(),
                 sanitizeText: this.deps.sanitizeObservabilityText,
                 providerInfo: input.providerInfo,
+                onPromptResolved: (prompt) => input.phase1ExecutionLog?.recordInstruction(phaseAttempt.reason, prompt, input.phase1LogSource),
+                onAttemptError: (error) => input.phase1ExecutionLog?.recordFailure(error, input.phase1LogSource),
                 execute: (instruction, sessionId, onPromptResolved) => executeAgent(
                   input.executableStep.persona,
                   instruction,
-                  { ...attempt.options, sessionId, onPromptResolved },
+                  {
+                    ...attempt.options,
+                    progressNotesInstruction: input.phase1Instruction,
+                    progressNotesRecoveryInstruction: composeRecoveryInstruction(followUpInstruction, instruction),
+                    sessionId,
+                    onPromptResolved,
+                  },
                 ),
                 onPhaseStart: (...args) => {
                   promptResolvedAttempts.add(phaseAttempt.sequence);
                   this.deps.onPhaseStart?.(...args);
                 },
               });
+              input.phase1ExecutionLog?.recordResult(observed.response, input.phase1LogSource);
               return observed.response;
             } catch (error) {
               if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
@@ -810,7 +881,7 @@ export class StepExecutor {
           recordUsage(false, normalizedResponse.providerUsage);
           return { kind: 'normal_follow_up', response: normalizedResponse };
         }
-        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse);
+        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse, phase1RecoveryInstruction);
         recordUsage(
           responseAfterLiveIntervention.response.status === 'done',
           responseAfterLiveIntervention.response.providerUsage,
@@ -913,6 +984,7 @@ export class StepExecutor {
     const companionDefinitions = this.deps.companionDefinitions;
     const companionProviders = this.deps.companionProviders;
     const companionDiffReader = this.deps.companionDiffReader;
+    const workflowMeta = this.deps.optionsBuilder.buildWorkflowMeta(step);
     const runtimeAbortSignal = abortSignal ?? this.resolveAbortSignal();
     state.companion = {
       completionSettled: false,
@@ -935,6 +1007,7 @@ export class StepExecutor {
         runPathNamespace: this.deps.getRunPathNamespace(),
         language: this.deps.getLanguage() ?? 'en',
         task,
+        workflowMeta,
         step,
         definitions: companionDefinitions,
         providers: companionProviders,
@@ -1016,7 +1089,7 @@ export class StepExecutor {
   ): string {
     const absPath = join(resolveReportDirectory(this.deps.getCwd(), directory), filename);
     transaction?.recordSnapshotWrite(absPath);
-    writeFileSync(absPath, content, 'utf-8');
+    writeFileSync(absPath, redactExecutionSecrets(content), 'utf-8');
     return join(directory, filename);
   }
 
@@ -1095,6 +1168,14 @@ export class StepExecutor {
     state.previousResponseSourcePath = sourcePath;
   }
 
+  private buildPhase1FollowUpInstruction(instruction: string, options: RunAgentOptions): string {
+    const assignment = options.workflowMeta?.context?.assignment;
+    return assignment === undefined ? instruction : [
+      renderPhaseContext(assignment, 1, options.language ?? 'en'),
+      instruction,
+    ].join('\n\n');
+  }
+
   buildPhase1Instruction(
     instruction: string,
     step: WorkflowStep,
@@ -1148,14 +1229,18 @@ export class StepExecutor {
       step: executableStep.name,
       phase: 1,
     }, executableStep.engineSynthesized === true);
+    const instructionWithoutLiveIntervention = this.buildPhase1Instruction(instruction.text, executableStep, runtime);
     return {
       executableStep,
-      phase1Instruction: this.appendLiveInterventionInstruction(
-        this.buildPhase1Instruction(instruction.text, executableStep, runtime),
-        liveInterventionDelivery,
-      ),
+      instructionWithoutLiveIntervention,
+      // Without a prepared delivery, resolve history after the final pending check in runNormalStep.
+      phase1Instruction: liveInterventionDelivery === undefined
+        ? instructionWithoutLiveIntervention
+        : this.appendLiveInterventionInstruction(instructionWithoutLiveIntervention, liveInterventionDelivery),
       injectedReports: instruction.injectedReports,
+      requiredReferenceContents: instruction.requiredReferenceContents,
       reportInputs: instruction.reportInputs,
+      reviewScope: instruction.reviewScope,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
       ...(liveInterventionDelivery === undefined ? {} : { liveInterventionDelivery }),
@@ -1180,9 +1265,14 @@ export class StepExecutor {
     instruction: string,
     delivery: PreparedLiveInterventionDelivery | undefined,
   ): string {
-    return delivery === undefined
+    const liveInstruction = resolveLiveInterventionPrompt(
+      this.deps.liveIntervention,
+      delivery,
+      this.deps.getLanguage(),
+    );
+    return liveInstruction.length === 0
       ? instruction
-      : [instruction, delivery.prompt].filter((part) => part.length > 0).join('\n\n');
+      : composeRecoveryInstruction(instruction, liveInstruction);
   }
 
   /**
@@ -1367,16 +1457,89 @@ export class StepExecutor {
   }
 
   /** Build Phase 1 instruction from template */
-  buildInstruction(
+  recordReportGeneration(
+    reportDir: string,
+    reportName: string,
+    written: boolean,
+    recovery?: readonly WorkflowResumePointEntry[],
+  ): void {
+    this.deps.reportGenerationIndex?.record(
+      this.deps.getRunPaths().reportsRootAbs,
+      reportDir,
+      reportName,
+      written,
+      recovery,
+    );
+  }
+
+  finalizeReportGeneration(
     step: WorkflowStep,
-    stepIteration: number,
     state: WorkflowState,
-    task: string,
-    maxSteps: number | 'infinite',
-    fallbackContext?: FallbackContext,
-    transaction?: InstructionBuildTransaction,
-  ): string {
-    return this.prepareInstruction(step, stepIteration, state, task, maxSteps, fallbackContext, transaction).text;
+    reportDir: string,
+    writtenReports: ReadonlySet<string>,
+    reportGenerationError?: ReportPhaseGenerationError,
+    injectedReports?: readonly InjectedReport[],
+  ): void {
+    const missingReports = getReportFiles(step.outputContracts)
+      .filter((name) => !writtenReports.has(name));
+    for (const reportName of missingReports) {
+      const stack = this.deps.getCurrentWorkflowStack?.();
+      const frame = stack?.at(-1);
+      const readLocalInput = injectedReports?.some((report) => (
+        report.scope === 'step' && resolve(reportDir, report.reference) === resolve(reportDir, reportName)
+      )) === true;
+      const recovery = readLocalInput && frame?.kind === 'agent' && frame.step === step.name
+        ? stack : undefined;
+      this.recordReportGeneration(reportDir, reportName, false, recovery);
+    }
+    const consumers = missingReports.length === 0 ? [] : this.deps.getWorkflowSteps().flatMap((workflowStep) => [
+      workflowStep,
+      ...(workflowStep.parallel === undefined ? [] : getAllParallelSubSteps(workflowStep.parallel)),
+    ]);
+    const missingRequiredReports = missingReports.filter((name) => consumers.some((consumer) => {
+      for (const declared of reportInputEntries(consumer.inputReports)) {
+        if (declared.fromStep === step.name
+          && (declared.reports === 'all' || declared.reports.includes(name))) {
+          return true;
+        }
+        if (declared.fromStep !== step.name) {
+          if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
+          if (declared.reports === 'all') {
+            try {
+              // An unrun producer reserves its names here; the consumer enforces completion.
+              const ownershipProbe = {
+                ...consumer,
+                inputReports: { ...declared, optionalIfUnrun: true as const },
+              };
+              const declaredNames = this.deps.resolveDeclaredReportInputs(
+                ownershipProbe, state, reportDir,
+              )?.declaredNames ?? [];
+              if (declaredNames.includes(name)) return false;
+            } catch (error) {
+              log.debug('Could not resolve another producer while checking a current report', {
+                step: step.name,
+                consumer: consumer.name,
+                error: getErrorMessage(error),
+              });
+            }
+          }
+        }
+      }
+      return extractReportReferences(consumer.instruction).some((reference) => {
+        const classification = classifyReportRelativePath(reference.trim());
+        return classification.kind === 'public' && classification.normalizedPath === name;
+      });
+    }));
+    if (missingRequiredReports.length > 0) {
+      const message = `Step "${step.name}" did not generate required report(s) in the current execution: ${missingRequiredReports.join(', ')}`;
+      if (reportGenerationError !== undefined) {
+        throw createAgentFailureError(
+          reportGenerationError.failureCategory ?? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+          message,
+        );
+      }
+      throw new Error(message);
+    }
   }
 
   prepareInstruction(
@@ -1387,7 +1550,7 @@ export class StepExecutor {
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
     transaction?: InstructionBuildTransaction,
-  ): PreparedInstruction {
+  ): PreparedStepInstruction {
     const suppressPreviousResponse = state.pendingFallback !== undefined
       && (state.lastOutput?.status === 'error' || state.lastOutput?.status === 'rate_limited');
     const includePreviousResponse = !suppressPreviousResponse;
@@ -1408,17 +1571,46 @@ export class StepExecutor {
       step.knowledgeContents,
       transaction,
     );
-    const workflowSteps = this.deps.getWorkflowSteps();
     const reportDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
     // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
     const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
+    const readableResumeOutputs = new Set(
+      this.deps.isResumedReportInputStep?.(step, stepIteration) === true
+        ? getReportFiles(step.outputContracts)
+          .filter((name) => this.deps.reportGenerationIndex?.canRecoverInput(
+            reportsRootDir, reportDir, name, this.deps.getCurrentWorkflowStack?.(),
+          ) === true)
+          .map((name) => resolve(reportDir, name))
+        : [],
+    );
+    const isUnavailableReportPath = (path: string): boolean => {
+      const resolvedPath = resolve(path);
+      return !readableResumeOutputs.has(resolvedPath)
+        && this.deps.reportGenerationIndex?.isMissing(
+          reportsRootDir,
+          dirname(resolvedPath),
+          basename(resolvedPath),
+        ) === true;
+    };
+    const localInputs = this.deps.resolveDeclaredReportInputs(step, state, reportDir);
+    const inheritedInputs = this.deps.getInheritedReportInputs();
+    const overriddenNames = new Set(localInputs?.declaredNames ?? []);
+    const declaredReportInputs = [
+      inheritedInputs === undefined ? undefined : {
+        declaredNames: inheritedInputs.declaredNames.filter((name) => !overriddenNames.has(name)),
+        reports: inheritedInputs.reports.filter((report) => !overriddenNames.has(report.reference)),
+      },
+      localInputs,
+    ].filter((value): value is DeclaredReportInputs => value !== undefined);
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.deps.getCurrentWorkflowStack?.() ?? [],
     );
+    const reviewScope = this.deps.getReviewScope();
     const instruction = new InstructionBuilder(step, {
       task,
+      goalSpecificationPaths: this.deps.goalSpecificationPaths,
       iteration: state.iteration,
       maxSteps,
       stepIteration,
@@ -1431,14 +1623,15 @@ export class StepExecutor {
       resumeReportConsumerKey,
       language: this.deps.getLanguage(),
       interactive: this.deps.getInteractive(),
-      workflowSteps,
-      currentStepIndex: workflowSteps.findIndex(s => s.name === step.name),
-      workflowName: this.deps.getWorkflowName(),
-      workflowDescription: this.deps.getWorkflowDescription(),
+      workflowAssignment: this.deps.getWorkflowAssignment?.(step),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
+      declaredReportInputs,
+      unavailableLocalReports: this.deps.reportGenerationIndex?.missingNames(reportsRootDir, reportDir)
+        .filter((name) => isUnavailableReportPath(resolve(reportDir, name))),
+      isUnavailableReportPath,
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
-      reviewScope: this.deps.getReviewScope(),
+      reviewScope,
       policyContents: policySnapshot
         ? policySnapshot.content.map((content) => ({ content, sourcePath: policySnapshot.sourcePath }))
         : step.policyContents,
@@ -1467,10 +1660,27 @@ export class StepExecutor {
       this.deps.reportReferenceObserver?.resolved(
         step,
         state.currentStep,
-        instruction.injectedReports.map(({ reference, scope }) => ({ reference, scope })),
+        instruction.injectedReports.map(({ reference, scope, producer }) => ({
+          reference,
+          scope,
+          ...(producer === undefined ? {} : { producer }),
+        })),
       );
     }
-    return instruction;
+    return { ...instruction, reviewScope };
+  }
+
+  savePhase1ExecutionLog(
+    executionLog: Phase1ExecutionLog,
+    stepName: string,
+    stepIteration: number,
+  ): Promise<Phase1ExecutionLogReference> {
+    return savePhase1ExecutionLog(
+      executionLog,
+      this.deps.getRunPaths().logsAbs,
+      stepName,
+      stepIteration,
+    );
   }
 
   /**
@@ -1493,6 +1703,8 @@ export class StepExecutor {
     phase2Diagnostic?: string,
     injectedReports?: readonly InjectedReport[],
     reportInputs?: Phase1ReportInputs,
+    onReportWritten?: (reportName: string) => void,
+    phase1ExecutionLog?: Phase1ExecutionLogReference,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1528,8 +1740,25 @@ export class StepExecutor {
     // Phase 2: report output (no tools)
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
+      const writtenReports = new Set<string>();
+      let reportGenerationError: ReportPhaseGenerationError | undefined;
       try {
-        const reportResult = await runReportPhase(step, stepIteration, { ...phaseCtx, injectedReports, reportInputs });
+        const reportResult = await runReportPhase(
+          step,
+          stepIteration,
+          {
+            ...phaseCtx,
+            lastStructuredOutput: nextResponse.structuredOutput,
+            injectedReports,
+            reportInputs,
+            phase1ExecutionLog,
+          },
+          (reportName) => {
+            writtenReports.add(reportName);
+            this.recordReportGeneration(phaseCtx.reportDir, reportName, true);
+            onReportWritten?.(reportName);
+          },
+        );
         if (reportResult && 'blocked' in reportResult) {
           onTerminalOperation?.({
             origin: reviewerOperationOrigin(step.name),
@@ -1560,14 +1789,16 @@ export class StepExecutor {
               reportError.failureMessage ?? getErrorMessage(reportError),
             );
           }
-          log.info('Report phase failed, continuing to status judgment', {
+          log.info('Report phase failed', {
             step: step.name,
             error: getErrorMessage(reportError),
           });
+          reportGenerationError = reportError;
         } else {
           throw reportError;
         }
       }
+      this.finalizeReportGeneration(step, state, phaseCtx.reportDir, writtenReports, reportGenerationError, injectedReports);
     }
 
     return this.applyPostExecutionRules(
@@ -1650,7 +1881,7 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    prebuiltInstruction?: PreparedInstruction,
+    prebuiltInstruction?: PreparedStepInstruction,
     runtime?: RuntimeStepResolution,
     preparedExecution?: PreparedNormalStepExecution,
   ): Promise<StepRunResult> {
@@ -1670,10 +1901,17 @@ export class StepExecutor {
         task,
         maxSteps,
       )
-      : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports, reportInputs: preparedExecution.reportInputs };
+      : {
+        text: preparedExecution.phase1Instruction,
+        injectedReports: preparedExecution.injectedReports,
+        requiredReferenceContents: preparedExecution.requiredReferenceContents,
+        reportInputs: preparedExecution.reportInputs,
+        reviewScope: preparedExecution.reviewScope,
+      };
     const instruction = preparedInstruction.text;
-    let phase1Instruction = preparedExecution?.phase1Instruction
+    const instructionWithoutLiveIntervention = preparedExecution?.instructionWithoutLiveIntervention
       ?? this.buildPhase1Instruction(instruction, executableStep, executionRuntime);
+    let phase1Instruction = preparedExecution?.phase1Instruction ?? instructionWithoutLiveIntervention;
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       executableStep,
       executionRuntime,
@@ -1690,10 +1928,11 @@ export class StepExecutor {
         liveInterventionDelivery,
       );
     }
-    const builtAgentOptions = this.deps.optionsBuilder.buildAgentOptions(
-      executableStep,
-      executionRuntime,
-    );
+    const builtAgentOptions: RunAgentOptions = {
+      ...this.deps.optionsBuilder.buildAgentOptions(executableStep, executionRuntime),
+      requiredReferenceContents: preparedInstruction.requiredReferenceContents,
+      progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(executableStep, preparedInstruction.reviewScope),
+    };
     const sessionKey = buildSessionKey(executableStep, {
       provider: providerInfo.provider,
       model: providerInfo.model,
@@ -1731,6 +1970,9 @@ export class StepExecutor {
       throw error;
     }
     const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
+    const phase1ExecutionLog = getReportFiles(step.outputContracts).length > 0
+      ? new Phase1ExecutionLog()
+      : undefined;
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
       this.deps.liveIntervention,
       liveInterventionDelivery,
@@ -1741,15 +1983,25 @@ export class StepExecutor {
     );
     const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
-      ...(initialDeliveryCommitter === undefined
-        ? {}
-        : { onDispatch: initialDeliveryCommitter.onDispatch }),
+      ...(phase1ExecutionLog === undefined ? {} : {
+        onStream: (event) => {
+          phase1ExecutionLog.recordEvent(event);
+          baseAgentOptions.onStream?.(event);
+        },
+      }),
+      onDispatch: (permissionMode) => {
+        if (initialDeliveryCommitter === undefined) baseAgentOptions.onDispatch?.(permissionMode);
+        else initialDeliveryCommitter.onDispatch(permissionMode);
+        phase1ExecutionLog?.markDispatched();
+      },
     };
     activeCompanionRuntime?.beginReviewAttempt();
     const promptResolvedAttempts = new Set<number>();
     let phase1Result: Awaited<ReturnType<typeof runPhase1WithEmptyRecovery>>;
     try {
       phase1Result = await runPhase1WithEmptyRecovery({
+        workflowMeta: agentOptions.workflowMeta,
+        language: agentOptions.language,
         instruction: phase1Instruction,
         initialSessionId: executableStep.internalFreshSession === true
           ? undefined
@@ -1766,6 +2018,8 @@ export class StepExecutor {
             workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo,
+            onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+            onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
             execute: (attemptInstruction, sessionId, onPromptResolved) => (
               executableStep.internalFreshSession === true
                 ? executeStructuredTextAgent(attemptInstruction, {
@@ -1795,9 +2049,14 @@ export class StepExecutor {
                     onPromptResolved,
                     onDispatch: agentOptions.onDispatch,
                     workflowMeta: agentOptions.workflowMeta,
+                    executionPhase: agentOptions.executionPhase,
+                    edit: agentOptions.edit,
                     mcpServers: agentOptions.mcpServers,
                     mcpAssignment: agentOptions.mcpAssignment,
                     mcpServerIdentity: agentOptions.mcpServerIdentity,
+                    ...(agentOptions.openCodeExternalDirectories === undefined
+                      ? {}
+                      : { openCodeExternalDirectories: agentOptions.openCodeExternalDirectories }),
                   }).then((response) => {
                     const freshResponse = { ...response };
                     delete freshResponse.sessionId;
@@ -1818,6 +2077,7 @@ export class StepExecutor {
                     attemptInstruction,
                     {
                       ...agentOptions,
+                      progressNotesInstruction: phase1Instruction,
                       sessionId,
                       onPromptResolved,
                     },
@@ -1840,6 +2100,7 @@ export class StepExecutor {
           if (result.promptResolved) {
             promptResolvedAttempts.add(attempt.sequence);
           }
+          phase1ExecutionLog?.recordResult(result.response);
           return result.response;
         },
         discardSession: (sessionId) => {
@@ -1909,6 +2170,8 @@ export class StepExecutor {
     }
 
     let phaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
+    // Follow-ups accumulate independently; live history is replaced from the store at each call.
+    let phase1RecoveryInstruction = instructionWithoutLiveIntervention;
     const drainLiveIntervention = async (
       initialResponse: AgentResponse,
       initialUsageRecorded = false,
@@ -1937,10 +2200,11 @@ export class StepExecutor {
           );
         }
         const liveInstruction = this.buildPhase1Instruction(
-          sameSessionDelivery.prompt,
+          this.buildPhase1FollowUpInstruction(sameSessionDelivery.prompt, agentOptions),
           executableStep,
           executionRuntime,
         );
+        const liveRecoveryInstruction = composeRecoveryInstruction(phase1RecoveryInstruction, liveInstruction);
         const liveAttempt: Phase1Attempt = {
           sequence: phaseExecutionSequence++,
           reason: 'live_intervention',
@@ -1976,16 +2240,23 @@ export class StepExecutor {
             workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo,
+            onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(liveAttempt.reason, prompt),
+            onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
             execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
               executableStep.persona,
               attemptInstruction,
               {
                 ...agentOptions,
+                progressNotesInstruction: phase1Instruction,
+                progressNotesRecoveryInstruction: liveRecoveryInstruction,
                 sessionId,
                 onPromptResolved,
                 ...(sameSessionCommitter === undefined
                   ? {}
-                  : { onDispatch: sameSessionCommitter.onDispatch }),
+                  : { onDispatch: (permissionMode) => {
+                      sameSessionCommitter.onDispatch(permissionMode);
+                      phase1ExecutionLog?.markDispatched();
+                    } }),
               },
             ),
             onPhaseStart: this.deps.onPhaseStart,
@@ -1995,6 +2266,7 @@ export class StepExecutor {
               step.name, providerInfo, false, undefined,
             ),
           });
+          phase1ExecutionLog?.recordResult(observed.response);
           if (!observed.promptResolved) {
             throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
           }
@@ -2047,8 +2319,14 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
+    const afterCompanionPhase1Response = async (companionResponse: AgentResponse, recoveryInstruction: string) => {
+      phase1RecoveryInstruction = recoveryInstruction;
+      return drainLiveIntervention(companionResponse);
+    };
     let companionSingleFixSettled = false;
     response = await this.completeCompanionReview({
+      phase1Instruction,
+      phase1RecoveryInstruction,
       eventStep: step,
       executableStep,
       state,
@@ -2058,7 +2336,8 @@ export class StepExecutor {
       companionRuntime: activeCompanionRuntime,
       providerInfo,
       nextSequence: () => phaseExecutionSequence++,
-      afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+      phase1ExecutionLog,
+      afterPhase1Response: afterCompanionPhase1Response,
       onSingleFixSettled: () => {
         companionSingleFixSettled = true;
       },
@@ -2083,9 +2362,14 @@ export class StepExecutor {
     if (executableStep.completionRetry !== undefined) {
       const completion = await this.completeReviewerResponse({
         step: executableStep,
-        originalInstruction: phase1Instruction,
+        originalInstruction: instructionWithoutLiveIntervention,
+        getReviewRequirementsInstruction: () => this.appendLiveInterventionInstruction(
+          instructionWithoutLiveIntervention, undefined,
+        ),
         initialResponse: response,
         executeRetry: async (retryInstruction, retrySessionId) => {
+          phase1RecoveryInstruction = composeRecoveryInstruction(phase1RecoveryInstruction, retryInstruction);
+          const retryRecoveryInstruction = this.appendLiveInterventionInstruction(phase1RecoveryInstruction, undefined);
           if (!companionSingleFixSettled) {
             activeCompanionRuntime?.beginReviewAttempt();
           }
@@ -2098,7 +2382,9 @@ export class StepExecutor {
             return created;
           };
           const retryResponse = await runPhase1WithEmptyRecovery({
-            instruction: retryInstruction,
+            workflowMeta: agentOptions.workflowMeta,
+            language: agentOptions.language,
+            instruction: retryRecoveryInstruction,
             initialSessionId: retrySessionId,
             execute: async (attempt) => {
               const observedAttempt = resolveObservedAttempt(attempt);
@@ -2113,10 +2399,20 @@ export class StepExecutor {
                 workflowStack: this.deps.getCurrentWorkflowStack?.(),
                 sanitizeText: this.deps.sanitizeObservabilityText,
                 providerInfo,
+                onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+                onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
                 execute: (attemptInstruction, attemptSessionId, onPromptResolved) => executeAgent(
                   executableStep.persona,
                   attemptInstruction,
-                  { ...agentOptions, sessionId: attemptSessionId, onPromptResolved },
+                  {
+                    ...agentOptions,
+                    progressNotesInstruction: phase1Instruction,
+                    progressNotesRecoveryInstruction: composeRecoveryInstruction(
+                      retryRecoveryInstruction, attemptInstruction,
+                    ),
+                    sessionId: attemptSessionId,
+                    onPromptResolved,
+                  },
                 ),
                 onPhaseStart: this.deps.onPhaseStart,
                 onPhaseComplete: this.deps.onPhaseComplete,
@@ -2128,6 +2424,7 @@ export class StepExecutor {
                   undefined,
                 ),
               });
+              phase1ExecutionLog?.recordResult(observed.response);
               return observed.response;
             },
             discardSession: () => undefined,
@@ -2172,6 +2469,8 @@ export class StepExecutor {
             return normalizedAfterLiveIntervention.response;
           }
           return this.completeCompanionReview({
+            phase1Instruction,
+            phase1RecoveryInstruction,
             eventStep: step,
             executableStep,
             state,
@@ -2181,7 +2480,8 @@ export class StepExecutor {
             companionRuntime: activeCompanionRuntime,
             providerInfo,
             nextSequence: () => phaseExecutionSequence++,
-            afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+            phase1ExecutionLog,
+            afterPhase1Response: afterCompanionPhase1Response,
             onSingleFixSettled: () => {
               companionSingleFixSettled = true;
             },
@@ -2203,6 +2503,7 @@ export class StepExecutor {
     }
 
     let terminalOperation: StepRunResult['terminalOperation'];
+    const writtenReportNames: string[] = [];
     try {
       response = await this.applyPostExecutionPhases(
         step,
@@ -2218,6 +2519,10 @@ export class StepExecutor {
         completionRetryDiagnostic,
         preparedInstruction.injectedReports,
         reportInputTracker.snapshot(),
+        (reportName) => writtenReportNames.push(reportName),
+        phase1ExecutionLog === undefined
+          ? undefined
+          : await this.savePhase1ExecutionLog(phase1ExecutionLog, step.name, stepIteration),
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {
@@ -2251,6 +2556,7 @@ export class StepExecutor {
         stepIteration,
         providerInfo,
       },
+      writtenReportNames,
     );
     return {
       response,
@@ -2306,13 +2612,16 @@ export class StepExecutor {
       readonly stepIteration: number;
       readonly providerInfo: StepProviderInfo;
     },
+    writtenReportNames?: readonly string[],
   ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
     const context = this.createReportExecutionContext(execution);
     const baseDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
 
+    const written = writtenReportNames === undefined ? undefined : new Set(writtenReportNames);
     for (const entry of step.outputContracts) {
       const fileName = entry.name;
+      if (written !== undefined && !written.has(fileName)) continue;
       this.checkReportFile(step, baseDir, fileName, context);
     }
   }

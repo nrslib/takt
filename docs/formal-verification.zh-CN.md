@@ -17,7 +17,9 @@
 | Apalache | 首次执行 `quint verify` 时由 Quint 下载 | `~/.quint/`（可用 `QUINT_HOME` 更改） |
 | Alloy Analyzer 6.2.0 JAR | 首次进行 Alloy 验证时由 TAKT 下载并校验 SHA-256 | 项目内的 `.takt/cache/alloy/6.2.0/alloy.jar` |
 
-用于时态属性的 TLC 包含在 Apalache 发行包中，无需单独安装。下载只发生一次且需要网络访问，之后的 `/verify` 可离线运行。
+用于时态属性的 TLC 包含在 Apalache 发行包中，无需单独安装。每个文件首次下载时都需要网络访问。预先下载所需各验证器的文件后，验证器本身可以在本地离线运行。只验证 Quint 不会下载 Alloy JAR。
+
+`/verify` 生成规范和解释结果时会调用配置的 Assistant provider。使用云端 provider 时，这些阶段需要网络连接。要离线运行整个 `/verify` 流程，Assistant 配置也必须支持离线使用。
 
 在无法访问网络的环境中使用 Alloy 时，请通过 `TAKT_ALLOY_JAR` 环境变量指定本地已有的 Alloy JAR。相对路径以项目目录为基准解析。
 
@@ -44,11 +46,36 @@ assistant:
 1. `parse` 检查语法。
 2. `typecheck` 检查类型和效果。
 3. `run` 模拟 1 个样本、最多 20 步。仅在找到包含 `init` 和 `step` action 的主模块，且选定的验证目标位于该模块中时执行。
-4. 若有 Java 17 或更高版本，则以 20 步为上限执行 `quint verify`。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索。
+4. 主模块包含 `run` 声明时，在模拟成功后使用 `quint test` 检查这些场景。
+5. 前面的阶段全部通过且有 Java 17 或更高版本时，执行 `quint verify`。默认的 Apalache 后端最多检查 20 步。包含时态属性的规范会切换到 TLC 后端，对整个状态空间进行穷举探索，不受 20 步上限限制。
 
 对于 Alloy 代码块，TAKT 独立于 Quint 结果运行 Alloy Analyzer。规范中的每个 `run` 和 `check` 命令都会执行，也支持只有 `run` 的模型。
 
-`parse`、`typecheck`、`run` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
+`parse`、`typecheck`、`run`、`test` 的超时为 60 秒。`quint verify` 和 Alloy Analyzer 的模型检查默认最多等待 15 分钟，可通过 `assistant.formal_spec.model_check_timeout_seconds`（1～86,400 秒的整数）调整。若状态数较多的规范导致 TLC 被中止，请增大该值或缩小模型。
+
+### Alloy 并发与 JVM 设置
+
+以下环境变量在验证开始时读取一次，不是 YAML 配置键，也不适用于仅含 Quint 的验证。
+
+| 环境变量 | 默认值 | 格式 |
+|----------|--------|------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | 正安全整数；`1` 为顺序执行 |
+| `TAKT_ALLOY_HEAP` | `4g` | 正整数和小写单位 `k`、`m` 或 `g` |
+| `TAKT_ALLOY_STACK` | `64m` | 正整数和小写单位 `k`、`m` 或 `g` |
+
+仅未设置时使用默认值；空字符串或无效值会产生包含变量名的错误。一次验证期间设置保持不变。包括命令枚举在内的所有 Alloy JVM 默认接收 `-Xmx4g -Xss64m`。覆盖时只传入指定值，不重复传入默认参数。
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+内存不足时，请降低堆上限或将并发数设为 1。请使用这些 TAKT 专用设置修改 JVM 参数，不要仅依赖 `JAVA_TOOL_OPTIONS`。
+
+`assistant.formal_spec.model_check_timeout_seconds` 分别适用于每条 Alloy 命令（默认 900 秒），不设置整体超时。失败或超时不会阻止其余命令执行，有空闲位置时立即启动下一条命令。各命令结果通过 `timedOut: true` 标识超时。
+
+对于 `N` 条 Alloy 命令，最多并行运行 `K` 条时，等待模型检查进程的时间可用 `ceil(N / K) × model_check_timeout_seconds` 估算（`ceil` 表示向上取整）。这不是实际经过时间的严格上限：每个进程退出后、下一个命令启动前，工作线程还会处理结果和文件，这些操作不受单条命令的超时限制。
+
+验证失败、错误或超时时，`.takt/runs/verify-*/` 中的规范与日志会保留，结果消息会显示目录路径。保留目录不参与自动清理，请在不再需要时手动删除。成功验证的产物在结果解读结束后删除。
 
 ## 验证目标的选择
 
@@ -91,4 +118,16 @@ TLC 报告违反或失败时，TAKT 会从 `Error:` 行开始提取诊断信息�
 
 若 Alloy JAR 下载失败，请检查网络和代理设置，或通过 `TAKT_ALLOY_JAR` 提供本地 JAR。下载的 JAR 若 SHA-256 不匹配同样视为失败。
 
-验证期间生成的临时文件位于 `.takt/runs/verify-*/`，验证结束时删除。若因异常退出而残留，下一次 `/verify` 会清理一小时以前的目录。
+验证失败、错误或超时的结果确定后，保留标记会保护工作目录免于自动清理。只要所有权标记仍在且未明确请求删除，无论所属 Node 进程是否仍在运行，目录都会受到保护。结果确定前因进程异常退出而残留的目录也包括在内；不再需要时请手动删除。无法检查所有权标记时也不会删除目录。成功时在解读结束后删除；明确取消时，等待已启动的进程停止后再删除工作目录。
+
+如果写入保留标记失败，TAKT 会将所有权标记移动为保留标记，并报告目录路径和写入错误。如果移动也失败，TAKT 会保留所有权标记，提示无法确认保留状态，并报告两个错误。残留的所有权标记会在所属进程退出后继续保护目录免于自动清理。请按照提示手动复制所需的产物。
+
+没有这两种标记的目录在闲置超过一小时后会成为清理对象。成功或取消后的删除操作失败时，TAKT 会在当前进程中记录待删除目录。闲置超过一小时后，同一进程中的下一次 `/verify` 会重试删除，即使此前未能移除所有权标记。
+
+## manager 目标与形式规格
+
+`assistant.formal_spec` 也适用于 manager 的目标注册提案。manager 不会在每次注册时询问：`true` 和 `"Y/n"` 包含 Quint 和 Alloy，`false` 和 `"y/N"` 则不包含。项目配置优先于全局配置，object 中各字段独立解析。`comments` 和 `model_check_timeout_seconds` 与交互模式使用相同设置。
+
+开发和实现目标使用 Gherkin 描述误解后会改变实现结果的重要可观察行为，不在验收条件中重复相同的预期结果。Gherkin 关键字使用英语，描述可以使用对话语言。研究、文档、运维等不以实现为交付物的目标不使用 Gherkin。
+
+在 TUI 或 Slack 的 manager 对话中输入 `/verify`，即可根据当前共识生成 Quint 和 Alloy 规格，并使用与交互模式相同的检查器验证。结果返回同一对话，由 manager 解释诊断信息与反例。禁用形式规格时会提示该命令不可用。注册前不会自动验证；仅验证不会注册目标，也不会修改注册提案或已保存的规格。

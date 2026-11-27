@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { SummaryActionOption, SummaryActionValue } from '../features/interactive/interactive-summary-types.js';
 import {
   setupRawStdin,
   restoreStdin,
@@ -46,45 +47,73 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: vi.fn().mockResolvedValue('execute'),
-}));
+vi.mock('../features/interactive/pipedSummaryInput.js', async () => {
+  const { selectOption, selectOptionWithDefault, confirmWithCancel } = await import('../shared/prompt/index.js');
+  return {
+    selectPipedSummaryAction: (
+      _task: string,
+      _proposedLabel: string,
+      message: string,
+      options: readonly SummaryActionOption[],
+      initialAction?: SummaryActionValue,
+    ) => initialAction === undefined
+      ? selectOption(message, [...options])
+      : selectOptionWithDefault(message, [...options], initialAction),
+    confirmPipedSummaryAction: confirmWithCancel,
+  };
+});
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => {
+  const select = vi.fn().mockResolvedValue('execute');
+  return {
+    ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+    selectOption: select,
+    selectOptionWithDefault: select,
+    confirmWithCancel: vi.fn().mockResolvedValue({ kind: 'value', value: true }),
+  };
+});
 
 vi.mock('../features/interactive/tellCommand.js', () => ({
   runTellCommand: (...args: unknown[]) => mockRunTellCommand(...args),
 }));
 
-vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((key: string, _lang: string) => (
-    key === 'interactive.ui.creatingInstruction' ? 'Creating instruction...'
-      : key === 'interactive.ui.thinking' ? 'Assistant is thinking...'
-        : 'Mock label'
-  )),
-  getLabelObject: vi.fn(() => ({
-    intro: 'Intro',
-    resume: 'Resume',
-    noConversation: 'No conversation',
-    summarizeFailed: 'Summarize failed',
-    continuePrompt: 'Continue?',
-    proposed: 'Proposed:',
-    actionPrompt: 'What next?',
-    cancelled: 'Cancelled',
-    actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
-  })),
-}));
+vi.mock('../shared/i18n/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/i18n/index.js')>();
+  return {
+    getLabel: vi.fn((key: string, _lang: string) => (
+      key === 'interactive.ui.creatingInstruction' ? 'Creating instruction...'
+        : key === 'interactive.ui.thinking' ? 'Assistant is thinking...'
+          : 'Mock label'
+    )),
+    getLabelObject: vi.fn(() => ({
+      ...actual.getLabelObject<Record<string, unknown>>('interactive.ui', 'en'),
+      intro: 'Intro',
+      resume: 'Resume',
+      noConversation: 'No conversation',
+      summarizeFailed: 'Summarize failed',
+      continuePrompt: 'Continue?',
+      proposed: 'Proposed:',
+      actionPrompt: 'What next?',
+      cancelled: 'Cancelled',
+      actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
+    })),
+  };
+});
 
 // --- Imports (after mocks) ---
 
@@ -127,6 +156,18 @@ afterEach(() => {
 // Route A: EOF (Ctrl+D) → cancel
 // =================================================================
 describe('EOF handling', () => {
+  it('should keep the same dialogue accepting input after a tell cancellation notice', async () => {
+    setupRawStdin(toRawInputs(['before command', '/tell keep scope', 'after cancellation', '/cancel']));
+    const capture = setupProvider(['Initial answer.', 'Continued answer.']);
+    mockRunTellCommand.mockResolvedValue('The instruction was not sent.');
+
+    const result = await runInteractive();
+
+    expect(mockRunTellCommand).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(result.action).toBe('cancel');
+  });
   it('should cancel on Ctrl+D without any conversation', async () => {
     setupRawStdin(toRawInputs([null]));
     setupProvider([]);

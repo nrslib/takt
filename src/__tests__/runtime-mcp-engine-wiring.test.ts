@@ -79,9 +79,10 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => 'leaf',
       () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
     const step: WorkflowStep = {
       name: 'execute',
@@ -101,9 +102,10 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => 'leaf',
       () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
     const step: WorkflowStep = {
       name: 'execute',
@@ -130,9 +132,10 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => 'leaf',
       () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
     const step: WorkflowStep = {
       name: 'execute',
@@ -189,12 +192,10 @@ describe('OptionsBuilder.resolveMcpServersForStep: runtime MCP mode + step.mcpSe
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => workflowName,
-      () => undefined,
-      workflowStack !== undefined
-        ? () => workflowStack as never
-        : undefined,
+      () => (workflowStack === undefined ? undefined : workflowStack as never),
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
   }
 

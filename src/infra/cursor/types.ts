@@ -8,6 +8,7 @@ import type { ProviderActivityCallback, StreamCallback } from '../../shared/type
 /** Options for calling Cursor Agent CLI */
 export interface CursorCallOptions {
   cwd: string;
+  callerManagedMcp?: true;
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;

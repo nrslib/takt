@@ -1,0 +1,5 @@
+# スニペットの作業記録
+
+snip はプロジェクトのリポジトリの中で使う。init は作業用のディレクトリと .snip/.gitignore を作る。new は作業ごとにディレクトリを作り、絶対パスを state.json に記録する。done は記録を完了にする。prune は完了した作業のディレクトリと記録を消し、残った件数を返す。
+
+import <archive> はチームで共有されたスニペット集を取り込む。アーカイブは path と content を持つ entry の JSON 配列で、取り込み先は .snip/imports。

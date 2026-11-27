@@ -5,11 +5,13 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+description: AIレビューと監督者の指摘を並列に修正する
 tags:
   - coding
 capabilities: readonly
 parallel:
   - name: ai-antipattern-fix-parallel
+    description: AIレビューの指摘を実際のコードで確認して修正し、結果を報告する
     capabilities: edit
     tags:
       - coding
@@ -27,6 +29,7 @@ parallel:
         - name: ai-antipattern-fix-report.md
           format: fix-report
   - name: supervise_fix_parallel
+    description: 監督者の指摘を優先度に沿って修正し、変更内容と検証結果を報告する
     capabilities: edit
     tags:
       - coding

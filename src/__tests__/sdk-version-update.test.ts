@@ -4,23 +4,94 @@ import { describe, expect, it } from 'vitest';
 
 type PackageManifest = {
   dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
+  overrides: Record<string, string>;
 };
 
 type PackageLock = {
-  packages: Record<string, { version?: string; dependencies?: Record<string, string> }>;
+  packages: Record<string, {
+    version?: string;
+    dev?: boolean;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  }>;
 };
 
+const PI_SDK_VERSION = '1.5.2';
+const PI_SDK_PACKAGES = [
+  '@earendil-works/pi-ai',
+  '@earendil-works/pi-coding-agent',
+] as const;
+const PI_SDK_OVERRIDES = [
+  '@earendil-works/pi-agent-core',
+  '@earendil-works/pi-codemode',
+  '@earendil-works/pi-mcp',
+  '@earendil-works/pi-telemetry',
+  '@earendil-works/pi-tui',
+] as const;
 const root = process.cwd();
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as PackageManifest;
 const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as PackageLock;
+const managedManifest = JSON.parse(
+  readFileSync(join(root, 'managed/pi/package.json'), 'utf8'),
+) as Pick<PackageManifest, 'dependencies'>;
+const managedLockfile = JSON.parse(
+  readFileSync(join(root, 'managed/pi/package-lock.json'), 'utf8'),
+) as PackageLock;
+const managedDeepSeekManifest = JSON.parse(
+  readFileSync(join(root, 'managed/deepseek-harness/package.json'), 'utf8'),
+) as Pick<PackageManifest, 'overrides'>;
+const managedDeepSeekLockfile = JSON.parse(
+  readFileSync(join(root, 'managed/deepseek-harness/package-lock.json'), 'utf8'),
+) as PackageLock;
 
 describe('pi SDK dependency versions', () => {
-  it('declares and locks both SDK packages at 1.1.0', () => {
-    expect(manifest.dependencies['@earendil-works/pi-ai']).toBe('^1.1.0');
-    expect(manifest.dependencies['@earendil-works/pi-coding-agent']).toBe('^1.1.0');
-    expect(lockfile.packages['']?.dependencies?.['@earendil-works/pi-ai']).toBe('^1.1.0');
-    expect(lockfile.packages['']?.dependencies?.['@earendil-works/pi-coding-agent']).toBe('^1.1.0');
-    expect(lockfile.packages['node_modules/@earendil-works/pi-ai']?.version).toBe('1.1.0');
-    expect(lockfile.packages['node_modules/@earendil-works/pi-coding-agent']?.version).toBe('1.1.0');
+  it.each(PI_SDK_PACKAGES)('declares and locks %s at 1.5.2 for development only', (packageName) => {
+    expect(manifest.dependencies[packageName]).toBeUndefined();
+    expect(manifest.devDependencies[packageName]).toBe(PI_SDK_VERSION);
+    expect(lockfile.packages['']?.devDependencies?.[packageName]).toBe(PI_SDK_VERSION);
+    expect(lockfile.packages[`node_modules/${packageName}`]?.version).toBe(PI_SDK_VERSION);
+    expect(lockfile.packages[`node_modules/${packageName}`]?.dev).toBe(true);
+  });
+
+  it.each(PI_SDK_PACKAGES)('ships %s at 1.5.2 in the managed Pi manifest and lock', (packageName) => {
+    expect(managedManifest.dependencies[packageName]).toBe(PI_SDK_VERSION);
+    expect(managedLockfile.packages['']?.dependencies?.[packageName]).toBe(PI_SDK_VERSION);
+    expect(managedLockfile.packages[`node_modules/${packageName}`]?.version).toBe(PI_SDK_VERSION);
+  });
+
+  it.each(PI_SDK_OVERRIDES)('overrides %s at 1.5.2', (packageName) => {
+    expect(manifest.overrides[packageName]).toBe(PI_SDK_VERSION);
+  });
+
+  it.each([...PI_SDK_PACKAGES, ...PI_SDK_OVERRIDES])('locks all installed instances of %s at 1.5.2', (packageName) => {
+    for (const lock of [lockfile, managedLockfile]) {
+      const entries = Object.entries(lock.packages).filter(([path]) => path.endsWith(`node_modules/${packageName}`));
+      expect(entries.length).toBeGreaterThan(0);
+      for (const [, entry] of entries) expect(entry.version).toBe(PI_SDK_VERSION);
+    }
+  });
+
+  it('resolves the existing managed DSH Pi AI range to 1.5.2', () => {
+    expect(managedDeepSeekManifest.overrides['@earendil-works/pi-ai']).toBe(PI_SDK_VERSION);
+    expect(
+      managedDeepSeekLockfile.packages['node_modules/@deepseek-ai/dsh-llm-pi-ai']
+        ?.dependencies?.['@earendil-works/pi-ai'],
+    ).toBe('^1.1.0');
+    expect(
+      managedDeepSeekLockfile.packages['node_modules/@earendil-works/pi-ai']?.version,
+    ).toBe(PI_SDK_VERSION);
+  });
+
+  it.each([
+    ['root', lockfile],
+    ['managed Pi', managedLockfile],
+    ['managed DSH', managedDeepSeekLockfile],
+  ] as const)('locks every %s Pi SDK instance at 1.5.2', (_name, lock) => {
+    const entries = Object.entries(lock.packages).filter(([path]) =>
+      /(?:^|\/)node_modules\/@earendil-works\/pi-[^/]+$/.test(path),
+    );
+    expect(entries.some(([path]) => path.endsWith('node_modules/@earendil-works/pi-ai'))).toBe(true);
+    for (const [, entry] of entries) expect(entry.version).toBe(PI_SDK_VERSION);
   });
 });

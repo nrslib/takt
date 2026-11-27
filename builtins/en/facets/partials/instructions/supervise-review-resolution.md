@@ -1,6 +1,15 @@
 Determine requirement fulfillment and resolution of preceding concerns from current code and the current review decision.
 
+If you find a past action that departed from the instructed way of working, check the following.
+
+- Do its results remain in current artifacts or external state?
+- Does the evidence used to establish that acceptance criteria are met come from checking current code under the specified conditions?
+
+Record the results in the report before deciding.
+
 {{include:instructions/final-preservation-check}}
+
+{{include:instructions/supervise-spec-deviations}}
 
 **Current review resolution:**
 {report:review-resolution.md}
@@ -10,7 +19,7 @@ Determine requirement fulfillment and resolution of preceding concerns from curr
 Judge a requirement fulfilled only after confirming the path by which the required result actually holds in the code. The mere existence of a call to a function that validates, saves, or propagates is not a basis. When using a call site as evidence of fulfillment, open the callees relevant to the required result and confirm with file:line that the necessary path connects the required input to the observable result (the save destination path, the output format, or propagation to consumers). Never cite a file you have not opened. Do not mark an inspectable code path fulfilled while it remains unverified. For requirements that current code and the current review resolution cannot decide, apply the REJECT / BLOCKED conditions below.
 
 1. Split the original requirements into the smallest independently decidable units and map them to current code
-2. Compare each preceding finding's original acceptance criteria with the latest adjudication. Do not use criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts to decide completion; determine resolution against the current acceptance criteria
+2. Compare each preceding finding's original acceptance criteria with the latest adjudication. Do not use criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts to decide completion; determine resolution against the current acceptance criteria. Do not restore a condition in Guarantees Not Adopted under different wording. If new evidence changes a human decision's premises, identify the decision needed
 3. When a requirement is unfulfilled or a concern remains unresolved, record the repair target, acceptance criteria, and narrow repair boundary
 4. Treat the work as externally blocked only when current code and the current review decision cannot decide a requirement and task-scope code changes cannot provide the required external decision or information
 
@@ -19,3 +28,7 @@ Do not request or inspect machine-gate execution status, results, or logs, inclu
 {{include:instructions/supervise-external-confirmation}}
 
 Record the decision, evidence, and any required repair targets completely.
+
+Retain the fixed-version references in review-resolution.md. Record repair history analyzed from original records by repair planning with its plan source, and how the actual method matches the latest requirements and decision. Reconcile changed verification approaches with the original acceptance criteria.
+
+Carry forward the unverified conditions, reasons they cannot be verified in this environment, and evidence needed to decide from Cannot Verify in This Environment in the adjudication report into the final validation report, and relate them to the requirements fulfillment judgment.

@@ -56,7 +56,7 @@ async function loadServerPool(): Promise<typeof import('../infra/opencode/server
 
 function serverStartResult(close: () => Promise<void> = async () => undefined) {
   return {
-    client: {},
+    client: { sdkState: { directory: '/test/managed/opencode', stale: false } },
     close,
     onError: vi.fn(() => () => undefined),
   };
@@ -132,6 +132,62 @@ describe('OpenCode server pool forced shutdown', () => {
     childExit.resolve();
     await shutdown;
 
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('waits for an in-flight v1 output probe to close before shutdown completes', async () => {
+    const lookupStarted = deferred<void>();
+    const output = deferred<number>();
+    const childExit = deferred<void>();
+    const closeStarted = deferred<void>();
+    const close = vi.fn(() => {
+      closeStarted.resolve();
+      return childExit.promise;
+    });
+    startServerMock.mockResolvedValue({
+      ...serverStartResult(close),
+      client: {
+        sdkState: { directory: '/test/managed/opencode', stale: false },
+        getModelOutputLimit: vi.fn(() => {
+          lookupStarted.resolve();
+          return output.promise;
+        }),
+      },
+    });
+    const { acquireOpenCodeClient, prepareSharedServerPoolForForcedShutdown } = await loadServerPool();
+    const acquisition = acquireOpenCodeClient(
+      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, undefined, 500_000, '/test/project',
+    ).catch((error: unknown) => error);
+    await lookupStarted.promise;
+    const shutdown = prepareSharedServerPoolForForcedShutdown();
+    await expectPromisePending(shutdown);
+    output.resolve(32_000);
+    await closeStarted.promise;
+    await expectPromisePending(shutdown);
+    childExit.resolve();
+    await shutdown;
+    await expect(acquisition).resolves.toMatchObject({ message: 'OpenCode shared server pool is shutting down' });
+    expect(startServerMock).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('reports a v1 probe stop failure during forced shutdown', async () => {
+    const stopFailure = Object.assign(new Error('v1 probe child did not stop'), { name: 'OpenCodeServerStopError' });
+    const close = vi.fn().mockRejectedValue(stopFailure);
+    startServerMock.mockResolvedValue({
+      ...serverStartResult(close),
+      client: {
+        sdkState: { directory: '/test/managed/opencode', stale: false },
+        getModelOutputLimit: vi.fn(async () => 32_000),
+      },
+    });
+    const { acquireOpenCodeClient, prepareSharedServerPoolForForcedShutdown } = await loadServerPool();
+    await expect(acquireOpenCodeClient(
+      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, undefined, 500_000, '/test/project',
+    )).rejects.toBe(stopFailure);
+    const shutdown = await prepareSharedServerPoolForForcedShutdown().catch((error: unknown) => error);
+    expect(shutdown).toBeInstanceOf(AggregateError);
+    expect((shutdown as AggregateError).errors).toContain(stopFailure);
     expect(close).toHaveBeenCalledOnce();
   });
 

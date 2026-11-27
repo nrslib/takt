@@ -6,7 +6,6 @@
  */
 
 import {
-  displayAndClearSessionState,
   runConversationLoop,
   type ConversationStrategy,
 } from './conversationLoop.js';
@@ -149,8 +148,6 @@ async function runRetryConversation(
 ): Promise<InstructModeResult> {
   const plan = createRetryConversationPlan(cwd, retryContext, { reviseOrder, display });
   const ctx = plan.ctx;
-
-  displayAndClearSessionState(cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
   const strategy: ConversationStrategy = {

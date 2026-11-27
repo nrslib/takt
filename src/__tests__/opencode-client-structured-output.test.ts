@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
@@ -108,6 +109,31 @@ describe('OpenCodeClient structured output', () => {
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it.each(['auto', 'manual', undefined] as const)('emits context_compacted only for a verified automatic event (reason=%s)', async (reason) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-compacted';
+    const stream = new MockEventStream([
+      { type: 'session.compacted', properties: { sessionID: sessionId, ...(reason === undefined ? {} : { reason }) } },
+      textPartUpdated(sessionId, 'reply', 'review result'),
+      sessionIdle(sessionId),
+    ], sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: sessionId } }), promptAsync: vi.fn().mockResolvedValue(undefined), abort: successfulSessionAbort() },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) }, permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const sessions: string[] = [];
+    const result = await new OpenCodeClient().call('reviewer', 'review', {
+      cwd: '/tmp', model: 'opencode/big-pickle', permissionMode: 'readonly',
+      onStream: (event) => { if (event.type === 'context_compacted') sessions.push(event.data.sessionId!); },
+    });
+    expect(result.status).toBe('done');
+    expect(sessions).toEqual(reason === 'auto' ? [sessionId] : []);
   });
 
   it('should request native structured output and capture info.structured', async () => {

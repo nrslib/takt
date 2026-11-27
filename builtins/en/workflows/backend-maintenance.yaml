@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: Preserve existing contracts while planning, testing, and implementing backend changes, then confirm requirements through review and fixes.
     kind: workflow_call
     call: development-core
     args:

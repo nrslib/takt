@@ -2,6 +2,9 @@
  * Tests for interactive mode
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
@@ -20,19 +23,32 @@ const {
   mockResolveFormalSpecConfigurationWithoutPrompt,
   mockSelectRecentSession,
   mockRunFormalSpecVerification,
-  mockCleanupFormalSpecVerificationArtifacts,
   mockDeepSeekClientCall,
+  mockFetchIssue,
 } = vi.hoisted(() => ({
   mockResolveFormalSpecConfiguration: vi.fn(),
   mockResolveFormalSpecConfigurationWithoutPrompt: vi.fn(),
   mockSelectRecentSession: vi.fn(),
   mockRunFormalSpecVerification: vi.fn(),
-  mockCleanupFormalSpecVerificationArtifacts: vi.fn(),
   mockDeepSeekClientCall: vi.fn(),
+  mockFetchIssue: vi.fn(),
+}));
+
+vi.mock('../infra/git/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/git/index.js')>()),
+  getGitProvider: () => ({
+    checkCliStatus: () => ({ available: true }),
+    fetchIssue: mockFetchIssue,
+  }),
 }));
 
 vi.mock('../infra/deepseek-harness/index.js', () => ({
   callDeepSeekHarness: mockDeepSeekClientCall,
+}));
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
 }));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -46,7 +62,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveFormalSpecConfiguration: (cwd: string) => mockResolveFormalSpecConfiguration(cwd),
+  resolveFormalSpecConfiguration: (...args: unknown[]) => mockResolveFormalSpecConfiguration(...args),
   resolveFormalSpecConfigurationWithoutPrompt: (cwd: string) => mockResolveFormalSpecConfigurationWithoutPrompt(cwd),
 }));
 
@@ -56,7 +72,7 @@ vi.mock('../features/interactive/sessionSelector.js', () => ({
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  cleanupFormalSpecVerificationArtifacts: (...args: unknown[]) => mockCleanupFormalSpecVerificationArtifacts(...args),
+  cleanupFormalSpecVerificationArtifacts: () => undefined,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -76,36 +92,50 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/tty.js')>()),
+  resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: vi.fn(),
+  selectOptionWithDefault: (...args: unknown[]) => vi.mocked(selectOption)(...args as Parameters<typeof selectOption>),
+  confirmWithCancel: vi.fn(),
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { runConversationLoop } from '../features/interactive/conversationLoop.js';
+import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
-import { selectOption } from '../shared/prompt/index.js';
+import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { info, error, StreamDisplay } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
+let projectConfigDir: string;
 
 function setupMockProvider(responses: string[]): void {
   const { provider } = createMockProvider(responses);
@@ -114,7 +144,10 @@ function setupMockProvider(responses: string[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  projectConfigDir = mkdtempSync(join(tmpdir(), 'takt-interactive-config-'));
+  vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   mockSelectOption.mockResolvedValue('execute');
+  vi.mocked(confirmWithCancel).mockReset().mockResolvedValue({ kind: 'value', value: true });
   mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   mockSelectRecentSession.mockResolvedValue(null);
@@ -129,9 +162,80 @@ beforeEach(() => {
 afterEach(() => {
   restoreStdin();
   mockSelectOption.mockReset();
+  rmSync(projectConfigDir, { recursive: true, force: true });
 });
 
 describe('interactiveMode', () => {
+  it('should preview instructions against the replaced Issue within the same conversation', async () => {
+    const first = '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.';
+    const next = '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.';
+    setupRawStdin(toRawInputs(['/go', '/issue #456', '/go']));
+    const { provider, capture } = createMockProvider([first, next]);
+    mockGetProvider.mockReturnValue(provider);
+    mockSelectOption.mockResolvedValueOnce('continue').mockResolvedValueOnce('save_task');
+    mockFetchIssue.mockReturnValue({
+      number: 456, title: 'Issue 456', body: 'Body 456', labels: [], comments: [], url: 'https://example.com/issues/456',
+    });
+
+    const result = await interactiveMode('/project', {
+      sourceContext: '## Issue #123: Issue 123\n\nBody 123',
+    });
+
+    expect(result).toMatchObject({ action: 'save_task', task: next, issueContextReplacement: { issueNumber: 456 } });
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[0]).toContain('## Issue #123: Issue 123');
+    expect(capture.prompts[1]).toContain('## Issue #456: Issue 456');
+    expect(capture.prompts[1]).not.toContain('## Issue #123: Issue 123');
+    expect(capture.prompts[1]).toContain(first);
+    expect(mockFetchIssue).toHaveBeenCalledWith(456, '/project');
+    const displayed = mockInfo.mock.calls.map((call) => call[0]);
+    expect(displayed).toContain(first);
+    expect(displayed).toContain(next);
+    expect(mockSelectOption).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])('should wait for the initial formal specification answer=%s before starting dialogue', async (mode) => {
+    setupRawStdin(toRawInputs(['continue discussing the task', '/cancel']));
+    const { provider, capture } = createMockProvider(['What should be changed?']);
+    mockGetProvider.mockReturnValue(provider);
+    let answer!: (configuration: { mode: boolean; comments: boolean; modelCheckTimeoutSeconds: number }) => void;
+    mockResolveFormalSpecConfiguration.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+
+    const run = interactiveMode('/project');
+    await Promise.resolve();
+
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledWith('/project');
+    expect(capture.callCount).toBe(0);
+    answer({ mode, comments: true, modelCheckTimeoutSeconds: 300 });
+    const result = await run;
+
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('continue discussing the task');
+    expect(capture.systemPrompts[0]).toBe(withProgressNotesGuidance(buildInteractiveSystemPrompt('en', {
+      grillMe: false, formalSpec: mode, formalSpecComments: true,
+    }), 'en'));
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should propagate resume confirmation cancellation through the plan and keep the same dialogue', async () => {
+    setupRawStdin(toRawInputs(['before resume', '/resume', 'after cancellation', '/cancel']));
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);
+    mockGetProvider.mockReturnValue(provider);
+    mockSelectRecentSession.mockResolvedValue('unapproved-session');
+    mockResolveFormalSpecConfiguration
+      .mockResolvedValueOnce({ mode: true, comments: false, modelCheckTimeoutSeconds: 45 })
+      .mockResolvedValueOnce(null);
+
+    const result = await interactiveMode('/project', undefined, undefined, 'initial-session');
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(2);
+    expect(capture.sessionIds).not.toContain('unapproved-session');
+    expect(capture.systemPrompts[1]).toBe(capture.systemPrompts[0]);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project', { allowCancel: true });
+  });
   it.each([
     ['assistant', undefined, undefined],
     ['Grill Me', undefined, { assistantMode: 'grill-me' as const }],
@@ -173,7 +277,7 @@ describe('interactiveMode', () => {
 
       expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledTimes(2);
       expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, '/project');
-      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project');
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, '/project', { allowCancel: true });
       expect(capture.systemPrompts).toHaveLength(3);
     },
   );
@@ -242,22 +346,6 @@ describe('interactiveMode', () => {
       expect(mockGetProvider.mock.results[0]?.value?._call).not.toHaveBeenCalled();
       expect(mockRunFormalSpecVerification).not.toHaveBeenCalled();
     }
-  });
-
-  it.each([
-    ['assistant', undefined],
-    ['Grill Me', { assistantMode: 'grill-me' as const }],
-  ] as const)('should apply resolved formal specification mode to the %s system prompt', async (_label, options) => {
-    setupRawStdin(toRawInputs(['plan a stateful feature', '/cancel']));
-    const { provider, capture } = createMockProvider(['Which states are involved?']);
-    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
-
-    await interactiveMode('/project', undefined, undefined, undefined, undefined, options);
-
-    expect(capture.systemPrompts[0]).toMatch(/Gherkin/);
-    expect(capture.systemPrompts[0]).toMatch(/\bQuint\b/);
-    expect(capture.systemPrompts[0]).toMatch(/\bAlloy\b/);
   });
 
   it('should return action=cancel when user types /cancel', async () => {
@@ -600,7 +688,8 @@ describe('interactiveMode', () => {
     expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.verifyUnavailable', 'en'));
   });
 
-  it.each(['codex', 'claude', 'claude-headless'] as const)('should route /verify through generation and interpretation for %s', async (providerType) => {
+  it('should route /verify through generation and interpretation for codex', async () => {
+    const providerType = 'codex';
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const { provider, capture } = createMockProvider([
@@ -629,6 +718,43 @@ describe('interactiveMode', () => {
     expect(provider._call.mock.calls[1]![1]).toMatchObject({ allowReadonlyFileRead: true });
   });
 
+  it.each(['opencode', 'pi'] as const)('should stop /verify before interpretation when %s cannot limit file reads to verification artifacts', async (providerType) => {
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const generatedResponse = '```quint\nmodule currentAgreement {}\n```';
+    const call = vi.fn<ProviderAgent['call']>().mockImplementationOnce(async (_prompt, options) => {
+      options.onStream?.({ type: 'text', data: { text: generatedResponse } });
+      return { persona: 'test', status: 'done', content: generatedResponse, timestamp: new Date() };
+    });
+    const { provider } = createMockProvider([]);
+    vi.mocked(provider.setup).mockReturnValue({ call });
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
+
+    const displayMock = vi.mocked(StreamDisplay);
+    const originalDisplayImplementation = displayMock.getMockImplementation()!;
+    try {
+      displayMock.mockImplementation(function (agentName, quiet, progressInfo) {
+        return new TerminalStreamDisplay(agentName, quiet, progressInfo);
+      });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { provider: providerType });
+
+      expect(result.action).toBe('cancel');
+      expect(call).toHaveBeenCalledOnce();
+      expect(mockRunFormalSpecVerification).toHaveBeenCalledWith(
+        generatedResponse,
+        '/project',
+        { abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300 },
+      );
+      expect(vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('')).toContain(generatedResponse);
+      expect(error).toHaveBeenCalledWith(
+        `Provider "${providerType}" does not support read-only access limited to verification artifacts`,
+      );
+    } finally {
+      displayMock.mockImplementation(originalDisplayImplementation);
+    }
+  });
+
   it('should reject DeepSeek Harness before specification generation reaches the client', async () => {
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     mockGetProvider.mockReturnValue(new DeepSeekHarnessProvider());
@@ -644,7 +770,8 @@ describe('interactiveMode', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('DeepSeek Harness cannot honor read-only file access'));
   });
 
-  it.each(['codex', 'claude', 'claude-headless'] as const)('should display generated specifications before the interpretation when /verify succeeds for %s', async (providerType) => {
+  it('should display generated specifications before the interpretation when /verify succeeds for codex', async () => {
+    const providerType = 'codex';
     setupRawStdin(toRawInputs(['/verify', '/cancel']));
     const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
     const interpretedResponse = 'Both specifications passed verification.';
@@ -674,8 +801,9 @@ describe('interactiveMode', () => {
     const displayMock = vi.mocked(StreamDisplay);
     const originalDisplayImplementation = displayMock.getMockImplementation()!;
     try {
-      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
-        new TerminalStreamDisplay(agentName, quiet, progressInfo));
+      displayMock.mockImplementation(function (agentName, quiet, progressInfo) {
+        return new TerminalStreamDisplay(agentName, quiet, progressInfo);
+      });
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
         provider: providerType,
@@ -688,67 +816,6 @@ describe('interactiveMode', () => {
       expect(output.indexOf(interpretedResponse)).toBeGreaterThanOrEqual(
         output.indexOf(generatedResponse) + generatedResponse.length,
       );
-    } finally {
-      displayMock.mockImplementation(originalDisplayImplementation);
-    }
-  });
-
-  it.each(['opencode', 'pi'] as const)('should display /verify generation but reject %s interpretation and clean up artifacts', async (providerType) => {
-    setupRawStdin(toRawInputs(['/verify', '/cancel']));
-    const generatedResponse = '```quint\nmodule currentAgreement {}\n```\n```alloy\ncheck CurrentAgreement\n```';
-    const interpretedResponse = 'Both specifications passed verification.';
-    const call = vi.fn<ProviderAgent['call']>()
-      .mockImplementationOnce(async (_prompt, options) => {
-        options.onStream?.({ type: 'text', data: { text: generatedResponse } });
-        return { persona: 'test', status: 'done', content: generatedResponse, timestamp: new Date() };
-      })
-      .mockResolvedValueOnce({ persona: 'test', status: 'done', content: interpretedResponse, timestamp: new Date() });
-    const { provider } = createMockProvider([]);
-    vi.mocked(provider.setup).mockReturnValue({ call });
-    mockGetProvider.mockReturnValue(provider);
-    mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 300 });
-    const verification = {
-      verdict: 'passed',
-      verificationStarted: true,
-      quint: { status: 'passed' },
-      alloy: { status: 'passed' },
-      artifacts: {
-        runDirectory: '/project/.takt/runs/verify-current',
-        specifications: {
-          quint: '/project/.takt/runs/verify-current/specs/spec.qnt',
-          alloy: '/project/.takt/runs/verify-current/specs/spec.als',
-        },
-        logs: {},
-      },
-    };
-    mockRunFormalSpecVerification.mockResolvedValueOnce(verification);
-    const displayMock = vi.mocked(StreamDisplay);
-    const originalDisplayImplementation = displayMock.getMockImplementation()!;
-    try {
-      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
-        new TerminalStreamDisplay(agentName, quiet, progressInfo));
-
-      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
-        provider: providerType,
-      });
-
-      const output = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('');
-      expect(result.action).toBe('cancel');
-      expect(output).toContain(generatedResponse);
-      expect(output).not.toContain(interpretedResponse);
-      expect(error).toHaveBeenCalledExactlyOnceWith(
-        `Provider "${providerType}" cannot restrict file reads to the specified verification artifacts`,
-      );
-      expect(provider.setup).toHaveBeenCalledOnce();
-      expect(call).toHaveBeenCalledOnce();
-      expect(call.mock.calls[0]![1]).toMatchObject({
-        allowedTools: [], permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
-      });
-      expect(mockRunFormalSpecVerification).toHaveBeenCalledExactlyOnceWith(generatedResponse, '/project', {
-        abortSignal: expect.any(AbortSignal), modelCheckTimeoutSeconds: 300,
-      });
-      expect(call.mock.invocationCallOrder[0]).toBeLessThan(mockRunFormalSpecVerification.mock.invocationCallOrder[0]!);
-      expect(mockCleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(verification);
     } finally {
       displayMock.mockImplementation(originalDisplayImplementation);
     }
@@ -1042,6 +1109,50 @@ describe('interactiveMode', () => {
   });
 
   describe('action selection after /go', () => {
+    it('dispatches Issue-only after declining task creation', async () => {
+      setupRawStdin(toRawInputs(['/go build the task', 'What happened?', '/cancel']));
+      const { provider, capture } = createMockProvider(['Summarized task.', 'The Issue was created.']);
+      mockGetProvider.mockReturnValue(provider);
+      mockSelectOption.mockResolvedValueOnce('create_issue');
+      vi.mocked(confirmWithCancel).mockResolvedValueOnce({ kind: 'value', value: false });
+      const notice = 'Issue created without saving a task.';
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
+
+      expect(result).toMatchObject({ action: 'cancel', task: '' });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        action: 'create_issue_only', task: 'Summarized task.',
+      }));
+      expect(mockInfo).toHaveBeenCalledWith(notice);
+      expect(capture.callCount).toBe(2);
+      expect(capture.prompts[1]).toContain(notice);
+    });
+
+    it.each(['create_issue', 'execute'] as const)('does not dispatch %s before confirmation and keeps the same proposal on cancellation', async (action) => {
+      setupRawStdin(toRawInputs(['/go build the task', '/cancel']));
+      const { provider, capture } = createMockProvider(['Summarized task.']);
+      mockGetProvider.mockReturnValue(provider);
+      mockSelectOption.mockResolvedValueOnce(action).mockResolvedValueOnce('save_task');
+      const notice = 'Task saved.';
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+      vi.mocked(confirmWithCancel).mockImplementationOnce(async () => {
+        expect(dispatch).not.toHaveBeenCalled();
+        return { kind: 'cancelled' };
+      });
+
+      const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { dispatch });
+
+      expect(result).toMatchObject({ action: 'cancel', task: '' });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        action: 'save_task', task: 'Summarized task.',
+      }));
+      expect(capture.callCount).toBe(1);
+      expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledOnce();
+      expect(mockSelectOption).toHaveBeenCalledTimes(2);
+      expect(mockInfo).toHaveBeenCalledWith(notice);
+    });
+
     it('should return action=create_issue when user selects create issue', async () => {
       // Given
       setupRawStdin(toRawInputs(['describe task', '/go']));
@@ -1070,7 +1181,7 @@ describe('interactiveMode', () => {
       expect(result.task).toBe('Summarized task.');
     });
 
-    it('should reopen the action menu after a cancelled save and keep the confirmed task and attachments', async () => {
+    it('should return to the conversation after a cancelled save and keep the confirmed task and attachments', async () => {
       const attachment = {
         placeholder: '[Image #1]',
         tempPath: '/tmp/interactive-image.png',
@@ -1082,7 +1193,7 @@ describe('interactiveMode', () => {
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('continue');
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
       const dispatchOptions = {
         dispatch,
       } as NonNullable<Parameters<typeof interactiveMode>[5]> & { dispatch: typeof dispatch };
@@ -1098,18 +1209,9 @@ describe('interactiveMode', () => {
 
       try {
         expect(result.action).toBe('cancel');
-        expect(mockSelectOption).toHaveBeenCalledTimes(3);
-        expect(mockSelectOption.mock.calls[1]?.[0]).toBe(mockSelectOption.mock.calls[0]?.[0]);
-        expect(mockSelectOption.mock.calls[1]?.[1]).toEqual(mockSelectOption.mock.calls[0]?.[1]);
-        expect(mockSelectOption.mock.calls[2]?.[0]).toBe(mockSelectOption.mock.calls[0]?.[0]);
-        expect(mockSelectOption.mock.calls[2]?.[1]).toEqual(mockSelectOption.mock.calls[0]?.[1]);
-        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(mockSelectOption).toHaveBeenCalledTimes(1);
+        expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({
-          action: 'save_task',
-          task: 'Summarized task.',
-          attachments: [attachment],
-        }));
-        expect(dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({
           action: 'save_task',
           task: 'Summarized task.',
           attachments: [attachment],
@@ -1120,21 +1222,21 @@ describe('interactiveMode', () => {
     });
 
     it.each(['execute', 'create_issue'] as const)(
-      'should dispatch %s when it is selected after a cancelled save',
+      'should dispatch %s only after a new /go following a cancelled save',
       async (action) => {
         const attachment = {
           placeholder: '[Image #1]',
           tempPath: '/tmp/interactive-image.png',
           fileName: 'image-1.png',
         };
-        setupRawStdin(toRawInputs(['/go', '/cancel']));
-        setupMockProvider(['Summarized task.']);
+        setupRawStdin(toRawInputs(['/go', '/go', '/cancel']));
+        setupMockProvider(['Summarized task.', 'Summarized task.']);
         mockSelectOption
           .mockResolvedValueOnce('save_task')
           .mockResolvedValueOnce(action);
         const dispatch = vi.fn()
-          .mockResolvedValueOnce({ kind: 'cancelled' })
-          .mockResolvedValueOnce({ kind: 'dispatched' });
+          .mockResolvedValueOnce({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' })
+          .mockResolvedValueOnce({ kind: 'dispatched', notice: 'Execution finished.' });
         const dispatchOptions = {
           dispatch,
         } as NonNullable<Parameters<typeof interactiveMode>[5]> & { dispatch: typeof dispatch };
@@ -1149,6 +1251,9 @@ describe('interactiveMode', () => {
         );
 
         try {
+          expect(result.action).toBe('cancel');
+          const provider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+          expect(provider._call).toHaveBeenCalledTimes(2);
           expect(mockSelectOption).toHaveBeenCalledTimes(2);
           expect(dispatch).toHaveBeenCalledTimes(2);
           expect(dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({

@@ -1,8 +1,10 @@
 name: reviewers_2
+description: Review security and code in parallel and decide whether fixes are needed.
 tags:
   - review
 parallel:
   - name: security-review
+    description: Examine input and permission boundaries and report security problems along actual execution paths.
     tags:
       - review
     edit: false
@@ -18,6 +20,7 @@ parallel:
         - name: security-review.md
           format: security-review
   - name: coding-review
+    description: Compare the changes with the requirements and report implementation defects and regressions.
     tags:
       - review
     edit: false

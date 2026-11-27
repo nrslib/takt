@@ -96,6 +96,11 @@ function decodeImageData(params: string[], encodedData: string): Buffer {
   return imageData;
 }
 
+export function validatePastedImage(data: Buffer, fileName?: string): PastedImage {
+  if (data.length > MAX_INLINE_IMAGE_BYTES) throw new Error(`Pasted image exceeds the ${MAX_INLINE_IMAGE_BYTES} byte limit.`);
+  return { data, mimeType: resolveInlineImageMimeType(fileName === undefined ? [] : [`name=${fileName}`], data) };
+}
+
 function resolveInlineImageMimeType(params: string[], data: Buffer): string {
   const mimeType = inferMimeTypeFromMagicBytes(data);
   if (!mimeType) {

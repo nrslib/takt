@@ -136,6 +136,25 @@ describe('formal specification assistant normalization', () => {
   });
 });
 
+describe('merge config origin tracking', () => {
+  it('tracks fork merge settings in both project and global config schemas', () => {
+    for (const key of ['merge.include_forks', 'merge.threat_check_max_diff_bytes']) {
+      expect(getProjectTracedSchema()[key]?.sources).toMatchObject({
+        local: true,
+        global: false,
+        env: false,
+        cli: false,
+      });
+      expect(getGlobalTracedSchema()[key]?.sources).toMatchObject({
+        local: false,
+        global: true,
+        env: false,
+        cli: false,
+      });
+    }
+  });
+});
+
 describe('denormalizeProviderOptions', () => {
   it('should convert camelCase provider options into persisted snake_case format', () => {
     const result = denormalizeProviderOptions({
@@ -294,6 +313,25 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip Codex readonly permission base', () => {
+    const rawProviderOptions = {
+      codex: {
+        permission_control: 'codex' as const,
+        readonly_permission_base: 'takt-review-p2',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        permissionControl: 'codex',
+        readonlyPermissionBase: 'takt-review-p2',
+      },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
   it.each([true, false])('should normalize and denormalize Codex fast_mode=%s', (fastMode) => {
     const rawProviderOptions = { codex: { fast_mode: fastMode } };
     const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
@@ -362,6 +400,7 @@ describe('denormalizeProviderOptions', () => {
       copilot: { guards: { call_timeout_ms: 120_000 } },
       kiro: { guards: { call_timeout_ms: 120_000 } },
       cursor: { guards: { call_timeout_ms: 120_000 } },
+      devin: { guards: { call_timeout_ms: 120_000 } },
       pi: { guards: { call_timeout_ms: 120_000 } },
     };
 
@@ -374,6 +413,7 @@ describe('denormalizeProviderOptions', () => {
       copilot: { guards: { callTimeoutMs: 120_000 } },
       kiro: { guards: { callTimeoutMs: 120_000 } },
       cursor: { guards: { callTimeoutMs: 120_000 } },
+      devin: { guards: { callTimeoutMs: 120_000 } },
       pi: { guards: { callTimeoutMs: 120_000 } },
     });
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
@@ -435,6 +475,33 @@ describe('denormalizeProviderOptions', () => {
       },
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('should round-trip kiro effort through the schema and normalizers: %s', (effort) => {
+    const rawProviderOptions = {
+      kiro: {
+        effort,
+      },
+    };
+
+    const parsedProviderOptions = StepProviderOptionsObjectSchema.parse(rawProviderOptions);
+    const normalizedProviderOptions = normalizeProviderOptions(parsedProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      kiro: {
+        effort,
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should reject a kiro effort value that kiro-cli does not accept', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      kiro: {
+        effort: 'custom',
+      },
+    })).toThrow();
   });
 
   it('should round-trip kiro agent through normalize and denormalize', () => {
@@ -555,6 +622,30 @@ describe('buildRawTaktProvidersOrThrow', () => {
       assistant: {
         provider: 'claude',
         model: 'haiku',
+      },
+    });
+  });
+
+  it('should round-trip Codex readonly permission base through selector provider options', () => {
+    const normalized = normalizeTaktSelectorProvider({
+      provider: 'codex',
+      provider_options: {
+        codex: { permission_control: 'codex', readonly_permission_base: 'takt-review-p2' },
+      },
+    });
+
+    expect(normalized).toEqual({
+      provider: 'codex',
+      providerOptions: {
+        codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' },
+      },
+    });
+    expect(buildRawTaktProvidersOrThrow({ selector: normalized })).toEqual({
+      selector: {
+        provider: 'codex',
+        provider_options: {
+          codex: { permission_control: 'codex', readonly_permission_base: 'takt-review-p2' },
+        },
       },
     });
   });

@@ -12,7 +12,6 @@ import { info, header, blankLine, status, warn } from '../../../shared/ui/index.
 import type {
   WorkflowConfig,
   WorkflowRestartPoint,
-  WorkflowResumePoint,
 } from '../../../core/models/index.js';
 import {
   loadRunSessionContext,
@@ -34,13 +33,14 @@ import {
 } from './requeueHelpers.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
-import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
+import { resolveTaskPullRequestContext, resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import {
   selectTaskRetryStart,
   InvalidTaskRetryResumeWithoutRestartError,
   resolveTaskRetryStartOwnership,
   type TaskRetryStartSelection,
+  type SelectTaskRetryStartOptions,
 } from './taskRetryStartSelection.js';
 import {
   buildFailedTaskRetryStartContext,
@@ -75,12 +75,7 @@ function displayFailureInfo(task: TaskListItem, failure: TaskFailure): void {
 
 async function selectRetryStart(
   workflowConfig: WorkflowConfig,
-  options: {
-    projectCwd: string;
-    lookupCwd: string;
-    resumePoint?: WorkflowResumePoint;
-    preferredRootStep?: string;
-  },
+  options: SelectTaskRetryStartOptions,
 ): Promise<TaskRetryStartSelection | null> {
   const result = await selectTaskRetryStart(
     workflowConfig,
@@ -131,7 +126,7 @@ function buildRetryRunInfo(
 function resolveTaskRetryPullRequestContext(
   task: TaskListItem,
   projectDir: string,
-  worktreePath: string,
+  worktreePath: string | undefined,
 ): PullRequestContext | undefined {
   const data = task.data;
   if (data?.source !== 'pr_review') {
@@ -142,6 +137,13 @@ function resolveTaskRetryPullRequestContext(
   }
   if (!data.branch?.trim()) {
     throw new Error(`PR review task "${sanitizeTerminalText(task.name)}" is missing head branch.`);
+  }
+
+  if (!worktreePath || data.merge_task === true && data.merge_clone_prepared === false) {
+    return resolveTaskPullRequestContext({
+      projectDir, prNumber: data.pr_number, headBranch: data.branch,
+      ...(data.base_branch === undefined ? {} : { savedBaseBranch: data.base_branch }),
+    });
   }
 
   return resolveTaskPullRequestWorktreeContext({
@@ -164,7 +166,7 @@ async function prepareFailedTaskRetrySelection(
   const selectedWorkflow = await selectWorkflowWithOptionalReuse(
     projectDir,
     preparation.previousWorkflow,
-    preparation.worktreePath,
+    preparation.interactionCwd,
   );
   if (!selectedWorkflow) {
     info('Cancelled');
@@ -173,7 +175,7 @@ async function prepareFailedTaskRetrySelection(
 
   let startContext: FailedTaskRetryStartContext;
   try {
-    startContext = buildFailedTaskRetryStartContext(preparation, projectDir, selectedWorkflow);
+    startContext = buildFailedTaskRetryStartContext(preparation, projectDir, selectedWorkflow, true);
   } catch (error) {
     if (!(error instanceof InvalidTaskRetryResumeWithoutRestartError)) {
       throw error;
@@ -218,10 +220,11 @@ export async function requeueFailedTask(
       step: selection.failedStep,
     }),
   );
-  persistFailedTaskRetry({
+  await persistFailedTaskRetry({
     task,
     projectDir,
     worktreePath: selection.worktreePath,
+    freshStart: selection.freshStart,
     startStep: selection.startStep,
     retryNote,
     resumePoint: selection.selectedResumePoint,
@@ -229,6 +232,7 @@ export async function requeueFailedTask(
     taskDir: undefined,
     sourceRunSlug: selection.matchedRunSlug,
     restartPoint: selection.selectedRestartPoint,
+    sourceResumePoint: selection.selectedRestartPoint === undefined ? undefined : selection.resumePoint ?? selection.sourceResumePoint,
   });
 
   info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
@@ -253,15 +257,15 @@ export async function retryFailedTask(
     return false;
   }
   const runInfo = selection.matchedRunSlug && selection.runMeta
-    ? buildRetryRunInfo(selection.worktreePath, selection.matchedRunSlug)
+    ? buildRetryRunInfo(selection.runsBaseDir, selection.matchedRunSlug)
     : null;
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const lang = resolveLanguage(resolveWorkflowConfigValue(selection.worktreePath, 'language'));
+  const lang = resolveLanguage(resolveWorkflowConfigValue(selection.interactionCwd, 'language'));
   const workflowDesc = getWorkflowDescription(
     selection.selectedWorkflow,
     projectDir,
     previewCount,
-    selection.worktreePath,
+    selection.interactionCwd,
     agentOverrides,
   );
   const workflowContext = {
@@ -286,7 +290,7 @@ export async function retryFailedTask(
   };
 
   const displayTaskName = sanitizeTerminalText(task.name);
-  const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext, {
+  const retryResult = await runTaskRetryMode(selection.interactionCwd, retryContext, {
     taskName: displayTaskName,
     subjectValue: task.branch ?? displayTaskName,
   });
@@ -303,10 +307,11 @@ export async function retryFailedTask(
     if (retryResult.action !== 'save_task') {
       throw new Error('Retry must finish by queueing the revised task.');
     }
-    persistFailedTaskRetry({
+    await persistFailedTaskRetry({
       task,
       projectDir,
       worktreePath: selection.worktreePath,
+      freshStart: selection.freshStart,
       startStep: selection.startStep,
       retryNote: executionRetryNote,
       resumePoint: selection.selectedResumePoint,
@@ -314,6 +319,7 @@ export async function retryFailedTask(
       taskDir: task.taskDir,
       sourceRunSlug: selection.matchedRunSlug,
       restartPoint: selection.selectedRestartPoint,
+      sourceResumePoint: selection.selectedRestartPoint === undefined ? undefined : selection.resumePoint ?? selection.sourceResumePoint,
       ...(retryResult.source === 'go'
         ? {
           revisedOrder: {

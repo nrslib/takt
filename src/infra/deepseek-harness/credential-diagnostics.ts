@@ -206,6 +206,10 @@ export function buildDeepSeekSdkFailureDiagnostic(code: string | undefined): str
       return 'DeepSeek Harness runtime returned a JSON-RPC error. Verify the provider configuration and retry. Upstream error details are withheld.';
     case 'transport-closed':
       return 'DeepSeek Harness runtime connection closed. Verify the runtime installation and retry. Upstream error details are withheld.';
+    case 'npm-plugin-load-failed':
+      return 'DeepSeek Harness npm plugin failed to load. Check the package entrypoint and configuration, then retry. Upstream error details are withheld.';
+    case 'plugin-cleanup-failed':
+      return 'DeepSeek Harness plugin cleanup failed. Verify temporary storage access and retry. Upstream error details are withheld.';
     default:
       return undefined;
   }

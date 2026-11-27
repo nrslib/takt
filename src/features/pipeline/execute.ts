@@ -1,4 +1,5 @@
-import { resolveConfigValues } from '../../infra/config/index.js';
+import { loadGlobalConfig, loadProjectConfig, resolveConfigValues } from '../../infra/config/index.js';
+import { resolveWorkflowSystemCommandsForProject } from '../../infra/config/loaders/workflowNormalizationPolicies.js';
 import { info, error, status, blankLine } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary, generateRunId } from '../../shared/utils/index.js';
 import type { SlackTaskDetail } from '../../shared/utils/index.js';
@@ -29,7 +30,8 @@ import {
   createLoopAnalysisPublicationCoordinator,
   settleLoopAnalysisPublication,
 } from '../tasks/execute/loopAnalysisPublication.js';
-import { runLinkedCacciaSafely } from '../caccia/index.js';
+import { runLinkedMergeSafely } from '../merge/index.js';
+import { runLinkedCacciaSafely } from '../caccia/linked.js';
 
 export type { PipelineExecutionOptions };
 
@@ -85,6 +87,9 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   const taskContent = resolveTaskContent(options);
   if (!taskContent) return { exitCode: EXIT_ISSUE_FETCH_FAILED, result: buildResult() };
 
+  const workflowSystemCommandsPolicy = taskContent.prBranch && !options.createWorktree && !options.skipGit
+    ? resolveWorkflowSystemCommandsForProject(loadGlobalConfig(), loadProjectConfig(cwd))
+    : undefined;
   let context: ExecutionContext;
   try {
     context = await resolveExecutionContext(
@@ -106,7 +111,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   const preparedTask = await preparePipelineTaskSpec(cwd, context.execCwd, taskContent);
   try {
     log.info('Pipeline workflow execution starting', { workflow, branch: context.branch, skipGit, issueNumber: options.issueNumber });
-    const workflowOk = await runWorkflow(
+    const workflowResult = await runWorkflow(
       cwd,
       workflow,
       preparedTask.task,
@@ -115,8 +120,9 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
       context,
       loopAnalysisPublication,
       preparedTask.taskSpec,
+      workflowSystemCommandsPolicy,
     );
-    if (!workflowOk) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
+    if (!workflowResult.success) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
 
     if (!skipGit && context.branch) {
       const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
@@ -129,12 +135,14 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     if (autoPr && !skipGit && context.branch) {
       prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, workflow, pipelineConfig, options);
       if (!prUrl) return { exitCode: EXIT_PR_CREATION_FAILED, result: buildResult({ branch: context.branch }) };
-      await runLinkedCacciaSafely(cwd, prUrl, undefined, {
+      const display = {
         outputMode: options.outputMode ?? 'terminal',
         taskPrefix: options.taskPrefix,
         taskColorIndex: options.taskColorIndex,
         taskDisplayLabel: options.taskDisplayLabel,
-      });
+      };
+      await runLinkedCacciaSafely(cwd, prUrl, workflowResult.workflowHasCaccia, undefined, display);
+      await runLinkedMergeSafely(cwd, prUrl, undefined, display);
     } else if (autoPr && skipGit) {
       info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
     }

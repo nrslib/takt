@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
@@ -71,18 +71,19 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -111,6 +112,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { writeRunSessionLogFixture } from './helpers/run-session-log-fixture.js';
 import {
   loadRunSessionContext,
@@ -123,6 +125,7 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { createRetryConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { getWorkflowDescription } from '../infra/config/loaders/workflowPreview.js';
 import { formatStepPreviews } from '../features/interactive/interactive-summary.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockConfirm = vi.mocked(confirm);
@@ -175,15 +178,19 @@ function setupProvider(responses: string[]): MockProviderCapture {
 
 describe('E2E: Retry mode with failure context injection', () => {
   let tmpDir: string;
+  let projectConfigDir: string;
 
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    projectConfigDir = mkdtempSync(join(tmpdir(), 'takt-retry-flow-config-'));
+    vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   });
 
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(projectConfigDir, { recursive: true, force: true });
   });
 
   describe.each(['en', 'ja'] as const)('retry display in %s', (lang) => {
@@ -353,7 +360,7 @@ describe('E2E: Retry mode with failure context injection', () => {
         Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
         expect((await runTaskRetryMode(tmpDir, context, display)).action).toBe('cancel');
         expectSafeIntro(consoleLog.mock.calls.flat().map(String).find((line) => line.includes('##'))!);
-        expect(capture.systemPrompts).toContain(original.strategy.systemPrompt);
+        expect(capture.systemPrompts).toContain(withProgressNotesGuidance(original.strategy.systemPrompt, lang));
         restoreStdin();
         setupRawStdin([]);
         Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });

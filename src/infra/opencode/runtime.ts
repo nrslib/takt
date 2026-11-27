@@ -17,10 +17,11 @@ export function openCodeRuntimeSelection(): { generation: 'v1' | 'v2'; command: 
   return { generation, command };
 }
 
-export async function resolveOpenCodeRuntime(): Promise<OpenCodeRuntime> {
+export async function resolveOpenCodeRuntime(abortSignal?: AbortSignal): Promise<OpenCodeRuntime> {
+  abortSignal?.throwIfAborted();
   const selection = openCodeRuntimeSelection();
   const version = await new Promise<string>((resolve, reject) => {
-    execFile(selection.command, ['--version'], { timeout: 10_000, env: buildChildProcessEnv() }, (error, stdout) => {
+    execFile(selection.command, ['--version'], { timeout: 10_000, env: buildChildProcessEnv(), signal: abortSignal }, (error, stdout) => {
       if (error) reject(new Error('Cannot read OpenCode CLI version. Install the selected CLI or set TAKT_OPENCODE_PATH.', { cause: error }));
       else resolve(String(stdout).trim());
     });

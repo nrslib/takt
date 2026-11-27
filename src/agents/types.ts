@@ -2,7 +2,8 @@
  * Type definitions for agent execution
  */
 
-import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/types.js';
+import type { StreamCallback } from '../shared/types/provider.js';
+import type { PermissionHandler, AskUserQuestionHandler } from '../core/workflow/types.js';
 import type { SkillPermissionHandler } from '../core/workflow/types.js';
 import type {
   PermissionMode,
@@ -26,10 +27,8 @@ export interface WorkflowProcessSafetyMeta {
 
 export interface WorkflowMeta {
   workflowName: string;
-  workflowDescription?: string;
   currentStep: string;
-  stepsList: ReadonlyArray<{ name: string; description?: string }>;
-  currentPosition: string;
+  context?: import('../core/workflow/workflow-prompt-context.js').WorkflowPromptContext;
   processSafety?: WorkflowProcessSafetyMeta;
 }
 
@@ -45,6 +44,8 @@ export interface RunAgentOptions {
   cwd: string;
   executionProfile?: 'isolated-structured';
   projectCwd?: string;
+  /** TAKT-owned external context directories OpenCode may read for this run. */
+  openCodeExternalDirectories?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
@@ -59,6 +60,13 @@ export interface RunAgentOptions {
   internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
+  progressNotes?: import('../core/workflow/progress-notes.js').ProgressNotesRequest;
+  /** Stable Phase 1 request for the progress notes identity across continuations and live interventions. */
+  progressNotesInstruction?: string;
+  /** Complete current instruction, including follow-ups and live history, for fresh or compacted execution. */
+  progressNotesRecoveryInstruction?: string;
+  /** Runner-local capture of each provider attempt, including suppressed compaction results, and the recovery input rebuilt from it. */
+  progressNotesRecorder?: import('../infra/progress-notes/session.js').ProgressNotesRecorder;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   /**
@@ -80,6 +88,7 @@ export interface RunAgentOptions {
   mcpServerIdentity?: string;
   maxTurns?: number;
   permissionMode?: PermissionMode;
+  edit?: boolean;
   permissionResolution?: {
     stepName: string;
     requiredPermissionMode?: PermissionMode;
@@ -99,6 +108,8 @@ export interface RunAgentOptions {
   language?: Language;
   workflowMeta?: WorkflowMeta;
   outputSchema?: Record<string, unknown>;
+  /** Full policy/knowledge sources the assembled step instructs the agent to read. */
+  requiredReferenceContents?: readonly string[];
   failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
   onPromptResolved?: (promptParts: {

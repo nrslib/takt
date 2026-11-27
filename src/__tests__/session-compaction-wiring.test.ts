@@ -129,6 +129,7 @@ function makeParallelDeps(
 ): ParallelRunnerDeps {
   return {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd,
         projectCwd: cwd,
@@ -178,6 +179,7 @@ function makeNormalDeps(
 ): StepExecutorDeps {
   return {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd,
         projectCwd: cwd,
@@ -201,8 +203,9 @@ function makeNormalDeps(
     getWorkflowSteps: () => [{ name: 'review' }],
     getWorkflowName: () => 'test-workflow',
     getTask: () => 'task',
-    getWorkflowDescription: () => undefined,
     getWorkflowRules: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
@@ -603,7 +606,7 @@ describe('session compaction Phase 1 wiring', () => {
     expect(state.personaSessions.get(sessionKey)).toBe('session-1');
   });
 
-  it('Given parallel Phase 1 starts without a resumed session When empty continuation hits a provider error Then it retries the original instruction fresh once', async () => {
+  it('Given parallel Phase 1 starts without a resumed session When empty continuation hits a provider error Then it repeats the continuation in the same session', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
     const deps = makeParallelDeps(cwd);
@@ -632,7 +635,7 @@ describe('session compaction Phase 1 wiring', () => {
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId))
-      .toEqual([undefined, 'session-fresh', undefined]);
+      .toEqual([undefined, 'session-fresh', 'session-fresh']);
     expect(state.stepOutputs.get('api-review')).toMatchObject({
       status: 'error',
       error: 'provider failed',
@@ -659,7 +662,7 @@ describe('session compaction Phase 1 wiring', () => {
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId)).toEqual(['session-1', undefined]);
   });
 
-  it('Given normal Phase 1 stays empty When recovery runs Then it continues once and restarts fresh with truthful phase records', async () => {
+  it('Given normal Phase 1 stays empty When recovery runs Then it repeats the same session with truthful phase records', async () => {
     const step = makeCompactStep();
     const state = makeState();
     const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
@@ -673,7 +676,7 @@ describe('session compaction Phase 1 wiring', () => {
     const recordSynthesizedAgentUsage = vi.fn();
     queueAgentResponse(makeDoneResponse({ content: '  ', sessionId: 'session-1' }));
     queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-1' }));
-    queueAgentResponse(makeDoneResponse({ content: 'approved fresh', sessionId: 'session-fresh' }));
+    queueAgentResponse(makeDoneResponse({ content: 'approved after continuation', sessionId: 'session-1' }));
 
     const result = await new StepExecutor(makeNormalDeps(cwd, runPaths, {
       onPhaseStart,
@@ -686,7 +689,7 @@ describe('session compaction Phase 1 wiring', () => {
     expect(calls.map(([, , options]) => options.sessionId)).toEqual([
       'session-1',
       'session-1',
-      undefined,
+      'session-1',
     ]);
     expect(calls[2]![1]).toBe(calls[0]![1]);
     expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
@@ -701,12 +704,12 @@ describe('session compaction Phase 1 wiring', () => {
     ]);
     expect(recordSynthesizedAgentUsage).toHaveBeenCalledTimes(2);
     expect(recordSynthesizedAgentUsage.mock.calls.map((call) => call[2])).toEqual([true, true]);
-    expect(updatePersonaSession).toHaveBeenCalledWith(sessionKey, undefined);
-    expect(state.personaSessions.get(sessionKey)).toBe('session-fresh');
-    expect(result.response.content).toBe('approved fresh');
+    expect(updatePersonaSession).toHaveBeenCalledWith(sessionKey, 'session-1');
+    expect(state.personaSessions.get(sessionKey)).toBe('session-1');
+    expect(result.response.content).toBe('approved after continuation');
   });
 
-  it('Given parallel Phase 1 stays empty When recovery runs Then it uses the same continuation and fresh-session contract', async () => {
+  it('Given parallel Phase 1 stays empty When recovery runs Then it repeats the same continuation session', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({
       name: 'reviewers',
@@ -725,7 +728,7 @@ describe('session compaction Phase 1 wiring', () => {
     const delegatedUsage = vi.fn();
     queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-1' }));
     queueAgentResponse(makeDoneResponse({ content: ' \n', sessionId: 'session-1' }));
-    queueAgentResponse(makeDoneResponse({ content: 'approved fresh', sessionId: 'session-fresh' }));
+    queueAgentResponse(makeDoneResponse({ content: 'approved after continuation', sessionId: 'session-1' }));
 
     const result = await new ParallelRunner(makeParallelDeps(cwd, {
       onPhaseStart,
@@ -741,7 +744,7 @@ describe('session compaction Phase 1 wiring', () => {
     expect(calls.map(([, , options]) => options.sessionId)).toEqual([
       'session-1',
       'session-1',
-      undefined,
+      'session-1',
     ]);
     expect(calls[2]![1]).toBe(calls[0]![1]);
     expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
@@ -756,8 +759,8 @@ describe('session compaction Phase 1 wiring', () => {
     ]);
     expect(delegatedUsage).toHaveBeenCalledTimes(3);
     expect(delegatedUsage.mock.calls.map((call) => call[1].success)).toEqual([true, true, true]);
-    expect(state.personaSessions.get(sessionKey)).toBe('session-fresh');
-    expect(state.stepOutputs.get('api-review')?.content).toBe('approved fresh');
+    expect(state.personaSessions.get(sessionKey)).toBe('session-1');
+    expect(state.stepOutputs.get('api-review')?.content).toBe('approved after continuation');
     expect(result.response.status).toBe('done');
   });
 
@@ -819,7 +822,7 @@ describe('session compaction Phase 1 wiring', () => {
     expect(result.response.status).toBe('error');
   });
 
-  it('Given all normal empty recoveries fail When Phase 1 stops Then it discards the final fresh session', async () => {
+  it('Given all normal empty recoveries fail When Phase 1 stops Then it discards the final continuation session', async () => {
     const step = makeCompactStep();
     const state = makeState();
     const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
@@ -830,7 +833,7 @@ describe('session compaction Phase 1 wiring', () => {
     });
     queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-1' }));
     queueAgentResponse(makeDoneResponse({ content: ' ', sessionId: 'session-1' }));
-    queueAgentResponse(makeDoneResponse({ content: '\n', sessionId: 'session-final-empty' }));
+    queueAgentResponse(makeDoneResponse({ content: '\n', sessionId: 'session-1' }));
     const onPhaseComplete = vi.fn();
 
     const result = await new StepExecutor(

@@ -1,7 +1,17 @@
+import { isQuietMode } from '../../../shared/context.js';
+import { registerManagerImageRun } from '../managerImageAttachments.js';
+import { cacciaEffect } from '../../caccia/system-effect.js';
+import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
+import { hasCacciaEffect } from '../../../core/workflow/workflow-step-traversal.js';
+import { getAllParallelSubSteps } from '../../../core/models/index.js';
+import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
+import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
+import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
+import { resolveTaskRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
 import { getLabel } from '../../../shared/i18n/index.js';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
 import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
@@ -51,6 +61,7 @@ import {
 import {
   RunCleanupError,
   RunLiveDeliveryError,
+  RunProjectionError,
   type RunFinalizationIssue,
   type WorkflowRunExecutionControl,
   type WorkflowRunExecutionHandle,
@@ -69,6 +80,8 @@ import {
   reportWorkflowFailure,
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { stageGoalSpecificationsForExecution } from './goalSpecificationContext.js';
+import { persistDeliveredLiveInstructions } from './liveInterventionPersistence.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
 import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
 import {
@@ -82,6 +95,7 @@ import { LiveInterventionFileStore } from '../../../infra/workflow/live-interven
 import { createOutputFns } from './outputFns.js';
 import { validateWorkflowReportReferences } from '../../../core/workflow/instruction/report-reference-validation.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { closeOpenCodeServersForExternalDirectories } from '../../../infra/opencode/server-pool.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -218,17 +232,20 @@ async function executeWorkflowInternal(
   const executionOptions = prContext === undefined
     ? options
     : { ...options, prContext };
+  const prExecution = options.cacciaExecutionSource === undefined
+    ? { prExecutionContext: options.prExecutionContext, prGitOperations: options.prGitOperations }
+    : await resolveTaskPrExecutionContext({ ...options, cwd, prContext, gitProvider: runContext?.gitProvider });
   const parentRunPid = process.pid;
-  const liveWorkflowCallResolver = createWorkflowCallResolver(
-    createWorkflowExecutionContext(
-      workflowConfig,
-      options.projectCwd,
-      options.workflowResourceRoot,
-    ),
-  );
-  const preparedBundle = prepareWorkflowExecutionBundle({
+  const preparedBundle = options.preparedWorkflowBundle ?? prepareWorkflowExecutionBundle({
     rootWorkflow: workflowConfig,
-    workflowCallResolver: liveWorkflowCallResolver,
+    workflowCallResolver: createWorkflowCallResolver(
+      createWorkflowExecutionContext(
+        workflowConfig,
+        options.projectCwd,
+        options.workflowResourceRoot,
+        options.workflowSystemCommandsPolicy,
+      ),
+    ),
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
     centralExecution: options.runPathsDirectory !== undefined,
@@ -262,6 +279,7 @@ async function executeWorkflowInternal(
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
+  let goalSpecificationPaths: string[];
   let executionBundle: ReturnType<typeof loadWorkflowExecutionBundle>;
   let runtimeReportDiagnostics: ReturnType<typeof validateWorkflowReportReferences>;
   const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
@@ -284,8 +302,10 @@ async function executeWorkflowInternal(
       throw new Error(errors.map(({ message }) => message).join('\n'));
     }
     if (options.taskSpec !== undefined) {
+      await registerManagerImageRun(options.taskSpec.sourceTaskDir, activeRun.runPaths);
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
+    goalSpecificationPaths = stageGoalSpecificationsForExecution(options.projectCwd, options.goalId, activeRun.runPaths);
     bootstrap = await createWorkflowExecutionBootstrap(
       bundledWorkflowConfig,
       task,
@@ -306,10 +326,8 @@ async function executeWorkflowInternal(
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
-      ...(options.sessionStorageDirectory === undefined
-        ? {}
-        : { sessionStorageDirectory: options.sessionStorageDirectory }),
       primaryError: bootstrapError,
+      onPreparationFailure: (message: string) => bootstrapFailureOut.error(sanitizeTerminalText(message)),
       resumeLineage,
       loopAnalysisScheduler: options.loopAnalysisScheduler,
       ...(liveIntervention === undefined ? {} : { liveIntervention }),
@@ -319,12 +337,10 @@ async function executeWorkflowInternal(
     });
   }
   const workflowCallResolver = executionBundle.workflowCallResolver;
+  const startedWorkflows = new Set<WorkflowConfig>([executionBundle.rootWorkflow]);
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
-    ...(options.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: options.sessionStorageDirectory }),
     task,
     workflowName: bootstrap.effectiveWorkflowConfig.name,
     sessionLog: bootstrap.sessionLog,
@@ -341,12 +357,22 @@ async function executeWorkflowInternal(
   const terminalPayloads = createWorkflowTerminalPayloadFactory(
     terminalPublicationContext,
   );
-  const liveIntervention = cwd === options.projectCwd
+  const liveIntervention: LiveInterventionFileStore | undefined = cwd === options.projectCwd
     ? undefined
-    : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug);
+    : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug, (instructions) => {
+      persistDeliveredLiveInstructions(options.projectCwd, cwd, options.taskSpec, activeRun.runPaths, instructions);
+      if (options.onLiveInterventionDelivery !== undefined) {
+        const context = liveIntervention!.read().lastDelivery;
+        if (context === undefined) throw new Error('Live intervention delivery has no saved context');
+        options.onLiveInterventionDelivery(instructions.map((instruction) => instruction.instructionId), context);
+      }
+    });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
+  let openCodeExternalDirectories: readonly string[] | undefined;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
+  let cacciaFailure: { step: string; reason: string } | undefined;
+  let activeStep: WorkflowStep;
   let runExecution: Pick<WorkflowRunExecutionHandle, 'run'> | undefined;
   let runExecutionControl: WorkflowRunExecutionControl | undefined;
   let abortHandler: AbortHandler | undefined;
@@ -420,16 +446,22 @@ async function executeWorkflowInternal(
       runExecutionControl = executionControl;
       abortHandler = new AbortHandler({
         externalSignal: options.abortSignal,
+        handleSigint: options.handleSigint,
         internalController: executionControl,
         getEngine: () => engine,
       });
-      const childProcessEnv = resolveNestedChildProcessEnv(
-        bootstrap.observability,
-        buildChildProcessEnv(),
-      );
+      const ambientEnv = buildChildProcessEnv();
+      const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, ambientEnv);
+      // Resolved for the run; each workflow's `repository_identity` decides whether it is passed on.
+      const repositoryIdentityEnv = resolveTaskRepositoryIdentityEnv(cwd, options.projectCwd, ambientEnv);
+      const gitSafety = prExecution.prExecutionContext
+        ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
+        : {};
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
         onStream: handleProviderStream,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        streamQuiet: isQuietMode(),
         onProviderStream: (context, event) => {
           bootstrap.providerEventLogger.logEvent(context, event);
         },
@@ -450,6 +482,7 @@ async function executeWorkflowInternal(
         onAskUserQuestion: options.onAskUserQuestion ?? createDenyAskUserQuestionHandler(),
         ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
         projectCwd: options.projectCwd,
+        goalSpecificationPaths,
         ...(liveIntervention === undefined ? {} : {
           liveIntervention,
           onLiveInterventionWarning: (count: number) => {
@@ -460,6 +493,7 @@ async function executeWorkflowInternal(
         observabilityRunId: bootstrap.runSlug,
         sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
         childProcessEnv,
+        repositoryIdentityEnv,
         language: options.language,
         provider: bootstrap.currentProvider,
         providerSource: bootstrap.currentProviderSource,
@@ -503,6 +537,7 @@ async function executeWorkflowInternal(
         resumePoint: options.resumePoint,
         restartPoint: options.restartPoint,
         resumeSource: artifactResumeSource,
+        sourceResumePoint: options.sourceResumePoint,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
         ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
@@ -512,16 +547,74 @@ async function executeWorkflowInternal(
         currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
         traceTaskMetadata: options.traceTaskMetadata,
         prContext,
+        prExecutionContext: prExecution.prExecutionContext,
+        mergeMethod: options.mergeMethod,
+        prGitOperations: prExecution.prGitOperations,
         phase1ProcessSafetyByStep,
-        systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
-          ...serviceOptions,
-          ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
-        }),
+        systemStepServicesFactory: (serviceOptions) => {
+          const stepName = activeStep.name;
+          return createDefaultSystemStepServices({
+            ...serviceOptions,
+            runPaths: bootstrap.runPaths,
+            ...gitSafety,
+            ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
+              execute: async (prNumber) => {
+                const result = await cacciaEffect({
+                  ...serviceOptions, ...gitSafety, prContext,
+                  prMergePushRecorder: options.prMergePushRecorder,
+                  gitProvider: runContext?.gitProvider,
+                  outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+                  eventSink: options.eventSink,
+                  taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
+                }, prNumber);
+                cacciaFailure = result.failed === true && typeof result.error === 'string'
+                  ? { step: stepName, reason: result.error } : undefined;
+                return result;
+              },
+            } }),
+            ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
+          });
+        },
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
       });
+      openCodeExternalDirectories = engine.openCodeExternalDirectories;
+
+      engine.on('step:start', (startedStep: WorkflowStep, _iteration, _instruction, _provider, _workflowName,
+        _resumeStepName, _stepIteration, stack) => {
+        activeStep = startedStep;
+        if (cacciaFailure !== undefined) {
+          const reference = `${cacciaFailure.step}.caccia.error`;
+          const reportsFailure = startedStep.effects?.some((effect) => effect.type === 'comment_pr'
+            && [...effect.body.matchAll(/\{effect:([^}]+)\}/g)]
+              .some((match) => match[1]!.replaceAll(':', '.') === reference));
+          if (!reportsFailure) cacciaFailure = undefined;
+        }
+        let workflow = executionBundle.rootWorkflow;
+        let steps: readonly WorkflowStep[] = workflow.steps;
+        for (const [index, frame] of stack.entries()) {
+          if (!workflowEntryMatchesWorkflow(frame, workflow)) throw new Error('Started workflow identity does not match its bundle');
+          if (index === stack.length - 1) break;
+          const step = steps.find((candidate) => candidate.name === frame.step);
+          if (step === undefined) throw new Error('Started workflow step is missing from its bundle');
+          if (step.kind === 'workflow_call') {
+            const child = workflowCallResolver({ parentWorkflow: workflow, step, projectCwd: options.projectCwd, lookupCwd: cwd });
+            if (child === null) throw new Error('Started child workflow is missing from its bundle');
+            startedWorkflows.add(child);
+            workflow = child;
+            steps = child.steps;
+          } else if (step.parallel !== undefined) {
+            steps = getAllParallelSubSteps(step.parallel);
+          }
+        }
+      });
+
+      engine.on('step:complete', (_step: WorkflowStep, response: AgentResponse) => {
+        if (response.systemWaitTimeout) cacciaFailure = undefined;
+      });
 
       eventBridge = bindWorkflowExecutionEvents({
+        getCacciaFailureReason: () => cacciaFailure?.reason,
         runtimeReportDiagnostics,
         engine,
         workflowConfig: bootstrap.effectiveWorkflowConfig,
@@ -530,6 +623,8 @@ async function executeWorkflowInternal(
         out: bootstrap.out,
         prefixWriter: bootstrap.prefixWriter,
         displayRef: bootstrap.displayRef,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        flushStream: bootstrap.flushStream,
         handlerRef: bootstrap.handlerRef,
         usageEventLogger: bootstrap.usageEventLogger,
         analyticsEmitter: bootstrap.analyticsEmitter,
@@ -554,8 +649,11 @@ async function executeWorkflowInternal(
       const finalState = await engine.run();
       await eventBridge.flushEventSink();
       executionResult = {
+        interrupted: eventBridge.getStagedAbort()?.status === 'aborted',
         success: finalState.status === 'completed',
+        workflowHasCaccia: [...startedWorkflows].some((workflow) => hasCacciaEffect(workflow.steps)),
         reason: eventBridge.state.failure?.error ?? eventBridge.state.abortReason,
+        ...(eventBridge.state.abortKind === undefined ? {} : { abortKind: eventBridge.state.abortKind }),
         lastStep: eventBridge.state.failure?.step ?? eventBridge.state.lastStepName,
         lastMessage: eventBridge.state.lastStepContent,
         runDirectory: bootstrap.runPaths.runRootAbs,
@@ -610,6 +708,7 @@ async function executeWorkflowInternal(
       }
     }
   } finally {
+    captureError(terminalizationErrors, () => bootstrap.providerEventLogger.flush());
     let committedPublication: WorkflowTerminalPublicationPayload | undefined;
     if (runExecution !== undefined || primaryError !== undefined) {
       if (liveIntervention !== undefined && !liveInterventionTerminalizationOwned) {
@@ -669,8 +768,15 @@ async function executeWorkflowInternal(
       finalizationIssues.push(...eventBridge.getFinalizationIssues());
     }
     captureError(cleanupErrors, () => bootstrap.warnIfAutoStrategyUnused());
+    captureError(cleanupErrors, () => bootstrap.flushStream());
     captureError(cleanupErrors, () => bootstrap.prefixWriter?.flush());
     captureError(cleanupErrors, () => abortHandler?.cleanup());
+    const externalDirectories = openCodeExternalDirectories;
+    if (externalDirectories !== undefined) {
+      await captureAsyncError(cleanupErrors, async () => {
+        await closeOpenCodeServersForExternalDirectories(externalDirectories);
+      });
+    }
     await captureAsyncError(
       cleanupErrors,
       () => bootstrap.observabilityHandle.shutdown(),
@@ -722,17 +828,17 @@ function resolveAvailableSourceLineage(
 }
 
 async function terminalizeBootstrapFailure(input: {
+  onPreparationFailure: (message: string) => void;
   readonly activeRun: WorkflowRunHandle;
   readonly workflowConfig: WorkflowConfig;
   readonly task: string;
   readonly projectCwd: string;
-  readonly sessionStorageDirectory?: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
   readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
   readonly liveIntervention?: LiveInterventionFileStore;
   readonly onLiveInterventionWarning?: (count: number) => void;
-}): Promise<never> {
+}): Promise<WorkflowExecutionResult> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
   const publishedResumeSource = input.resumeLineage?.publishedResumeSource;
@@ -783,9 +889,6 @@ async function terminalizeBootstrapFailure(input: {
   const terminalPayloads = createWorkflowTerminalPayloadFactory({
     runSlug: input.activeRun.runSlug,
     projectCwd: input.projectCwd,
-    ...(input.sessionStorageDirectory === undefined
-      ? {}
-      : { sessionStorageDirectory: input.sessionStorageDirectory }),
     task: input.task,
     workflowName: input.workflowConfig.name,
     sessionLog,
@@ -797,8 +900,6 @@ async function terminalizeBootstrapFailure(input: {
     status: 'failed',
     iterations: 0,
     reason,
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
   if (input.liveIntervention !== undefined) {
@@ -828,6 +929,11 @@ async function terminalizeBootstrapFailure(input: {
     );
   } catch (error) {
     finalizationErrors.push(error);
+  }
+  if (input.primaryError instanceof ManagedProviderInstallRequiredError && finalizationErrors.length === 0) {
+    const reason = getErrorMessage(input.primaryError);
+    input.onPreparationFailure(reason);
+    return { success: false, reason };
   }
   throwCombinedErrors(input.primaryError, finalizationErrors);
   throw input.primaryError;
@@ -863,8 +969,6 @@ function resolveTerminalPublication(
     status: 'failed',
     iterations: 0,
     reason: getErrorMessage(primaryError),
-    lastStepContent: undefined,
-    lastStepName: undefined,
     endTime: new Date().toISOString(),
   });
 }
@@ -893,6 +997,24 @@ async function publishTerminalLiveFeedback(input: {
   readonly shouldNotifyWorkflowAbort: boolean;
   readonly issues: RunFinalizationIssue[];
 }): Promise<void> {
+  const traceIssues = input.issues.filter(
+    (issue) => issue instanceof RunProjectionError && issue.stage === 'trace',
+  );
+  for (const issue of traceIssues) {
+    const message = sanitizeTerminalText(
+      `Run result was committed, but trace finalization failed: ${getErrorMessage(issue)}`,
+    );
+    try {
+      input.out.warn(message);
+    } catch (error) {
+      input.issues.push(new RunLiveDeliveryError(error));
+    }
+    try {
+      input.eventBridge.emitTerminalFeedback({ type: 'progress', level: 'warn', message });
+    } catch (error) {
+      input.issues.push(new RunLiveDeliveryError(error));
+    }
+  }
   try {
     if (input.payload.status === 'completed') {
       reportWorkflowCompletion(

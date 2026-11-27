@@ -8,6 +8,18 @@ vi.mock('../app/cli/initialization.js', () => ({
 vi.mock('../app/cli/updateCheck.js', () => ({ runUpdateCheck: vi.fn(async () => undefined) }));
 
 describe('CLI --provider option', () => {
+  it('should accept the update notification opt-out without preventing the requested command', async () => {
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    const action = vi.fn();
+    isolatedProgram.command('notification-test').action(action);
+    isolatedProgram.configureOutput({ writeErr: vi.fn() });
+
+    await isolatedProgram.parseAsync(['node', 'takt', '--no-update-notifier', 'notification-test']);
+
+    expect(action).toHaveBeenCalledOnce();
+    expect(isolatedProgram.opts().updateNotifier).toBe(false);
+  });
   it.each(['claude-sdk', 'claude', 'claude-headless', 'claude-terminal'])('should accept %s as a provider', async (provider) => {
     vi.resetModules();
     const { program: isolatedProgram } = await import('../app/cli/program.js');

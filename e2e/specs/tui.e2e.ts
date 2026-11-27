@@ -18,6 +18,7 @@ import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../he
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 import { startTaktPty, type TaktPtySession } from '../helpers/takt-pty-runner';
+import { REPORT_INTERNAL_NAMESPACE } from '../../src/core/models/reserved-report-names.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,6 +28,7 @@ const CTRL_C = '\x03';
 const ENTER = '\r';
 const ARROW_DOWN = '\x1b[B';
 const ARROW_UP = '\x1b[A';
+const BACKSPACE = '\x7f';
 // CSI-u reports the kitty keyboard protocol turns on.
 const SHIFT_ENTER = '\x1b[13;2u';
 const OPTION_ENTER = '\x1b[13;3u';
@@ -50,11 +52,7 @@ const PROMPT_PLACEHOLDERS = [PLACEHOLDER, PLACEHOLDER_JA] as const;
 const SPINNER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const ESC = '\x1b';
 const INTERRUPTED = 'Response interrupted.';
-/**
- * What the finished run recorded about itself, which the session prints when it
- * takes over again (the same banner the readline flow greets a session with).
- */
-const RUN_FINISHED_NOTICE = 'Previous task completed successfully';
+const RUN_FINISHED_NOTICE = 'Workflow execution finished successfully.';
 const WORKFLOW_MAKER_WAIT_EN = 'Please wait until the workflow completes…';
 const WORKFLOW_MAKER_WAIT_JA = 'ワークフロー完了までお待ちください…';
 
@@ -122,6 +120,7 @@ describe('E2E: Ink TUI', () => {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
       const entryPath = join(root, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === REPORT_INTERNAL_NAMESPACE) continue;
         const nested = findFile(entryPath, filename);
         if (nested !== undefined) return nested;
       } else if (entry.name === filename) {
@@ -242,17 +241,24 @@ describe('E2E: Ink TUI', () => {
   }
 
   /**
-   * Match only inside the prompt box (the last `╭` frame). Submitted lines stay
-   * in the transcript with the same `❯ ` prefix, so a repeated command such as
-   * /go would otherwise match an earlier entry before the new draft is drawn.
+   * Match only inside the last live input frame, ending at its bottom border.
+   * Conversation inputs start their window on the caret row, below the top
+   * border. Neither they nor exec prompts may match a submitted transcript line.
    */
   function hasCurrentPromptLine(screen: string, expected: string): boolean {
     const lines = screen.split('\n');
-    const promptTop = lines.findLastIndex((line) => line.includes('╭'));
-    if (promptTop < 0) return false;
-    const promptBottom = lines.findIndex((line, index) => index > promptTop && line.includes('╰'));
-    const promptLines = lines.slice(promptTop + 1, promptBottom < 0 ? undefined : promptBottom);
+    const promptBottom = lines.findLastIndex((line) => line.startsWith('╰'));
+    if (promptBottom < 0) return false;
+    const promptStart = lines.findLastIndex((line, index) => index < promptBottom && line.startsWith('│ ❯ '));
+    if (promptStart < 0) return false;
+    const promptLines = lines.slice(promptStart, promptBottom);
     return hasExactVisibleLine(promptLines.join('\n'), expected);
+  }
+
+  function hasCompletePromptFrame(screen: string, columns: number): boolean {
+    const lines = screen.split('\n');
+    return lines.some((line) => line.startsWith('╭') && line.endsWith('╮') && line.length === columns)
+      && lines.some((line) => line.startsWith('╰') && line.endsWith('╯') && line.length === columns);
   }
 
   function selectableRows(screen: string): string[] {
@@ -267,18 +273,16 @@ describe('E2E: Ink TUI', () => {
   }
 
   /**
-   * The status row is always two rows above the prompt border: the notice row
-   * is between them. Looking at that row avoids mistaking the word "Thinking"
-   * in an assistant reply for the live spinner.
+   * The spinner is below the current input's bottom border (and completions).
+   * Scoping to those rows excludes similarly worded committed assistant replies.
    */
   function hasBusyStatus(screen: string): boolean {
     const lines = screen.split('\n');
-    const promptTop = lines.findLastIndex((line) => line.includes('╭'));
-    const statusLine = promptTop >= 2 ? lines[promptTop - 2] : undefined;
-    const firstCharacter = statusLine?.trimStart().charAt(0);
-    return firstCharacter !== undefined
-      && firstCharacter !== ''
-      && SPINNER_FRAMES.includes(firstCharacter);
+    const promptBottom = lines.findLastIndex((line) => line.startsWith('╰'));
+    return promptBottom >= 0 && lines.slice(promptBottom + 1).some((line) => {
+      const firstCharacter = line.trimStart().charAt(0);
+      return firstCharacter !== '' && SPINNER_FRAMES.includes(firstCharacter);
+    });
   }
 
   /**
@@ -345,6 +349,24 @@ describe('E2E: Ink TUI', () => {
     );
   }
 
+  /**
+   * Resolve once the Ink conversation prompt owns the keyboard.
+   *
+   * Ink draws the prompt, hint included, before its input hook turns raw mode
+   * on. Text sent as soon as the hint appears can still be echoed by the
+   * terminal, and an echo wider than the screen wraps past the box and stays
+   * after Ink redraws. One probe key cannot wrap, and the terminal holds it
+   * until raw mode is on, so a probe drawn as the whole draft says Ink is
+   * reading keys.
+   */
+  async function waitForConversationInput(tui: TaktPtySession): Promise<void> {
+    await tui.waitForOutput(TUI_HINT);
+    tui.write('x');
+    await tui.waitForScreen('the probe key drawn as the draft', (screen) => hasCurrentPromptLine(screen, '❯ x'));
+    tui.write(BACKSPACE);
+    await tui.waitForScreen('the empty prompt after the probe key', (screen) => screen.includes(PLACEHOLDER));
+  }
+
   /** Accept the highlighted row of a select list. */
   async function chooseHighlighted(tui: TaktPtySession, prompt: string): Promise<void> {
     await waitForSelector(tui, prompt);
@@ -381,7 +403,8 @@ describe('E2E: Ink TUI', () => {
     // The conversation itself is the Ink one.
     await tui.waitForOutput(TUI_HINT);
     const screen = await tui.visibleScreen();
-    expect(screen.join('\n')).toContain('╭');
+    expect(screen.join('\n')).toContain('│ ❯ ');
+    expect(screen.join('\n')).toContain('╰');
 
     tui.write(CTRL_C);
     await expect(tui.waitForExit()).resolves.toBe(0);
@@ -1308,21 +1331,39 @@ steps:
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
     await submitLine(tui, '/go', 'TUI-ASSISTANT-REPLY-OK');
-    await chooseHighlighted(tui, ACTION_PROMPT);
+    await waitForSelector(tui, ACTION_PROMPT);
+    const actionScreen = (await tui.visibleScreen()).join('\n');
+    expect(selectableRows(actionScreen.slice(actionScreen.lastIndexOf(ACTION_PROMPT))))
+      .toEqual(['Save as Task', 'Create Issue', 'Execute here now', 'Continue editing', 'Cancel']);
+    tui.write(ARROW_DOWN.repeat(2));
+    await tui.waitForOutput('❯ Execute here now');
+    tui.write(ENTER);
+    await tui.waitForOutput('[y/N]:');
+    tui.write('y\r');
     await tui.waitForOutput('TUI-WORKFLOW-STEP-DONE', 180_000);
 
-    // The run is over and the conversation is back, with what it did on record.
+    // The run is over and the conversation resumes with the operation notice.
     await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
-    const screen = (await tui.visibleScreen()).join('\n');
+    // The notice reaches the byte history before Ink repaints the input box,
+    // so the box is awaited on the live screen instead of sampled once. The
+    // border alone is also drawn while the run is busy (the spinner sits
+    // below it), so the wait also requires the busy status to be gone and
+    // the idle placeholder to be back.
+    const screen = await tui.waitForScreen(
+      'the input box redrawn after the run finished',
+      (current) => current.includes('╰') && !hasBusyStatus(current) && current.includes('Type a task'),
+      60_000,
+    );
     expect(screen).toContain('╰');
     // The earlier turn stays in the scrollback exactly once.
     const transcript = (await tui.visibleTranscript()).join('\n');
     expect((transcript.match(/create noop\.txt/g) ?? []).length).toBe(1);
+    expect(transcript).toContain(RUN_FINISHED_NOTICE);
 
     // Only leaving ends the process.
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit(60_000)).resolves.toBe(0);
-  }, 240_000);
+  }, 480_000);
 
   it('should close Ink for the action selector and reopen it to continue editing', async () => {
     const tui = start('tui-go-handoff.json', ['--workflow', WORKFLOW_PATH]);
@@ -1338,9 +1379,8 @@ steps:
     const duringSelector = await tui.visibleScreen();
     expect(duringSelector.join('\n')).not.toContain('╰');
 
-    // Rows: Execute now, Save as Task, Continue editing, Create Issue, Cancel.
-    tui.write(ARROW_DOWN);
-    tui.write(ARROW_DOWN);
+    // Rows: Save as Task, Create Issue, Execute here now, Continue editing, Cancel.
+    tui.write(ARROW_DOWN.repeat(3));
     await tui.waitForOutput('❯ Continue editing');
     tui.write(ENTER);
     await tui.waitForOutput('Okay, continue describing your task.');
@@ -1356,6 +1396,216 @@ steps:
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 240_000);
+
+  it('should preserve native scrollback across resizes and /go handoffs without duplicate live prompts', async () => {
+    const archive = Array.from({ length: 70 }, (_, index) => `resize-archive-${index.toString().padStart(2, '0')}`);
+    const scenario = join(testRepo.path, 'resize-history.json');
+    writeFileSync(scenario, JSON.stringify([
+      { persona: 'interactive', status: 'done', content: archive.join('\n') },
+      { persona: 'interactive', status: 'done', content: 'Create a file called noop.txt' },
+      { persona: 'interactive', status: 'done', content: 'never completed', wait_for_abort: true },
+    ]));
+    const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH], {
+      TAKT_MOCK_SCENARIO: scenario,
+    });
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await submitLine(tui, 'retain this history');
+    await waitForPromptReady(tui, archive.at(-1));
+    expect((await tui.visibleScreen()).join('\n')).not.toContain(archive[0]);
+
+    /** Checks offscreen history and ensures only the current input/status frame remains. */
+    const assertHistoryAndLiveFrame = async (thinking: boolean): Promise<void> => {
+      const transcript = (await tui.visibleTranscript()).join('\n');
+      for (const entry of archive) {
+        expect(transcript.split(entry).length - 1, transcript).toBe(1);
+      }
+      expect(transcript.split('│ ❯ ').length - 1, transcript).toBe(1);
+      expect(transcript.split('╭').length - 1, transcript).toBe(1);
+      expect(transcript.split('╰').length - 1, transcript).toBe(1);
+      expect(transcript.split(THINKING_MARKER).length - 1, transcript).toBe(thinking ? 1 : 0);
+    };
+    /** Waits for one complete input box at the requested width after the resize debounce. */
+    const waitForResizedFrame = async (columns: number): Promise<void> => {
+      await tui.waitForScreen(`one prompt at width ${columns}`, (screen) => {
+        const lines = screen.split('\n');
+        return lines.filter((line) => line.startsWith('│ ❯ ')).length === 1
+          && lines.filter((line) => line.startsWith('╭')).length === 1
+          && hasCompletePromptFrame(screen, columns);
+      });
+    };
+    for (const columns of [80, 50, 32, 80]) {
+      await tui.resize(columns, 50);
+      await waitForResizedFrame(columns);
+      await assertHistoryAndLiveFrame(false);
+    }
+
+    await submitLine(tui, '/go', archive.at(-1));
+    await waitForSelector(tui, ACTION_PROMPT);
+    await tui.resize(64, 50);
+    tui.write(ARROW_DOWN.repeat(3));
+    await tui.waitForOutput('❯ Continue editing');
+    tui.write(ENTER);
+    await tui.waitForOutput('Okay, continue describing your task.');
+    await waitForPromptReady(tui);
+    await waitForResizedFrame(64);
+    await assertHistoryAndLiveFrame(false);
+
+    await submitLine(tui, 'keep answering');
+    // Raw output still contains /go's old spinner. Wait for this Enter to
+    // clear the live draft and start the current answer before typing again.
+    await tui.waitForScreen('the empty prompt while keep answering is in flight', (screen) => (
+      hasBusyStatus(screen)
+      && PROMPT_PLACEHOLDERS.some((placeholder) => hasCurrentPromptLine(screen, `❯  ${placeholder}`))
+    ), 10_000);
+    const draft = '/go not submitted';
+    tui.write(draft);
+    await tui.waitForScreen('unsent /go draft while busy', (screen) => hasBusyStatus(screen) && hasCurrentPromptLine(screen, `❯ ${draft}`));
+    const burstOffset = tui.output().length;
+    for (const columns of [32, 100, 48, 64]) {
+      await tui.resize(columns, 50);
+    }
+    // A fresh edit also proves that we are reading the final frame, not a stale
+    // screen with the same width from before this burst.
+    tui.write('!');
+    await waitForNewOutput(tui, burstOffset, `${draft}!`);
+    await waitForResizedFrame(64);
+    await assertHistoryAndLiveFrame(true);
+    expect((await tui.visibleScreen()).join('\n')).toContain(`${draft}!`);
+
+    tui.write(CTRL_C);
+    await expect(tui.waitForExit()).resolves.toBe(0);
+    const transcript = (await tui.visibleTranscript()).join('\n');
+    for (const entry of archive) {
+      expect(transcript.split(entry).length - 1, transcript).toBe(1);
+    }
+  }, 180_000);
+
+  it('should reflow previously committed user and AI paragraphs when widening without losing scrollback', async () => {
+    const userParagraph = 'USER-PARAGRAPH alpha beta gamma delta epsilon zeta eta theta iota kappa lambda';
+    const replyParagraph = 'AI-PARAGRAPH alpha beta gamma delta epsilon zeta eta theta iota kappa lambda';
+    const scenario = join(testRepo.path, 'paragraph-reflow.json');
+    writeFileSync(scenario, JSON.stringify([{
+      persona: 'interactive', status: 'done',
+      content: `${Array.from({ length: 70 }, (_, index) => `saved-history-${index.toString().padStart(2, '0')}`).join('\n')}\n${replyParagraph}`,
+    }]));
+    const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH], { TAKT_MOCK_SCENARIO: scenario });
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await waitForPromptReady(tui);
+    const narrowOutputOffset = tui.output().length;
+    await tui.resize(32, 50);
+    await waitForNewOutput(tui, narrowOutputOffset, '╭');
+    await tui.waitForScreen('the narrow input box', (screen) => hasCompletePromptFrame(screen, 32));
+    tui.write(userParagraph);
+    await tui.waitForScreen('the draft caret row', (screen) => screen.split('\n').some((line) => line.startsWith('│ ❯ ') && line.includes(userParagraph.slice(-3))));
+    // Home exposes the following wrapped rows; folded rows remain in the buffer.
+    tui.write('\x01');
+    await tui.waitForScreen('the wrapped draft', (screen) => compactScreen(screen.split('\n')).includes(userParagraph.replace(/\s/g, '')));
+    tui.write(ENTER);
+    await tui.waitForScreen('the completed narrow reply', (screen) => !hasBusyStatus(screen) && screen.includes('Type a task') && compactScreen(screen.split('\n')).includes(replyParagraph.replace(/\s/g, '')));
+    expect((await tui.visibleScreen()).join('\n')).not.toContain('saved-history-00');
+    for (const columns of [120, 32, 120]) {
+      const outputOffset = tui.output().length;
+      await tui.resize(columns, 50);
+      await waitForNewOutput(tui, outputOffset, '╭');
+      await tui.waitForScreen(`the input box at width ${columns}`, (screen) => hasCompletePromptFrame(screen, columns));
+      const transcript = (await tui.visibleTranscript()).join('\n');
+      expect(transcript).toContain('saved-history-00');
+      expect(transcript.includes(userParagraph), transcript).toBe(columns === 120);
+      expect(transcript.includes(replyParagraph), transcript).toBe(columns === 120);
+      expect(transcript.replace(/\s/g, '').split(userParagraph.replace(/\s/g, '')).length - 1).toBe(1);
+      expect(transcript.replace(/\s/g, '').split(replyParagraph.replace(/\s/g, '')).length - 1).toBe(1);
+      expect(transcript.split('│ ❯ ').length - 1, transcript).toBe(1);
+      expect(transcript.split('╰').length - 1, transcript).toBe(1);
+    }
+    await submitLine(tui, '/cancel');
+    await expect(tui.waitForExit()).resolves.toBe(0);
+  }, 180_000);
+
+  it('should not archive input boxes or Thinking when height shrinks around a multiline draft', async () => {
+    const scenario = join(testRepo.path, 'height-resize.json');
+    const archive = Array.from({ length: 70 }, (_, index) => `height-history-${index.toString().padStart(2, '0')}`);
+    writeFileSync(scenario, JSON.stringify([
+      { persona: 'interactive', status: 'done', content: archive.join('\n') },
+      { persona: 'interactive', status: 'done', content: 'never completed', wait_for_abort: true },
+    ]));
+    const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH], { TAKT_MOCK_SCENARIO: scenario });
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await submitLine(tui, 'keep the committed history');
+    await waitForPromptReady(tui, archive.at(-1));
+    const draft = 'very long issue body '.repeat(130) + 'UNSENT_END_TOKEN';
+    /** Enters a long unsent draft and waits until its tail is visible. */
+    const typeDraft = async (): Promise<void> => {
+      tui.write(draft);
+      await tui.waitForScreen('the multiline draft', (screen) => compactScreen(screen.split('\n')).includes('UNSENT_END_TOKEN'));
+    };
+    await typeDraft();
+    for (const busy of [false, true]) {
+      if (busy) {
+        tui.write(ENTER);
+        await tui.waitForScreen('the busy reply', (screen) => screen.includes(THINKING_MARKER));
+        await typeDraft();
+      }
+      for (const [columns, rows] of [[200, 8], [200, 50], [32, 14], [80, 50], [80, 6], [200, 50]] as const) {
+        const offset = tui.output().length;
+        await tui.resize(columns, rows);
+        await waitForNewOutput(tui, offset, '╰');
+        await tui.waitForScreen(`the settled ${columns}x${rows} live frame`, (screen) => {
+          const lines = screen.trimEnd().split('\n');
+          const modelShown = lines.at(-1)?.trimStart().startsWith('Model:') === true;
+          return lines.some((line) => line.startsWith('╰') && line.length === columns)
+            && modelShown === (rows >= 8);
+        });
+        const transcript = (await tui.visibleTranscript()).join('\n');
+        expect(transcript.split('│ ❯ ').length - 1, transcript).toBe(1);
+        expect(transcript.split('╭').length - 1, transcript).toBe(1);
+        expect(transcript.split('╰').length - 1, transcript).toBe(1);
+        expect(transcript.split(THINKING_MARKER).length - 1, transcript).toBe(busy ? 1 : 0);
+        for (const entry of archive) {
+          expect(transcript.split(entry).length - 1, transcript).toBe(1);
+        }
+      }
+      expect(compactScreen(await tui.visibleScreen())).toContain('UNSENT_END_TOKEN');
+    }
+    tui.write(CTRL_C);
+    await expect(tui.waitForExit()).resolves.toBe(0);
+    const afterExit = (await tui.visibleTranscript()).join('\n');
+    expect(afterExit).not.toContain('│ ❯ ');
+    expect(afterExit).not.toContain('╰');
+  }, 180_000);
+
+  it('should keep the Japanese IME insertion cursor on the first live row through tiny PTY resizes', async () => {
+    const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH]);
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await waitForPromptReady(tui);
+    tui.write('folded input row');
+    await tui.waitForScreen('the first input row', (screen) => hasCurrentPromptLine(screen, '❯ folded input row'));
+    tui.write(SHIFT_ENTER);
+    await tui.waitForScreen('the folded earlier row', (screen) => screen.includes('↑ 1'));
+    tui.write('やあてすと');
+    await tui.waitForScreen('the Japanese caret row', (screen) => hasCurrentPromptLine(screen, '❯ やあてすと'));
+    for (const [columns, rows] of [[32, 6], [40, 2], [32, 1], [40, 3], [80, 50]] as const) {
+      const offset = tui.output().length;
+      await tui.resize(columns, rows);
+      await waitForNewOutput(tui, offset, 'やあてすと');
+      await tui.waitForScreen('the resized Japanese caret row', (screen) => screen.includes('❯ やあてすと'));
+      const screen = await tui.visibleScreen();
+      const row = screen.findIndex((line) => line.includes('❯ やあてすと'));
+      const caret = await tui.cursorPosition();
+      expect(caret.row).toBe(row);
+      expect(caret.column).toBe(screen[row]!.indexOf('やあてすと') + 10);
+      const transcript = (await tui.visibleTranscript()).join('\n');
+      expect(transcript.split('やあてすと').length - 1, transcript).toBe(1);
+      expect(transcript.split('╭').length - 1, transcript).toBeLessThanOrEqual(1);
+    }
+    // Folding and resizing must not change the original multi-line submission.
+    tui.write(ENTER);
+    await waitForPromptReady(tui, 'TUI-ASSISTANT-REPLY-OK');
+    const submitted = (await tui.visibleTranscript()).join('\n');
+    expect(submitted.split('folded input row').length - 1).toBe(1);
+    expect(submitted.split('やあてすと').length - 1).toBe(1);
+    await submitLine(tui, '/cancel');
+    await expect(tui.waitForExit()).resolves.toBe(0);
+  }, 180_000);
 
   it('should queue what is typed while the assistant answers and send it after', async () => {
     const promptLog = join(testRepo.path, 'mock-prompts.jsonl');
@@ -1386,7 +1636,7 @@ steps:
     // Waiting for the hint proves the lines were queued rather than sent.
     await tui.waitForOutput(QUEUE_HINT);
     const queuedScreen = await tui.visibleScreen();
-    expect(queuedScreen.join('\n'), 'the queued lines should sit above the prompt')
+    expect(queuedScreen.join('\n'), 'the queued lines should sit below the prompt')
       .toContain('queued two');
 
     // Once the answer lands the queue drains on its own.
@@ -1495,7 +1745,8 @@ steps:
     await tui.waitForScreen(
       'the completed reply and redrawn input box',
       (screen) => screen.includes('SLOW-REPLY-END')
-        && screen.includes('╭')
+        && screen.includes('│ ❯ ')
+        && screen.includes('╰')
         && screen.includes(PLACEHOLDER)
         && !screen.includes(THINKING_MARKER),
     );
@@ -1514,18 +1765,20 @@ steps:
     // survive is the input box itself, which is the only bordered thing drawn.
     expect(aboveAssistant.filter((line) => /[╭│╰]/.test(line)), rendered).toEqual([]);
 
-    // Exactly one marked reply, one input box, and the box sits at the bottom.
+    // Exactly one marked reply and one cursor-first input, followed by live status/hints.
     expect(visible.filter((line) => line.includes('●')), rendered).toHaveLength(1);
-    expect(visible.filter((line) => line.includes('╭')), rendered).toHaveLength(1);
-    // Two rows follow the box: the key hints and the session's model.
-    const boxBottom = visible.findIndex((line) => line.includes('╰'));
-    expect(boxBottom, rendered).toBeGreaterThanOrEqual(visible.length - 3);
+    expect(visible.filter((line) => line.startsWith('│ ❯ ')), rendered).toHaveLength(1);
+    expect(visible.filter((line) => line.startsWith('╰')), rendered).toHaveLength(1);
+    const boxBottom = visible.findIndex((line) => line.startsWith('╰'));
+    const hintRow = visible.findIndex((line) => line.includes(TUI_HINT));
+    expect(hintRow, rendered).toBe(boxBottom + 2);
+    expect(visible[hintRow + 1], rendered).toMatch(/^Model:/);
 
     tui.write(CTRL_C);
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 240_000);
 
-  it('should keep the input box pinned to the bottom of the screen', async () => {
+  it('should keep the cursor-first input before its status, hints and model after a reply', async () => {
     const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH]);
 
     await chooseHighlighted(tui, MODE_PROMPT);
@@ -1533,9 +1786,15 @@ steps:
     await submitLine(tui, 'first turn');
     await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
 
+    await waitForPromptReady(tui, 'TUI-ASSISTANT-REPLY-OK');
     const screen = await tui.visibleScreen();
-    const boxBottom = screen.findIndex((line) => line.includes('╰'));
-    expect(boxBottom, screen.join('\n')).toBeGreaterThanOrEqual(screen.length - 3);
+    const promptRow = screen.findIndex((line) => line.startsWith('│ ❯ '));
+    const boxBottom = screen.findIndex((line) => line.startsWith('╰'));
+    const hintRow = screen.findIndex((line) => line.includes(TUI_HINT));
+    expect(screen[promptRow - 1], screen.join('\n')).toMatch(/^╭─+╮$/u);
+    expect(boxBottom, screen.join('\n')).toBe(promptRow + 1);
+    expect(hintRow, screen.join('\n')).toBe(boxBottom + 2);
+    expect(screen[hintRow + 1], screen.join('\n')).toMatch(/^Model:/);
 
     tui.write(CTRL_C);
     await expect(tui.waitForExit()).resolves.toBe(0);
@@ -1558,8 +1817,20 @@ steps:
 
     // None of that submitted, so the assistant has not answered.
     expect(tui.output()).not.toContain('TUI-ASSISTANT-REPLY-OK');
-    const boxRows = (await tui.visibleScreen()).filter((line) => line.includes('│'));
-    expect(boxRows.length, boxRows.join('\n')).toBeGreaterThanOrEqual(3);
+    await tui.waitForScreen('the folded multi-line draft', (screen) => hasCurrentPromptLine(screen, '❯ gamma') && screen.includes('↑ 2'));
+    tui.write(ARROW_UP);
+    await tui.waitForScreen('the second input row', (screen) => hasCurrentPromptLine(screen, '❯ beta'));
+    tui.write(ARROW_UP);
+    await tui.waitForScreen('all input rows below the caret', (screen) => hasCurrentPromptLine(screen, '❯ alpha') && screen.includes('beta') && screen.includes('gamma'));
+    const boxRows = (await tui.visibleScreen()).filter((line) => line.startsWith('│'));
+    expect(boxRows.length, boxRows.join('\n')).toBe(3);
+    expect(tui.output()).not.toContain('TUI-ASSISTANT-REPLY-OK');
+    tui.write(ENTER);
+    await waitForPromptReady(tui, 'TUI-ASSISTANT-REPLY-OK');
+    const transcript = (await tui.visibleTranscript()).join('\n');
+    for (const line of ['alpha', 'beta', 'gamma']) {
+      expect(transcript.split(line).length - 1, transcript).toBe(1);
+    }
 
     tui.write(CTRL_C);
     await expect(tui.waitForExit()).resolves.toBe(0);
@@ -1569,21 +1840,36 @@ steps:
     const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH]);
 
     await chooseHighlighted(tui, MODE_PROMPT);
-    await tui.waitForOutput(TUI_HINT);
+    await waitForConversationInput(tui);
 
     // Far wider than the PTY, so it can only be shown by wrapping it.
     tui.write(`${'wide '.repeat(120)}TAIL`);
-    await tui.waitForOutput('TAIL');
-
-    const screen = await tui.visibleScreen();
-    const rendered = screen.join('\n');
-    // The end of the draft is on screen, and the box grew to hold the rows.
+    const rendered = await tui.waitForScreen('the folded draft in one completed input box', (screen) => {
+      const lines = screen.split('\n');
+      return compactScreen(lines).includes('TAIL')
+        && screen.includes('↑ 3')
+        && lines.filter((line) => line.startsWith('╭')).length === 1
+        && lines.filter((line) => line.startsWith('╰')).length === 1;
+    });
+    // The caret row stays first and the previous display rows are folded.
     expect(rendered).toContain('TAIL');
-    const boxRows = screen.filter((line) => line.includes('│'));
-    expect(boxRows.length, rendered).toBeGreaterThanOrEqual(3);
-    // The box is still a box: nothing spilled past its right border.
-    const bottom = screen.findIndex((line) => line.includes('╰'));
-    expect(bottom, rendered).toBeGreaterThanOrEqual(screen.length - 3);
+    expect(rendered).toContain('↑ 3');
+    tui.write('\x01');
+    const expanded = (await tui.waitForScreen('the full draft in one completed input box', (current) => {
+      const lines = current.split('\n');
+      return compactScreen(lines).includes(`${'wide'.repeat(120)}TAIL`)
+        && lines.filter((line) => line.startsWith('╭')).length === 1
+        && lines.filter((line) => line.startsWith('│')).length === 4
+        && lines.filter((line) => line.startsWith('╰')).length === 1;
+    })).split('\n');
+    const boxRows = expanded.filter((line) => line.startsWith('│'));
+    expect(boxRows.length, expanded.join('\n')).toBe(4);
+    for (const row of boxRows) {
+      expect(row.length).toBeLessThanOrEqual(200);
+      expect(row.endsWith('│')).toBe(true);
+    }
+    const bottom = expanded.findIndex((line) => line.startsWith('╰'));
+    expect(expanded.findIndex((line) => line.includes(TUI_HINT))).toBe(bottom + 2);
 
     tui.write(CTRL_C);
     await expect(tui.waitForExit()).resolves.toBe(0);

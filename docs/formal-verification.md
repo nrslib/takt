@@ -17,7 +17,9 @@ Two artifacts are downloaded automatically on first use.
 | Apalache | Fetched by Quint on the first `quint verify` | `~/.quint/` (override with `QUINT_HOME`) |
 | Alloy Analyzer 6.2.0 JAR | Fetched by TAKT on the first Alloy verification; SHA-256 is checked | `.takt/cache/alloy/6.2.0/alloy.jar` inside the project |
 
-TLC, which is used for temporal properties, is part of the Apalache distribution, so no separate TLC install is needed. The downloads happen once and require network access; later `/verify` runs work offline.
+TLC, which is used for temporal properties, is part of the Apalache distribution, so no separate TLC install is needed. The first download of each artifact requires network access. The checkers themselves can run locally offline once the artifacts for every checker you intend to use have been downloaded. Verifying only Quint does not download the Alloy JAR.
+
+To generate specifications and interpret results, `/verify` calls the configured assistant provider. These stages require network access when you use a cloud provider. Running the entire `/verify` flow offline also requires an assistant configuration that works offline.
 
 To use Alloy without network access, point the `TAKT_ALLOY_JAR` environment variable at an Alloy JAR you already have. Relative paths are resolved from the project directory.
 
@@ -44,11 +46,36 @@ For a Quint block, TAKT runs the stages in order, and a stage that does not pass
 1. `parse` checks the syntax.
 2. `typecheck` checks types and effects.
 3. `run` simulates one sample for up to 20 steps. It runs only when a main module with `init` and `step` actions is found and the selected verification targets live in that module.
-4. With Java 17 or later, `quint verify` runs with a bound of 20 steps. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space.
+4. If the main module contains `run` declarations, `quint test` checks those scenarios after simulation succeeds.
+5. Once all preceding stages pass, `quint verify` runs if Java 17 or later is available. The default Apalache backend checks up to 20 steps. A specification with temporal properties switches to the TLC backend, which exhaustively explores the state space without a 20-step bound.
 
 For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint results. Every `run` and `check` command in the specification is executed, including models with only `run` commands.
 
-`parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
+`parse`, `typecheck`, `run`, and `test` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
+
+### Alloy concurrency and JVM settings
+
+These environment variables are read once at the start of verification. They are not YAML keys and do not apply to Quint-only verification.
+
+| Environment variable | Default | Format |
+|----------------------|---------|--------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | Positive safe integer; `1` runs sequentially |
+| `TAKT_ALLOY_HEAP` | `4g` | Positive integer followed by lowercase `k`, `m`, or `g` |
+| `TAKT_ALLOY_STACK` | `64m` | Positive integer followed by lowercase `k`, `m`, or `g` |
+
+Only unset values use defaults; empty or invalid values produce an error naming the variable. Settings stay fixed for one verification. All Alloy JVM launches, including command enumeration, receive `-Xmx4g -Xss64m` by default. Overrides replace the defaults without duplicate arguments.
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+If memory is limited, lower the heap limit or set concurrency to 1. Use these TAKT-specific settings to change the JVM arguments instead of relying on `JAVA_TOOL_OPTIONS` alone.
+
+`assistant.formal_spec.model_check_timeout_seconds` applies separately to each Alloy command (default: 900 seconds). There is no overall timeout; failures and timeouts do not prevent the remaining commands from running. A free slot starts the next command immediately. Each command result identifies a timeout with `timedOut: true`.
+
+For `N` Alloy commands with at most `K` running concurrently, `ceil(N / K) × model_check_timeout_seconds` estimates the time spent waiting for model-checking processes (`ceil` rounds up). This is not a strict upper bound on elapsed time: workers process results and perform file operations after a process exits and before starting another command, and that work is outside each command's timeout.
+
+Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
 
 ## How targets are selected
 
@@ -63,13 +90,11 @@ Put them in the module that has the `init` and `step` actions. If a target lives
 
 In Alloy, every `run` and `check` is a target. A `run` passes when an instance exists within its scope (SAT) and fails when none exists (UNSAT). A `check` passes without a counterexample (UNSAT) and fails with one (SAT). Include a consistency `run {}` with a finite scope so contradictory model constraints cannot make every check pass vacuously. Use additional `run` commands for required scenarios and reachability; each is expected to be satisfiable. Keep the scope and temporal trace length finite for both command types.
 
-The result preserves `checks` as check command indexes and reports the index, type, label, status, and message of each command in `commandResults`. Diagnostic artifacts include per-command stdout/stderr, `receipt.json`, and instance/counterexample files. TAKT validates the selected command's receipt after a successful process exit; missing, invalid, mismatched, or oversized receipts and truncated execution output are errors.
-
-An Alloy `expect` annotation does not override TAKT's run/check verdicts. When Alloy exits with an expectation-mismatch diagnostic and a matching, complete receipt, TAKT uses the recorded SAT/UNSAT result. Other abnormal exits remain errors. Commands with `expect` but no explicit `for` clause are also executed with Alloy's default finite scope.
+The result records each `run` and `check` command's type, label, status, and message. If an instance or counterexample was found, inspect the diagnostic artifacts. An Alloy `expect` annotation does not override TAKT's verdict from the observed SAT/UNSAT result. Commands without an explicit `for` clause use Alloy's default finite scope.
 
 ## Reading the result
 
-`/verify` supports `claude`, `claude-headless`, `claude-terminal`, `codex`, `cursor`, `copilot`, `kiro`, `opencode`, and `pi`. During result interpretation, Claude providers restrict file reads to the verification artifacts listed for that call. The other supported providers, including OpenCode and Pi, use session-level read-only settings; readable paths are not restricted to verification artifacts. OpenCode and Pi allow only read-related tools during interpretation; writing, editing, shell, subagent, Web, and MCP tools are unavailable. Ordinary Pi calls retain their configured extension tools. The controls follow each provider's implementation and do not provide the same artifact-only guarantee as Claude.
+`/verify` supports `claude`, `claude-headless`, `claude-terminal`, `codex`, `cursor`, `copilot`, `kiro`, `opencode`, and `pi`. Result interpretation allows reading the verification artifacts. Claude providers restrict reads to the listed artifacts; the other supported providers use session-level read-only settings, which do not restrict readable paths to those artifacts.
 
 The result is summarized as `passed`, `failed`, or `error`, with per-stage status and messages.
 
@@ -77,7 +102,7 @@ The result is summarized as `passed`, `failed`, or `error`, with per-stage statu
 - `failed` means an invariant or temporal property was violated, an Alloy `check` found a counterexample, or an Alloy `run` found no instance within its scope. Counterexample traces are preserved in the diagnostic artifacts.
 - `error` means verification could not be completed: a syntax or type error, a timeout, or a verifier that failed to start. A skipped model-checking stage due to missing Java also lands here, with the skipped stage and reason in the message.
 
-When TLC reports a violation or failure, TAKT extracts the diagnostics starting at the `Error:` line and includes them in the result. Unrecognized output is included verbatim.
+When TLC reports a violation or failure, the result includes the diagnostic information.
 
 ## Troubleshooting
 
@@ -91,4 +116,16 @@ If `quint verify` stops with "Parsing or semantic analysis failed" while Quint `
 
 If the Alloy JAR download fails, check your network and proxy settings, or supply a local JAR through `TAKT_ALLOY_JAR`. A downloaded JAR whose SHA-256 does not match is also treated as a failure.
 
-Temporary files created during verification live under `.takt/runs/verify-*/` and are removed when verification ends. If one is left behind by an abnormal exit, the next `/verify` cleans up directories older than one hour.
+A retention marker protects workspaces with completed failed, errored, or timed-out results from automatic cleanup. An ownership marker also protects workspaces unless deletion has explicitly been requested, regardless of whether the owner Node process is still running. This includes workspaces left by an abnormal exit before a result is finalized; remove them manually when no longer needed. If the ownership marker cannot be inspected, the workspace is not deleted. Successful workspaces are removed after interpretation; explicitly cancelled verification waits for its processes to stop, then removes its workspace.
+
+If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with both errors. The remaining ownership marker protects the workspace from automatic cleanup even after the owner exits. Follow the notice to copy any needed artifacts manually.
+
+Workspaces without either marker become eligible for cleanup after more than one hour of inactivity. When deletion following success or cancellation fails, TAKT records the pending deletion in the current process. The next `/verify` in that process retries deletion after more than one hour of inactivity, even if the ownership marker could not be removed.
+
+## Manager goals and formal specifications
+
+`assistant.formal_spec` also applies to manager goal proposals. The manager does not ask at each registration: `true` and `"Y/n"` include both Quint and Alloy, while `false` and `"y/N"` omit them. Project configuration takes precedence over global configuration, resolving object fields independently. `comments` and `model_check_timeout_seconds` use the same settings as interactive mode.
+
+Development and implementation goals use Gherkin for important observable behavior where a misunderstanding would change the result. Do not repeat those expected outcomes in acceptance criteria. Gherkin keywords are English; descriptions may use the conversation language. Goals for research, documentation, operations, or other non-implementation work do not use Gherkin.
+
+Enter `/verify` in the manager conversation in either TUI or Slack to generate Quint and Alloy specifications from the current agreement and run the same checkers as interactive mode. Results return to the same conversation for the manager to interpret diagnostics and counterexamples. When formal specifications are disabled, verification is reported as unavailable. Registration does not automatically run verification, and verification alone does not register a goal or modify its proposal or saved specifications.

@@ -64,11 +64,12 @@ describe('Provider MCP capability declaration (MCP-CAPABILITY-DECLARE)', () => {
     expect(transports!.has('sse')).toBe(false);
   });
 
-  it('Given mock provider, Then it declares stdio transport for fixture support', () => {
+  it('Given mock provider, Then it declares stdio and HTTP transports for fixture support', () => {
     const provider = getProvider('mock');
     const transports = provider.supportedMcpTransports;
     expect(transports).toBeDefined();
     expect(transports!.has('stdio')).toBe(true);
+    expect(transports!.has('http')).toBe(true);
   });
 
   it('Given a provider that supports MCP servers, Then providerSupportsMcpServers returns true', () => {

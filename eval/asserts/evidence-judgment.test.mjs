@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import assertEvidenceJudgment from './evidence-judgment.mjs';
 import buildEvidenceJudgmentPrompt from '../evidence-judgment-prompt.mjs';
 import { assertBuiltinFacetIncluded } from './builtin-facet-assembly.mjs';

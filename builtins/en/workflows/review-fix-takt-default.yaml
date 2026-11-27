@@ -15,6 +15,7 @@ steps:
           - {question1}
           - {question2}
   - name: develop
+    description: Apply TAKT-specific rules and carry out planning, tests, implementation, review, finding repairs, and final confirmation of requirement fulfillment.
     kind: workflow_call
     call: development-core
     args:

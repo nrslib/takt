@@ -1,4 +1,6 @@
 name: review
+subworkflow:
+  callable: true
 description: Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results.
 all_steps:
   rules:
@@ -24,6 +26,7 @@ steps:
           - {Question 2}
 
   - name: reviewers
+    description: Select specialist reviewers for the change and review in parallel to determine whether fixes are needed.
     kind: workflow_call
     call: development-review
     vars:
@@ -37,6 +40,10 @@ steps:
         next: ABORT
 
   - name: review-synthesis
+    description: Consolidate review results and findings into an overall verdict and final summary.
+    input_reports:
+      from_step: reviewers
+      reports: all
     capabilities: readonly
     tags:
       - review
@@ -60,7 +67,8 @@ steps:
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**
-      1. Read `review-target.md` and every reviewer report present in the Report Directory. Do not assume an optional reviewer report exists.
+      1. Read the following review target and every supplied report from the completed reviewers step. Do not assume an optional reviewer report exists.
+         Review target: {report:review-target.md}
       2. Synthesize all available review results
       3. Produce a consolidated review summary with overall verdict
 
@@ -127,6 +135,10 @@ steps:
             ```
 
   - name: supervise
+    description: Consolidate review results and findings into an overall verdict and final summary.
+    input_reports:
+      from_step: reviewers
+      reports: all
     capabilities: readonly
     tags:
       - review
@@ -134,6 +146,7 @@ steps:
     edit: false
     persona: supervisor
     policy:
+      - process-deviation
       - contract-change
       - review
     pass_previous_response: false

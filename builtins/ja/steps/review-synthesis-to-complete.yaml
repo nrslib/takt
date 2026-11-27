@@ -1,4 +1,5 @@
 name: review-synthesis
+description: 現在のコードで要件を満たし、指摘が解消したかを独立に判定する
 capabilities: readonly
 tags:
   - final-gate

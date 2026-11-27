@@ -16,7 +16,7 @@ notification_sound_events:
   iteration_limit: false
   workflow_complete: false
   workflow_abort: false
-  run_complete: true
+  run_complete: false
   run_abort: false
 provider_profiles:
   cursor:

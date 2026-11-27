@@ -7,10 +7,9 @@ import type {
 } from '../../models/types.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
 import type { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
-import { matchesResumeStackPrefix } from '../run/resume-point.js';
+import { matchesResumeStackPrefix, resumeWorkflowMatches } from '../run/resume-point.js';
 import {
   workflowEntriesMatch,
-  workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
 import { buildWorkflowStackStepIterationIdentity } from '../step-iteration-identity.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -39,6 +38,7 @@ export class WorkflowResumeContinuation {
     readonly step: WorkflowStep;
     readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
     readonly state: WorkflowState;
+    readonly selectedRestartOccurrence?: number;
     readonly isOccurrenceNamespaceReserved?: (occurrence: number) => boolean;
   }): number {
     const frameIndex = input.resumeStackPrefix.length;
@@ -47,6 +47,10 @@ export class WorkflowResumeContinuation {
       input.step.name,
       input.resumeStackPrefix,
     );
+    if (input.selectedRestartOccurrence !== undefined) {
+      input.state.stepIterations.set(stepIterationIdentity, input.selectedRestartOccurrence);
+      return input.selectedRestartOccurrence;
+    }
     const source = this.#source;
     const sourceFrame = source?.stack[frameIndex];
     if (
@@ -57,7 +61,7 @@ export class WorkflowResumeContinuation {
         source.stack,
         input.resumeStackPrefix,
       )
-      || !workflowEntryMatchesWorkflow(sourceFrame, this.#workflow)
+      || !resumeWorkflowMatches(sourceFrame, this.#workflow)
       || sourceFrame.step !== input.step.name
       || sourceFrame.kind !== getWorkflowResumeFrameKind(input.step)
     ) {
@@ -113,7 +117,7 @@ export class WorkflowResumeContinuation {
       || frame.kind !== 'workflow_call'
       || frame.step !== input.step.name
       || frame.occurrence !== input.occurrence
-      || !workflowEntryMatchesWorkflow(frame, this.#workflow)
+      || !resumeWorkflowMatches(frame, this.#workflow)
       || !matchesResumeStackPrefix(
         source.stack,
         input.resumeStackPrefix,

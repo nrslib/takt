@@ -6,6 +6,7 @@
  */
 
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
+import { redactExecutionSecrets } from '../../../shared/utils/execution-secrets.js';
 import {
   readRunMeta,
   type RunMeta,
@@ -14,7 +15,8 @@ import {
 } from '../../../core/workflow/run/run-meta.js';
 import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-codec.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowResumePoint, WorkflowResumePointEntry } from '../../../core/models/index.js';
+import { runStepIdentity, type RunStepExecution } from '../../../core/workflow/run/step-executions.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import {
   createPullRequestContext,
@@ -65,6 +67,13 @@ function serializeRunMeta(meta: RunMeta, updatedAt: string): PersistedRunMeta {
   } = meta;
   return {
     ...baseMeta,
+    task: redactExecutionSecrets(meta.task),
+    ...(meta.reason === undefined ? {} : { reason: redactExecutionSecrets(meta.reason) }),
+    ...(meta.failure === undefined ? {} : { failure: { ...meta.failure, error: redactExecutionSecrets(meta.failure.error) } }),
+    ...(meta.observability?.traceDiscovery?.task?.summary === undefined ? {} : {
+      observability: { ...meta.observability, traceDiscovery: { ...meta.observability.traceDiscovery,
+        task: { ...meta.observability.traceDiscovery.task, summary: redactExecutionSecrets(meta.observability.traceDiscovery.task.summary) } } },
+    }),
     updatedAt,
     ...(resumePoint ? { resume_point: parseWorkflowResumePoint(resumePoint) } : {}),
     ...(sourceRunSlug ? { source_run_slug: sourceRunSlug } : {}),
@@ -116,6 +125,7 @@ export function finalizeFileRunMeta(input: {
 
 export class RunMetaManager {
   private readonly runMeta: RunMeta;
+  private readonly stepExecutions = new Map<string, RunStepExecution>();
   private readonly metaAbs: string;
 
   constructor(
@@ -135,6 +145,7 @@ export class RunMetaManager {
       contextDirectory: runPaths.contextRel,
       logsDirectory: runPaths.logsRel,
       status: 'running',
+      stepExecutions: [],
       startTime: options?.startTime ?? new Date().toISOString(),
       ...(resumeSource ? {
         resumeMode: resumeSource.resumeMode,
@@ -164,6 +175,25 @@ export class RunMetaManager {
     delete this.runMeta.phase;
     this.runMeta.resumePoint = resumePoint;
     this.writeRunMeta(this.runMeta);
+  }
+
+  recordStep(stepName: string, stack: readonly WorkflowResumePointEntry[]): void {
+    this.countStep(stepName, stack);
+    this.writeRunMeta(this.runMeta);
+  }
+
+  recordWorkflowCall(stack: readonly WorkflowResumePointEntry[]): void {
+    const frame = stack.at(-1);
+    if (frame === undefined) throw new Error('Workflow call requires its active stack');
+    this.countStep(frame.step, stack);
+    this.writeRunMeta(this.runMeta);
+  }
+
+  private countStep(stepName: string, stack: readonly WorkflowResumePointEntry[]): void {
+    const execution = runStepIdentity(stack, this.runMeta.workflow, stepName);
+    const count = (this.stepExecutions.get(execution.identity)?.count ?? 0) + 1;
+    this.stepExecutions.set(execution.identity, { ...execution, count });
+    this.runMeta.stepExecutions = [...this.stepExecutions.values()];
   }
 
   updatePhase(stepName: string, iteration: number, phase: 1 | 2 | 3): void {

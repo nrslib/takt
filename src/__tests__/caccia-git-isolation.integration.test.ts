@@ -15,6 +15,7 @@ const {
   mockFetchCodeRabbitReviewThreads,
   mockResolveReviewThread,
   mockRunWorkflowExecution,
+  mockLogError,
 } = vi.hoisted(() => ({
   mockMkdtempSync: vi.fn(),
   mockFetchCacciaPullRequestDetails: vi.fn<(...args: unknown[]) => unknown>(),
@@ -24,6 +25,7 @@ const {
   mockFetchCodeRabbitReviewThreads: vi.fn<(...args: unknown[]) => unknown>(),
   mockResolveReviewThread: vi.fn<(...args: unknown[]) => unknown>(),
   mockRunWorkflowExecution: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -59,11 +61,20 @@ vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
   runWorkflowExecution: (...args: unknown[]) => Reflect.apply(mockRunWorkflowExecution, undefined, args),
 }));
 
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError }),
+  getSlackWebhookUrl: () => undefined,
+}));
+
 import {
   invalidateAllResolvedConfigCache,
   resolveConfigValue,
 } from '../infra/config/index.js';
 import { runCaccia } from '../features/caccia/index.js';
+import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
+import { createCheckoutFilter } from './helpers/checkout-filter.js';
 
 const temporaryRoots: string[] = [];
 const childOutputs = new WeakMap<ChildProcess, { stdout: string; stderr: string }>();
@@ -193,7 +204,7 @@ function startForcedExitChild(
   fixture: CacciaProjectFixture,
   globalConfigDir: string,
   options: {
-    route: 'worker-pool' | 'standalone' | 'pipeline';
+    route: 'worker-pool' | 'standalone' | 'linked';
     cloneCount: number;
     failFirstCleanup: boolean;
   },
@@ -239,7 +250,7 @@ function startForcedExitChild(
 
 async function expectForcedExitCleanup(options: {
   mode: 'second-sigint' | 'second-handler-input' | 'timeout';
-  route?: 'worker-pool' | 'standalone' | 'pipeline';
+  route?: 'worker-pool' | 'standalone' | 'linked';
   cloneCount?: number;
   failFirstCleanup?: boolean;
 }): Promise<void> {
@@ -372,15 +383,56 @@ function git(cwd: string, args: string[]): string {
   }).trim();
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
   vi.unstubAllEnvs();
+  vi.clearAllMocks();
   invalidateAllResolvedConfigCache();
 });
 
 describe('Caccia real Git isolation', () => {
+  it.each([
+    ['smudge', false], ['smudge', true], ['process', false], ['process', true],
+  ] as const)('PR checkout suppresses %s filters even with allow_git_filters=%s', async (kind, allowGitFilters) => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-caccia-filter-'));
+    temporaryRoots.push(root);
+    const fixture = createCacciaProjectFixture(root);
+    const author = join(root, 'filter-author');
+    git(root, ['clone', fixture.bareRemote, author]);
+    git(author, ['checkout', fixture.branch]);
+    git(author, ['config', 'user.name', 'Filter Author']);
+    git(author, ['config', 'user.email', 'filter@example.test']);
+    writeFileSync(join(author, '.gitattributes'), 'reviewed.txt filter=probe\n');
+    git(author, ['add', '.gitattributes']); git(author, ['commit', '-m', 'PR filter attribute']);
+    git(author, ['push', 'origin', fixture.branch]);
+    const headSha = git(author, ['rev-parse', 'HEAD']);
+    const probe = createCheckoutFilter(root, kind);
+    vi.stubEnv('GIT_CONFIG_GLOBAL', probe.configPath);
+    const control = join(root, 'filter-control');
+    git(root, ['clone', '--no-checkout', fixture.bareRemote, control]); git(control, ['checkout', fixture.branch]);
+    expect(existsSync(probe.markerPath)).toBe(true); rmSync(probe.markerPath);
+    writeFileSync(join(fixture.projectCwd, '.takt/config.yaml'), `vcs_provider: github\nallow_git_filters: ${allowGitFilters}\n`);
+    invalidateAllResolvedConfigCache();
+    mockFetchCacciaPullRequestDetails.mockReset().mockResolvedValue({ number: 42, title: 'Review fixes', body: '', headBranch: fixture.branch,
+      headSha, headRepositoryUrl: fixture.bareRemote, headRepositoryPushUrls: [fixture.bareRemote] });
+    mockFetchCodeRabbitReviewStatus.mockReset().mockReturnValue({ headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] });
+    mockFetchCodeRabbitReviewThreads.mockReset().mockReturnValue([{ id: 'thread-42', author: 'coderabbitai', body: 'Correct the PR.', replies: [] }]);
+    mockRunWorkflowExecution.mockReset().mockImplementation(async (...args: unknown[]) => {
+      const request = args[0] as WorkflowExecutionRequest;
+      expect(git(request.cwd, ['rev-parse', 'HEAD'])).toBe(headSha);
+      expect(readFileSync(join(request.cwd, 'reviewed.txt'), 'utf8')).toBe('original PR change\n');
+      expect(existsSync(probe.markerPath)).toBe(false);
+      return { success: false };
+    });
+    await expect(runCaccia({ entry: 'standalone', prNumber: 42, projectCwd: fixture.projectCwd,
+      settings: { enabled: false, waitTimeoutMs: 1000, maxIterations: 1, workflow: 'caccia' } })).rejects.toThrow();
+    expect(mockRunWorkflowExecution).toHaveBeenCalledOnce(); expect(existsSync(probe.markerPath)).toBe(false);
+    const clone = (mockRunWorkflowExecution.mock.calls[0]![0] as WorkflowExecutionRequest).cwd;
+    expect(existsSync(clone)).toBe(false);
+  });
+
   it('removes the active clone when a second SIGINT forces process exit', async () => {
     await expectForcedExitCleanup({ mode: 'second-sigint' });
   });
@@ -393,8 +445,8 @@ describe('Caccia real Git isolation', () => {
     await expectForcedExitCleanup({ mode: 'second-sigint', route: 'standalone' });
   });
 
-  it('removes the active clone after the Pipeline Caccia SIGINT listener is consumed', async () => {
-    await expectForcedExitCleanup({ mode: 'second-sigint', route: 'pipeline' });
+  it('removes the active clone after the explicit Caccia SIGINT listener is consumed', async () => {
+    await expectForcedExitCleanup({ mode: 'second-sigint', route: 'linked' });
   });
 
   it('keeps the active clone during graceful shutdown and removes it when the timeout expires', async () => {
@@ -422,6 +474,7 @@ describe('Caccia real Git isolation', () => {
       expect(prNumber).toBe(42);
       return {
         number: 42,
+        title: 'Review fixes', body: '',
         headBranch: 'caccia/pr-42',
         headSha: 'head-sha',
         headRepositoryUrl: join(testRoot, 'remote.git'),
@@ -484,6 +537,7 @@ describe('Caccia real Git isolation', () => {
 
     mockFetchCacciaPullRequestDetails.mockReturnValue({
       number: 42,
+      title: 'Review fixes', body: '',
       headBranch: 'caccia/pr-42',
       headSha: 'head-sha',
       headRepositoryUrl: join(testRoot, 'unused-remote.git'),
@@ -590,6 +644,7 @@ describe('Caccia real Git isolation', () => {
       expect(prNumber).toBe(42);
       return {
         number: 42,
+        title: 'Review fixes', body: '',
         headBranch: branch,
         headSha: initialHeadSha,
         headRepositoryUrl: bareRemote,
@@ -610,25 +665,18 @@ describe('Caccia real Git isolation', () => {
     let cloneCwd: string | undefined;
     const reportDirectory = join(projectCwd, '.takt', 'runs', 'caccia-git-isolation-report');
     mockRunWorkflowExecution.mockImplementation(async (...args: unknown[]) => {
-      const options = args[0] as {
-        cwd: string;
-        projectCwd: string;
-        workflowIdentifier: string;
-        runPathsDirectory: string;
-        outputMode: string;
-        task: string;
-      };
+      const options = args[0] as WorkflowExecutionRequest;
       cloneCwd = options.cwd;
       expect(git(options.cwd, ['remote', 'get-url', 'origin'])).toBe(bareRemote);
       expect(git(options.cwd, ['remote', 'get-url', '--push', '--all', 'origin'])).toBe(headPushRemotes.join('\n'));
       expect(git(options.cwd, ['rev-parse', 'HEAD'])).toBe(initialHeadSha);
       writeFileSync(join(options.cwd, 'caccia-fix.txt'), 'fixed in the temporary clone\n', 'utf8');
       mkdirSync(reportDirectory, { recursive: true });
-      writeFileSync(join(reportDirectory, 'caccia-decisions.json'), JSON.stringify([{
+      writeFileSync(join(reportDirectory, 'caccia-decisions.json'), JSON.stringify({ outcome: 'complete', reason: '', decisions: [{
         thread_id: 'thread-42',
         valid: true,
         reason: 'The PR branch is missing the requested correction.',
-      }]), 'utf8');
+      }] }), 'utf8');
       expect(options).toMatchObject({
         cwd: expect.stringMatching(/^.*takt-caccia-42-/u),
         projectCwd,
@@ -643,12 +691,18 @@ describe('Caccia real Git isolation', () => {
       });
       expect(options).not.toHaveProperty('workflowResourceRoot');
       expect(options.task).toContain('"thread_id": "thread-42"');
+      await options.eventSink?.({ type: 'output', outputType: 'text', message: 'Caccia trace failed' });
+      await options.eventSink?.({ type: 'progress', message: 'ordinary progress' });
+      await options.eventSink?.({ type: 'progress', level: 'warn', message: 'Caccia trace failed' });
+      await options.eventSink?.({ type: 'completed', success: true });
       return { success: true, reportDirectory };
     });
 
     const exitListenerCount = process.listenerCount('exit');
+    const events: WorkflowExecutionEvent[] = [];
     const result = await runCaccia({
       ...display,
+      eventSink: (event) => { events.push(event); },
       prNumber: 42,
       projectCwd,
       settings: {
@@ -660,6 +714,7 @@ describe('Caccia real Git isolation', () => {
     });
 
     expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0 });
+    expect(events).toEqual([{ type: 'progress', level: 'warn', message: 'Caccia trace failed' }]);
     expect(result.exitCode).toBe(display.entry === 'standalone' ? 0 : undefined);
     expect(cloneCwd).toBeDefined();
     expect(existsSync(cloneCwd as string)).toBe(false);

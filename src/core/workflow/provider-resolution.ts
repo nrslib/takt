@@ -111,7 +111,7 @@ interface ProviderModelOverride {
   source: ProviderResolutionSource;
 }
 
-type ResolvedTagProviderRoutingEntry = Pick<ProviderRoutingEntry, 'provider' | 'model' | 'permissionMode'> & {
+type ResolvedTagProviderRoutingEntry = Pick<ProviderRoutingEntry, 'provider' | 'model' | 'modelSpecified' | 'permissionMode'> & {
   modelProvider?: ProviderType;
 };
 
@@ -274,11 +274,14 @@ function resolveTagProviderRoutingEntry(
     resolved = {
       ...(resolved?.provider !== undefined ? { provider: resolved.provider } : {}),
       ...(resolved?.model !== undefined ? { model: resolved.model } : {}),
+      ...(resolved?.modelSpecified !== undefined ? { modelSpecified: resolved.modelSpecified } : {}),
       ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
-      ...(entry.model !== undefined ? { model: entry.model } : {}),
+      ...(entry.model !== undefined || entry.modelSpecified === true
+        ? { model: entry.model, modelSpecified: entry.modelSpecified }
+        : {}),
       ...(permissionModeOverride !== undefined ? { permissionMode: permissionModeOverride } : {}),
     };
-    if (entry.model !== undefined) {
+    if (entry.model !== undefined || entry.modelSpecified === true) {
       modelProvider = entry.provider;
     }
   }
@@ -388,19 +391,19 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     model = input.step.model;
     modelSource = 'step';
     modelProvider = stepProviderIsDirect ? input.step.provider : undefined;
-  } else if (routingStepEntry?.model !== undefined) {
+  } else if (routingStepEntry?.model !== undefined || routingStepEntry?.modelSpecified === true) {
     model = routingStepEntry.model;
     modelSource = 'provider_routing.steps';
     modelProvider = routingStepEntry.provider;
-  } else if (routingTagEntry?.model !== undefined) {
+  } else if (routingTagEntry?.model !== undefined || routingTagEntry?.modelSpecified === true) {
     model = routingTagEntry.model;
     modelSource = 'provider_routing.tags';
     modelProvider = routingTagEntry.modelProvider;
-  } else if (routingPersonaEntry?.model !== undefined) {
+  } else if (routingPersonaEntry?.model !== undefined || routingPersonaEntry?.modelSpecified === true) {
     model = routingPersonaEntry.model;
     modelSource = 'provider_routing.personas';
     modelProvider = routingPersonaEntry.provider;
-  } else if (personaEntry?.model !== undefined) {
+  } else if (personaEntry?.model !== undefined || personaEntry?.modelSpecified === true) {
     model = personaEntry.model;
     modelSource = 'persona_providers';
     modelProvider = personaEntry.provider;

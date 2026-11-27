@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, usePaste, useStdout } from 'ink';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 import { toDisplayText } from './displayText.js';
 import { resolveEditorKey } from './editorKeys.js';
@@ -29,6 +29,7 @@ export interface PromptScreenProps {
   readonly onDone: (answer: string | null) => void;
 }
 
+/** Edits one answer, aligns its IME cursor below the question, and reports submission or cancellation. */
 export function PromptScreen({
   question,
   hint,
@@ -56,6 +57,13 @@ export function PromptScreen({
     doneRef.current = true;
     onDone(answer);
   }, [onDone]);
+
+  usePaste((text) => {
+    if (doneRef.current) {
+      return;
+    }
+    edit(applyEditorKey(editorRef.current, { kind: 'paste', text }));
+  });
 
   useInput((input, key) => {
     if (doneRef.current) {
@@ -90,6 +98,7 @@ export function PromptScreen({
         text={editor.text}
         cursor={editor.cursor}
         contentWidth={contentWidth}
+        cursorRowOffset={1}
         placeholder={placeholder}
         hint={hint}
         completions={[]}

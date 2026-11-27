@@ -67,36 +67,6 @@ describe('CLI update check', () => {
     vi.restoreAllMocks();
   });
 
-  it('should refresh the cache in a silent detached worker', async () => {
-    process.argv = ['node', 'takt', '--help'];
-    const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
-
-    await runUpdateCheck('1.0.0');
-
-    expect(mockSpawn).toHaveBeenCalledWith(
-      process.execPath,
-      [expect.stringMatching(/shared\/utils\/updateNotifierWorker\.js$/)],
-      {
-        detached: true,
-        stdio: 'ignore',
-      },
-    );
-    expect(mockUnref).toHaveBeenCalledTimes(1);
-  });
-
-  it('should preserve the update-notifier opt-out argument in the worker', async () => {
-    process.argv = ['node', 'takt', '--no-update-notifier'];
-    const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
-
-    await runUpdateCheck('1.0.0');
-
-    expect(mockSpawn).toHaveBeenCalledWith(
-      process.execPath,
-      [expect.stringMatching(/shared\/utils\/updateNotifierWorker\.js$/), '--no-update-notifier'],
-      expect.any(Object),
-    );
-  });
-
   it('should notify a cached pending update from the parent process', async () => {
     process.argv = ['node', 'takt', 'list'];
     writeUpdateCache(configHome, '99.0.0');
@@ -106,13 +76,21 @@ describe('CLI update check', () => {
 
     expect(mockCheckForUpdates).toHaveBeenCalledTimes(1);
     expect(mockUnref).toHaveBeenCalledTimes(1);
-    expect(mockCheckForUpdates.mock.invocationCallOrder[0])
-      .toBeLessThan(mockSpawn.mock.invocationCallOrder[0]!);
   });
 
   it('should not notify when the cached version equals the current version', async () => {
     process.argv = ['node', 'takt', 'list'];
     writeUpdateCache(configHome, '1.0.0');
+    const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
+
+    await runUpdateCheck('1.0.0');
+
+    expect(mockCheckForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('should not notify when the cached version is older than the current version', async () => {
+    process.argv = ['node', 'takt', 'list'];
+    writeUpdateCache(configHome, '0.9.0');
     const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
 
     await runUpdateCheck('1.0.0');
@@ -156,7 +134,6 @@ describe('CLI update check', () => {
     const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
     await runUpdateCheck('1.0.0');
     expect(mockCheckForUpdates).not.toHaveBeenCalled();
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it.each(['EAGAIN', 'worker exit 1', 'ETIMEDOUT', 'ENOBUFS'])('should warn and refresh after notification failure: %s', async (failure) => {

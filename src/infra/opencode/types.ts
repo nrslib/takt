@@ -6,6 +6,10 @@ import type { AskUserQuestionHandler, PermissionHandler, SkillPermissionHandler 
 import type { Language, OpenCodeGuardOptions, PermissionMode } from '../../core/models/index.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
+import {
+  normalizeOpenCodeExternalDirectories,
+  openCodeExternalDirectoryPattern,
+} from './external-directories.js';
 
 /** OpenCode permission reply values */
 export type OpenCodePermissionReply = 'once' | 'always' | 'reject';
@@ -68,7 +72,8 @@ function isPermissionAllowedByRuleset(
 
   return ruleset.some((rule) => (
     rule.action === 'allow'
-    && (rule.permission === permission || rule.permission === '*')
+    && (rule.permission === permission || rule.permission === '*'
+      || (rule.permission.endsWith('_*') && permission.startsWith(rule.permission.slice(0, -1))))
   ));
 }
 
@@ -216,19 +221,29 @@ export type OpenCodeAllowedTools = readonly string[];
  * restriction is enforced by the explicit per-prompt tools map instead
  * (see buildOpenCodePromptTools).
  *
- * `external_directory` is denied explicitly. Note that this session-scoped
- * rule only holds until the first prompt: a prompt-level tools map is
+ * `external_directory` is denied except for explicitly supplied TAKT context
+ * directories. This session-scoped rule only holds until the first prompt: a prompt-level tools map is
  * materialized into `session.permission` by OpenCode and replaces this
- * ruleset. The authoritative deny lives in the server config passed to
- * `createOpencode` (see client.ts), which the rewrite does not touch; the
- * rule here covers the window before the first prompt.
+ * ruleset. The external-directory deny and its narrow exceptions live in
+ * the server config passed to `createOpencode` in `server-pool.ts`, which the
+ * rewrite does not touch; the rule here covers the window before the first
+ * prompt.
  */
 export function buildOpenCodeSessionPermission(
   mode?: PermissionMode,
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
   allowedMcpTools?: readonly string[],
+  strictToolAllowlist?: OpenCodeAllowedTools,
+  externalDirectoryAllowlist?: readonly string[],
 ): OpenCodePermissionRule[] {
+  const externalDirectoryRules = buildExternalDirectorySessionRules(externalDirectoryAllowlist);
+  if (strictToolAllowlist !== undefined) {
+    return [
+      ...buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools),
+      ...externalDirectoryRules,
+    ];
+  }
   const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools)
     .map((rule) => (
       (rule.permission === 'edit' || rule.permission === 'write') && rule.action === 'deny'
@@ -240,8 +255,22 @@ export function buildOpenCodeSessionPermission(
       rules.push({ permission, pattern: '*', action: 'allow' });
     }
   }
-  rules.push({ permission: 'external_directory', pattern: '*', action: 'deny' });
+  rules.push(...externalDirectoryRules);
   return rules;
+}
+
+function buildExternalDirectorySessionRules(
+  directories: readonly string[] | undefined,
+): OpenCodePermissionRule[] {
+  const normalized = normalizeOpenCodeExternalDirectories(directories);
+  return [
+    { permission: 'external_directory', pattern: '*', action: 'deny' },
+    ...normalized.map((directory) => ({
+      permission: 'external_directory',
+      pattern: openCodeExternalDirectoryPattern(directory),
+      action: 'allow' as const,
+    })),
+  ];
 }
 
 /**
@@ -313,6 +342,7 @@ export function buildOpenCodePromptTools(
   networkAccess?: boolean,
   allowedTools?: OpenCodeAllowedTools,
   allowedMcpTools?: readonly string[],
+  strictToolAllowlist?: OpenCodeAllowedTools,
 ): Record<string, boolean> {
   const enabledPermissions = new Set<string>();
   if (allowedTools !== undefined) {
@@ -336,10 +366,12 @@ export function buildOpenCodePromptTools(
     enabledPermissions.add(permission);
   }
 
-  const tools: Record<string, boolean> = { task: false };
+  const tools: Record<string, boolean> = { ...(strictToolAllowlist === undefined ? {} : { '*': false }), task: false };
   for (const [permission, toolIds] of Object.entries(OPEN_CODE_TOOL_IDS_BY_PERMISSION)) {
     for (const toolId of toolIds) {
-      tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(permission);
+      tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(
+        strictToolAllowlist === undefined ? permission : toolId,
+      );
     }
   }
   for (const permission of allowedMcpTools ?? []) {
@@ -448,17 +480,24 @@ function toOpenCodeAllowedPermission(tool: string): string | null {
 
 /** Options for calling OpenCode */
 export interface OpenCodeCallOptions {
+  callerManagedSession?: true;
   cwd: string;
+  /** Exact TAKT-owned context directories approved for external reads. */
+  externalDirectoryAllowlist?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  contextWindow?: number;
   /** Workflow-only permission to resolve an omitted model through OpenCode. */
   allowDefaultModel?: boolean;
   systemPrompt?: string;
   /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
   allowedTools?: OpenCodeAllowedTools;
+  strictToolAllowlist?: OpenCodeAllowedTools;
   /** Trusted task-state MCP tools in OpenCode's normalized permission names. */
   allowedMcpTools?: readonly string[];
+  /** Conversation-approved MCP server names as assigned (every tool of each server is allowed). */
+  allowedMcpServers?: readonly string[];
   permissionMode?: PermissionMode;
   internalAgentIsolation?: import('../../shared/types/provider.js').InternalAgentIsolation;
   allowReadonlyFileRead?: boolean;
@@ -478,7 +517,7 @@ export interface OpenCodeCallOptions {
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;
   childProcessEnv?: Readonly<Record<string, string>>;
-  /** JSON schema: native format on v1; prompt, extraction and downstream validation on v2. */
+  /** JSON schema: native format on v1; prompt/extraction for strict calls and v2. */
   outputSchema?: Record<string, unknown>;
   language?: Language;
   /** Provider-prepared MCP material (issue #1137). */
@@ -488,6 +527,8 @@ export interface OpenCodeCallOptions {
 export interface OpenCodeCompactSessionOptions {
   cwd: string;
   sessionId: string;
+  /** Exact TAKT-owned context directories approved for external reads. */
+  externalDirectoryAllowlist?: readonly string[];
   model?: string;
   /** Workflow-only permission to use the model stored on the OpenCode session. */
   allowDefaultModel?: boolean;

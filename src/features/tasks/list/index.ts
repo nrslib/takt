@@ -1,3 +1,6 @@
+import { getLabel } from '../../../shared/i18n/index.js';
+import { describeSavedTask, describeIssueResult, describeIssueOnlyResult, describeExecutionResult, runConversationOperation } from '../../interactive/operationFeedback.js';
+import type { ConversationDispatchOutcome } from '../../interactive/actionDispatcher.js';
 import {
   TaskRunner,
 } from '../../../infra/task/index.js';
@@ -7,7 +10,8 @@ import { info, header, blankLine } from '../../../shared/ui/index.js';
 import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
-import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
+import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
+import { createIssueAndSaveTask, createIssueFromTaskResult, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
 import {
   type ListAction,
   showFullDiff,
@@ -19,14 +23,16 @@ import {
   syncBranchWithRoot,
   pullFromRemote,
 } from './taskActions.js';
-import { deleteTaskByKind, deleteAllTasks } from './taskDeleteActions.js';
+import { deleteTaskByKind, deleteAllTasks, deleteSelectedTasks } from './taskDeleteActions.js';
 import { forceFailRunningTask } from './taskForceFailActions.js';
+import { stopRunningTask } from './taskStopActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
 import { resolveConfigValues } from '../../../infra/config/index.js';
 import { runTui } from '../../tui/index.js';
 import type { InteractiveModeResult } from '../../interactive/interactive.js';
+import { resolveInstructionIssue } from '../../interactive/issueBinding.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
 
@@ -49,7 +55,7 @@ export {
 
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
-type RunningTaskAction = 'force_fail' | 'interactive';
+type RunningTaskAction = 'stop' | 'force_fail' | 'interactive';
 type FailedTaskAction = 'requeue' | 'retry' | 'create_pr' | 'delete';
 type PrFailedTaskAction = ListAction;
 type CompletedTaskAction = ListAction;
@@ -88,7 +94,7 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
   );
 }
 
-async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<RunningTaskAction | null> {
+async function showRunningTaskAndPromptAction(task: TaskListItem, lang: 'en' | 'ja'): Promise<RunningTaskAction | null> {
   header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
   if (task.content) {
@@ -103,6 +109,7 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
       ...(task.runSlug !== undefined && task.worktreePath !== undefined && task.data?.worktree !== false
         ? [{ label: 'Interactive', value: 'interactive' as const, description: 'Consult the running task and propose additional instructions' }]
         : []),
+      { label: getLabel('taskStop.label', lang), value: 'stop', description: getLabel('taskStop.description', lang) },
     ],
   );
 }
@@ -110,6 +117,11 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
 async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
   header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
+  if (task.data?.merge_task === true) {
+    info(`  PR: #${task.data.pr_number}`);
+    if (task.worktreePath) info(`  Clone: ${sanitizeTerminalText(task.worktreePath)}`);
+    if (task.failure?.error) info(`  Failure: ${sanitizeTerminalText(task.failure.error)}`);
+  }
   if (task.content) {
     info(`  ${task.content}`);
   }
@@ -120,7 +132,9 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
       { label: 'Retry', value: 'retry', description: 'Review the revised instruction in conversation, then queue it' },
-      { label: 'Create PR', value: 'create_pr', description: 'Commit, push, and create a pull request' },
+      { label: 'Create PR', value: 'create_pr', description: task.data?.merge_task === true
+        ? 'Commit and push to the existing pull request'
+        : 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );
@@ -157,51 +171,56 @@ async function dispatchListConversation(
   workflowId: string,
   result: InteractiveModeResult,
   agentOverrides?: TaskExecutionOptions,
-): Promise<void> {
+): Promise<ConversationDispatchOutcome> {
   const issueContextReplacement = result.issueContextReplacement;
+  const boundIssue = resolveInstructionIssue(result.task, issueContextReplacement?.issueNumber);
   const traceTaskContext = issueContextReplacement === undefined
     ? undefined
     : {
       source: 'issue' as const,
-      ...(issueContextReplacement.issueNumber === undefined
+      ...(boundIssue === undefined
         ? {}
-        : { issueNumber: issueContextReplacement.issueNumber }),
+        : { issueNumber: boundIssue }),
     };
 
-  switch (result.action) {
-    case 'execute':
-      await selectAndExecuteTask(cwd, result.task, {
-        workflow: workflowId,
-        interactiveUserInput: true,
-        interactiveMetadata: { confirmed: true, task: result.task },
-        skipTaskList: true,
-        failureMode: 'return',
-        ...(traceTaskContext ? { traceTaskContext } : {}),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      }, agentOverrides);
-      return;
-    case 'create_issue': {
-      const labels = await promptLabelSelection(lang);
-      await createIssueAndSaveTask(cwd, result.task, workflowId, {
-        labels,
-        ...(issueContextReplacement?.issueNumber === undefined
-          ? {}
-          : { sourceIssue: { number: issueContextReplacement.issueNumber, language: lang } }),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-      return;
+  return runConversationOperation(result.action, lang, async () => {
+    switch (result.action) {
+      case 'execute':
+        return describeExecutionResult(await selectAndExecuteTask(cwd, result.task, {
+          workflow: workflowId,
+          interactiveUserInput: true,
+          interactiveMetadata: { confirmed: true, task: result.task },
+          skipTaskList: true,
+          failureMode: 'return',
+          ...(traceTaskContext ? { traceTaskContext } : {}),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        }, agentOverrides), lang);
+      case 'create_issue': {
+        const labels = await promptLabelSelection(lang);
+        return describeIssueResult(await createIssueAndSaveTask(cwd, result.task, workflowId, {
+          labels,
+          ...(boundIssue === undefined
+            ? {}
+            : { sourceIssue: { number: boundIssue, language: lang } }),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        }), lang);
+      }
+      case 'create_issue_only': {
+        const labels = await promptLabelSelection(lang);
+        return describeIssueOnlyResult(createIssueFromTaskResult(result.task, { cwd, labels }), lang);
+      }
+      case 'save_task':
+        return describeSavedTask(await saveTaskFromInteractive(cwd, result.task, workflowId, {
+          allowCancel: true,
+          ...(boundIssue === undefined
+            ? {}
+            : { issue: boundIssue }),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        }), lang);
+      case 'cancel':
+        return { kind: 'cancelled', notice: getLabel('interactive.ui.cancelled', lang) };
     }
-    case 'save_task':
-      await saveTaskFromInteractive(cwd, result.task, workflowId, {
-        ...(issueContextReplacement?.issueNumber === undefined
-          ? {}
-          : { issue: issueContextReplacement.issueNumber }),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-      return;
-    case 'cancel':
-      return;
-  }
+  });
 }
 
 export async function listTasks(
@@ -230,6 +249,7 @@ export async function listTasks(
         value: `${task.kind}:${idx}`,
         description: `${task.summary ?? task.content} | ${formatShortDate(task.createdAt)}`,
       })),
+      { label: 'Delete selected…', value: '__delete-selected__', description: 'Select tasks to delete' },
       { label: 'All Delete', value: '__all-delete__', description: 'Delete all tasks at once' },
     ];
 
@@ -240,6 +260,11 @@ export async function listTasks(
 
     if (selected === null) {
       return;
+    }
+
+    if (selected === '__delete-selected__') {
+      await deleteSelectedTasks(tasks);
+      continue;
     }
 
     if (selected === '__all-delete__') {
@@ -263,13 +288,14 @@ export async function listTasks(
     } else if (type === 'running') {
       const task = tasks[idx];
       if (!task) continue;
-      const taskAction = await showRunningTaskAndPromptAction(task);
+      const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
+      const lang = config.language === 'ja' ? 'ja' : 'en';
+      const taskAction = await showRunningTaskAndPromptAction(task, lang);
       if (taskAction === 'interactive' && task.runSlug !== undefined) {
         try {
-          const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
           await runTui({
             cwd,
-            lang: config.language === 'ja' ? 'ja' : 'en',
+            lang,
             previewCount: config.interactivePreviewSteps,
             ...(options === undefined ? {} : { agentOverrides: options }),
             taskHistory: [],
@@ -282,18 +308,32 @@ export async function listTasks(
               runSlug: task.runSlug,
             },
             dispatch: async (workflowId, result) => {
-              await dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
+              return dispatchListConversation(cwd, lang, workflowId, result, options);
             },
           });
         } catch (error) {
           info(getErrorMessage(error));
         }
+      } else if (taskAction === 'stop') {
+        await stopRunningTask(task, cwd, lang);
       } else if (taskAction === 'force_fail') {
         await forceFailRunningTask(task, cwd);
       }
     } else if (type === 'completed') {
       const task = tasks[idx];
       if (!task) continue;
+      if (task.data?.merge_task === true) {
+        header(formatTaskStatusLabel(task));
+        info(`  PR: #${task.data.pr_number}`);
+        info('  Pull request merged.');
+        if (task.worktreePath) info(`  Clone cleanup pending: ${sanitizeTerminalText(task.worktreePath)}`);
+        const mergeAction = await selectOption<'delete'>(
+          `Action for ${sanitizeTerminalText(task.name)}:`,
+          [{ label: 'Delete record', value: 'delete', description: 'Remove this task and any remaining clone' }],
+        );
+        if (mergeAction === 'delete') await deleteTaskByKind(task);
+        continue;
+      }
       if (!task.branch) {
         info(`Branch is missing for completed task: ${sanitizeTerminalText(task.name)}`);
         continue;
@@ -347,6 +387,12 @@ export async function listTasks(
       if (!task) continue;
       const taskAction = await showExceededTaskAndPromptAction(task);
       if (taskAction === 'requeue') {
+        try {
+          await checkQueuedTaskProviders(cwd, task, options ?? {}, terminalProviderConfirmation());
+        } catch (error) {
+          info(getErrorMessage(error));
+          continue;
+        }
         runner.requeueExceededTask(task.name);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);

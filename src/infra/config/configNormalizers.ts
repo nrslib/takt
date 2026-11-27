@@ -17,6 +17,7 @@ import type {
   AssistantConfig,
   AutoRoutingConfig,
   CacciaConfig,
+  MergeConfig,
   FormalSpecMode,
   FormalSpecSetting,
   WorkflowOverrides,
@@ -61,6 +62,21 @@ export function denormalizeCacciaConfig(config: CacciaConfig | undefined): Recor
     ...(config.waitTimeoutMs !== undefined ? { wait_timeout_ms: config.waitTimeoutMs } : {}),
     ...(config.maxIterations !== undefined ? { max_iterations: config.maxIterations } : {}),
     ...(config.workflow !== undefined ? { workflow: config.workflow } : {}),
+  };
+}
+
+export function denormalizeMergeConfig(config: MergeConfig | undefined): Record<string, unknown> | undefined {
+  if (config === undefined) return undefined;
+  return {
+    ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+    ...(config.prepareWorkflow === undefined ? {} : { prepare_workflow: config.prepareWorkflow }),
+    ...(config.method === undefined ? {} : { method: config.method }),
+    ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
+    ...(config.autoStart === undefined ? {} : { auto_start: config.autoStart }),
+    ...(config.includeDraft === undefined ? {} : { include_draft: config.includeDraft }),
+    ...(config.includeForks === undefined ? {} : { include_forks: config.includeForks }),
+    ...(config.threatCheckMaxDiffBytes === undefined ? {} : { threat_check_max_diff_bytes: config.threatCheckMaxDiffBytes }),
+    ...(config.where === undefined ? {} : { where: config.where }),
   };
 }
 
@@ -216,6 +232,9 @@ export function denormalizeAutoRoutingConfig(
   if (config.defaultPool === undefined) {
     throw new Error('Cannot serialize auto routing without a default pool');
   }
+  if (config.router.model === undefined) {
+    throw new Error('Cannot serialize legacy auto_routing.router without a model');
+  }
   return {
     strategy: config.strategy,
     router: {
@@ -224,6 +243,9 @@ export function denormalizeAutoRoutingConfig(
     },
     candidates: config.candidates.map((candidate, index) => {
       const path = `auto_routing.candidates[${index}]`;
+      if (candidate.model === undefined) {
+        throw new Error(`Cannot serialize legacy ${path} without a model`);
+      }
       const rawProviderOptions = denormalizeProviderOptions(candidate.providerOptions);
       if (candidate.providerOptions !== undefined) {
         assertNormalizedProviderOptions(path, rawProviderOptions);
@@ -730,6 +752,7 @@ export function denormalizeProviderOptions(
     || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.permissionControl !== undefined
     || providerOptions.codex?.configProfile !== undefined
+    || providerOptions.codex?.readonlyPermissionBase !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
     || providerOptions.codex?.fastMode !== undefined
     || providerOptions.codex?.guards?.callTimeoutMs !== undefined
@@ -748,6 +771,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.codex.configProfile !== undefined
         ? { config_profile: providerOptions.codex.configProfile }
+        : {}),
+      ...(providerOptions.codex.readonlyPermissionBase !== undefined
+        ? { readonly_permission_base: providerOptions.codex.readonlyPermissionBase }
         : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }
@@ -851,6 +877,16 @@ export function denormalizeProviderOptions(
     if (Object.keys(sandbox).length > 0) {
       claude.sandbox = sandbox;
     }
+    const permissions: Record<string, unknown> = {};
+    if (providerOptions.claude.permissions?.deny !== undefined) {
+      permissions.deny = providerOptions.claude.permissions.deny;
+    }
+    if (providerOptions.claude.permissions?.importUserReadDeny !== undefined) {
+      permissions.import_user_read_deny = providerOptions.claude.permissions.importUserReadDeny;
+    }
+    if (Object.keys(permissions).length > 0) {
+      claude.permissions = permissions;
+    }
     if (Object.keys(claude).length > 0) {
       raw.claude = claude;
     }
@@ -866,12 +902,14 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.kiro?.usePromptTempFile !== undefined || providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
+  if (providerOptions.kiro?.usePromptTempFile !== undefined
+    || providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.effort !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
     raw.kiro = {
       ...(providerOptions.kiro.usePromptTempFile !== undefined
         ? { use_prompt_temp_file: providerOptions.kiro.usePromptTempFile }
         : {}),
       ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
+      ...(providerOptions.kiro.effort !== undefined ? { effort: providerOptions.kiro.effort } : {}),
       ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
         ? { guards: { call_timeout_ms: providerOptions.kiro.guards.callTimeoutMs } }
         : {}),
@@ -887,6 +925,15 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
+  if (providerOptions.devin?.guards?.callTimeoutMs !== undefined) {
+    raw.devin = {
+      guards: {
+        ...(providerOptions.devin.guards.callTimeoutMs !== undefined
+          ? { call_timeout_ms: providerOptions.devin.guards.callTimeoutMs }
+          : {}),
+      },
+    };
+  }
   if (providerOptions.deepseekHarness !== undefined) {
     const deepseekHarness = {
       ...(providerOptions.deepseekHarness.baseUrl !== undefined
@@ -900,6 +947,11 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
         ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.plugins !== undefined
+        ? { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => (
+            typeof plugin === 'string' ? plugin : { ...plugin }
+          )) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {

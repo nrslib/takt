@@ -65,6 +65,11 @@ const ClaudeSandboxShape = {
 /** Claude sandbox settings schema */
 export const ClaudeSandboxSchema = z.object(ClaudeSandboxShape).optional();
 
+const ClaudePermissionsShape = {
+  deny: z.array(z.string().min(1)).optional(),
+  import_user_read_deny: z.boolean().optional(),
+};
+
 /** Provider-specific step options schema */
 const CodexSkillsShape = {
   repo: z.boolean().optional(),
@@ -88,6 +93,7 @@ const CodexProviderOptionShape = {
   network_access: z.boolean().optional(),
   permission_control: z.enum(['takt', 'codex']).optional(),
   config_profile: CodexConfigProfileSchema.optional(),
+  readonly_permission_base: CodexConfigProfileSchema.optional(),
   reasoning_effort: ProviderEffortSchema.optional(),
   fast_mode: z.boolean().optional(),
   skills: z.object(CodexSkillsShape).optional(),
@@ -138,6 +144,7 @@ const ClaudeProviderOptionShape = {
   effort: ProviderEffortSchema.optional(),
   skills: ClaudeSkillsSchema.optional(),
   sandbox: z.object(ClaudeSandboxShape).optional(),
+  permissions: z.object(ClaudePermissionsShape).strict().optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 };
 
@@ -162,9 +169,14 @@ const CopilotProviderOptionsSchema = z.object({
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
+const KiroEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'], {
+  error: (issue) => `Invalid Kiro effort ${JSON.stringify(issue.input)}; expected low, medium, high, xhigh, or max`,
+});
+
 const KiroProviderOptionsSchema = z.object({
   use_prompt_temp_file: z.boolean().optional(),
   agent: z.string().min(1).optional(),
+  effort: KiroEffortSchema.optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
@@ -173,8 +185,37 @@ const CursorProviderOptionsSchema = z.object({
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
+const DevinProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
 const DeepSeekReasoningEffortSchema = z.enum(['off', 'low', 'high', 'max'], {
   error: (issue) => `Invalid DeepSeek reasoning_effort ${JSON.stringify(issue.input)}; expected off, low, high, or max`,
+});
+
+/** Require an explicit npm prefix and a nonempty package spec for string plugin options. */
+function hasNpmPackageSpec(source: string): boolean {
+  return source.startsWith('npm:') && source.slice('npm:'.length).trim().length > 0;
+}
+
+const DeepSeekHarnessPluginObjectSchema = z.object({
+  id: z.string().min(1).optional(),
+  source: z.string().min(1),
+  ref: z.string().min(1).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+}).strict().superRefine((plugin, ctx) => {
+  if (plugin.source.startsWith('npm:')) {
+    if (!hasNpmPackageSpec(plugin.source)) {
+      ctx.addIssue({ code: 'custom', path: ['source'], message: 'npm plugins require a package spec.' });
+    }
+    if (plugin.ref !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['ref'], message: 'npm plugins do not support ref.' });
+    }
+    return;
+  }
+  if (plugin.id === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['id'], message: 'Git plugins require an id.' });
+  }
 });
 
 const DeepSeekHarnessProviderOptionsSchema = z.object({
@@ -183,6 +224,12 @@ const DeepSeekHarnessProviderOptionsSchema = z.object({
   request_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   shutdown_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   reasoning_effort: DeepSeekReasoningEffortSchema.optional(),
+  plugins: z.array(z.union([
+    z.string().min(1).refine(hasNpmPackageSpec, {
+      message: 'Plugin string sources must use npm:<package-spec>.',
+    }),
+    DeepSeekHarnessPluginObjectSchema,
+  ])).optional(),
 }).strict();
 
 const PiProviderOptionsSchema = z.object({
@@ -207,6 +254,7 @@ export const StepProviderOptionsObjectSchema = z.object({
   kiro: KiroProviderOptionsSchema.optional(),
   pi: PiProviderOptionsSchema.optional(),
   deepseek_harness: DeepSeekHarnessProviderOptionsSchema.optional(),
+  devin: DevinProviderOptionsSchema.optional(),
 });
 
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
@@ -221,6 +269,7 @@ const StrictStepProviderOptionsSchema = z.object({
   kiro: KiroProviderOptionsSchema.strict().optional(),
   pi: PiProviderOptionsSchema.strict().optional(),
   deepseek_harness: DeepSeekHarnessProviderOptionsSchema.strict().optional(),
+  devin: DevinProviderOptionsSchema.strict().optional(),
 }).strict().optional();
 
 /** Provider key schema for profile maps */
@@ -419,6 +468,7 @@ export const ProviderPermissionProfilesSchema = z.object({
   kiro: ProviderPermissionProfileSchema.optional(),
   pi: ProviderPermissionProfileSchema.optional(),
   'deepseek-harness': ProviderPermissionProfileSchema.optional(),
+  devin: ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
 }).strict().optional();
 
@@ -614,6 +664,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     networkAccess: z.boolean().optional(),
     permissionControl: z.enum(['takt', 'codex']).optional(),
     configProfile: CodexConfigProfileSchema.optional(),
+    readonlyPermissionBase: CodexConfigProfileSchema.optional(),
     reasoningEffort: ProviderEffortSchema.optional(),
     fastMode: z.boolean().optional(),
     guards: z.object({
@@ -650,6 +701,10 @@ const NormalizedStepProviderOptionsSchema = z.object({
       allowUnsandboxedCommands: z.boolean().optional(),
       excludedCommands: z.array(z.string()).optional(),
     }).strict().optional(),
+    permissions: z.object({
+      deny: z.array(z.string().min(1)).optional(),
+      importUserReadDeny: z.boolean().optional(),
+    }).strict().optional(),
   }).strict().optional(),
   claudeTerminal: z.object({
     backend: z.enum(['tmux']).optional(),
@@ -668,11 +723,17 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   kiro: z.object({
     agent: z.string().min(1).optional(),
+    effort: KiroEffortSchema.optional(),
     guards: z.object({
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
     }).strict().optional(),
   }).strict().optional(),
   cursor: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  devin: z.object({
     guards: z.object({
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
     }).strict().optional(),
@@ -683,6 +744,12 @@ const NormalizedStepProviderOptionsSchema = z.object({
     requestTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     shutdownTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     reasoningEffort: DeepSeekReasoningEffortSchema.optional(),
+    plugins: z.array(z.union([
+      z.string().min(1).refine(hasNpmPackageSpec, {
+        message: 'Plugin string sources must use npm:<package-spec>.',
+      }),
+      DeepSeekHarnessPluginObjectSchema,
+    ])).optional(),
   }).strict().optional(),
   pi: z.object({
     guards: z.object({

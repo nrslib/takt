@@ -1,0 +1,86 @@
+ja:
+  lang: ja
+  expectedQuestionType: information
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 外部保管サービスへのエクスポートを実装する
+    outOfScope:
+      - 本番環境の切り替え
+    acceptanceCriteria:
+      - 契約上の1日あたり転送上限を超えずにエクスポートできる。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/archive-export
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  event:
+    kind: registered
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:30:00.000Z
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/archive-account.md
+      result: アカウントは個別契約。公開ドキュメントの標準上限は適用されない。アプリの設定、リポジトリ内の契約資料、サービスの参照APIには1日あたり転送上限の値がない。契約書の原本は担当者が社外で管理している。
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: 設計、実装、レビューを実行する。
+en:
+  lang: en
+  expectedQuestionType: information
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Implement export to the external archive service
+    outOfScope:
+      - Production cutover
+    acceptanceCriteria:
+      - Export without exceeding the contractual daily transfer limit.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/archive-export
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  event:
+    kind: registered
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:30:00.000Z
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/archive-account.md
+      result: The account has a negotiated contract; the public standard limit does not apply. App configuration, contract materials in this repository and the service read API do not contain the daily transfer limit. The account owner keeps the original contract outside the repository.
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Plan, implement and review the assigned work.

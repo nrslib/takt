@@ -92,6 +92,18 @@ describe('StatusLine', () => {
     expect(stdoutChunks).toEqual([]);
   });
 
+  it.each([true, undefined])('renders immediately only when requested (%s) and keeps periodic updates', async (renderImmediately) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    statusLine.start('Working...', { renderImmediately, intervalMs: 120 });
+    const initialOutput = stdoutChunks.join('');
+    expect((await readTerminalText(initialOutput)).trim()).toBe(renderImmediately ? '⠋ Working...' : '');
+    statusLine.update('Updated');
+    vi.advanceTimersByTime(119);
+    expect(stdoutChunks.join('')).toBe(initialOutput);
+    vi.advanceTimersByTime(1);
+    expect((await readTerminalText(stdoutChunks.join(''))).trim()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Updated$/u);
+  });
+
   it.each(['stdout', 'stderr'] as const)(
     'keeps the spinner running when %s terminal metadata cannot be read',
     async (streamName) => {
@@ -294,22 +306,35 @@ describe('StatusLine', () => {
     expect(screen).toContain(chunks.join(''));
   });
 
-  it('preserves split thinking across spinner timer ticks in the rendered terminal', async () => {
+  it('shows thinking progress without exposing split thinking across spinner timer ticks', async () => {
     vi.useFakeTimers();
     const display = new StreamDisplay('test-agent', false);
-    statusLine.start('Thinking...');
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      process.stdout.write(`${format(...args)}\n`);
+    });
     const chunks = ['思考 ', 'の断片\n続き ', 'です\n'];
+    try {
+      statusLine.start('Thinking...');
+      for (const chunk of chunks) {
+        display.showThinking(chunk);
+        vi.advanceTimersByTime(80);
+      }
+      display.showText('公開する応答本文\n');
+      display.flush();
+      statusLine.stop();
+      vi.useRealTimers();
 
-    for (const chunk of chunks) {
-      display.showThinking(chunk);
-      vi.advanceTimersByTime(80);
+      const output = stdoutChunks.join('');
+      const screen = await readTerminalText(output);
+      expect(screen).toContain('[test-agent] thinking:');
+      expect(screen).toContain('公開する応答本文');
+      for (const chunk of chunks) expect(output).not.toContain(chunk);
+    } finally {
+      display.reset();
+      statusLine.stop();
+      consoleLog.mockRestore();
+      vi.useRealTimers();
     }
-    display.flushThinking();
-    statusLine.stop();
-    vi.useRealTimers();
-
-    const screen = await readTerminalText(stdoutChunks.join(''));
-    expect(screen).toContain(chunks.join(''));
   });
 
   it('preserves tool output while the status line spinner is active', async () => {
@@ -428,6 +453,32 @@ describe('StatusLine', () => {
     expect(rendered.length).toBeGreaterThan(0);
 
     statusLine.stop();
+  });
+
+  it('erases the previous longer message when redrawing a shorter message', async () => {
+    vi.useFakeTimers();
+    statusLine.start('a much longer message', { dim: true, intervalMs: 120, truncate: true });
+    vi.advanceTimersByTime(120);
+    statusLine.update('short');
+    vi.advanceTimersByTime(120);
+    const output = stdoutChunks.join('');
+    statusLine.stop();
+    vi.useRealTimers();
+    expect((await readTerminalText(output)).trim()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] short$/u);
+  });
+
+  it('preserves the display style and interval across suspend and resume', () => {
+    vi.useFakeTimers();
+    statusLine.start('dim message', { dim: true, intervalMs: 120, truncate: true });
+    statusLine.suspend();
+    statusLine.update('new message');
+    stdoutChunks = [];
+    statusLine.resume();
+    vi.advanceTimersByTime(119);
+    expect(stdoutChunks).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(stdoutChunks.join('')).toContain('new message');
+    expect(stdoutChunks.join('')).not.toContain('dim message');
   });
 
   it('should defer start while suspended and resume with the latest message', () => {

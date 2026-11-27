@@ -1,8 +1,10 @@
 import { getLabel } from '../shared/i18n/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -63,15 +65,24 @@ vi.mock('../shared/ui/index.js', async (importOriginal) => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
+import { createTaktMcpServer } from '../app/mcp/server.js';
 import { WorkflowEngine, type WorkflowEngineOptions } from '../core/workflow/index.js';
 import { RuleEvaluator as ActualRuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import type { AgentResponse, LoopMonitorRule, WorkflowConfig } from '../core/models/index.js';
 import type { LiveInterventionChannel } from '../core/workflow/live-intervention/types.js';
+import { createLiveInterventionState, reduceLiveInterventionEvent } from '../core/workflow/live-intervention/state.js';
+import { buildLiveInterventionPrompt } from '../core/workflow/live-intervention/prompt.js';
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import * as workflowExecutionBundle from '../features/tasks/execute/workflowExecutionBundle.js';
+import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
+import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { TaskRunner } from '../infra/task/index.js';
+import { stringify as stringifyYaml } from 'yaml';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import { firstTextContent } from './helpers/mcp-content.js';
 import {
   cleanupWorkflowEngine,
   createTestTmpDir,
@@ -218,6 +229,7 @@ describe('WorkflowEngine live intervention integration', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     if (engine !== undefined) {
       cleanupWorkflowEngine(engine);
@@ -226,6 +238,377 @@ describe('WorkflowEngine live intervention integration', () => {
     if (existsSync(projectCwd)) {
       rmSync(projectCwd, { recursive: true, force: true });
     }
+  });
+
+  function createTellTaskSpecFixture(runSlug: string, source: 'task_dir' | 'content' | 'content_file' = 'task_dir') {
+    const cloneCwd = join(projectCwd, '.takt', 'worktrees', 'tell-task');
+    const originalOrder = '# Task\n\nOriginal task instructions.\n';
+    const inputFile = join(projectCwd, 'task.txt');
+    mkdirSync(cloneCwd, { recursive: true });
+    if (source === 'task_dir') {
+      mkdirSync(join(projectCwd, '.takt/tasks/tell-task'), { recursive: true });
+      writeFileSync(join(projectCwd, '.takt/tasks/tell-task/order.md'), originalOrder, 'utf8');
+    } else if (source === 'content_file') {
+      writeFileSync(inputFile, originalOrder, 'utf8');
+    }
+    writeFileSync(join(projectCwd, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        name: 'tell-task', status: 'running', summary: 'Tell task',
+        ...(source === 'task_dir' ? { task_dir: '.takt/tasks/tell-task' }
+          : source === 'content' ? { content: originalOrder } : { content_file: 'task.txt' }),
+        workflow: 'live-intervention-engine', worktree: true, worktree_path: cloneCwd,
+        auto_pr: false, branch: 'feature/tell', run_slug: runSlug,
+        created_at: '2026-10-18T00:00:00.000Z', started_at: '2026-10-18T00:00:00.000Z',
+        completed_at: null,
+      }],
+    }), 'utf8');
+    const runner = new TaskRunner(projectCwd);
+    const running = runner.updateRunningTaskExecution('tell-task', { runSlug, worktreePath: cloneCwd });
+    expect(running.taskDir).toBeDefined();
+    const taskDir = running.taskDir!;
+    const sourceOrderPath = join(projectCwd, taskDir, 'order.md');
+    return {
+      cloneCwd, taskDir, sourceOrderPath, inputFile, originalOrder,
+      taskSpec: resolveTaskSpecForExecution(projectCwd, cloneCwd, taskDir, runSlug),
+      runPaths: buildRunPaths(cloneCwd, runSlug),
+      store: new LiveInterventionFileStore(projectCwd, runSlug),
+    };
+  }
+
+  it('passes a tell received by the coder exactly once to later child agents and the parent planner', async () => {
+    const runSlug = 'tell-coder-to-adjudicator';
+    const fixture = createTellTaskSpecFixture(runSlug);
+    const content = 'docs は変えない';
+    const workflowDir = join(fixture.cloneCwd, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(workflowDir, 'tell-child.yaml'), stringifyYaml({
+      name: 'tell-child',
+      subworkflow: { callable: true },
+      initial_step: 'adjudicate',
+      max_steps: 3,
+      steps: [
+        { name: 'adjudicate', persona: 'Adjudicator role', instruction: 'Adjudicate this task.',
+          rules: [{ condition: 'done', next: 'replan' }] },
+        { name: 'replan', persona: 'Planner role', instruction: 'Replan this task.',
+          rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      ],
+    }), 'utf8');
+    const config: WorkflowConfig = {
+      name: 'tell-parent', maxSteps: 8, initialStep: 'implement',
+      steps: [
+        makeStep('implement', { persona: 'Coder role', rules: [makeRule('done', 'delegate')] }),
+        { name: 'delegate', personaDisplayName: 'delegate', instruction: '', kind: 'workflow_call',
+          call: './.takt/workflows/tell-child.yaml', rules: [makeRule('COMPLETE', 'finalize')] },
+        makeStep('finalize', { persona: 'Parent planner role', instruction: 'Finalize this task.',
+          rules: [makeRule('done', 'COMPLETE')] }),
+      ],
+    };
+    const server = createTaktMcpServer({}, { allowedProjectRoot: projectCwd });
+    const client = new Client({ name: 'tell-propagation-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      let issued = false;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+        options.onDispatch?.(options.permissionMode);
+        if (!issued) {
+          issued = true;
+          expect(instruction).not.toContain(content);
+          expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).toBe(fixture.originalOrder);
+          const result = await client.callTool({
+            name: 'takt_tell_run', arguments: { cwd: projectCwd, runSlug, content },
+          });
+          expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+          expect(fixture.store.read().pending).toBe(1);
+        }
+        return makeResponse({ content: 'done', sessionId: 'coder-session' });
+      });
+
+      const result = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+        projectCwd, provider: 'mock', reportDirName: runSlug,
+        taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+      });
+
+      expect(result.success).toBe(true);
+      const calls = vi.mocked(runAgent).mock.calls;
+      expect(calls).toHaveLength(5);
+      expect(calls[1]?.[2].sessionId).toBe('coder-session');
+      const sourceOrder = readFileSync(fixture.sourceOrderPath, 'utf8');
+      expect(sourceOrder.split(content)).toHaveLength(2);
+      expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).toBe(sourceOrder);
+      expect(fixture.store.read()).toMatchObject({ pending: 0, deliveredSameSession: 1, deliveredNextStep: 0 });
+      const deliveries = readFileSync(fixture.store.getFilePath(), 'utf8').trim().split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.type === 'delivered');
+      expect(deliveries).toHaveLength(1);
+      for (const [index, marker] of ['Adjudicate this task.', 'Replan this task.', 'Finalize this task.'].entries()) {
+        expect(calls[index + 2]?.[1]).toContain(marker);
+      }
+      for (const [index, call] of calls.slice(1).entries()) {
+        expect.soft(call[1].split(content).length - 1, `prompt ${index + 1}`).toBe(1);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('includes a new instruction arriving after preparation without duplicating delivered history', async () => {
+    let liveState = reduceLiveInterventionEvent(createLiveInterventionState(), {
+      type: 'issued', instructionId: 1, issuedAt: '2026-10-29T00:00:00.000Z', content: 'docs は変えない',
+    });
+    const channel: LiveInterventionChannel = {
+      read: () => liveState,
+      prepareDelivery: async (context) => ({
+        instructionIds: liveState.instructions.filter((entry) => entry.state === 'pending').map((entry) => entry.instructionId),
+        prompt: buildLiveInterventionPrompt(liveState.instructions, context.language), context,
+      }),
+      commitDelivery: vi.fn(async (delivery) => {
+        liveState = reduceLiveInterventionEvent(liveState, {
+          type: 'delivered', instructionIds: [...delivery.instructionIds],
+          deliveredAt: '2026-10-29T00:00:02.000Z', ...delivery.context,
+        });
+      }),
+      recordTerminal: async () => 0,
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) =>
+      dispatchMockResponse(persona, instruction, options, makeResponse({ content: 'done', sessionId: `${persona}-session` })));
+    engine = new WorkflowEngine(
+      buildSingleStepConfig([makeRule('done', 'fix')]),
+      projectCwd, 'test task', createEngineOptions(projectCwd, channel),
+    );
+    let issuedAfterPreparation = false;
+    engine.on('step:start', (step) => {
+      if (step.name === 'fix') {
+        expect(liveState.pending).toBe(0);
+        liveState = reduceLiveInterventionEvent(liveState, {
+          type: 'issued', instructionId: 2, issuedAt: '2026-10-29T00:00:01.000Z', content: 'focused tests only',
+        });
+        issuedAfterPreparation = true;
+      }
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(issuedAfterPreparation).toBe(true);
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![1].split('docs は変えない')).toHaveLength(2);
+    expect(calls[1]![1].split('focused tests only')).toHaveLength(2);
+    expect(channel.commitDelivery).toHaveBeenCalledTimes(2);
+    expect(liveState).toMatchObject({ pending: 0, deliveredNextStep: 2 });
+  });
+
+  it('passes delivered history and a new pending instruction once in issue order to subsequent agents', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const first = 'docs は変えない';
+    const second = '対象のテストだけ実行する';
+    await store.issue(first);
+    vi.mocked(runReportPhase).mockImplementationOnce(async () => {
+      await store.issue(second);
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) =>
+      dispatchMockResponse(persona, instruction, options, makeResponse({ content: 'done', sessionId: `${persona}-session` })));
+    const config = buildSingleStepConfig([makeRule('done', 'fix')]);
+    config.steps[0]!.outputContracts = [{ name: 'review.md', format: 'markdown' }];
+    config.steps[1]!.rules = [makeRule('done', 'finalize')];
+    config.steps.push(makeStep('finalize', { rules: [makeRule('done', 'COMPLETE')] }));
+    engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[0]![1].split(first)).toHaveLength(2);
+    expect(calls[0]![1]).not.toContain(second);
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 2, deliveredSameSession: 0 });
+    const deliveries = readFileSync(store.getFilePath(), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'delivered');
+    expect(deliveries.map((event) => event.instructionIds)).toEqual([[1], [2]]);
+    for (const [index, call] of calls.slice(1).entries()) {
+      expect.soft(call[1].split(first).length - 1, `prompt ${index + 1}: first instruction`).toBe(1);
+      expect.soft(call[1].split(second).length - 1, `prompt ${index + 1}: second instruction`).toBe(1);
+      expect.soft(call[1].indexOf(first), `prompt ${index + 1}: issue order`).toBeLessThan(call[1].indexOf(second));
+    }
+  });
+
+  it.each((['task_dir', 'content', 'content_file'] as const).flatMap((source) =>
+    (['same_session', 'next_step'] as const).map((mode) => ({ source, mode })),
+  ))('lets a later agent read $source instructions persisted after $mode delivery', async ({ source, mode }) => {
+    const runSlug = 'tell-persisted-workflow';
+    const fixture = createTellTaskSpecFixture(runSlug, source);
+    const content = '後続の役もこの追加指示を読む。';
+    const orderReads: string[] = [];
+    let issued = false;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      options.onDispatch?.(options.permissionMode);
+      orderReads.push(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8'));
+      if (!issued && mode === 'same_session') {
+        issued = true;
+        await issueTellableRunningTask(projectCwd, runSlug, content);
+        expect(readFileSync(fixture.sourceOrderPath, 'utf8')).not.toContain(content);
+        expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).not.toContain(content);
+      }
+      return makeResponse({ content: 'done', sessionId: 'tell-session' });
+    });
+    const config = buildSingleStepConfig([makeRule('done', 'fix')]);
+    if (mode === 'next_step') {
+      config.steps[0]!.outputContracts = [{ name: 'review.md', format: 'markdown' }];
+      vi.mocked(runReportPhase).mockImplementationOnce(async () => {
+        await issueTellableRunningTask(projectCwd, runSlug, content);
+        expect(readFileSync(fixture.sourceOrderPath, 'utf8')).not.toContain(content);
+        expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).not.toContain(content);
+      });
+    }
+
+    const result = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: runSlug,
+      taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(orderReads).toHaveLength(mode === 'same_session' ? 3 : 2);
+    expect(orderReads[0]).toBe('# Task\n\nOriginal task instructions.\n');
+    expect(orderReads[1]).toContain(content);
+    expect(orderReads.at(-1)).toContain(content);
+    const calls = vi.mocked(runAgent).mock.calls;
+    if (mode === 'same_session') expect(calls[1]?.[2].sessionId).toBe('tell-session');
+    expect(calls.at(-1)?.[1]).toContain(fixture.runPaths.contextTaskOrderRel);
+    expect(fixture.store.read()).toMatchObject({ pending: 0,
+      deliveredSameSession: mode === 'same_session' ? 1 : 0,
+      deliveredNextStep: mode === 'next_step' ? 1 : 0 });
+    const delivered = fixture.store.read().instructions[0]!;
+    const original = readFileSync(fixture.sourceOrderPath, 'utf8');
+    expect(original.startsWith(fixture.originalOrder)).toBe(true);
+    for (const text of [content, `instructionId: ${delivered.instructionId}`, delivered.issuedAt]) {
+      expect(original).toContain(text);
+      expect(orderReads.at(-1)).toContain(text);
+    }
+    if (source === 'content_file') expect(readFileSync(fixture.inputFile, 'utf8')).toBe(fixture.originalOrder);
+    for (const call of calls.slice(1)) {
+      expect.soft(call[1].split(content).length - 1).toBe(1);
+    }
+  });
+
+  it.each(['same_session', 'next_step'] as const)(
+    'delivers an issued instruction through %s even when appending the source order fails',
+    async (mode) => {
+      const runSlug = `tell-append-failure-${mode.replaceAll('_', '-')}`;
+      const fixture = createTellTaskSpecFixture(runSlug);
+      const content = 'order.md の失敗で配送を止めない。';
+      const issueWithAppendFailure = async () => {
+        rmSync(fixture.sourceOrderPath);
+        mkdirSync(fixture.sourceOrderPath);
+        await expect(issueTellableRunningTask(projectCwd, runSlug, content)).resolves.toMatchObject({ instructionId: 1 });
+      };
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      if (mode === 'next_step') {
+        vi.mocked(runReportPhase).mockImplementationOnce(issueWithAppendFailure);
+      }
+      let agentCalls = 0;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        agentCalls += 1;
+        options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+        options.onDispatch?.(options.permissionMode);
+        if (mode === 'same_session' && agentCalls === 1) await issueWithAppendFailure();
+        return makeResponse({ content: 'done', sessionId: 'append-failure-session' });
+      });
+      const config = buildSingleStepConfig([makeRule('done', 'fix')]);
+      config.steps[0]!.outputContracts = [{ name: 'review.md', format: 'markdown' }];
+
+      const result = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+        projectCwd, provider: 'mock', reportDirName: runSlug,
+        taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+      });
+
+      expect(result.success).toBe(true);
+      const calls = vi.mocked(runAgent).mock.calls;
+      expect(calls).toHaveLength(mode === 'same_session' ? 3 : 2);
+      expect(calls[1]?.[1]).toContain(content);
+      if (mode === 'same_session') expect(calls[1]?.[2].sessionId).toBe('append-failure-session');
+      expect(fixture.store.read()).toMatchObject({
+        pending: 0,
+        deliveredSameSession: mode === 'same_session' ? 1 : 0,
+        deliveredNextStep: mode === 'next_step' ? 1 : 0,
+      });
+      const events = readFileSync(fixture.store.getFilePath(), 'utf8').trim().split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.filter((event) => event.type === 'issued')).toEqual([
+        { type: 'issued', instructionId: 1, issuedAt: expect.any(String), content },
+      ]);
+      expect(events.find((event) => event.type === 'delivered')).toMatchObject({ mode, instructionIds: [1] });
+      expect(calls.at(-1)?.[1].split(content).length).toBe(2);
+    },
+  );
+
+  it.each((['task_dir', 'content', 'content_file'] as const).flatMap((source) =>
+    [true, false].map((delivered) => ({ source, delivered })),
+  ))('restores only delivered instructions after requeue from $source (delivered=$delivered)', async ({ source, delivered }) => {
+    const runSlug = 'tell-before-resume';
+    const fixture = createTellTaskSpecFixture(runSlug, source);
+    const content = '再開後もこの追加指示を保持する。';
+    let issued = false;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      if (delivered) options.onDispatch?.(options.permissionMode);
+      if (!issued) {
+        issued = true;
+        await issueTellableRunningTask(projectCwd, runSlug, content);
+        expect(readFileSync(fixture.sourceOrderPath, 'utf8')).not.toContain(content);
+        if (delivered) return makeResponse({ content: 'done', sessionId: 'before-resume' });
+      }
+      return makeResponse({ status: 'error', error: 'deterministic failure before resume', content: 'failed' });
+    });
+    const config = buildSingleStepConfig([makeRule('done', 'COMPLETE')]);
+    const failed = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: runSlug,
+      taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+    });
+    expect(failed.success).toBe(false);
+    expect(fixture.store.read().deliveredSameSession).toBe(delivered ? 1 : 0);
+    const expectedOrder = readFileSync(fixture.sourceOrderPath, 'utf8');
+    expect(expectedOrder.includes(content)).toBe(delivered);
+    expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).toBe(expectedOrder);
+    const runner = new TaskRunner(projectCwd);
+    runner.forceFailRunningTask('tell-task', { error: 'deterministic failure before resume', step: 'review' });
+    runner.requeueTask('tell-task', ['failed']);
+    const [claimed] = runner.claimNextTasks(1);
+    expect(claimed?.taskDir).toBe(fixture.taskDir);
+    const resumedSlug = 'tell-after-resume';
+    runner.updateRunningTaskExecution('tell-task', { runSlug: resumedSlug });
+    const resumedSpec = resolveTaskSpecForExecution(projectCwd, fixture.cloneCwd, claimed!.taskDir!, resumedSlug);
+    const resumedPaths = buildRunPaths(fixture.cloneCwd, resumedSlug);
+    const orderReads: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      orderReads.push(readFileSync(resumedPaths.contextTaskOrderAbs, 'utf8'));
+      return dispatchMockResponse(persona, instruction, options, makeResponse({ content: 'resumed', sessionId: 'resumed-session' }));
+    });
+
+    const resumed = await executeWorkflow(config, resumedSpec.taskPrompt, fixture.cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: resumedSlug, taskSpec: resumedSpec,
+      resumeSource: { sourceRunSlug: runSlug, resumeMode: 'requeue' },
+      language: 'ja', outputMode: 'silent',
+    });
+
+    expect(resumed.success).toBe(true);
+    expect(orderReads).toHaveLength(1);
+    expect(orderReads[0]).toBe(expectedOrder);
+    expect(readFileSync(resumedPaths.contextTaskOrderAbs, 'utf8')).toBe(expectedOrder);
+    expect(expectedOrder.startsWith(fixture.originalOrder)).toBe(true);
+    if (delivered) {
+      const instruction = fixture.store.read().instructions[0]!;
+      expect(orderReads[0]).toContain(`instructionId: ${instruction.instructionId}`);
+      expect(orderReads[0]).toContain(instruction.issuedAt);
+    } else {
+      expect(expectedOrder).toBe(fixture.originalOrder);
+    }
+    if (source === 'content_file') expect(readFileSync(fixture.inputFile, 'utf8')).toBe(fixture.originalOrder);
   });
 
   it.each([
@@ -805,6 +1188,78 @@ describe('WorkflowEngine live intervention integration', () => {
     });
     expect(warning).toHaveBeenCalledTimes(1);
     expect(warning).toHaveBeenCalledWith(1);
+  });
+
+  it('judges current delivered live requirements without accumulating history in completion retries', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const interventions = [
+      'Inspect the initial live boundary',
+      'Inspect the same-session live boundary',
+      'Inspect the retry live boundary',
+    ];
+    await store.issue(interventions[0]!);
+    const config: WorkflowConfig = {
+      name: 'live-intervention-completion-requirements',
+      maxSteps: 1,
+      initialStep: 'review',
+      steps: [makeStep('review', {
+        completionRetry: {
+          minRetry: 0,
+          maxRetry: 2,
+          retryInstruction: 'Recheck the review gaps.',
+        },
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    let reviewerCalls = 0;
+    const judgeRequirements: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        const payload = JSON.parse(instruction.slice(instruction.indexOf('{'))) as { review_requirements: string };
+        judgeRequirements.push(payload.review_requirements);
+        const complete = judgeRequirements.length === 3;
+        return makeResponse({
+          persona: 'review-completion-judge',
+          content: 'decision',
+          structuredOutput: {
+            complete,
+            reason: complete ? 'closed' : 'missing consumer',
+            missing_paths: complete ? [] : [{ path: 'consumer.ts', reason: 'not inspected' }],
+          },
+        });
+      }
+
+      reviewerCalls += 1;
+      if (reviewerCalls === 1 || reviewerCalls === 3) {
+        await store.issue(interventions[reviewerCalls === 1 ? 1 : 2]!);
+      }
+      return dispatchMockResponse(persona, instruction, options, makeResponse({
+        content: `review-${reviewerCalls}`,
+        sessionId: 'review-session',
+      }));
+    });
+
+    engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+    const state = await engine.run();
+    const reviewerInstructions = vi.mocked(runAgent).mock.calls
+      .filter(([, , options]) => options.internalAgentName !== 'review-completion-judge')
+      .map(([, instruction]) => instruction);
+
+    expect(state.status).toBe('completed');
+    expect(reviewerInstructions).toHaveLength(5);
+    expect(judgeRequirements).toHaveLength(3);
+    for (const [index, requirements] of judgeRequirements.entries()) {
+      const delivered = interventions.slice(0, index === 0 ? 2 : 3);
+      for (const intervention of delivered) {
+        expect(requirements.split(intervention)).toHaveLength(2);
+      }
+    }
+    for (const [index, deliveredCount] of [[0, 1], [2, 2], [4, 3]] as const) {
+      for (const intervention of interventions.slice(0, deliveredCount)) {
+        expect(reviewerInstructions[index]!.split(intervention)).toHaveLength(2);
+      }
+    }
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1, deliveredSameSession: 2 });
   });
 
   it('drains an intervention issued during completion retry before the next judge', async () => {
@@ -1984,6 +2439,77 @@ describe('WorkflowEngine live intervention integration', () => {
       });
     },
   );
+
+  it('delivers a confirmed merge instruction to the next child agent step without a terminal warning', async () => {
+    const runSlug = 'merge-delivery-run';
+    const cloneCwd = join(projectCwd, '.takt', 'worktrees', 'merge');
+    mkdirSync(cloneCwd, { recursive: true });
+    const childPath = join(projectCwd, '.takt', 'workflows', 'merge-child.yaml');
+    mkdirSync(join(projectCwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(childPath, stringifyYaml({
+      name: 'merge-child', subworkflow: { callable: true }, max_steps: 3, initial_step: 'review',
+      steps: [
+        { name: 'review', persona: 'Review this change.', instruction: 'Review the merge.',
+          rules: [{ condition: 'needs-fix', next: 'fix' }, { condition: 'approved', next: 'COMPLETE' }] },
+        { name: 'fix', persona: 'Fix this change.', instruction: 'Fix the merge.',
+          rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      ],
+    }), 'utf8');
+    const config: WorkflowConfig = {
+      name: 'merge-parent', maxSteps: 5, initialStep: 'review-call',
+      steps: [{ name: 'review-call', personaDisplayName: 'review-call', instruction: '',
+        kind: 'workflow_call', call: childPath, rules: [makeRule('COMPLETE', 'COMPLETE')] }],
+    };
+    const runner = new TaskRunner(projectCwd);
+    const task = runner.startPrMergeTask({
+      prNumber: 1805, headBranch: 'feature/tell-merge', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: 'https://example.com/owner/takt.git',
+      headRepositoryPushUrls: ['https://example.com/owner/takt.git'],
+      workflow: config.name, method: 'squash', worktreePath: cloneCwd,
+      threatCheckMaxDiffBytes: 100_000,
+    });
+    runner.recordPrMergeClonePrepared(task.name);
+    runner.updateRunningTaskExecution(task.name, { runSlug });
+    const store = new LiveInterventionFileStore(projectCwd, runSlug);
+    const content = 'Keep the agreed merge scope at the next agent step.';
+    let issuing: ReturnType<typeof issueTellableRunningTask> | undefined;
+    vi.mocked(runStatusJudgmentPhase).mockImplementationOnce(async () => {
+      expect(vi.mocked(runAgent).mock.calls).toHaveLength(1);
+      expect(store.read().instructions).toEqual([]);
+      issuing = issueTellableRunningTask(projectCwd, runSlug, content);
+      await issuing;
+      expect(store.read()).toMatchObject({ pending: 1, deliveredNextStep: 0 });
+      return { label: 'needs-fix', method: 'auto_select' };
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) =>
+      dispatchMockResponse(persona, instruction, options, makeResponse({ content: 'done', sessionId: 'merge-child-session' })));
+
+    const result = await executeWorkflow(config, 'Merge PR #1805', cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: runSlug,
+      runPathsDirectory: join(projectCwd, '.takt', 'runs'), language: 'ja', outputMode: 'terminal',
+    });
+
+    expect(issuing).toBeDefined();
+    await expect(issuing).resolves.toMatchObject({ instructionId: 1 });
+    expect(result.success).toBe(true);
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).not.toContain(content);
+    expect(calls[1]?.[1]).toContain(content);
+    expect(calls[1]?.[2].cwd).toBe(cloneCwd);
+    expect(store.read()).toMatchObject({
+      pending: 0, deliveredNextStep: 1, deliveredSameSession: 0,
+      unconsumedWarned: 0, terminalStatus: 'completed',
+      instructions: [expect.objectContaining({ instructionId: 1, content, state: 'deliveredNextStep' })],
+    });
+    const events = readFileSync(store.getFilePath(), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.find((event) => event.type === 'terminal')).toMatchObject({
+      status: 'completed', unconsumedInstructionIds: [],
+    });
+    expect(mockOutputWarn.mock.calls.filter(([message]) => /未消化の追加指示/u.test(String(message)))).toEqual([]);
+    expect(existsSync(join(cloneCwd, '.takt', 'runs', runSlug, 'interventions.jsonl'))).toBe(false);
+  });
 
   it('passes project-side instructions from executeWorkflow into an engine running in a clone cwd', async () => {
     const cloneCwd = mkdtempSync(join(tmpdir(), 'takt-live-engine-clone-'));

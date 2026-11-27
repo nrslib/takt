@@ -33,6 +33,11 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
 }));
 
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
+
 vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   confirm: (...args: unknown[]) => mockConfirm(...args),
@@ -68,7 +73,7 @@ function createTaskInstructionResult(overrides: Record<string, unknown> = {}) {
 function createRealConversationSessionForAcp(input: {
   cwd: string;
   outputMode?: 'terminal' | 'silent';
-}) {
+}, lang: 'en' | 'ja' = 'en') {
   return createConversationSession({
     cwd: input.cwd,
     outputMode: input.outputMode,
@@ -84,7 +89,7 @@ function createRealConversationSessionForAcp(input: {
       },
       providerType: 'mock',
       model: 'mock-model',
-      lang: 'en',
+      lang,
       personaName: 'interactive',
       sessionId: undefined,
     },
@@ -1684,6 +1689,9 @@ describe('TAKT ACP agent adapter', () => {
         auto_pr: false,
       }));
       const taskOrderFile = join(projectDir, String(parsed.tasks[0]?.task_dir), 'order.md');
+      const headings = String(mockCallAIWithRetry.mock.calls[1]?.[0]).split('\n').filter((line) => /^## /u.test(line));
+      expect(headings).toContain('## Utterance from ACP');
+      expect(headings).not.toContain('## Utterance from /go');
       expect(readFileSync(taskOrderFile, 'utf-8')).toBe('Implement ACP support with queue storage.');
       expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
         kind: 'agent_message',
@@ -1694,6 +1702,50 @@ describe('TAKT ACP agent adapter', () => {
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
+  });
+
+  describe.each(['en', 'ja'] as const)('ACP source reaches the real summary in %s', (lang) => {
+    it.each([
+      ['監査ログを追加して今すぐ実行して', 'acp', 'direct', 'enqueue'],
+      ['監査ログを追加してタスクに積んで', 'acp', 'enqueue', 'direct'],
+      ['監査ログを追加して /go の説明も含めてタスクに積んで', 'acp', 'enqueue', 'enqueue'],
+      ['監査ログのIssueを作ってタスクに積んで', 'acp', 'create_issue_and_enqueue', 'enqueue'],
+      ['監査ログのIssueを作ってタスクに積んで。/go の説明も含めて', 'acp', 'create_issue_and_enqueue', 'enqueue'],
+      ['/go 監査ログを追加してタスクに積んで', 'go', 'enqueue', 'enqueue'],
+      ['監査ログを追加して /go', 'go', 'direct', 'direct'],
+    ] as const)('preserves source and action for %s', async (text, source, action, defaultAction) => {
+      const generated = '# Audit logs\n\nImplement audit logging.';
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: generated } });
+      const runWorkflowExecution = vi.fn().mockResolvedValue({ success: true, reportDirectory: '/repo/reports', task: generated });
+      const save = vi.fn().mockResolvedValue({ taskName: 'audit-logs', tasksFile: '/repo/.takt/tasks.yaml' });
+      const createIssue = vi.fn().mockReturnValue({ success: true, issueNumber: 913 });
+      const agent = createTaktAcpAgent({
+        createConversationSession: (input) => createRealConversationSessionForAcp(input, lang),
+        runWorkflowExecution,
+        saveTaskFile: save,
+        createIssueFromTaskResult: createIssue,
+        sendSessionUpdate: vi.fn(),
+      });
+      const { sessionId } = await agent.handleSessionNew(newSessionParams({ defaultAction }));
+      expect(await agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text }] })).toEqual({ stopReason: 'end_turn' });
+      const headings = String(mockCallAIWithRetry.mock.calls[0]?.[0]).split('\n').filter((line) => /^## /u.test(line));
+      const acpHeading = lang === 'ja' ? '## ACP から来た発話' : '## Utterance from ACP';
+      const goHeading = lang === 'ja' ? '## /go から来た発話' : '## Utterance from /go';
+      expect(headings).toContain(source === 'acp' ? acpHeading : goHeading);
+      expect(headings).not.toContain(source === 'acp' ? goHeading : acpHeading);
+      if (action === 'direct') {
+        expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({ task: generated, outputMode: 'silent' }));
+        expect(save).not.toHaveBeenCalled();
+      } else {
+        expect(save.mock.calls[0]?.slice(0, 2)).toEqual(['/repo', generated]);
+        expect(save.mock.calls[0]?.[2]).toMatchObject({ worktree: true, autoPr: false });
+        expect(runWorkflowExecution).not.toHaveBeenCalled();
+      }
+      if (action === 'create_issue_and_enqueue') {
+        expect(createIssue).toHaveBeenCalledWith(generated, expect.objectContaining({ cwd: '/repo' }));
+        expect(save.mock.calls[0]?.[2]).toMatchObject({ issue: 913 });
+      } else expect(createIssue).not.toHaveBeenCalled();
+    });
   });
 
   it('should return refusal and report the cause when enqueue saving fails', async () => {
@@ -2054,6 +2106,7 @@ describe('TAKT ACP agent adapter', () => {
   it('should abort an active conversation turn on session/cancel', async () => {
     let receivedSignal: AbortSignal | undefined;
     let resolveMessage: ((value: ConversationSessionResult) => void) | undefined;
+    const sendSessionUpdate = vi.fn();
     const handleUserMessage = vi.fn((input: {
       text: string;
       abortSignal?: AbortSignal;
@@ -2066,7 +2119,7 @@ describe('TAKT ACP agent adapter', () => {
     const agent = createTaktAcpAgent({
       createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
-      sendSessionUpdate: vi.fn(),
+      sendSessionUpdate,
     });
     const { sessionId } = await agent.handleSessionNew(newSessionParams());
 
@@ -2082,6 +2135,31 @@ describe('TAKT ACP agent adapter', () => {
     expect(result).toEqual({
       stopReason: 'cancelled',
     });
+    expect(sendSessionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sends retained artifact notification before completing a cancelled verification', async () => {
+    let finishMessage!: (result: ConversationSessionResult) => void;
+    let finishUpdate!: () => void;
+    const handleUserMessage = vi.fn(() => new Promise<ConversationSessionResult>((resolve) => { finishMessage = resolve; }));
+    const sendSessionUpdate = vi.fn(() => new Promise<void>((resolve) => { finishUpdate = resolve; }));
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
+      runWorkflowExecution: vi.fn(),
+      sendSessionUpdate,
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+    const prompt = agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text: '/verify' }] });
+    await agent.handleSessionCancel({ sessionId });
+    const retainedArtifactsMessage = 'Verification artifacts: /repo/.takt/runs/verify-cancelled';
+    finishMessage({ kind: 'error', message: 'interrupted verification', retainedArtifactsMessage });
+    let completed = false;
+    void prompt.then(() => { completed = true; });
+    await vi.waitFor(() => expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, { kind: 'agent_message', text: retainedArtifactsMessage }));
+    expect(completed).toBe(false);
+    expect(sendSessionUpdate).toHaveBeenCalledTimes(1);
+    finishUpdate();
+    expect(await prompt).toEqual({ stopReason: 'cancelled' });
   });
 
   it('should carry idle session/cancel into the next prompt', async () => {

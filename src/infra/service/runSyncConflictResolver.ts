@@ -1,5 +1,6 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import {
   getLanguage,
   resolveConfigValues,
@@ -8,12 +9,15 @@ import {
 } from '../config/index.js';
 import { getProvider, type ProviderCallOptions } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
+import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
 
 interface RunSyncConflictResolverOptions {
+  abortSignal?: AbortSignal;
   projectCwd: string;
   cwd: string;
   originalInstruction: string;
   onStream?: ProviderCallOptions['onStream'];
+  createProviderStream?: (provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
 }
 
 async function autoApproveToolRequest(request: { input: Record<string, unknown> }) {
@@ -35,13 +39,6 @@ export async function runSyncConflictResolver(
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
 
-  const provider = getProvider(resolvedProviderModel.provider);
-  const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
-    systemPrompt,
-    lang,
-    provider.getRuntimeInstructions(),
-  );
-  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt: resolvedSystemPrompt });
   const onPermissionRequest = config.syncConflictResolver?.autoApproveTools
     ? autoApproveToolRequest
     : undefined;
@@ -56,13 +53,18 @@ export async function runSyncConflictResolver(
       undefined,
       resolvedProviderModel.provider,
     );
+  const provider = getProvider(resolvedProviderModel.provider);
+  const resolvedSystemPrompt = withProgressNotesGuidance(buildProviderRuntimeSystemPrompt(systemPrompt, lang, provider.getRuntimeInstructions()), lang);
+  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt: resolvedSystemPrompt });
 
   return agent.call(prompt, {
     cwd: options.cwd,
+    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
     model: resolvedProviderModel.model,
     permissionMode: resolvedProviderModel.permissionMode ?? 'edit',
     providerOptions,
     onPermissionRequest,
-    onStream: options.onStream,
+    onStream: options.createProviderStream?.(resolvedProviderModel.provider, resolvedProviderModel.model)
+      ?? options.onStream,
   });
 }

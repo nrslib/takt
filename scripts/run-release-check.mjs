@@ -2,11 +2,17 @@ import { createWriteStream, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { requireFullHeavyItPermission } from './heavy-it-guard.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 import { runTeedCommand } from './teed-command.mjs';
 
+// Sync the lockfile first so every later gate tests the dependencies the release ships,
+// and check the packed global install right after build because a lockfile change can break it alone.
 export const RELEASE_GATE_SCRIPTS = Object.freeze([
+  'sync:nix-deps',
   'build',
+  'test:global-install',
+  'test:managed-install',
   'lint',
   'test',
   'test:it:all',
@@ -89,6 +95,8 @@ async function runNpmCommand(npmArgs, logStream) {
 }
 
 export async function runReleaseCheck(runCommand = runNpmCommand, openLog = openReleaseLog) {
+  requireFullHeavyItPermission();
+
   let logStream;
   try {
     logStream = await openLog();

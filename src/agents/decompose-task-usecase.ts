@@ -9,6 +9,7 @@ import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import type { RunAgentOptions, StreamCallback } from './runner.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
+import { renderPhaseContext, stripPhaseContext } from '../shared/prompts/phase-context.js';
 import {
   executeStructuredAgent,
   requireStructuredAgentProvider,
@@ -51,7 +52,9 @@ export interface DecomposeTaskOptions {
   resolvedProvider?: ProviderType;
   resolvedProviderOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
+  edit?: RunAgentOptions['edit'];
   projectCwd?: string;
+  openCodeExternalDirectories?: RunAgentOptions['openCodeExternalDirectories'];
   onStream?: StreamCallback;
   onActivity?: RunAgentOptions['onActivity'];
   workflowMeta?: RunAgentOptions['workflowMeta'];
@@ -71,12 +74,10 @@ export interface DecomposeTaskOptions {
   onDispatch?: RunAgentOptions['onDispatch'];
   onAgentResponse?: (response: AgentResponse) => void;
   onAgentError?: (error: unknown) => void;
+  onValidationError?: (error: unknown) => void;
 }
 
-export type MorePartsOptions = Omit<
-  DecomposeTaskOptions,
-  'onPromptResolved'
-> & {
+export type MorePartsOptions = DecomposeTaskOptions & {
   cancellablePartIds: readonly string[];
   /** Known IDs tolerated in model output but removed before the response is returned. */
   ignoredCancelPartIds?: readonly string[];
@@ -98,28 +99,41 @@ export interface DecomposeTaskResponse {
   providerUsage?: ProviderUsageSnapshot;
 }
 
+function prepareTeamLeaderTask(instruction: string, options: DecomposeTaskOptions): {
+  phaseContext: string;
+  taskInstruction: string;
+} {
+  const assignment = options.workflowMeta?.context?.assignment;
+  if (assignment === undefined) return { phaseContext: '', taskInstruction: instruction };
+  const phaseContext = renderPhaseContext(assignment, 1, options.language ?? 'en').trimStart();
+  return {
+    phaseContext,
+    taskInstruction: stripPhaseContext(instruction, phaseContext),
+  };
+}
+
 export async function requestDecompositionRawResponse(
   instruction: string,
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
   rejectedDecomposition?: RejectedTeamLeaderDecomposition,
 ): Promise<AgentResponse> {
+  const { phaseContext, taskInstruction } = prepareTeamLeaderTask(instruction, options);
+  const prompt = [phaseContext, buildDecomposePrompt(taskInstruction, {
+    maxInitialParts,
+    language: options.language,
+    inspectTools: options.inspectTools,
+    inspectGuidance: options.inspectGuidance === true,
+    rejectedDecomposition,
+  })].filter((part) => part.length > 0).join('\n\n');
   let response: AgentResponse;
   try {
-    response = await executeStructuredAgent<Record<string, unknown>>(buildDecomposePrompt(
-      instruction,
-      {
-        maxInitialParts,
-        language: options.language,
-        inspectTools: options.inspectTools,
-        inspectGuidance: options.inspectGuidance === true,
-        rejectedDecomposition,
-      },
-    ), loadDecompositionSchema(maxInitialParts), {
+    response = await executeStructuredAgent<Record<string, unknown>>(prompt, loadDecompositionSchema(maxInitialParts), {
       name: 'team-leader-decomposer',
       persona: options.persona,
       cwd: options.cwd,
       projectCwd: options.projectCwd,
+      openCodeExternalDirectories: options.openCodeExternalDirectories,
       personaPath: options.personaPath,
       workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
@@ -136,6 +150,8 @@ export async function requestDecompositionRawResponse(
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
+      executionPhase: 1,
+      edit: options.edit,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
@@ -173,7 +189,14 @@ export async function decomposeTask(
         options,
         rejectedDecomposition,
       );
-      return parseDecomposition(response, maxInitialParts);
+      try {
+        return parseDecomposition(response, maxInitialParts);
+      } catch (error) {
+        if (error instanceof TeamLeaderDecompositionValidationError) {
+          options.onValidationError?.(error);
+        }
+        throw error;
+      }
     },
   });
 }
@@ -210,8 +233,9 @@ export async function requestMorePartsRawResponse(
   existingIds: string[],
   options: MorePartsOptions,
 ): Promise<AgentResponse> {
-  const prompt = buildMorePartsPrompt(
-    originalInstruction,
+  const { phaseContext, taskInstruction } = prepareTeamLeaderTask(originalInstruction, options);
+  const prompt = [phaseContext, buildMorePartsPrompt(
+    taskInstruction,
     allResults,
     existingIds,
     options.language,
@@ -219,7 +243,7 @@ export async function requestMorePartsRawResponse(
     options.inspectTools,
     options.inspectGuidance === true,
     options.companionFindings,
-  );
+  )].filter((part) => part.length > 0).join('\n\n');
 
   let response: AgentResponse;
   try {
@@ -228,6 +252,7 @@ export async function requestMorePartsRawResponse(
       persona: options.persona,
       cwd: options.cwd,
       projectCwd: options.projectCwd,
+      openCodeExternalDirectories: options.openCodeExternalDirectories,
       personaPath: options.personaPath,
       workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
@@ -244,10 +269,13 @@ export async function requestMorePartsRawResponse(
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
+      executionPhase: 1,
+      edit: options.edit,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       sessionId: options.sessionId,
+      onPromptResolved: options.onPromptResolved,
       onDispatch: options.onDispatch,
     });
   } catch (error) {
@@ -284,10 +312,16 @@ export async function requestMoreParts(
   }
 
   const ignoredCancelPartIds = new Set(options.ignoredCancelPartIds ?? []);
-  const parsedResponse = toMorePartsResponse(response.structuredOutput, [
-    ...options.cancellablePartIds,
-    ...ignoredCancelPartIds,
-  ]);
+  let parsedResponse: ReturnType<typeof toMorePartsResponse>;
+  try {
+    parsedResponse = toMorePartsResponse(response.structuredOutput, [
+      ...options.cancellablePartIds,
+      ...ignoredCancelPartIds,
+    ]);
+  } catch (error) {
+    options.onValidationError?.(error);
+    throw error;
+  }
   return {
     ...parsedResponse,
     cancelPartIds: parsedResponse.cancelPartIds.filter((partId) => !ignoredCancelPartIds.has(partId)),

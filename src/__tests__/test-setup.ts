@@ -1,8 +1,11 @@
+import { Console } from 'node:console';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
+
+globalThis.console.Console = Console;
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
 const TEST_TMPDIR = realpathSync(tmpdir());
@@ -35,7 +38,7 @@ beforeEach(async () => {
   await new Promise<void>((resolve) => realSetImmediate(resolve));
   taktEnvSnapshot = clearTaktEnv();
   process.env.TMPDIR = TEST_TMPDIR;
-  isolatedRootDir = mkdtempSync(join(tmpdir(), 'takt-test-global-'));
+  isolatedRootDir = realpathSync(mkdtempSync(join(tmpdir(), 'takt-test-global-')));
   gitEnvSnapshot = new Map(gitEnvKeys.map((key) => [key, process.env[key]]));
   process.env.TAKT_CONFIG_DIR = join(isolatedRootDir, '.takt');
   const emptyGitConfig = join(isolatedRootDir, 'gitconfig');

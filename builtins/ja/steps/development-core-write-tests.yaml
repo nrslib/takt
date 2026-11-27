@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: write_tests
+description: 実装の前に、計画の要求と受入条件を確かめるテストを作成する
 capabilities: edit
 tags:
   - coding

@@ -1,4 +1,9 @@
 import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type { MergeMethod } from '../../models/config-types.js';
+import type { PrMergeOptions, PrStatus, PrStatusFetchOptions } from './pr-execution-context.js';
+import type { PrCiFailure, PrCiRerunResult } from './pr-ci.js';
+import type { RunPaths } from '../run/run-paths.js';
+import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 
 export interface SystemStepTaskContext {
   readonly issueNumber?: number;
@@ -104,12 +109,26 @@ export interface SystemStepGitProvider {
   findExistingPr(branch: string, cwd?: string): SystemStepExistingPr | undefined;
   commentOnPr(prNumber: number, body: string, cwd?: string): SystemStepCommentResult;
   closePr(prNumber: number, cwd?: string): SystemStepMergeResult;
-  mergePr(prNumber: number, cwd?: string): SystemStepMergeResult;
+  mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string): SystemStepMergeResult;
+  fetchPrStatus?(prNumber: number, cwd?: string, options?: PrStatusFetchOptions): Promise<PrStatus>;
+  fetchPrCiFailure?(prNumber: number, headSha: string, cwd: string, options?: PrStatusFetchOptions): Promise<PrCiFailure>;
+  rerunPrCi?(failure: PrCiFailure, cwd: string, options?: PrStatusFetchOptions): Promise<PrCiRerunResult>;
 }
 
-export interface SystemStepServicesOptions {
+export interface SystemStepServicesOptions extends PrMergeOptions {
+  readonly runPaths?: RunPaths;
+  readonly cacciaService?: {
+    execute(prNumber: number): Promise<Record<string, unknown>>;
+  };
+  readonly abortSignal?: AbortSignal;
+  readonly createProviderStream?: (provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
+  readonly allowGitHooks?: boolean;
+  readonly allowGitFilters?: boolean;
   readonly cwd: string;
+  readonly contextDirectory?: string;
   readonly projectCwd: string;
+  /** Snapshot for child processes; only repository identity reaches `command` inputs. */
+  readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly task: string;
   readonly taskContext?: SystemStepTaskContext;
   readonly runtimeState?: SystemStepRuntimeState;
@@ -117,6 +136,7 @@ export interface SystemStepServicesOptions {
 }
 
 export interface SystemStepInputResolutionContext {
+  readonly prStatusFetchOptions?: PrStatusFetchOptions;
   readonly cache: Map<string, unknown>;
   readonly resolvedBindings: Map<string, unknown>;
 }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantProviderConfig } from '../core/config/provider-resolution.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import type { WorkflowConfig } from '../core/models/types.js';
+import type { SelectorProviderInfo } from '../core/workflow/types.js';
 import {
   resolveSelectorProviderForProject,
   resolveSelectorProviderFromConfig,
@@ -367,7 +368,7 @@ describe('workflow selector resolution', () => {
   function resolveWorkflowSelectorForProject(
     workflow: WorkflowConfig,
     projectDir: string,
-    options: { companionEnabled?: boolean } = {},
+    options: { companionEnabled?: boolean; selectorProvider?: SelectorProviderInfo } = {},
   ) {
     const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(projectDir, workflow);
     return resolveWorkflowSelector(workflow, {
@@ -394,6 +395,20 @@ describe('workflow selector resolution', () => {
     };
 
     expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toEqual({ applies: false });
+  });
+
+  it.each([false, true])('uses an explicit selector only when dynamic selection applies (%s)', (dynamic) => {
+    const projectDir = createProject('provider: mock\n');
+    const workflow: WorkflowConfig = dynamic ? makeDynamicWorkflow() : {
+      name: 'ordinary', initialStep: 'implement', maxSteps: 1,
+      steps: [{ name: 'implement', personaDisplayName: 'implement', instruction: 'Implement' }],
+    };
+    const selectorProvider: SelectorProviderInfo = {
+      provider: 'pi', model: undefined, providerOptions: { pi: { systemPromptMode: 'replace' } },
+    };
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir, { selectorProvider })).toEqual(dynamic
+      ? { applies: true, selectorProvider: { ...selectorProvider, model: undefined } }
+      : { applies: false });
   });
 
   it('should resolve selector configuration for a companion pool', () => {

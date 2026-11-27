@@ -1,0 +1,84 @@
+import { beforeEach,expect,it,vi } from 'vitest';
+import { enqueueTaktGoalTask } from '../features/mcp/goalOperations.js';
+import type { Goal } from '../infra/goals/schema.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), states: vi.fn(), tasks: vi.fn(), enqueue: vi.fn(), workflow: vi.fn(), ensure: vi.fn() }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.states; listAllTaskItems = doubles.tasks; } }));
+vi.mock('../infra/task/enqueueService.js', () => ({ enqueueTask: doubles.enqueue }));
+vi.mock('../infra/config/index.js', () => ({ loadWorkflowByIdentifier: doubles.workflow }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
+vi.mock('../features/manager/notifications.js', () => ({ resolveManagerNotificationOptions: () => ({ policy: {}, mainMerge: 'approve' }), sendSavedGoalNotifications: vi.fn() }));
+vi.mock('../features/mcp/operations.js', async (original) => ({ ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: vi.fn() }));
+let goal: Goal;
+const input = { cwd: '/project', goalId: goalRecord().id, purpose: 'CSVを実装する', task: 'CSVを実装する', workflow: 'safe', workKey: 'csv' };
+const signal = new AbortController().signal;
+beforeEach(() => { vi.resetAllMocks(); goal = goalRecord(); doubles.get.mockImplementation(async () => goal); doubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => { goal = transform(goal); return goal; }); doubles.states.mockReturnValue([]); doubles.workflow.mockReturnValue({ steps: [] }); doubles.enqueue.mockResolvedValue({ taskName: 'task-a', tasksFile: '/project/.takt/tasks.yaml', workflow: 'safe' }); });
+it('submits isolated goal work and records its purpose in the shared memory', async () => {
+  expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledWith(expect.objectContaining({ goalId: goal.id, goalPurpose: input.purpose, goalWorkKey: 'csv', worktree: true, autoPr: false, shouldPublishBranchToOrigin: false, taskContext: { baseBranch: goal.branch }, abortSignal: signal }), expect.any(Function));
+  expect(goal.workLog).toHaveLength(1); expect(goal).not.toHaveProperty('operations'); expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith(input.cwd);
+});
+it('finds a previously submitted work key in tasks.yaml and leaves it unchanged', async () => {
+  doubles.states.mockReturnValue([{ name: 'task-a', goalId: goal.id, goalWorkKey: 'csv', status: 'completed', workflow: 'safe' }]);
+  expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).not.toHaveBeenCalled(); expect(doubles.update).not.toHaveBeenCalled();
+});
+it('does not reuse an existing task with a different explicit work key', async () => {
+  doubles.states.mockReturnValue([{ name: 'task-a', goalId: goal.id, goalWorkKey: 'csv', status: 'completed', workflow: 'safe' }]);
+  expect((await enqueueTaktGoalTask({ ...input, workKey: 'csv-review' }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledOnce();
+  expect(doubles.update).toHaveBeenCalledOnce();
+});
+it('lets the manager decide which work can proceed while a question is pending', async () => {
+  goal.questions = [{ id: '550e8400-e29b-41d4-a716-446655440001', recipient: 'human', body: '確認', status: 'pending' }];
+  expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined(); expect(doubles.enqueue).toHaveBeenCalledOnce();
+});
+it('rejects a missing workflow before enqueueing', async () => {
+  doubles.workflow.mockReturnValue(null);
+  expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBe(true); expect(doubles.enqueue).not.toHaveBeenCalled();
+});
+it.each(['paused', 'aborted'] as const)('does not enqueue work for a %s goal', async (executionStatus) => {
+  goal.executionStatus = executionStatus;
+  expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBe(true); expect(doubles.enqueue).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('checks canonical instructions before reusing work without a key (same instructions: %s)', async (same) => {
+  doubles.states.mockReturnValue([{ name: 'task-a', goalId: goal.id, goalPurpose: input.purpose, workflow: input.workflow }]);
+  doubles.tasks.mockReturnValue([{ name: 'task-a', content: same ? input.task : '別の指示' }]);
+  expect((await enqueueTaktGoalTask({ ...input, workKey: undefined }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.enqueue).toHaveBeenCalledTimes(same ? 0 : 1);
+});
+
+it('reads task instructions once when checking multiple candidates without a work key', async () => {
+  doubles.states.mockReturnValue(['task-a', 'task-b'].map((name) => ({
+    name, goalId: goal.id, goalPurpose: input.purpose, workflow: input.workflow,
+  })));
+  doubles.tasks.mockReturnValue([
+    { name: 'task-a', content: '別の指示' }, { name: 'task-b', content: input.task },
+  ]);
+
+  const result = await enqueueTaktGoalTask({ ...input, workKey: undefined }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.tasks).toHaveBeenCalledOnce();
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+});
+it('returns a bounded enqueue result without the accumulated goal histories', async () => {
+  goal.workLog = Array.from({ length: 200 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: '作業'.repeat(20000), recordedAt: '2026-10-14T00:00:00Z' }));
+  goal.questions = Array.from({ length: 100 }, (_, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '質問'.repeat(20000), status: 'pending', recipient: 'human' }));
+  goal.notifications = Array.from({ length: 100 }, (_, index) => ({ id: `750e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '通知'.repeat(20000), kind: 'custom', recordedAt: '2026-10-14T00:00:00Z' }));
+  const result = await enqueueTaktGoalTask(input, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  expect(goal.workLog).toHaveLength(201);
+});
+
+it.each(['./work.yaml', '/work/custom.yml', '@owner/repo/work'])('accepts a workflow identifier %s with PR effects and explicit publication', async (workflow) => {
+  doubles.workflow.mockReturnValue({ steps: [{ kind: 'system', effects: [{ type: 'merge_pr' }, { type: 'close_pr' }] }] });
+  expect((await enqueueTaktGoalTask({ ...input, workflow, autoPr: true, shouldPublishBranchToOrigin: true }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.workflow).toHaveBeenCalledWith(workflow, input.cwd);
+  expect(doubles.enqueue).toHaveBeenCalledWith(expect.objectContaining({ workflow, autoPr: true, shouldPublishBranchToOrigin: true, worktree: true, taskContext: { baseBranch: goal.branch } }), expect.any(Function));
+});

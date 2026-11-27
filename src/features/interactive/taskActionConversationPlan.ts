@@ -166,7 +166,7 @@ function withOrderRevision(
     ...strategy,
     selectGoAction: retry ? selectRetryQueueAction : createOrderRevisionSelector(),
     summaryPromptBuilder: (summaryOptions) =>
-      buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
+      buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent, 'task_list_revision'),
     normalizeSummaryTask: (task, attachments) =>
       normalizeOrderRevisionSummary(task, attachments, lang),
     initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),

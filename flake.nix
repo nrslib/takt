@@ -30,7 +30,7 @@
             version = packageJson.version;
             src = ./.;
 
-            npmDepsHash = "sha256-ibTWa6O7SeQL9cR8iHp0snGP8DzeuE0XuCdW2dEDcLA=";
+            npmDepsHash = "sha256-ln0RRhjaKJBzKlpzX76GKLbJi2nOr5RZPf+1AEuAtj8=";
             npmDepsFetcherVersion = 2;
             nodejs = nodejs;
             ONNXRUNTIME_NODE_INSTALL = "skip";
@@ -43,6 +43,10 @@
               npm ci --omit=dev --ignore-scripts
               patchShebangs node_modules
               npm rebuild --omit=dev
+              # Recreating the production tree also restores pristine Ink.
+              # Reapply the renderer patch without the dev-only patch-package.
+              patch -p1 < patches/ink+7.1.1.patch
+              patch -p1 < patches/@informalsystems+quint+0.32.0.patch
               patchShebangs node_modules
             '';
             dontNpmPrune = true;

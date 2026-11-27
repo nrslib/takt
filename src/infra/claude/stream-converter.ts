@@ -85,24 +85,24 @@ function extractToolResultContent(toolResult: unknown): { content: string; isErr
   };
 }
 
-function extractToolResultId(message: SDKUserMessage): string | undefined {
+function extractCompletedToolIds(message: SDKUserMessage): readonly string[] {
+  const ids = new Set<string>();
   if (message.tool_use_result !== null && typeof message.tool_use_result === 'object') {
     const result = message.tool_use_result as Record<string, unknown>;
     const id = result['tool_use_id'] ?? result['toolUseId'];
     if (typeof id === 'string' && id.length > 0) {
-      return id;
+      ids.add(id);
     }
   }
   const content = message.message.content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  for (const block of content) {
-    if (block.type === 'tool_result' && block.tool_use_id.length > 0) {
-      return block.tool_use_id;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === 'tool_result' && block.tool_use_id.length > 0) {
+        ids.add(block.tool_use_id);
+      }
     }
   }
-  return undefined;
+  return [...ids];
 }
 
 /**
@@ -174,10 +174,16 @@ export function sdkMessageToStreamEvent(
       const userMsg = message as SDKUserMessage;
       if (userMsg.tool_use_result !== undefined) {
         const { content, isError } = extractToolResultContent(userMsg.tool_use_result);
-        const id = extractToolResultId(userMsg);
+        const completedToolIds = extractCompletedToolIds(userMsg);
+        const id = completedToolIds[0];
         callback({
           type: 'tool_result',
-          data: { ...(id === undefined ? {} : { id }), content, isError },
+          data: {
+            ...(id === undefined ? {} : { id }),
+            ...(completedToolIds.length > 1 ? { completedToolIds } : {}),
+            content,
+            isError,
+          },
         });
       }
       break;

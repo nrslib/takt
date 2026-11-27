@@ -33,6 +33,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     kiroCliPath: resolveKiroCliPath(),
     agent: options.providerOptions?.kiro?.agent,
     usePromptTempFile: options.providerOptions?.kiro?.usePromptTempFile,
+    effort: options.providerOptions?.kiro?.effort,
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
   };

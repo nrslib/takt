@@ -4,6 +4,7 @@ max_steps: 21
 initial_step: develop
 steps:
   - name: develop
+    description: Plan and implement the frontend and a backend using CQRS and event sourcing, then review and fix them.
     kind: workflow_call
     call: mini-core
     args:

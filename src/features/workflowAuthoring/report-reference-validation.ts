@@ -1,5 +1,5 @@
 import { dirname } from 'node:path';
-import { parseScopeRef } from 'faceted-prompting';
+import { parseScopeRef } from '#faceted-prompting';
 import type { WorkflowConfig } from '../../core/models/types.js';
 import { validateWorkflowReportReferences } from '../../core/workflow/instruction/report-reference-validation.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';

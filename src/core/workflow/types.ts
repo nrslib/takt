@@ -1,4 +1,5 @@
-import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
+import type { ToolActivityDisplayMode } from '../../shared/tool-activity/types.js';
+import type { PermissionResult, PermissionUpdate } from './permission-types.js';
 import type {
   WorkflowStep,
   AgentResponse,
@@ -42,6 +43,7 @@ import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderReso
 import type { RunResumeSource } from './run/run-meta.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
+import type { PrMergeOptions } from './system/pr-execution-context.js';
 import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
@@ -198,6 +200,7 @@ export interface TeamLeaderPartRuntimeResolution {
 }
 
 export interface RuntimeStepResolution {
+  workflowAssignment?: import('./workflow-prompt-context.js').WorkflowAssignment;
   providerInfo?: StepProviderInfo;
   providerInfoResolution?: 'fully_resolved';
   fallback?: FallbackContext;
@@ -205,6 +208,8 @@ export interface RuntimeStepResolution {
 }
 
 export interface WorkflowSharedRuntimeState {
+  reportExecutions?: import('./report-execution-store.js').ReportExecutionStore;
+  workflowPromptTree?: import('./workflow-prompt-context.js').WorkflowPromptTree;
   startedAtMs: number;
   activeResumePoint?: WorkflowResumePoint;
   maxSteps?: WorkflowMaxSteps;
@@ -212,7 +217,9 @@ export interface WorkflowSharedRuntimeState {
   dynamicParallelSelectionStore?: DynamicParallelSelectionStore;
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
+  resumeInvocationSource?: WorkflowResumePoint;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
+  reportGenerationIndex?: import('./report-generation-index.js').ReportGenerationIndex;
   resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 
@@ -545,7 +552,11 @@ export type IterationLimitCallback = (request: IterationLimitRequest) => Promise
 export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
 
 /** Options for workflow engine */
-export interface WorkflowEngineOptions {
+export interface WorkflowEngineOptions extends PrMergeOptions {
+  /** Saved goal specifications staged at the run boundary; inherited by child workflows. */
+  goalSpecificationPaths?: readonly string[];
+  toolDisplayMode?: ToolActivityDisplayMode;
+  streamQuiet?: boolean;
   abortSignal?: AbortSignal;
   /** Project-side append-only channel for instructions issued during a live run. */
   liveIntervention?: LiveInterventionChannel;
@@ -597,6 +608,11 @@ export interface WorkflowEngineOptions {
   reportContentSanitizer?: (content: string) => string;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: Readonly<Record<string, string>>;
+  /**
+   * Repository identity for `gh` / `glab`, resolved once for the run. It reaches child processes
+   * only for a workflow that sets `repository_identity: true`, this engine's own config deciding.
+   */
+  repositoryIdentityEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;
@@ -676,6 +692,7 @@ export interface WorkflowEngineOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   operationJournal?: WorkflowOperationJournalContext;
   /** Override report directory name (without parent path). */
   reportDirName?: string;
@@ -711,6 +728,8 @@ export interface WorkflowEngineOptions {
   inheritedWorkflowRules?: readonly WorkflowWideRule[];
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
+  /** Verified report bodies passed by the owning workflow_call to this child. */
+  inheritedReportInputs?: import('./instruction/prepared-instruction.js').DeclaredReportInputs;
   /** Exact verified resource root for the run's workflow execution bundle. */
   workflowBundleResourceRoot?: string;
   /** Full resume-stack-derived identity for the workflow_call that owns this engine. */

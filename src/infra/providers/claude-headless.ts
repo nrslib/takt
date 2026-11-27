@@ -1,5 +1,6 @@
 import { callClaudeHeadless } from '../claude-headless/client.js';
 import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
+import { resolveClaudeDenyRules } from '../claude/read-deny.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
@@ -18,6 +19,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     : claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     internalAgentIsolation: options.internalAgentIsolation,
@@ -33,9 +35,11 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     preparedMcp: options.preparedMcp,
+    callerManagedMcp: options.callerManagedMcp,
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     sandbox: claudeOptions?.sandbox,
+    denyRules: resolveClaudeDenyRules(claudeOptions?.permissions),
     onStream: options.onStream,
     onActivity: options.onActivity,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,

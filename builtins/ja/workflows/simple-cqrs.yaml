@@ -4,6 +4,7 @@ max_steps: 30
 initial_step: develop
 steps:
   - name: develop
+    description: CQRS+ESに沿ってバックエンドを計画・テスト・実装・修正し、レビューと要件確認を実施する
     kind: workflow_call
     call: simple-core
     args:

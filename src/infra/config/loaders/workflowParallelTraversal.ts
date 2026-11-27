@@ -83,6 +83,9 @@ export function collectReachableSteps(workflow: WorkflowConfig): WorkflowStep[] 
     const step = stepsByName.get(name);
     if (step === undefined) continue;
     reachable.push(step);
+    if (step.kind === 'system' && step.wait && stepsByName.has(step.wait.onTimeout)) {
+      pending.push(step.wait.onTimeout);
+    }
     for (const next of step.rules?.map((rule) => rule.next) ?? []) {
       if (next !== undefined && stepsByName.has(next) && !visited.has(next)) pending.push(next);
     }

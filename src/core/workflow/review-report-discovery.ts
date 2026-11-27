@@ -1,5 +1,6 @@
 import {
   getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
   type DynamicParallelSelectionSnapshot,
   type WorkflowConfig,
   type WorkflowCallStep,
@@ -10,8 +11,15 @@ import type { WorkflowCallResolver } from './types.js';
 import { getReportFiles } from './output-contract-files.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from './workflow-call-depth.js';
 import { buildWorkflowResumePointEntry, getWorkflowReference } from './workflow-reference.js';
-import { workflowCallNamespaceSegmentMatchesInvocation } from './workflow-call-namespace.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import {
+  parseWorkflowCallNamespaceSegment,
+  workflowCallNamespaceSegmentMatchesInvocation,
+} from './workflow-call-namespace.js';
+import { buildWorkflowCallSiteIdentity } from './workflow-call-site-identity.js';
+import { buildWorkflowStepParticipationIdentity } from './workflow-step-participation-index.js';
+import type { ReportExecutionStore } from './report-execution-store.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { buildDynamicParallelSelectionIdentity } from './dynamic-parallel/identity.js';
 import {
   resolveReviewReportStepParticipation,
   type ReviewReportParticipationEvidence,
@@ -20,6 +28,7 @@ import {
 } from './review-report-participation.js';
 
 const REPORT_PATH_SEPARATOR = '/';
+const log = createLogger('review-report-discovery');
 
 export interface InheritedReviewReportNamesResult {
   readonly reportNames: readonly string[];
@@ -31,6 +40,7 @@ export type ReviewReportDiscoveryFailure =
   | { readonly kind: 'fatal'; readonly reason: string };
 
 export interface InheritedReportSourceResolverContext {
+  readonly reportExecutions?: Pick<ReportExecutionStore, 'isInheritedProducer'>;
   readonly step: WorkflowStep;
   readonly workflow: WorkflowConfig;
   readonly workflowCallResolver?: WorkflowCallResolver;
@@ -38,9 +48,11 @@ export interface InheritedReportSourceResolverContext {
   readonly lookupCwd: string;
   readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
   readonly participation: ReviewReportParticipationEvidence;
+  readonly requireCompletedCalls?: true;
 }
 
 export interface ReviewReportDiscoveryContextOptions {
+  readonly reportExecutions?: Pick<ReportExecutionStore, 'isInheritedProducer'>;
   readonly step: WorkflowStep;
   readonly workflow: WorkflowConfig;
   readonly workflowCallResolver?: WorkflowCallResolver;
@@ -52,12 +64,14 @@ export interface ReviewReportDiscoveryContextOptions {
   readonly workflowCallInvocations: ReviewReportParticipationEvidence['workflowCallInvocations'];
   readonly workflowStepParticipations?: ReviewReportParticipationEvidence['workflowStepParticipations'];
   readonly dynamicParallelSelections?: ReadonlyMap<string, DynamicParallelSelectionSnapshot>;
+  readonly requireCompletedCalls?: true;
 }
 
 export function createReviewReportDiscoveryContext(
   options: ReviewReportDiscoveryContextOptions,
 ): InheritedReportSourceResolverContext {
   return {
+    reportExecutions: options.reportExecutions,
     step: options.step,
     workflow: options.workflow,
     workflowCallResolver: options.workflowCallResolver,
@@ -72,6 +86,7 @@ export function createReviewReportDiscoveryContext(
       workflowStepParticipations: options.workflowStepParticipations ?? new Map(),
       dynamicParallelSelections: options.dynamicParallelSelections ?? new Map(),
     },
+    requireCompletedCalls: options.requireCompletedCalls,
   };
 }
 
@@ -172,6 +187,12 @@ function resolveReviewReportSourceStepGroups(
     const participation = resolveParticipation(candidate, context);
     if (participation.kind === 'not-participated') continue;
     if (participation.kind === 'invalid') {
+      if (context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+        getWorkflowReference(context.workflow), candidate.name, context.resumeStackPrefix,
+      ))) {
+        log.warn('Ignoring unavailable inherited report participation', { step: candidate.name });
+        continue;
+      }
       failures.push({ kind: 'fatal', reason: participation.reason });
       continue;
     }
@@ -204,6 +225,18 @@ function resolveWorkflowCallReportNames(
   workflowReferences: ReadonlySet<string>,
   depth: number,
 ): InheritedReviewReportNamesResult {
+  if (context.requireCompletedCalls === true && reportParticipation.invocation.completed !== true) {
+    if (context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+      getWorkflowReference(context.workflow), step.name, reportParticipation.resumeStackPrefix,
+    ))) {
+      log.warn('Ignoring incomplete inherited workflow call reports', { step: step.name });
+      return { reportNames: [], failures: [] };
+    }
+    return {
+      reportNames: [],
+      failures: [{ kind: 'fatal', reason: `workflow_call_input_not_completed:${step.name}` }],
+    };
+  }
   let childWorkflow: WorkflowConfig | null | undefined;
   try {
     childWorkflow = context.workflowCallResolver?.({
@@ -258,6 +291,37 @@ function resolveWorkflowCallReportNames(
     };
   }
   const namespaceSegment = reportParticipation.invocation.report_namespace_segment;
+  const savedNamespace = parseWorkflowCallNamespaceSegment(namespaceSegment);
+  if (savedNamespace === undefined || savedNamespace.iteration === '*') {
+    return {
+      reportNames: [],
+      failures: [{
+        kind: 'fatal',
+        reason: `workflow_call_invocation_namespace_mismatch:${step.name}`,
+      }],
+    };
+  }
+  const currentDefinitionNamespace = buildWorkflowCallSiteIdentity({
+    stack: [
+      ...reportParticipation.resumeStackPrefix,
+      buildWorkflowResumePointEntry(
+        context.workflow,
+        step.name,
+        step.kind,
+        savedNamespace.iteration,
+        undefined,
+        reportParticipation.invocation.call_instance,
+      ),
+    ],
+    childWorkflow,
+  }).runPathSegment;
+  if (namespaceSegment !== currentDefinitionNamespace) {
+    log.warn('Saved workflow call site digest differs from current workflow', {
+      step: step.name,
+      saved: namespaceSegment,
+      current: currentDefinitionNamespace,
+    });
+  }
   const childNamespace = [
     ...namespace,
     'subworkflows',
@@ -295,7 +359,31 @@ function resolveWorkflowStepReportNames(
   parallelParentStepName?: string,
 ): InheritedReviewReportNamesResult {
   const participation = resolveParticipation(step, context, parallelParentStepName);
+  const inherited = context.reportExecutions?.isInheritedProducer(buildWorkflowStepParticipationIdentity(
+    getWorkflowReference(context.workflow), step.name, context.resumeStackPrefix, parallelParentStepName,
+  )) === true;
+  if (inherited && participation.kind !== 'participated') {
+    log.warn('Ignoring unavailable inherited report participation', { step: step.name });
+    return { reportNames: [], failures: [] };
+  }
   if (participation.kind === 'not-participated') {
+    const staticParallelParent = parallelParentStepName === undefined
+      ? undefined
+      : context.workflow.steps.find((candidate) => candidate.name === parallelParentStepName);
+    if (
+      context.requireCompletedCalls === true
+      && staticParallelParent?.parallel !== undefined
+      && !isDynamicParallelSubSteps(staticParallelParent.parallel)
+      && (hasReportOutputs(step) || step.kind === 'workflow_call')
+    ) {
+      return {
+        reportNames: [],
+        failures: [{
+          kind: 'fatal',
+          reason: `workflow_report_input_static_reviewer_missing:${parallelParentStepName}:${step.name}`,
+        }],
+      };
+    }
     return { reportNames: [], failures: [] };
   }
   if (participation.kind === 'invalid') {
@@ -305,7 +393,20 @@ function resolveWorkflowStepReportNames(
     };
   }
   const generatedReportNames = new Set(participation.reportNames);
-  const reportNames = getReportFiles(step.outputContracts)
+  const dynamicSelection = step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    ? context.participation.dynamicParallelSelections.get(
+        buildDynamicParallelSelectionIdentity(context.workflow, step.name, context.resumeStackPrefix),
+      )
+    : undefined;
+  const missingSelectedReviewers = !inherited && context.requireCompletedCalls === true && dynamicSelection !== undefined
+    ? dynamicSelection.effective_selection_ids.filter((id) =>
+        !participation.parallelParticipants.some((candidate) => candidate.name === id))
+    : [];
+  const contractedReportNames = getReportFiles(step.outputContracts);
+  const missingContractedReports = !inherited && context.requireCompletedCalls === true
+    ? contractedReportNames.filter((fileName) => !generatedReportNames.has(fileName))
+    : [];
+  const reportNames = contractedReportNames
     .filter((fileName) => generatedReportNames.has(fileName))
     .map((fileName) => [...namespace, fileName].join(REPORT_PATH_SEPARATOR));
   const parallelResults = participation.parallelParticipants.map((parallelStep) =>
@@ -329,7 +430,16 @@ function resolveWorkflowStepReportNames(
       )
     : { reportNames: [], failures: [] };
   return combineReportNameResults([
-    { reportNames, failures: [] },
+    {
+      reportNames,
+      failures: missingContractedReports.map((fileName) => ({
+        kind: 'fatal' as const,
+        reason: `workflow_report_input_not_produced:${step.name}:${fileName}`,
+      })).concat(missingSelectedReviewers.map((id) => ({
+        kind: 'fatal' as const,
+        reason: `workflow_report_input_selected_reviewer_missing:${step.name}:${id}`,
+      }))),
+    },
     ...parallelResults,
     nestedWorkflowCallResult,
   ]);

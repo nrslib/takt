@@ -33,6 +33,7 @@ import {
 } from './workflow-session-constraints.js';
 import {
   MAX_COMPLETION_RETRY,
+  MAX_SYSTEM_WAIT_INTERVAL_MS,
   WORKFLOW_SESSION_MODES,
 } from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
@@ -482,9 +483,29 @@ function validateCompletionRetryOptIn(
   }
 }
 
+const WorkflowReportInputEntryRawSchema = z.object({
+  from_step: WorkflowStepNameSchema,
+  fallback_from_step: WorkflowStepNameSchema.optional(),
+  reports: z.union([z.literal('all'), z.array(z.string().min(1)).min(1)]),
+  optional_if_unrun: z.literal(true).optional(),
+  previous_only: z.literal(true).optional(),
+  history: z.object({ previous: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
+}).strict().superRefine((input, ctx) => {
+  if (input.previous_only && (input.fallback_from_step || input.optional_if_unrun || input.reports === 'all')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'previous_only requires explicit reports and cannot use a fallback or optional_if_unrun' });
+  }
+});
+
+export const WorkflowReportInputRawSchema = z.union([
+  WorkflowReportInputEntryRawSchema,
+  z.array(WorkflowReportInputEntryRawSchema).min(1),
+]);
+
 const AgentParallelSubStepRawObjectSchema = z.object({
   name: WorkflowStepNameSchema,
-  description: z.never().optional(),
+  input_reports: WorkflowReportInputRawSchema.optional(),
+  description: z.string().optional(),
+  selection_hint: z.never().optional(),
   kind: z.never().optional(),
   mode: z.never().optional(),
   call: z.never().optional(),
@@ -554,6 +575,7 @@ const AgentParallelSubStepRawSchema = AgentParallelSubStepRawObjectSchema.superR
 
 const WorkflowCallParallelSubStepRawSchema = z.object({
   name: WorkflowStepNameSchema,
+  input_reports: WorkflowReportInputRawSchema.optional(),
   kind: z.literal('workflow_call').optional(),
   mode: z.never().optional(),
   call: WorkflowReferenceOrParamSchema,
@@ -561,6 +583,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   args: WorkflowCallArgsRawSchema.optional(),
   vars: WorkflowCallVarsRawSchema.optional(),
   description: z.string().optional(),
+  selection_hint: z.never().optional(),
   session_key: z.never().optional(),
   session: z.never().optional(),
   persona: z.never().optional(),
@@ -610,6 +633,7 @@ export const ParallelSubStepRawSchema = z.union([
 
 const DynamicParallelPoolSubStepRawSchema = AgentParallelSubStepRawObjectSchema.extend({
   description: z.string().trim().min(1),
+  selection_hint: z.string().trim().min(1).optional(),
 }).superRefine(validateAgentParallelSubStepRules);
 
 const DynamicParallelRawSchema = z.object({
@@ -669,7 +693,9 @@ const WorkflowSubworkflowRawSchema = z.object({
 function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: boolean }) {
   return z.object({
     name: WorkflowStepNameSchema,
+    input_reports: WorkflowReportInputRawSchema.optional(),
     description: z.string().optional(),
+    selection_hint: z.never().optional(),
     session_key: z.string().trim().min(1).optional(),
     kind: WorkflowStepKindSchema.optional(),
     mode: z.literal('system').optional(),
@@ -701,6 +727,15 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     instruction: WorkflowInstructionRefOrParamSchema.optional(),
     instruction_template: z.never().optional(),
     delay_before_ms: z.number().int().min(0).optional(),
+    wait: z.object({
+      until: z.string().min(1).refine((value) => {
+        try { return parseWorkflowRuleCondition(value).kind === 'when'; }
+        catch { return false; }
+      }, 'wait.until must be a valid when(...) expression'),
+      interval_ms: z.number().int().positive().max(MAX_SYSTEM_WAIT_INTERVAL_MS).optional(),
+      max_retries: z.number().int().nonnegative().safe().optional(),
+      on_timeout: z.string().min(1),
+    }).strict().optional(),
     structured_output: StructuredOutputRawSchema.optional(),
     system_inputs: z.array(SystemInputRawSchema).optional(),
     effects: z.array(WorkflowEffectRawSchema).optional(),
@@ -731,6 +766,13 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     const stepKind = getWorkflowStepKind(data);
+    if (stepKind === 'system' && data.input_reports !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['input_reports'],
+        message: 'input_reports is only supported on agent and workflow_call steps',
+      });
+    }
     if (data.completion_retry !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -969,6 +1011,7 @@ export const LoopMonitorRuleSchema = z.object({
 
 /** Loop monitor judge schema */
 export const LoopMonitorJudgeSchema = z.object({
+  input_reports: WorkflowReportInputRawSchema.optional(),
   session_key: z.never({ message: 'session_key is not supported on loop_monitors.judge; judges always use a fresh session' }).optional(),
   persona: z.string().optional(),
   provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
@@ -1100,6 +1143,8 @@ export const WorkflowConfigRawSchema = z.object({
   // Issue #1208: workflow-level capability-set reference (the default for every step) and the
   // portable, bundled MCP server definitions that step/sub-step `mcp:` references resolve against.
   capabilities: WorkflowCapabilitiesRefSchema,
+  // Opt-in: name the project's repository for `gh` / `glab` in a task that runs in a clone.
+  repository_identity: z.boolean().optional(),
   mcp_servers: McpServersSchema,
   auto_routing: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),
   rate_limit_fallback: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),

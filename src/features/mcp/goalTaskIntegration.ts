@@ -1,0 +1,62 @@
+import { GoalStore } from '../../infra/goals/store.js';
+import { buildGoalGitEnvironment, isGoalCommitIncluded, resolveGoalBranchSha, runGoalGit } from '../../infra/goals/git-command.js';
+import type { TaskState } from '../../infra/task/types.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+
+type GoalBranchResolution = { sha: string } | { reason: string };
+
+export async function getTaskGoalIntegrations(
+  cwd: string, tasks: readonly TaskState[], signal: AbortSignal | undefined,
+): Promise<Record<string, unknown>[]> {
+  const store = new GoalStore(cwd);
+  const branches = new Map<string, GoalBranchResolution>();
+  const integrations: Record<string, unknown>[] = [];
+  let environment: Promise<NodeJS.ProcessEnv> | undefined;
+  const gitEnvironment = () => (environment ??= buildGoalGitEnvironment(cwd, signal));
+  for (const task of tasks) {
+    if (task.mergeTask === true) {
+      integrations.push({ goalIntegration: 'direct_push' });
+      continue;
+    }
+    if (task.goalId === undefined) {
+      integrations.push({});
+      continue;
+    }
+    const sha = task.completion?.sha;
+    if (task.status !== 'completed' || sha === undefined) {
+      integrations.push({ goalIntegration: 'not_integrated' });
+      continue;
+    }
+    let branch = branches.get(task.goalId);
+    if (branch === undefined) {
+      try {
+        const goal = await store.get(task.goalId);
+        branch = { sha: await resolveGoalBranchSha(cwd, goal.branch, signal, await gitEnvironment()) };
+      } catch (error) {
+        signal?.throwIfAborted();
+        branch = { reason: `Goal branch could not be resolved: ${safeExternalErrorMessage(error)}` };
+      }
+      branches.set(task.goalId, branch);
+    }
+    if ('reason' in branch) {
+      integrations.push({ goalIntegration: 'unknown', goalIntegrationReason: branch.reason });
+      continue;
+    }
+    try {
+      const included = await isGoalCommitIncluded(cwd, sha, branch.sha, signal, await gitEnvironment());
+      integrations.push({ goalIntegration: included ? 'integrated' : 'not_integrated' });
+    } catch (error) {
+      signal?.throwIfAborted();
+      let reason = safeExternalErrorMessage(error);
+      try {
+        const commit = await runGoalGit(cwd, ['cat-file', '-e', '--', `${sha}^{commit}`], 0, signal, [0, 1, 128], await gitEnvironment());
+        if (commit.code !== 0) reason = 'Completion commit not found or unreadable';
+      } catch (checkError) {
+        signal?.throwIfAborted();
+        reason = `${reason}; completion commit check failed: ${safeExternalErrorMessage(checkError)}`;
+      }
+      integrations.push({ goalIntegration: 'unknown', goalIntegrationReason: reason });
+    }
+  }
+  return integrations;
+}

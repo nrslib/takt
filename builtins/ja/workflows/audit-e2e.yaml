@@ -26,6 +26,7 @@ loop_monitors:
 
 steps:
   - name: plan
+    description: 全ユーザーフローと既存の E2E テストを対応付け、監査対象と不足シナリオの優先順位を整理する
     tags:
       - plan
     persona: test-planner
@@ -49,6 +50,7 @@ steps:
         next: ABORT
 
   - name: audit
+    description: 対象フローを分担してコードと E2E テストを並列に監査し、カバレッジと不足を記録する
     tags:
       - review
     edit: false
@@ -75,6 +77,7 @@ steps:
         next: supervise
 
   - name: supervise
+    description: E2E 監査の網羅性・根拠・Issue 化できる具体性を確認し、完了か再監査かを判定する
     tags:
       - review
       - supervise
@@ -95,6 +98,7 @@ steps:
         next: review
 
   - name: review
+    description: 未監査または根拠不足のフローとシナリオを再監査し、既存レポートへ結果を統合する
     tags:
       - review
     edit: false

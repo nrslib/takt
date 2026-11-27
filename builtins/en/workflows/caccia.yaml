@@ -5,6 +5,7 @@ initial_step: address
 
 steps:
   - name: address
+    description: Validate all CodeRabbit threads, fix valid findings, and record the decision and rationale for each thread.
     tags:
       - implementation
     capabilities: edit
@@ -17,7 +18,7 @@ steps:
         - name: caccia-decisions.json
           format: caccia-decisions
     rules:
-      - condition: All valid findings are fixed and every thread has a complete decision report
+      - condition: The report outcome is complete, all valid findings are fixed, and every thread has a decision
         next: COMPLETE
-      - condition: A valid finding could not be fixed safely or the required decision report is incomplete
+      - condition: The report outcome is abort or the required decision report is incomplete
         next: ABORT

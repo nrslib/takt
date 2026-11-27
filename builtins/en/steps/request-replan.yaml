@@ -1,4 +1,5 @@
 name: request-replan
+description: Confirm why the current fix approach cannot converge and request replanning of the whole task.
 tags:
   - plan
 edit: false

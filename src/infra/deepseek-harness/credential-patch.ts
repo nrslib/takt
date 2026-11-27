@@ -8,6 +8,7 @@ import {
   writeNewPrivateFileWithMode,
 } from '../../shared/utils/private-file.js';
 import type { DeepSeekCredentialBinding } from './credential-binding.js';
+import type { ResolvedDeepSeekHarnessPlugin } from './plugin-types.js';
 
 const PATCH_FILE_NAME = 'credentials.patch.yml';
 const PATCH_DIRECTORY_PREFIX = 'takt-deepseek-credentials-';
@@ -20,15 +21,22 @@ export interface DeepSeekCredentialPatch {
   disposeSync: () => void;
 }
 
+export interface DeepSeekCredentialPatchOptions {
+  /** Reference used only by the DeepSeek LLM plugin for this runtime. */
+  runtimeCredentialReference?: string;
+}
+
 /**
  * Build the process-owned patch that hands the official runtime the credential store
  * path and the reference name. The patch never contains a credential value.
- * Durable runtime logs are disabled because provider failures can echo credentials;
- * TAKT keeps only its own non-secret used-session markers.
+ * Durable runtime logs and session-log uploads are disabled because provider
+ * failures can echo credentials; TAKT keeps only its own non-secret used-session markers.
  */
 export async function createDeepSeekCredentialPatch(
   binding: DeepSeekCredentialBinding,
   systemPrompt?: string,
+  plugins: readonly ResolvedDeepSeekHarnessPlugin[] = [],
+  options: DeepSeekCredentialPatchOptions = {},
 ): Promise<DeepSeekCredentialPatch> {
   let patchDirectoryPath: string;
   try {
@@ -43,8 +51,9 @@ export async function createDeepSeekCredentialPatch(
       // this composition requires a trusted workspace; a credential reference
       // is not an OS-level read-isolation boundary for model-callable tools.
       { id: 'credentials', config: { path: binding.home.credentialsPath } },
-      { id: 'llm-deepseek', config: { apiKeyEnv: binding.ref } },
+      { id: 'llm-deepseek', config: { apiKeyEnv: options.runtimeCredentialReference ?? binding.ref } },
       { id: 'session-persistence-jsonl', disabled: true },
+      { id: 'session-log-deepseek', config: { enabled: false } },
       ...(systemPrompt === undefined
         ? []
         : [{
@@ -55,27 +64,36 @@ export async function createDeepSeekCredentialPatch(
             config: { prompt: systemPrompt },
           }],
         }]),
+      ...(plugins.length === 0 ? [] : [{ insert: plugins }]),
     ];
     ensurePrivateDirectory(patchDirectoryPath);
     writeNewPrivateFileWithMode(patchPath, stringifyYaml(document), PATCH_FILE_MODE);
     let disposed = false;
+    let pendingDisposal: Promise<void> | undefined;
     return {
       path: patchPath,
-      dispose: async (): Promise<void> => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await rm(patchPath, { force: true });
-        await rm(patchDirectoryPath, { recursive: true, force: true });
+      dispose: (): Promise<void> => {
+        if (pendingDisposal !== undefined) return pendingDisposal;
+        if (disposed) return Promise.resolve();
+        const cleanup = (async (): Promise<void> => {
+          try {
+            await rm(patchPath, { force: true });
+            await rm(patchDirectoryPath, { recursive: true, force: true });
+            disposed = true;
+          } finally {
+            pendingDisposal = undefined;
+          }
+        })();
+        pendingDisposal = cleanup;
+        return cleanup;
       },
       disposeSync: (): void => {
         if (disposed) {
           return;
         }
-        disposed = true;
         rmSync(patchPath, { force: true });
         rmSync(patchDirectoryPath, { recursive: true, force: true });
+        disposed = true;
       },
     };
   } catch (error) {

@@ -4,6 +4,7 @@
  * TAKT CLI entry point
  */
 
+import '../environment.js';
 import { CommanderError } from 'commander';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';

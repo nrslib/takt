@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RoutingModelInput } from '../core/workflow/auto-routing/contracts.js';
 

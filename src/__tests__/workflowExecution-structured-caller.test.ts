@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import * as childProcess from 'node:child_process';
+import * as gitEnvironment from '../infra/task/git-environment.js';
 import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
 import { resolveWorkflowConfigValues } from '../infra/config/index.js';
@@ -9,8 +11,14 @@ import {
   ProviderNeutralStructuredCaller,
   type StructuredCaller,
 } from '../agents/structured-caller.js';
-import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import type { SystemStepServicesFactory } from '../core/workflow/system/system-step-services.js';
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+}));
 
 const {
   MockWorkflowEngine,
@@ -19,6 +27,7 @@ const {
   mockGetProvider,
   mockRunAgent,
   mockResolveConfigValueWithSource,
+  mockCloseOpenCodeServersForExternalDirectories,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
@@ -28,14 +37,18 @@ const {
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
     static nextRunImpl: ((instance: MockWorkflowEngine) => Promise<{ status: string; iteration: number }>) | undefined;
+    static nextOpenCodeExternalDirectories: readonly string[] | undefined;
     readonly receivedOptions: Record<string, unknown>;
     readonly receivedConfig: WorkflowConfig;
+    openCodeExternalDirectories: readonly string[] = [];
     currentResumePoint: unknown;
 
     constructor(config: WorkflowConfig, _cwd: string, _task: string, options: Record<string, unknown>) {
       super();
       this.receivedConfig = config;
       this.receivedOptions = options;
+      this.openCodeExternalDirectories = MockWorkflowEngine.nextOpenCodeExternalDirectories ?? [];
+      MockWorkflowEngine.nextOpenCodeExternalDirectories = undefined;
       MockWorkflowEngine.lastInstance = this;
       this.currentResumePoint = undefined;
     }
@@ -54,13 +67,18 @@ const {
       }
       const step = this.receivedConfig.steps[0];
       if (step) {
-        this.emit('step:start', step, 1, step.instruction, { provider: 'cursor', model: undefined });
+        this.emit('step:start', step, 1, step.instruction, { provider: 'cursor', model: undefined },
+          this.receivedConfig.name, step.name, 1,
+          [buildWorkflowResumePointEntry(this.receivedConfig, step.name, getWorkflowResumeFrameKind(step), 1, undefined,
+            step.kind === 'workflow_call' ? 1 : undefined)]);
         this.emit('step:complete', step, {
           persona: step.personaDisplayName,
           status: 'done',
           content: 'ok',
           timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        }, step.instruction);
+        }, step.instruction, step.name,
+        [buildWorkflowResumePointEntry(this.receivedConfig, step.name, getWorkflowResumeFrameKind(step), 1, undefined,
+          step.kind === 'workflow_call' ? 1 : undefined)]);
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -79,6 +97,7 @@ const {
     mockGetProvider: vi.fn(),
     mockRunAgent: vi.fn(),
     mockResolveConfigValueWithSource: vi.fn(),
+    mockCloseOpenCodeServersForExternalDirectories: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -166,6 +185,11 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
 
+vi.mock('../infra/opencode/server-pool.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/opencode/server-pool.js')>()),
+  closeOpenCodeServersForExternalDirectories: mockCloseOpenCodeServersForExternalDirectories,
+}));
+
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
@@ -183,7 +207,6 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
     analytics: undefined,
     observability: disabledObservability,
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -205,10 +228,12 @@ vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn().mockReturnValue(vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn().mockReturnValue(vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../infra/fs/index.js', () => ({
@@ -263,6 +288,7 @@ vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn().mockReturnValue({
     filepath: '/tmp/provider-events.jsonl',
     logEvent: vi.fn(),
+    flush: vi.fn(),
   }),
   isProviderEventsEnabled: vi.fn().mockReturnValue(false),
 }));
@@ -359,6 +385,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
     mockResolvedProviderModel('cursor', undefined);
     MockWorkflowEngine.nextRunImpl = undefined;
+    MockWorkflowEngine.nextOpenCodeExternalDirectories = undefined;
     cleanupDirs = [];
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-structured-caller-project-'));
     cleanupDirs.push(projectCwd);
@@ -423,6 +450,76 @@ describe('executeWorkflow structuredCaller injection', () => {
       resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
+  });
+
+  it('外部にある run context の OpenCode server を run 完了時に閉じる', async () => {
+    const runPathsDirectory = mkdtempSync(join(tmpdir(), 'takt-structured-caller-runs-'));
+    cleanupDirs.push(runPathsDirectory);
+    const contextDirectory = join(runPathsDirectory, 'external-context-run', 'context');
+    mkdirSync(contextDirectory, { recursive: true });
+    const resolvedContextDirectory = realpathSync(contextDirectory);
+    MockWorkflowEngine.nextOpenCodeExternalDirectories = [resolvedContextDirectory];
+    MockWorkflowEngine.nextRunImpl = async (instance) => {
+      const result = await instance.run();
+      rmSync(contextDirectory, { recursive: true, force: true });
+      return result;
+    };
+
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
+      reportDirName: 'external-context-run',
+      runPathsDirectory,
+    });
+
+    expect(mockCloseOpenCodeServersForExternalDirectories).toHaveBeenCalledWith([
+      resolvedContextDirectory,
+    ]);
+  });
+
+  it('PR実行APIが同じPRとcloneのcontextおよび方式をengineへ渡す', async () => {
+    const { runWorkflowExecution } = await import('../features/tasks/execute/workflowExecutionApi.js');
+    const cloneCwd = join(projectCwd, 'clone');
+    mkdirSync(cloneCwd);
+    writeWorkflow(projectCwd, '.takt/workflows/merge-context-test.yaml', `name: merge-context-test
+initial_step: check
+steps:
+  - name: check
+    mode: system
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+`);
+    const prExecutionContext = { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+      headSha: 'a'.repeat(40), headRepositoryUrl: '/fork', headRepositoryPushUrls: ['/fork'] };
+    const prGitOperations = { fetch: vi.fn().mockResolvedValue(undefined), push: vi.fn().mockResolvedValue(undefined) };
+    await runWorkflowExecution({
+      task: 'Review PR 123', cwd: cloneCwd, projectCwd,
+      workflowIdentifier: 'merge-context-test', prExecutionContext, mergeMethod: 'rebase', prGitOperations,
+      runPathsDirectory: join(projectCwd, '.takt', 'runs'), skipWorktreeRuntimeProtection: true,
+    });
+    expect(MockWorkflowEngine.lastInstance.receivedOptions).toMatchObject({
+      projectCwd, prExecutionContext, mergeMethod: 'rebase',
+      runPathsDirectory: join(projectCwd, '.takt', 'runs'),
+    });
+    const received = MockWorkflowEngine.lastInstance.receivedOptions;
+    const git = vi.spyOn(childProcess, 'execFileSync').mockReturnValue('feature/pr');
+    const environment = vi.spyOn(gitEnvironment, 'buildSafeGitEnvironment').mockResolvedValue({});
+    const services = (received.systemStepServicesFactory as SystemStepServicesFactory)({
+      cwd: cloneCwd, projectCwd, task: 'Review PR 123', prExecutionContext: received.prExecutionContext as typeof prExecutionContext,
+      prGitOperations: received.prGitOperations as typeof prGitOperations,
+    });
+    try {
+      const result = await Reflect.apply(services.executeEffect, services, [
+        { type: 'sync_with_root', pr: 123 }, { pr: 123 }, { systemContexts: new Map(), effectResults: new Map() },
+      ]);
+      expect(result).toMatchObject({ success: true, conflicted: false });
+      expect(prGitOperations.fetch).toHaveBeenCalledWith('base', 'refs/heads/main:refs/takt/pr-base/main');
+      expect(git.mock.calls.some(([, args]) => Array.isArray(args) && args[0] === 'fetch')).toBe(false);
+      expect(received.childProcessEnv).toBeUndefined();
+    } finally {
+      git.mockRestore();
+      environment.mockRestore();
+    }
   });
 
   it('global provider が claude のとき structured output caller へ委譲できること', async () => {
@@ -522,6 +619,7 @@ describe('executeWorkflow structuredCaller injection', () => {
         { label: 'needs_fix' },
       ],
       {
+        judgmentInput: 'work result',
         cwd: projectCwd,
         stepName: 'implement',
         provider: 'cursor',
@@ -584,6 +682,7 @@ describe('executeWorkflow structuredCaller injection', () => {
         { label: 'needs_fix' },
       ],
       {
+        judgmentInput: 'work result',
         cwd: projectCwd,
         stepName: 'implement',
         provider: 'claude',
@@ -892,13 +991,16 @@ steps:
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
       instance.currentResumePoint = childResumePoint;
-      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
+      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined },
+        instance.receivedConfig.name, workflowCallStep.name, 1,
+        [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.emit('step:complete', workflowCallStep, {
         persona: 'delegate',
         status: 'done',
         content: 'COMPLETE',
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      }, workflowCallStep.instruction);
+      }, workflowCallStep.instruction, workflowCallStep.name,
+      [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.currentResumePoint = parentResumePoint;
       instance.emit(
         'workflow:abort',
@@ -989,13 +1091,16 @@ steps:
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
       instance.currentResumePoint = childResumePoint;
-      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
+      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined },
+        instance.receivedConfig.name, workflowCallStep.name, 1,
+        [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.emit('step:complete', workflowCallStep, {
         persona: 'delegate',
         status: 'done',
         content: 'COMPLETE',
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      }, workflowCallStep.instruction);
+      }, workflowCallStep.instruction, workflowCallStep.name,
+      [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.currentResumePoint = parentResumePoint;
       throw new Error('engine crashed after child completion');
     };
@@ -1401,3 +1506,7 @@ steps:
     expect(runOptions).toHaveProperty('outputSchema');
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

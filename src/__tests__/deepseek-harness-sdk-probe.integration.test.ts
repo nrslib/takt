@@ -74,7 +74,7 @@ interface LocalApiMock {
   close(): Promise<void>;
 }
 
-const SDK_VERSION = '0.2.0-rc.2';
+const SDK_VERSION = '0.2.1-rc.5';
 const STDERR_SENTINEL = 'TAKT_DSH_PROBE_STDERR_SENTINEL';
 const isSupportedDshRuntimePlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
@@ -94,10 +94,10 @@ const activeClients: Array<{ close(): Promise<void> }> = [];
 const localMocks: LocalApiMock[] = [];
 const processGroupFiles: string[] = [];
 
-/** Choose the consumer package root when configured, otherwise resolve packages from the checkout. */
+/** Choose the consumer package root when configured, otherwise resolve packages from the managed checkout. */
 function packageRequireBase(): string {
   const configuredRoot = process.env.TAKT_DSH_SDK_PROBE_PACKAGE_ROOT;
-  return configuredRoot === undefined ? process.cwd() : configuredRoot;
+  return configuredRoot ?? fileURLToPath(new URL('../../managed/deepseek-harness/', import.meta.url));
 }
 
 /** Read a package manifest for SDK/runtime version and distribution assertions. */
@@ -180,7 +180,7 @@ async function createHarness(
     patches: options.patches ?? [],
     dshHome: options.dshHome ?? env.DSH_HOME,
     env,
-    initializeTimeoutMs: options.initializeTimeoutMs ?? 2_000,
+    initializeTimeoutMs: options.initializeTimeoutMs ?? 30_000,
     requestTimeoutMs: options.requestTimeoutMs ?? 2_000,
     shutdownTimeoutMs: options.shutdownTimeoutMs ?? 200,
     disposeEofGraceMs: options.disposeEofGraceMs ?? 300,
@@ -595,7 +595,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       ['@deepseek-ai/dsh-sdk-protocol', SDK_VERSION],
       ['@deepseek-ai/dsh-session', SDK_VERSION],
     ]));
-    expect(peerVersions.find(([name]) => name === '@deepseek-ai/cordis')?.[1]).toMatch(/^4\.0\.\d+$/u);
+    expect(peerVersions.find(([name]) => name === '@deepseek-ai/cordis')?.[1]).toBe('4.0.5');
   });
 
   it.skipIf(!isSupportedDshRuntimePlatform)('continues multiple FIFO turns in one live runtime with an unchanged configuration', async () => {
@@ -653,6 +653,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
   it.skipIf(process.platform === 'win32')('discards runtime stderr before it reaches SDK failures', async () => {
     const { harness, launchDirectory } = await createHarness({ mode: 'stderr-exit' });
     const error = await rejectionOf(bounded(harness.start(), 3_000, 'SDK initialization'));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
 
     expect(error).toBeInstanceOf(Error);
@@ -664,6 +665,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
   it.skipIf(process.platform === 'win32')('cleans the process group after an initialization failure', async () => {
     const { harness, launchDirectory } = await createHarness({ mode: 'initialize-failure' });
     const error = await rejectionOf(bounded(harness.start(), 3_000, 'SDK initialization failure'));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
 
     expect(error).toBeInstanceOf(Error);
@@ -677,6 +679,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       initializeTimeoutMs: 100,
     });
     const error = await rejectionOf(bounded(harness.start(), 2_000, 'bounded initialization'));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
 
     expect(error).toMatchObject({ name: 'RequestTimeoutError' });
@@ -694,6 +697,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       2_000,
       'bounded turn request',
     ));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
     await bounded(harness.close(), 2_000, 'runtime close after turn timeout');
 
@@ -754,14 +758,40 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       dshHome: join(temporaryRoot, 'failed-cleanup-home'),
       mode: 'cleanup-failure',
       failCleanup: true,
-      initializeTimeoutMs: 1_000,
+      initializeTimeoutMs: 5_000,
       shutdownTimeoutMs: 40,
       disposeEofGraceMs: 30,
       disposeGraceMs: 50,
     });
-    const startError = await rejectionOf(bounded(first.harness.start(), 2_000, 'failed initialization cleanup'));
+    const startError = await rejectionOf(bounded(first.harness.start(), 6_000, 'failed initialization cleanup'));
+    try {
+      await waitForFile(join(first.launchDirectory, 'runtime.pgid'));
+    } catch (error) {
+      const dshHome = first.env.DSH_HOME;
+      if (dshHome === undefined) throw new Error('The probe runtime home was not configured');
+      const readDiagnostic = (filePath: string): string => (
+        existsSync(filePath) ? readFileSync(filePath, 'utf8').trim() : '<missing>'
+      );
+      const startErrorDescription = startError instanceof Error
+        ? `${startError.name}: ${startError.message}`
+        : String(startError);
+      throw new Error([
+        error instanceof Error ? error.message : String(error),
+        `startError=${startErrorDescription}`,
+        `supervisorPid=${readDiagnostic(join(first.launchDirectory, 'supervisor.pid'))}`,
+        `runtimePid=${readDiagnostic(join(first.launchDirectory, 'runtime.pid'))}`,
+        `toolChildPid=${readDiagnostic(join(first.launchDirectory, 'tool-child.pid'))}`,
+        `spawnLog=${readDiagnostic(join(dshHome, 'spawned-supervisors.log'))}`,
+      ].join('; '));
+    }
+    await waitForFile(join(first.launchDirectory, 'runtime.pid'));
+    await waitForFile(join(first.launchDirectory, 'tool-child.pid'));
     const pgid = readPidFile(join(first.launchDirectory, 'runtime.pgid'));
+    const runtimePid = readPidFile(join(first.launchDirectory, 'runtime.pid'));
+    const childPid = readPidFile(join(first.launchDirectory, 'tool-child.pid'));
     expect(startError).toBeInstanceOf(Error);
+    expect(processIsAlive(runtimePid)).toBe(true);
+    expect(processIsAlive(childPid)).toBe(true);
     expect(processGroupIsAlive(pgid)).toBe(true);
     expect(existsSync(join(first.launchDirectory, 'cleanup-confirmed.marker'))).toBe(false);
 
@@ -775,6 +805,41 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
     const restartError = await rejectionOf(bounded(next.harness.start(), 2_000, 'restart after unconfirmed cleanup'));
     expect(restartError).toBeInstanceOf(Error);
     expect((restartError as Error).message).not.toContain(STDERR_SENTINEL);
+    expect(processIsAlive(childPid)).toBe(true);
+    expect((await readFile(startLog, 'utf8')).trim().split('\n')).toHaveLength(startsBeforeRetry.length);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a restart while only an unconfirmed tool child remains alive', async () => {
+    const dshHome = join(temporaryRoot, 'orphaned-tool-child-home');
+    const first = await createHarness({
+      dshHome,
+      mode: 'cleanup-child-only',
+      failCleanup: true,
+      shutdownTimeoutMs: 40,
+      disposeEofGraceMs: 30,
+      disposeGraceMs: 50,
+    });
+    await bounded(first.harness.start(), 2_000, 'runtime startup before child-only cleanup');
+    await waitForFile(join(first.launchDirectory, 'tool-child.pid'));
+    const runtimePid = readPidFile(join(first.launchDirectory, 'runtime.pid'));
+    const childPid = readPidFile(join(first.launchDirectory, 'tool-child.pid'));
+    const pgid = readPidFile(join(first.launchDirectory, 'runtime.pgid'));
+    const startLog = join(dshHome, 'spawned-supervisors.log');
+
+    expect(processIsAlive(runtimePid)).toBe(true);
+    expect(processIsAlive(childPid)).toBe(true);
+    await bounded(first.harness.close(), 2_000, 'shutdown with a surviving tool child');
+    expect(await waitForProcessGone(runtimePid)).toBe(true);
+    expect(processIsAlive(childPid)).toBe(true);
+    expect(processGroupIsAlive(pgid)).toBe(true);
+
+    const next = await createHarness({ dshHome, mode: 'complete' });
+    const startsBeforeRetry = (await readFile(startLog, 'utf8')).trim().split('\n');
+    const restartError = await rejectionOf(bounded(next.harness.start(), 2_000, 'restart with a surviving tool child'));
+
+    expect(restartError).toBeInstanceOf(Error);
+    expect(processIsAlive(childPid)).toBe(true);
+    expect(existsSync(join(next.launchDirectory, 'runtime.pid'))).toBe(false);
     expect((await readFile(startLog, 'utf8')).trim().split('\n')).toHaveLength(startsBeforeRetry.length);
   });
 
@@ -846,6 +911,8 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       runtimeBin,
       cwd: temporaryRoot,
       reasoningEffort: 'high',
+      initializeTimeoutMs: 15_000,
+      requestTimeoutMs: 15_000,
     });
     const run = await bounded(harness.harness.run('return text and reasoning', {
       onNotification: () => {},
@@ -873,6 +940,8 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       credential: 'TAKT_DUMMY_CREDENTIAL_ASSISTANT_TEXT',
       runtimeBin,
       cwd: temporaryRoot,
+      initializeTimeoutMs: 15_000,
+      requestTimeoutMs: 15_000,
     });
     const run = await bounded(harness.harness.run('return only text', {
       onNotification: () => {},

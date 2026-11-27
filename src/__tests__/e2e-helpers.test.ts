@@ -292,7 +292,7 @@ describe('createIsolatedEnv', () => {
       iteration_limit: false,
       workflow_complete: false,
       workflow_abort: false,
-      run_complete: true,
+      run_complete: false,
       run_abort: false,
     });
     expect(config.provider_options).toEqual({
@@ -330,7 +330,7 @@ describe('createIsolatedEnv', () => {
       iteration_limit: false,
       workflow_complete: false,
       workflow_abort: false,
-      run_complete: true,
+      run_complete: false,
       run_abort: false,
     });
     expect(config.language).toBe('en');
@@ -342,7 +342,7 @@ describe('createIsolatedEnv', () => {
 
     updateIsolatedConfig(isolated.taktDir, {
       notification_sound_events: {
-        run_complete: false,
+        run_complete: true,
       },
     });
 
@@ -353,7 +353,7 @@ describe('createIsolatedEnv', () => {
       iteration_limit: false,
       workflow_complete: false,
       workflow_abort: false,
-      run_complete: false,
+      run_complete: true,
       run_abort: false,
     });
   });
@@ -433,11 +433,12 @@ describe('wait helper child process cleanup', () => {
       child.once('close', () => resolvePromise());
     });
 
-    const startedAt = Date.now();
-    const result = await waitForClose(child, 1_000);
+    const result = await Promise.race([
+      waitForClose(child, 1_000),
+      new Promise<never>((_, reject) => setImmediate(() => reject(new Error('waitForClose did not settle after close')))),
+    ]);
 
     expect(result).toEqual({ code: 0, signal: null });
-    expect(Date.now() - startedAt).toBeLessThan(250);
   });
 
   it('should terminate a running child in cleanupChildProcess', async () => {

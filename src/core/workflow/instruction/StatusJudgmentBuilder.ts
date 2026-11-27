@@ -13,11 +13,13 @@ import type { WorkflowStep, Language } from '../../models/types.js';
 import { semanticRuleCandidatesOf, type SemanticRuleCandidate } from '../../models/workflow-rule-condition.js';
 import { generateStatusRulesComponents } from './status-rules.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 
 /**
  * Context for building status judgment instruction.
  */
 export interface StatusJudgmentContext {
+  workflowAssignment?: import('../workflow-prompt-context.js').WorkflowAssignment;
   /** Language */
   language?: Language;
   /** Whether interactive-only rules are enabled */
@@ -60,20 +62,13 @@ export class StatusJudgmentBuilder {
       language,
     );
 
-    // 情報源に応じた内容を構築
-    const inputSource = this.context.inputSource || 'report';
-    let contentToJudge = '';
-
-    if (inputSource === 'report') {
-      contentToJudge = this.buildFromReport();
-    } else if (inputSource === 'response') {
-      contentToJudge = this.buildFromResponse();
-    }
-
     const isStructured = this.context.structuredOutput ?? false;
 
     return loadTemplate('perform_phase3_message', language, {
-      reportContent: contentToJudge,
+      phaseContext: this.context.workflowAssignment === undefined
+        ? ''
+        : renderPhaseContext(this.context.workflowAssignment, 3, language),
+      reportContent: this.buildJudgmentInput(),
       criteriaTable: components.criteriaTable,
       structuredOutput: isStructured,
       ...(isStructured ? {} : {
@@ -82,6 +77,12 @@ export class StatusJudgmentBuilder {
         appendixContent: components.appendixContent,
       }),
     });
+  }
+
+  buildJudgmentInput(): string {
+    return this.context.inputSource === 'response'
+      ? this.buildFromResponse()
+      : this.buildFromReport();
   }
 
   /**

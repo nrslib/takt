@@ -10,7 +10,9 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import type { Language } from '../../../core/models/types.js';
 import { saveEnqueuedTaskFile } from '../../../infra/task/enqueuedTaskFile.js';
+import { withTaskSaveRuntimeAssignment } from '../../../infra/config/runtime-provider/invocation.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
+import { checkTaskNameProvider, checkTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
 import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import { isIssueReference, parseIssueNumbers, formatIssueAsTask, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
@@ -24,6 +26,8 @@ import {
   createIssueAndEnqueueTask,
   formatIssueEnqueueFailure,
   type PrepareEnqueuedTaskSpec,
+  type EnqueuedTaskPublicationScope,
+  type IssueEnqueueResult,
   type SaveEnqueuedTaskFile,
   type SaveEnqueuedTaskFileOptions,
 } from '../../../infra/task/enqueueService.js';
@@ -45,12 +49,17 @@ export async function saveTaskFile(
   options?: SaveTaskOptions,
   prepareTaskSpec?: PrepareEnqueuedTaskSpec,
   abortSignal?: AbortSignal,
+  publicationScope?: EnqueuedTaskPublicationScope,
 ): Promise<{ taskName: string; tasksFile: string }> {
   const { attachments, ...saveOptions } = options ?? {};
+  await withTaskSaveRuntimeAssignment(saveOptions.runtimeAssignment, async () => {
+    await checkTaskProviders(cwd, saveOptions.workflow ?? DEFAULT_WORKFLOW_NAME, {}, terminalProviderConfirmation(), abortSignal);
+    await checkTaskNameProvider(cwd, terminalProviderConfirmation(), abortSignal);
+  });
   const attachmentPrepareTaskSpec = attachments !== undefined
     ? (saveCwd: string, saveTaskContent: string) => prepareTaskSpecDirectory(saveCwd, saveTaskContent, attachments)
     : prepareTaskSpec;
-  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, attachmentPrepareTaskSpec, abortSignal);
+  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, attachmentPrepareTaskSpec, abortSignal, publicationScope);
 }
 
 
@@ -184,12 +193,12 @@ export async function createIssueAndSaveTask(
   task: string,
   workflow?: string,
   options?: CreateIssueAndSaveTaskOptions,
-): Promise<void> {
+): Promise<IssueEnqueueResult> {
   const gitProvider = getGitProvider();
   const sourceIssue = options?.sourceIssue;
   const saveInteractiveTask: SaveEnqueuedTaskFile = async (saveCwd, taskContent, saveOptions) => {
     return saveTaskFromInteractive(saveCwd, taskContent, saveOptions?.workflow, {
-      issue: saveOptions?.issue,
+      issue: sourceIssue?.number ?? saveOptions?.issue,
       ...(options?.attachments ? { attachments: options.attachments } : {}),
     });
   };
@@ -215,8 +224,9 @@ export async function createIssueAndSaveTask(
     if (result.failure.stage !== 'issue_creation') {
       error(formatIssueEnqueueFailure(result.failure, getErrorMessage));
     }
-    return;
+    return result;
   }
+  return result;
 }
 
 /**

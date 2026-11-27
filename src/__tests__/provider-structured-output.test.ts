@@ -30,6 +30,8 @@ vi.mock('../infra/claude/client.js', () => ({
   callClaudeCustom: mockCallClaudeCustom,
 }));
 
+vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: vi.fn() }));
+
 // ===== Codex =====
 const {
   mockCallCodex,
@@ -99,6 +101,7 @@ import { ClaudeProvider } from '../infra/providers/claude.js';
 import { CodexProvider } from '../infra/providers/codex.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { MockProvider } from '../infra/providers/mock.js';
+import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 
 const SCHEMA = {
@@ -294,6 +297,23 @@ describe('ClaudeProvider — structured output', () => {
 // ---------- Codex ----------
 
 describe('CodexProvider — structured output', () => {
+  it.each([undefined, 'judge system prompt'])('isolates the judge from a manager hook and disables hooks at the SDK configuration boundary (system prompt: %s)', async (systemPrompt) => {
+    vi.clearAllMocks();
+    mockCallCodex.mockResolvedValue(doneResponse('structured-output-fixture'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('structured-output-fixture'));
+    await new CodexProvider().setupIsolatedStructured({ name: 'structured-output-fixture', systemPrompt }).call('judge', {
+      cwd: '/tmp', sessionId: 'manager-session', permissionMode: 'full', outputSchema: SCHEMA,
+      providerOptions: { codex: { fastMode: true } },
+      preparedMcp: { dispose: async () => {}, config: { mcp_servers: { manager: { command: 'node' } } } },
+    });
+    const calls = systemPrompt === undefined ? mockCallCodex.mock.calls : mockCallCodexCustom.mock.calls;
+    const options = calls[0]![systemPrompt === undefined ? 2 : 3];
+    expect(options).toMatchObject({ internalAgentIsolation: 'strict-readonly', sessionId: undefined, permissionMode: 'readonly', preparedMcp: undefined });
+    const { config } = buildCodexSessionConfig(options);
+    expect(config.features).toMatchObject({ hooks: false, fast_mode: true });
+    expect(config.mcp_servers).toBeUndefined();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -303,20 +323,20 @@ describe('CodexProvider — structured output', () => {
     expect(provider.supportsStructuredOutput).toBe(true);
   });
 
-  it('outputSchema を callCodex に渡し structuredOutput を返す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder', { step: 2 }));
+  it('outputSchema を callCodexCustom に渡し structuredOutput を返す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder', { step: 2 }));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     const result = await agent.call('prompt', { cwd: '/tmp', outputSchema: SCHEMA });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
     expect(opts).toHaveProperty('codexPathOverride', '/opt/codex/bin/codex');
     expect(result.structuredOutput).toEqual({ step: 2 });
   });
 
-  it('profile未指定時は既存のCodex SDK経路を維持する', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder', { step: 2 }));
+  it('profile未指定時も固定developer指示を持つCodex SDK経路を使う', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder', { step: 2 }));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     await agent.call('prompt', {
@@ -324,11 +344,19 @@ describe('CodexProvider — structured output', () => {
       outputSchema: SCHEMA,
     });
 
-    expect(mockCallCodex).toHaveBeenCalledOnce();
+    expect(mockCallCodex).not.toHaveBeenCalled();
+    expect(mockCallCodexCustom).toHaveBeenCalledOnce();
+    const [name, prompt, instructions, options] = mockCallCodexCustom.mock.calls[0]!;
+    expect(name).toBe('coder');
+    expect(JSON.parse(prompt)).toEqual({ taktCurrentInstructions: null, userInstruction: 'prompt' });
+    expect(instructions).toEqual(expect.any(String));
+    expect(instructions).toContain('taktCurrentInstructions');
+    expect(options).toHaveProperty('outputSchema', SCHEMA);
   });
 
   it('provider_options.codex.configProfile を通常実行と strict isolated structured 実行へ渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
+    mockCallCodex.mockResolvedValue(doneResponse('selector'));
     const providerOptions = {
       codex: { configProfile: 'automation-review', permissionControl: 'codex' },
     } as unknown as StepProviderOptions;
@@ -349,13 +377,13 @@ describe('CodexProvider — structured output', () => {
       outputSchema: SCHEMA,
     });
 
+    expect(mockCallCodexCustom.mock.calls[0]?.[3]).toHaveProperty('configProfile', 'automation-review');
+    expect(mockCallCodexCustom.mock.calls[1]?.[3]).toHaveProperty('configProfile', 'automation-review');
     expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('configProfile', 'automation-review');
-    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('configProfile', 'automation-review');
-    expect(mockCallCodex.mock.calls[2]?.[2]).toHaveProperty('configProfile', 'automation-review');
   });
 
-  it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+  it('provider_options.codex.reasoningEffort を callCodexCustom に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     await agent.call('prompt', {
@@ -363,12 +391,13 @@ describe('CodexProvider — structured output', () => {
       providerOptions: { codex: { reasoningEffort: 'high' } },
     });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('reasoningEffort', 'high');
   });
 
   it.each([true, false])('provider_options.codex.fastMode=%s を通常・isolated structured callへ渡す', async (fastMode) => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
+    mockCallCodex.mockResolvedValue(doneResponse('selector'));
     const providerOptions: StepProviderOptions = {
       codex: { fastMode },
     };
@@ -384,12 +413,12 @@ describe('CodexProvider — structured output', () => {
       outputSchema: SCHEMA,
     });
 
+    expect(mockCallCodexCustom.mock.calls[0]?.[3]).toHaveProperty('fastMode', fastMode);
     expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('fastMode', fastMode);
-    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('fastMode', fastMode);
   });
 
-  it('provider_options.codex.baseUrl を callCodex に渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+  it('provider_options.codex.baseUrl を callCodexCustom に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
     const providerOptions = {
       codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
     } as unknown as StepProviderOptions;
@@ -400,12 +429,12 @@ describe('CodexProvider — structured output', () => {
       providerOptions,
     });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787/v1');
   });
 
-  it('provider_options.codex.skills を callCodex に渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+  it('provider_options.codex.skills を callCodexCustom に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     await agent.call('prompt', {
@@ -415,17 +444,17 @@ describe('CodexProvider — structured output', () => {
       },
     });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('skills', { repo: true, user: false });
   });
 
-  it('provider_options.codex.skills の未指定値を false として callCodex に渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+  it('provider_options.codex.skills の未指定値を false として callCodexCustom に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     await agent.call('prompt', { cwd: '/tmp' });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('skills', { repo: false, user: false });
   });
 
@@ -456,7 +485,8 @@ describe('CodexProvider — structured output', () => {
   });
 
   it.each([false, true])('permission_control=codex と provider options (networkAccess=%s) を通常経路と strict isolated structured 経路へ渡す', async (networkAccess) => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
+    mockCallCodex.mockResolvedValue(doneResponse('selector'));
     const providerOptions: StepProviderOptions = {
       codex: {
         permissionControl: 'codex',
@@ -473,7 +503,7 @@ describe('CodexProvider — structured output', () => {
       permissionMode: 'edit',
       providerOptions,
     });
-    expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
+    expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
       permissionMode: 'edit',
       permissionControl: 'codex',
       networkAccess,
@@ -488,7 +518,7 @@ describe('CodexProvider — structured output', () => {
       providerOptions,
       outputSchema: SCHEMA,
     });
-    expect(mockCallCodex.mock.calls[1]?.[2]).toMatchObject({
+    expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
       permissionMode: 'readonly',
       permissionControl: 'codex',
       networkAccess,
@@ -498,8 +528,8 @@ describe('CodexProvider — structured output', () => {
     });
   });
 
-  it('childProcessEnv を callCodex に渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+  it('childProcessEnv を callCodexCustom に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
 
     const agent = new CodexProvider().setup({ name: 'coder' });
@@ -508,7 +538,7 @@ describe('CodexProvider — structured output', () => {
       childProcessEnv,
     });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
 
@@ -520,11 +550,15 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
+    expect(JSON.parse(mockCallCodexCustom.mock.calls[0]?.[1])).toEqual({
+      taktCurrentInstructions: 'sys',
+      userInstruction: 'prompt',
+    });
     expect(result.structuredOutput).toEqual({ step: 1 });
   });
 
   it('structuredOutput がない場合は undefined', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     const result = await agent.call('prompt', { cwd: '/tmp', outputSchema: SCHEMA });
@@ -533,12 +567,12 @@ describe('CodexProvider — structured output', () => {
   });
 
   it('outputSchema 未指定時は undefined が渡される', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new CodexProvider().setup({ name: 'coder' });
     await agent.call('prompt', { cwd: '/tmp' });
 
-    const opts = mockCallCodex.mock.calls[0]?.[2];
+    const opts = mockCallCodexCustom.mock.calls[0]?.[3];
     expect(opts.outputSchema).toBeUndefined();
   });
 });
@@ -726,7 +760,7 @@ describe('ClaudeProvider abortSignal wiring', () => {
 describe('Provider activity wiring', () => {
   it.each([
     ['claude', () => new ClaudeProvider(), mockCallClaude, undefined],
-    ['codex', () => new CodexProvider(), mockCallCodex, undefined],
+    ['codex', () => new CodexProvider(), mockCallCodexCustom, undefined],
     ['opencode', () => new OpenCodeProvider(), mockCallOpenCode, 'opencode/big-pickle'],
     ['mock', () => new MockProvider(), mockCallMock, undefined],
   ] as const)('%s provider は onActivity を client へ渡す', async (
@@ -745,6 +779,6 @@ describe('Provider activity wiring', () => {
       ...(model === undefined ? {} : { model }),
     });
 
-    expect(callMock.mock.calls[0]?.[2]).toHaveProperty('onActivity', onActivity);
+    expect(callMock.mock.calls[0]?.at(-1)).toHaveProperty('onActivity', onActivity);
   });
 });

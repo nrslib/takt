@@ -4,6 +4,7 @@ max_steps: 30
 initial_step: develop
 steps:
   - name: develop
+    description: Plan, test, implement, and fix frontend and backend changes using CQRS+ES guidance, then review them and confirm requirements.
     kind: workflow_call
     call: simple-core
     args:

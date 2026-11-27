@@ -169,6 +169,39 @@ describe('getWorkflowDescription consumes the compiled provider environment', ()
     invalidateAllResolvedConfigCache();
   });
 
+  it('previews a selected profile without borrowing the defaults profile model', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'fixed' },
+          selected: { provider: 'codex' },
+        },
+        targets: { steps: { 'preview-omission/review': { profile: 'selected' } } },
+      },
+    });
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    writeWorkflow('preview-omission.yaml', [
+      'name: preview-omission',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      '  - name: review',
+      '    instruction: Review the change.',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ]);
+
+    const preview = getWorkflowDescription('preview-omission', projectCwd, 1).stepPreviews[0];
+
+    expect(preview?.provider).toBe('codex');
+    expect(preview?.model).toBeUndefined();
+  });
+
   it('previews runtime.yaml profiles.default provider/model and resolves allowed-tools against it', () => {
     writeGlobalConfig(['language: en']);
     writeGlobalRuntimeFile({

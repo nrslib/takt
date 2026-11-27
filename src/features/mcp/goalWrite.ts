@@ -1,0 +1,46 @@
+import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalPaused } from '../../infra/goals/state.js';
+import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../manager/notifications.js';
+import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
+import {
+  askGoalQuestionInputSchema, completeGoalInputSchema, enqueueGoalTaskInputSchema, goalWriteInputSchema,
+  mergeGoalTaskInputSchema, mergeGoalPrInputSchema, notifyGoalInputSchema, reopenGoalInputSchema, tellGoalRunInputSchema, updateGoalBranchesInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
+} from './schemas.js';
+import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
+import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
+import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
+
+const inputSchemas = {
+  enqueue: enqueueGoalTaskInputSchema, integrate: mergeGoalTaskInputSchema, complete: completeGoalInputSchema,
+  question: askGoalQuestionInputSchema, notify: notifyGoalInputSchema,
+  withdraw_question: withdrawGoalQuestionInputSchema, check_completion: goalWriteInputSchema,
+  requeue: requeueGoalTaskInputSchema, retry: retryGoalTaskInputSchema, remove: removeGoalTaskInputSchema,
+  reopen: reopenGoalInputSchema, tell: tellGoalRunInputSchema,
+  update_branches: updateGoalBranchesInputSchema,
+  stop: stopGoalTaskInputSchema,
+  merge_pr: mergeGoalPrInputSchema,
+};
+
+export async function goalWrite(
+  input: GoalIdentityInput, deps: McpOperationDependencies, signal: AbortSignal,
+  action: (options: ReturnType<typeof resolveManagerNotificationOptions>) => Promise<Record<string, unknown>>,
+  errorContext: string, tool: keyof typeof inputSchemas,
+) {
+  try {
+    inputSchemas[tool].parse(input);
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const store = new GoalStore(input.cwd);
+    const previous = await store.get(input.goalId);
+    signal.throwIfAborted();
+    if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question' && tool !== 'remove') {
+      throw new Error('Goal is aborted. Work cannot continue for this goal.');
+    }
+    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr', 'update_branches'].includes(tool)) {
+      throw new Error('Goal is paused. Resume it before continuing work.');
+    }
+    const options = resolveManagerNotificationOptions(input.cwd);
+    const result = await action(options);
+    await sendSavedGoalNotifications(input.cwd, previous, await store.get(input.goalId), options.webhookUrl);
+    return jsonResult(result, tool === 'complete' && typeof result.pullRequestBodyError === 'string');
+  } catch (error) { return errorResult(errorContext, error); }
+}

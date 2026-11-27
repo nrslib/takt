@@ -167,10 +167,10 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
       issueNumber,
       ...(publicUrl !== undefined ? { url: publicUrl } : {}),
     };
-  } catch {
+  } catch (err) {
     const errorMessage = 'Failed to extract issue number from created issue URL';
     log.error('Issue number extraction failed after issue creation', {
-      error: errorMessage,
+      error: getErrorMessage(err),
       ...(publicUrl !== undefined ? { url: publicUrl } : {}),
     });
     return {

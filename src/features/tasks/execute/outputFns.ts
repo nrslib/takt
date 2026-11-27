@@ -5,7 +5,8 @@
  * 無効なとき（シングル実行モード）は shared/ui のモジュール関数に委譲する。
  */
 
-import chalk from 'chalk';
+import { ToolActivityDisplay, resolveToolActivityDisplayMode } from '../../../shared/ui/ToolActivityDisplay.js';
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 import {
   header as rawHeader,
   info as rawInfo,
@@ -79,36 +80,37 @@ export function createOutputFns(
  */
 export function createPrefixedStreamHandler(
   writer: TaskPrefixWriter,
-): (event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]) => void {
+  mode: ToolActivityDisplayMode = resolveToolActivityDisplayMode('terminal', process.stdout.isTTY !== true),
+  quiet = false,
+): ((event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]) => void) & { flush(): void } {
   let lastType: 'text' | 'thinking' | 'other' = 'other';
-  return (event) => {
+  const activity = new ToolActivityDisplay(mode, quiet, (line) => writer.writeLine(line), true);
+  const handler = (event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]): void => {
+    if (mode === 'silent') return;
     switch (event.type) {
       case 'text':
+        if (quiet) return;
         if (lastType === 'thinking') writer.flush();
         writer.writeChunk(event.data.text);
         lastType = 'text';
         break;
       case 'tool_use':
-        if (lastType === 'thinking' || lastType === 'text') writer.flush();
-        writer.writeLine(`[tool] ${event.data.tool}`);
+      case 'tool_result':
+      case 'tool_output':
+        if (lastType !== 'other') writer.flush();
+        activity.handle(event);
         lastType = 'other';
         break;
-      case 'tool_result': {
-        const label = event.data.isError ? '✗' : '✓';
-        writer.writeLine(`  ${label} ${event.data.content}`);
-        lastType = 'other';
-        break;
-      }
-      case 'tool_output': writer.writeChunk(event.data.output); break;
       case 'thinking':
+        if (quiet) return;
         if (lastType !== 'thinking') {
           if (lastType === 'text') writer.flush();
-          writer.writeLine('💭 thinking:', (s) => chalk.magenta(s));
+          writer.writeLine('thinking:');
         }
-        writer.writeChunk(event.data.thinking, (s) => chalk.dim(s));
         lastType = 'thinking';
         break;
       default: break;
     }
   };
+  return Object.assign(handler, { flush: () => { activity.flush(); lastType = 'other'; } });
 }

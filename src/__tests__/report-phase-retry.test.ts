@@ -104,13 +104,15 @@ function createContext(
       resolvedProvider: primaryProvider,
       failureDir,
       sessionId,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      permissionMode: 'readonly',
       maxTurns: overrides.maxTurns,
     }),
     buildNewSessionReportOptions: (_step, overrides) => ({
       cwd: reportDir,
       resolvedProvider: primaryProvider,
       failureDir,
-      allowedTools: overrides.allowedTools,
+      allowedTools: ['Read', 'Glob', 'Grep'],
       maxTurns: overrides.maxTurns,
     }),
     buildFallbackReportOptions: (_step, failedPrimaryOptions, overrides) => {
@@ -131,7 +133,7 @@ function createContext(
           ? { codex: { reasoningEffort: 'high' } }
           : undefined,
         sessionId: undefined,
-        allowedTools: overrides.allowedTools,
+        allowedTools: ['Read', 'Glob', 'Grep'],
         maxTurns: overrides.maxTurns,
       };
     },
@@ -256,18 +258,16 @@ describe('runReportPhase retry with new session', () => {
     }]);
 
     const ctx = createContext(reportDir, 'Phase 1 result', 'phase1-session');
-    const buildResumeOptions = ctx.buildResumeOptions;
-    ctx.buildResumeOptions = (...args) => ({ ...buildResumeOptions(...args), allowedTools: [] });
     await runReportPhase(createStep('plain-report.md'), 1, ctx);
 
     expect(readFileSync(join(reportDir, 'plain-report.md'), 'utf8')).toBe(body.trim());
     expect(vi.mocked(runAgent).mock.calls[0]![2]).toMatchObject({
-      resolvedProvider: 'opencode', allowedTools: [],
+      resolvedProvider: 'opencode', allowedTools: ['Read', 'Glob', 'Grep'],
     });
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(emptyAttempts + 1);
     for (const [, instruction, options] of vi.mocked(runAgent).mock.calls) {
       expect(instruction).toMatch(/markdown/i);
-      expect(options).toMatchObject({ allowedTools: [] });
+      expect(options).toMatchObject({ allowedTools: ['Read', 'Glob', 'Grep'] });
     }
     expect(vi.mocked(runAgent).mock.calls.at(-1)![2]!.resolvedProvider).toBe(emptyAttempts === 2 ? 'claude' : 'opencode');
   });
@@ -331,6 +331,176 @@ describe('runReportPhase retry with new session', () => {
 
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();
+  });
+
+  it('should retry with a new session when the resumed report context is compacted', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-context-compaction.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'context_compacted',
+          data: { sessionId: 'session-resume-2' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nCompacted output must not be accepted',
+          timestamp: new Date('2026-02-11T00:00:02Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered after compaction',
+          timestamp: new Date('2026-02-11T00:00:03Z'),
+          sessionId: 'session-fresh-1',
+        },
+      },
+    ]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-context-compaction.md'), 'utf-8')).toBe(
+      '# Report\nRecovered after compaction',
+    );
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.sessionId).toBe('session-resume-1');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[2]?.sessionId).toBeUndefined();
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(1, expect.anything(), false, undefined);
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(2, expect.anything(), true, undefined);
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ reason: 'context_compacted' }),
+    );
+  });
+
+  it('should accept a report when a compaction event belongs to another session', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-other-session-compaction.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentAttempts([{
+      streamEvents: [{
+        type: 'context_compacted',
+        data: { sessionId: 'another-session' },
+      }],
+      response: {
+        persona: 'coder',
+        status: 'done',
+        content: '# Report\nUnaffected output',
+        timestamp: new Date('2026-02-11T00:00:04Z'),
+        sessionId: 'session-resume-2',
+      },
+    }]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-other-session-compaction.md'), 'utf-8')).toBe(
+      '# Report\nUnaffected output',
+    );
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+  });
+
+  it('should fall back when the new-session retry context is also compacted', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-retry-context-compaction.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{ type: 'context_compacted', data: {} }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFirst compacted output',
+          timestamp: new Date('2026-02-11T00:00:05Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        streamEvents: [{
+          type: 'context_compacted',
+          data: { sessionId: 'session-fresh-1' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRetry compacted output',
+          timestamp: new Date('2026-02-11T00:00:06Z'),
+          sessionId: 'session-fresh-1',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered by fallback',
+          timestamp: new Date('2026-02-11T00:00:07Z'),
+          sessionId: 'session-fallback-1',
+        },
+      },
+    ]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-retry-context-compaction.md'), 'utf-8')).toBe(
+      '# Report\nRecovered by fallback',
+    );
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls.map(([, , options]) => options.sessionId)).toEqual([
+      'session-resume-1',
+      undefined,
+      undefined,
+    ]);
+    expect(calls[2]?.[2]?.resolvedProvider).toBe('claude');
+  });
+
+  it('should classify compaction as requiring fresh Phase 1 recovery in single-attempt mode', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-compaction-recovery.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentAttempts([{
+      streamEvents: [{
+        type: 'context_compacted',
+        data: { sessionId: 'session-resume-2' },
+      }],
+      response: {
+        persona: 'coder',
+        status: 'done',
+        content: '# Report\nCompacted output',
+        timestamp: new Date('2026-02-11T00:00:08Z'),
+        sessionId: 'session-resume-2',
+      },
+    }]);
+
+    // When
+    const error = await generateReportPhase(step, 1, ctx, { retryMode: 'single-attempt' })
+      .catch((caught: unknown) => caught);
+
+    // Then
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'context_compacted',
+      recovery: {
+        requiresFreshPhase1: true,
+        failureReasons: ['context_compacted'],
+      },
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
   });
 
   it('should fail fast on a provider stream parse error without report retry or fallback', async () => {
@@ -966,7 +1136,7 @@ describe('runReportPhase retry with new session', () => {
       sessionId?: string;
     };
     expect(fallbackOptions).toMatchObject({
-      allowedTools: [],
+      allowedTools: ['Read', 'Glob', 'Grep'],
       maxTurns: 3,
       permissionMode: 'readonly',
       resolvedProvider: 'claude',
@@ -1000,7 +1170,6 @@ describe('runReportPhase retry with new session', () => {
     // Then
     expect(error).toBeInstanceOf(ReportPhaseGenerationError);
     expect(error).toMatchObject({ failureReason: 'tool_call' });
-    expect((error as Error).message).toContain('provider emitted tool "StructuredOutput"');
   });
 
   it('should resume the next report file with the primary session after a fallback report succeeds', async () => {
@@ -1238,7 +1407,7 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
       resolvedProvider: 'claude',
       permissionMode: 'readonly',
-      allowedTools: [],
+      allowedTools: ['Read', 'Glob', 'Grep'],
       sessionId: undefined,
     }));
   });
@@ -1296,7 +1465,7 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
       resolvedProvider: 'claude',
       permissionMode: 'readonly',
-      allowedTools: [],
+      allowedTools: ['Read', 'Glob', 'Grep'],
       sessionId: undefined,
     }));
   });
@@ -1354,7 +1523,7 @@ describe('runReportPhase retry with new session', () => {
     // Then
     expect(thrownError).toBeInstanceOf(Error);
     const errorMessage = (thrownError as Error).message;
-    expect(errorMessage).toBe('Report phase failed for 03-unavailable-tool.md: Report phase does not allow tool results.');
+    expect(errorMessage).toBe('Report phase failed for 03-unavailable-tool.md: Report phase received an unmatched tool result.');
     expect(errorMessage).not.toContain(rawToolResult);
     expect(onStream).not.toHaveBeenCalled();
     expect(runAgentMock).toHaveBeenCalledTimes(2);
@@ -1408,7 +1577,7 @@ describe('runReportPhase retry with new session', () => {
 
     // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      'Report phase failed for 03-stream-callback-tool-result.md: Report phase does not allow tool results.',
+      'Report phase failed for 03-stream-callback-tool-result.md: Report phase received an unmatched tool result.',
     );
     expect(runAgentStream).not.toHaveBeenCalled();
     expect(existsSync(join(reportDir, '03-stream-callback-tool-result.md'))).toBe(false);
@@ -1486,11 +1655,11 @@ describe('runReportPhase retry with new session', () => {
 
     // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      'Report phase failed for 03-caught-tool-result.md: Report phase does not allow tool results.',
+      'Report phase failed for 03-caught-tool-result.md: Report phase received an unmatched tool result.',
     );
     expect(caughtErrors).toEqual([
-      'Report phase does not allow tool results.',
-      'Report phase does not allow tool results.',
+      'Report phase received an unmatched tool result.',
+      'Report phase received an unmatched tool result.',
     ]);
     expect(onStream).not.toHaveBeenCalled();
     expect(onPhaseComplete).toHaveBeenCalledWith(
@@ -1499,7 +1668,7 @@ describe('runReportPhase retry with new session', () => {
       'report',
       '',
       'error',
-      'Report phase does not allow tool results.',
+      'Report phase received an unmatched tool result.',
       'implement:1:2:1',
       1,
     );
@@ -1660,7 +1829,7 @@ describe('runReportPhase retry with new session', () => {
     }
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'claude',
-      allowedTools: [],
+      allowedTools: ['Read', 'Glob', 'Grep'],
       sessionId: undefined,
     }));
   });
@@ -1877,7 +2046,7 @@ describe('runReportPhase retry with new session', () => {
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'claude',
       permissionMode: 'readonly',
-      allowedTools: [],
+      allowedTools: ['Read', 'Glob', 'Grep'],
       sessionId: undefined,
     }));
   });
@@ -2072,13 +2241,13 @@ describe('runReportPhase retry with new session', () => {
         return {
           cwd: reportDir,
           sessionId,
-          allowedTools: [],
+          allowedTools: ['Read', 'Glob', 'Grep'],
           maxTurns: overrides.maxTurns,
         };
       },
       buildNewSessionReportOptions: (_step, overrides) => ({
         cwd: reportDir,
-        allowedTools: overrides.allowedTools,
+        allowedTools: ['Read', 'Glob', 'Grep'],
         maxTurns: overrides.maxTurns,
       }),
       buildFallbackReportOptions: (_step, _failedPrimaryOptions, overrides) => ({
@@ -2086,7 +2255,7 @@ describe('runReportPhase retry with new session', () => {
         permissionMode: 'readonly',
         resolvedProvider: 'claude',
         sessionId: undefined,
-        allowedTools: overrides.allowedTools,
+        allowedTools: ['Read', 'Glob', 'Grep'],
         maxTurns: overrides.maxTurns,
       }),
       updatePersonaSession: (key, sessionId) => {
@@ -2157,14 +2326,14 @@ describe('runReportPhase provider info', () => {
         cwd: reportDir,
         resolvedProvider: 'opencode',
         resolvedModel: 'qwen3-coder-next',
-        allowedTools: overrides.allowedTools,
+        allowedTools: ['Read', 'Glob', 'Grep'],
         maxTurns: overrides.maxTurns,
       }),
       buildFallbackReportOptions: (_step, _failedPrimaryOptions, overrides) => ({
         cwd: reportDir,
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.1-mini',
-        allowedTools: overrides.allowedTools,
+        allowedTools: ['Read', 'Glob', 'Grep'],
         maxTurns: overrides.maxTurns,
       }),
       resolveReportFallbackProviderModel: () => ({

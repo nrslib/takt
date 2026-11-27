@@ -6,7 +6,11 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { getAllParallelSubSteps, isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
+import {
+  getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
+  isNormalOrTeamLeaderWorkflowStep,
+} from '../../models/types.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type {
   RuntimeStepResolution,
@@ -16,7 +20,7 @@ import type {
 } from '../types.js';
 import type { WorkflowStepAbortSignalContext } from './step-deadline.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
-import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { PreparedStepInstruction } from '../instruction/prepared-instruction.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -30,6 +34,9 @@ import {
 import type { OptionsBuilder } from './OptionsBuilder.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
+  persistResults?: () => void;
+  beginReportExecution?: (step: WorkflowStep) => string | undefined;
+  finishReportExecution?: (id: string, completed: boolean) => void;
   config: {
     steps: WorkflowStep[];
   };
@@ -46,7 +53,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-      prebuiltInstruction?: PreparedInstruction,
+      prebuiltInstruction?: PreparedStepInstruction,
       runtime?: RuntimeStepResolution,
       preparedExecution?: PreparedNormalStepExecution,
     ) => Promise<StepRunResult>;
@@ -65,7 +72,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       fallbackContext?: FallbackContext,
-    ) => PreparedInstruction;
+    ) => PreparedStepInstruction;
     buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
     drainReportFiles: () => Array<{
       step: WorkflowStep;
@@ -329,7 +336,7 @@ export class WorkflowEngineStepCoordinator {
 
   async runStep(
     step: WorkflowStep,
-    prebuiltInstruction?: PreparedInstruction,
+    prebuiltInstruction?: PreparedStepInstruction,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
@@ -338,81 +345,91 @@ export class WorkflowEngineStepCoordinator {
     const updateSession = this.deps.updatePersonaSession;
     const executionDeadlineContext = this.createExecutionDeadlineContext(step, stepIteration);
     let result: StepRunResult;
-
-    if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
-      result = await this.deps.parallelRunner.runParallelStep(
-        step,
-        this.deps.state,
-        this.deps.task,
-        this.deps.getMaxSteps(),
-        updateSession,
-        runtime,
-        stepIteration,
-        executionDeadlineContext,
-      );
-    } else if (step.arpeggio) {
-      result = await this.deps.arpeggioRunner.runArpeggioStep(
-        step,
-        this.deps.state,
-        runtime,
-        stepIteration,
-      );
-    } else if (step.teamLeader) {
-      result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
-        step,
-        this.deps.state,
-        this.deps.task,
-        this.deps.getMaxSteps(),
-        updateSession,
-        runtime,
-        stepIteration,
-        executionDeadlineContext,
-      );
-    } else if (isSystemWorkflowStep(step)) {
-      result = {
-        response: await this.deps.systemStepExecutor.run(step, this.deps.state, runtime),
-        instruction: '',
-      };
-    } else if (isWorkflowCallStep(step)) {
-      if (workflowCallExecution === undefined) {
-        throw new Error(`workflow_call step "${step.name}" execution was not activated`);
+    const reportExecution = this.deps.beginReportExecution?.(step);
+    let completed = false;
+    try {
+      if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
+        result = await this.deps.parallelRunner.runParallelStep(
+          step,
+          this.deps.state,
+          this.deps.task,
+          this.deps.getMaxSteps(),
+          updateSession,
+          runtime,
+          stepIteration,
+          executionDeadlineContext,
+        );
+      } else if (step.arpeggio) {
+        result = await this.deps.arpeggioRunner.runArpeggioStep(
+          step,
+          this.deps.state,
+          runtime,
+          stepIteration,
+        );
+      } else if (step.teamLeader) {
+        result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
+          step,
+          this.deps.state,
+          this.deps.task,
+          this.deps.getMaxSteps(),
+          updateSession,
+          runtime,
+          stepIteration,
+          executionDeadlineContext,
+        );
+      } else if (isSystemWorkflowStep(step)) {
+        result = {
+          response: await this.deps.systemStepExecutor.run(step, this.deps.state, runtime),
+          instruction: '',
+        };
+      } else if (isWorkflowCallStep(step)) {
+        if (workflowCallExecution === undefined) {
+          throw new Error(`workflow_call step "${step.name}" execution was not activated`);
+        }
+        result = await this.deps.workflowCallRunner.run(step, workflowCallExecution, runtime);
+      } else {
+        result = await this.deps.stepExecutor.runNormalStep(
+          step,
+          this.deps.state,
+          this.deps.task,
+          this.deps.getMaxSteps(),
+          updateSession,
+          prebuiltInstruction,
+          runtime,
+          preparedExecution,
+        );
       }
-      result = await this.deps.workflowCallRunner.run(step, workflowCallExecution, runtime);
-    } else {
-      result = await this.deps.stepExecutor.runNormalStep(
-        step,
-        this.deps.state,
-        this.deps.task,
-        this.deps.getMaxSteps(),
-        updateSession,
-        prebuiltInstruction,
-        runtime,
-        preparedExecution,
-      );
-    }
 
-    const reports = this.deps.stepExecutor.drainReportFiles();
-    for (const { step: reportedStep, filePath, fileName, context } of reports) {
-      this.deps.emitReport(reportedStep, filePath, fileName, context);
+      const reports = this.deps.stepExecutor.drainReportFiles();
+      for (const { step: reportedStep, filePath, fileName, context } of reports) {
+        this.deps.emitReport(reportedStep, filePath, fileName, context);
+      }
+      const reportedSteps = new Set<WorkflowStep>([
+        step,
+        ...reports.map(({ step: reportedStep }) => reportedStep),
+        ...(step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)
+          ? getAllParallelSubSteps(step.parallel)
+          : []),
+      ]);
+      for (const participatedStep of reportedSteps) {
+        const parallelParentStepName = step.parallel !== undefined
+          && getAllParallelSubSteps(step.parallel).some((subStep) => subStep === participatedStep)
+          ? step.name
+          : undefined;
+        this.deps.recordParticipation(
+          participatedStep,
+          reports
+            .filter((report) => report.step === participatedStep)
+            .map((report) => report.fileName),
+          parallelParentStepName,
+        );
+      }
+      completed = result.response.status === 'done';
+      return result;
+    } finally {
+      this.deps.persistResults?.();
+      if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
     }
-    const reportedSteps = new Set<WorkflowStep>([
-      step,
-      ...reports.map(({ step: reportedStep }) => reportedStep),
-    ]);
-    for (const participatedStep of reportedSteps) {
-      const parallelParentStepName = step.parallel !== undefined
-        && getAllParallelSubSteps(step.parallel).some((subStep) => subStep === participatedStep)
-        ? step.name
-        : undefined;
-      this.deps.recordParticipation(
-        participatedStep,
-        reports
-          .filter((report) => report.step === participatedStep)
-          .map((report) => report.fileName),
-        parallelParentStepName,
-      );
-    }
-    return result;
   }
 
   resolveNextStepFromDone(step: WorkflowStep, response: AgentResponse): string {
@@ -427,6 +444,9 @@ export class WorkflowEngineStepCoordinator {
     if (response.status !== 'done') {
       throw new Error(`Unhandled response status: ${response.status}`);
     }
+    if (response.systemWaitTimeout && step.kind === 'system' && step.wait) {
+      return { nextStep: step.wait.onTimeout, commandGates: 'skip' };
+    }
     if (response.matchedRuleIndex != null && step.rules) {
       const transition = determineRuleTransition(step, response.matchedRuleIndex);
       if (transition && (transition.nextStep || transition.returnValue || transition.requiresUserInput)) {
@@ -440,7 +460,7 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     stepIteration: number,
     fallbackContext?: FallbackContext,
-  ): PreparedInstruction {
+  ): PreparedStepInstruction {
     return this.deps.stepExecutor.prepareInstruction(
       step,
       stepIteration,

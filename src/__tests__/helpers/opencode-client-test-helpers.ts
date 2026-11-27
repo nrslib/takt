@@ -78,6 +78,10 @@ export class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   async throw(e?: unknown): Promise<IteratorResult<unknown, void>> {
     throw e;
   }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.return();
+  }
 }
 
 export function withEventSessionId(event: unknown, sessionID: string): unknown {
@@ -155,6 +159,10 @@ export class StallingEventStream implements AsyncGenerator<unknown, void, unknow
 
   async throw(e?: unknown): Promise<IteratorResult<unknown, void>> {
     throw e;
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.return();
   }
 }
 

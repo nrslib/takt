@@ -1,0 +1,6 @@
+diff --git a/node_modules/@informalsystems/quint/package.json b/node_modules/@informalsystems/quint/package.json
+--- a/node_modules/@informalsystems/quint/package.json
++++ b/node_modules/@informalsystems/quint/package.json
+@@ -59,1 +59,1 @@
+-    "adm-zip": "^0.5.16",
++    "adm-zip": "^0.6.1",

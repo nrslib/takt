@@ -1,10 +1,11 @@
 name: default
-description: 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認を使う標準コーディングワークフロー。
+description: 動的実装 companion と共通コアのレビュー・裁定・修正・要件確認を使う標準コーディングワークフロー。
 max_steps: 51
 initial_step: develop
 
 steps:
   - name: develop
+    description: 要求シナリオに沿って計画・テスト作成・動的実装を進め、レビューと修正で要件充足を確認する
     kind: workflow_call
     call: development-core
     args:

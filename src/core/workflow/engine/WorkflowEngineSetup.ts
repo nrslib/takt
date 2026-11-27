@@ -1,7 +1,11 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { buildWorkflowPromptTree, locateWorkflowPromptStep, renderWorkflowPromptTree } from '../workflow-prompt-context.js';
+import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
+import { findWorkflowStepLocation } from '../workflow-step-location.js';
+import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, isRealPathInside } from '../../../shared/utils/index.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import {
   DEFAULT_COMPANION_FIX_POLICY,
@@ -19,9 +23,9 @@ import type {
   WorkflowStep,
   WorkflowWideRule,
 } from '../../models/types.js';
-import { isDynamicParallelSubSteps } from '../../models/types.js';
+import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
-import type { RunPaths } from '../run/run-paths.js';
+import { resolveReportDirectory, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
@@ -36,27 +40,34 @@ import { DynamicFacetSelectionStore } from '../dynamic-facets/dynamicFacetSelect
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
+import type { WorkflowResultsStore } from '../run/workflow-results.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
-import { getWorkflowReference } from '../workflow-reference.js';
+import { getWorkflowReference, workflowEntriesMatch } from '../workflow-reference.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { createTaskReviewScopeResolver } from '../review-scope.js';
-import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import { matchesResumeStackPrefix, requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   createReviewReportDiscoveryContext,
   resolveWorkflowStepReportNamesWithDiagnostics,
 } from '../review-report-discovery.js';
 import { DynamicParallelSelectionStore } from '../dynamic-parallel/selection-store.js';
+import { ReportGenerationIndex } from '../report-generation-index.js';
 import {
   restoreWorkflowCallInvocationEvidence,
   snapshotWorkflowCallInvocationEvidence,
   type WorkflowCallInvocationEvidence,
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
-import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import {
+  buildWorkflowStepParticipationIdentity,
+  restoreWorkflowStepParticipationIndex,
+} from '../workflow-step-participation-index.js';
+import { getReportFiles } from '../output-contract-files.js';
+import { resolveDeclaredReportInputs } from '../instruction/declared-report-inputs.js';
 import {
   createWorkflowStepAbortSignalContext,
   recordWorkflowStepProviderActivity,
@@ -68,6 +79,7 @@ import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
 const log = createLogger('workflow-engine');
 
 interface WorkflowEngineSetupParams {
+  workflowResults: WorkflowResultsStore;
   config: WorkflowConfig;
   state: WorkflowState;
   task: string;
@@ -119,6 +131,7 @@ interface WorkflowEngineSetupParams {
 }
 
 export interface WorkflowEngineServices {
+  openCodeExternalDirectories: readonly string[];
   stepAbortSignalContext: WorkflowStepAbortSignalContext;
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
@@ -150,6 +163,9 @@ export function createSharedRuntime(
     dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
+    reportGenerationIndex: new ReportGenerationIndex(
+      resumePoint?.missing_report_generations, resumePoint?.report_input_recoveries,
+    ),
   };
 }
 
@@ -167,6 +183,14 @@ export function ensureRunDirsExist(runPaths: RunPaths): void {
       mkdirSync(dir, { recursive: true });
     }
   }
+}
+
+export function resolveOpenCodeExternalDirectories(
+  executionCwd: string,
+  contextDirectory: string,
+): string[] {
+  const realContextDirectory = realpathSync(contextDirectory);
+  return isRealPathInside(executionCwd, realContextDirectory) ? [] : [realContextDirectory];
 }
 
 export function applyRuntimeEnvironment(
@@ -190,6 +214,25 @@ export function applyRuntimeEnvironment(
   });
 }
 
+export function isResumedReportInputStep(
+  source: WorkflowResumePoint | undefined,
+  currentStack: readonly WorkflowResumePointEntry[] | undefined,
+  stepName: string,
+  occurrence: number,
+): boolean {
+  const sourceFrame = source?.stack.at(-1);
+  const currentFrame = currentStack?.at(-1);
+  return source !== undefined
+    && currentStack !== undefined
+    && source.stack.length === currentStack.length
+    && sourceFrame?.kind === 'agent'
+    && currentFrame?.kind === 'agent'
+    && matchesResumeStackPrefix(source.stack, currentStack.slice(0, -1))
+    && workflowEntriesMatch(sourceFrame, currentFrame)
+    && currentFrame.step === stepName
+    && currentFrame.occurrence === occurrence;
+}
+
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
   const stepAbortSignalContext = createWorkflowStepAbortSignalContext(params.options.abortSignal);
   const phaseRelay = createWorkflowPhaseRelay(
@@ -201,8 +244,15 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const getReviewScope = createTaskReviewScopeResolver({
     getCwd: params.getCwd,
     getPrContext: () => params.options.prContext,
+    getReportDir: () => resolveReportDirectory(params.getCwd(), params.getReportDir()),
   });
   const failureDir = join(params.runPaths.runRootAbs, 'failures');
+  const runContextRoot = join(params.runPaths.runRootAbs, 'context');
+  const openCodeExternalDirectories = resolveOpenCodeExternalDirectories(params.getCwd(), runContextRoot);
+  const sharedTree = params.sharedRuntime.workflowPromptTree;
+  // Direct engine callers have no bundle; describe the current definition without resolving calls.
+  const promptTree = sharedTree ?? buildWorkflowPromptTree(params.config, undefined, params.projectCwd, params.getCwd());
+  const promptPrefix = sharedTree === undefined ? [] : params.resumeStackPrefix;
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -211,9 +261,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     (persona) => params.state.personaSessions.get(persona),
     params.getReportDir,
     () => params.options.language,
-    () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     () => params.config.name,
-    () => params.config.description,
     params.getCurrentWorkflowStack,
     () => params.task,
     getReviewScope,
@@ -221,10 +269,52 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepAbortSignalContext.getAbortSignal,
     stepAbortSignalContext.recordActivity,
     () => params.runPaths.reportsRootAbs,
+    (step, assignment) => {
+      const internalStep = step.internalPromptContext;
+      if (step.engineSynthesized && internalStep === undefined) return undefined;
+      const definitionStepName = internalStep?.ownerStepName ?? step.name;
+      const tree = promptTree;
+      const activeStep = params.config.steps.find((entry) => entry.name === params.state.currentStep);
+      if (activeStep === undefined) throw new Error(`Missing active step "${params.state.currentStep}"`);
+      const definition = activeStep.parallel !== undefined && step.parallel === undefined
+        && !(internalStep !== undefined && definitionStepName === activeStep.name)
+        ? getAllParallelSubSteps(activeStep.parallel).find((entry) => entry.name === definitionStepName)
+        : activeStep;
+      if (definition?.name !== definitionStepName) throw new Error(`Missing definition owner for "${step.name}"`);
+      const stepPath = findWorkflowStepLocation(params.config, definition);
+      if (stepPath === undefined) throw new Error(`Missing definition path for "${step.name}"`);
+      const location = locateWorkflowPromptStep(tree, promptPrefix, stepPath);
+      const language = params.options.language ?? 'en';
+      const identity = internalStep === undefined
+        ? buildScopedStepIterationIdentity(step.name,
+            location.parallelParent === undefined ? [] : [location.parallelParent])
+        : step.name;
+      const stepIteration = params.state.stepIterations.get(identity);
+      if (stepIteration === undefined) throw new Error(`Missing step iteration for "${step.name}"`);
+      return {
+        tree: renderWorkflowPromptTree(tree, location.route, language),
+        assignment: assignment ?? {
+          stepName: step.name,
+          parallelParent: location.parallelParent,
+          internalStep,
+          stepIteration,
+          iteration: params.state.iteration,
+          maxSteps: params.getMaxSteps(),
+        },
+        rules: (step.rules ?? []).map((rule) => {
+          const target = rule.next ?? (language === 'ja'
+            ? `${location.workflowName} を終えて ${rule.returnValue} を返す`
+            : `finish ${location.workflowName} and return ${rule.returnValue}`);
+          return `- ${formatWorkflowRuleCondition(rule.condition)} → ${target}`;
+        }).join('\n'),
+      };
+    },
+    openCodeExternalDirectories,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
     engineOptions: params.options,
+    getWorkflowMeta: (step) => optionsBuilder.buildWorkflowMeta(step),
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
     onStream: (event) => recordWorkflowStepProviderEventActivity(
       stepAbortSignalContext.recordActivity,
@@ -271,6 +361,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   );
 
   const stepExecutor = new StepExecutor({
+    goalSpecificationPaths: params.options.goalSpecificationPaths,
     reportReferenceObserver: {
       resolved: (step, currentStep, reports) => {
         params.emitEvent('report:resolved', {
@@ -291,14 +382,32 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getProjectCwd: () => params.projectCwd,
     getReportDir: params.getReportDir,
     getRunPaths: params.getRunPaths,
+    reportGenerationIndex: params.sharedRuntime.reportGenerationIndex,
+    isResumedReportInputStep: (step, occurrence) => isResumedReportInputStep(
+      params.options.resumePoint,
+      params.getCurrentWorkflowStack(),
+      step.name,
+      occurrence,
+    ),
     getLanguage: () => params.options.language,
     getInteractive: () => params.options.interactive === true,
-    getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
+    getWorkflowSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
-    getWorkflowDescription: () => params.config.description,
+    getWorkflowAssignment: (step) => optionsBuilder.buildWorkflowMeta(step).context?.assignment,
     getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
+    getInheritedReportInputs: () => params.options.inheritedReportInputs,
+    resolveDeclaredReportInputs: (step, state, reportDir) => resolveDeclaredReportInputs(step, {
+      workflow: params.config,
+      state,
+      sharedRuntime: params.sharedRuntime,
+      workflowCallResolver: params.options.workflowCallResolver,
+      projectCwd: params.projectCwd,
+      lookupCwd: params.getCwd(),
+      reportDir,
+      resumeStackPrefix: params.resumeStackPrefix,
+    }),
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
     getReviewScope,
@@ -352,6 +461,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 
   const dynamicParallelSelector = new DynamicParallelSelectorCoordinator({
     engineOptions: params.options,
+    getWorkflowMeta: (step) => optionsBuilder.buildWorkflowMeta(step),
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
     onStream: (event) => recordWorkflowStepProviderEventActivity(
       stepAbortSignalContext.recordActivity,
@@ -404,6 +514,22 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     emitEvent: params.emitEvent,
     getWorkflowCallRunner: () => workflowCallRunner,
+    beginReportExecution: (subStep, parallelParentStepName) => {
+      const reportNames = getReportFiles(subStep.outputContracts);
+      if (reportNames.length === 0) return undefined;
+      return params.sharedRuntime.reportExecutions!.begin(
+        buildWorkflowStepParticipationIdentity(
+          getWorkflowReference(params.config),
+          subStep.name,
+          params.resumeStackPrefix,
+          parallelParentStepName,
+        ),
+        subStep.name,
+        params.runPaths.reportsAbs,
+        reportNames,
+      );
+    },
+    finishReportExecution: (id, completed) => params.sharedRuntime.reportExecutions!.finish(id, completed),
     claimStepOccurrence: params.claimStepOccurrence,
     updateMaxSteps: params.updateMaxSteps,
     setActiveResumePoint: (step, iteration, occurrence) => params.setActiveResumePoint(
@@ -418,6 +544,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const arpeggioRunner = new ArpeggioRunner({
+    goalSpecificationPaths: params.options.goalSpecificationPaths,
     optionsBuilder,
     stepExecutor,
     liveIntervention: params.options.liveIntervention,
@@ -465,10 +592,20 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const systemStepExecutor = new SystemStepExecutor({
+    persistState: () => params.workflowResults.save(),
+    abortSignal: params.options.abortSignal,
     task: params.task,
     projectCwd: params.projectCwd,
+    childProcessEnv: params.options.childProcessEnv,
     getCwd: params.getCwd,
+    getContextDirectory: () => params.getRunPaths().contextAbs,
+    createProviderStream: (step, provider, model) => optionsBuilder.buildProviderStream(
+      step, provider, model, params.options.onStream,
+    ),
     taskContext: params.options.currentTask,
+    prExecutionContext: params.options.prExecutionContext,
+    mergeMethod: params.options.mergeMethod,
+    prGitOperations: params.options.prGitOperations,
     getRuleContext: () => {
       return {
         interactive: params.options.interactive === true,
@@ -559,6 +696,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   return {
+    openCodeExternalDirectories,
     stepAbortSignalContext,
     optionsBuilder,
     stepExecutor,

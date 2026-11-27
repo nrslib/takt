@@ -1,0 +1,69 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "executedPromptHash": "06bf50f50793404b81767a2a8b77a21625fbd2bcf5bd10ce300fb5046d4d2d43",
+  "executedResponseHash": "681bca28b526a935b4a16db62d66edb43777eee6b2e0227f834299d6462989f7",
+  "promptHash": "81380814818dfb1a6608f10a988249f3fa78f069bed08b8f685b8fdefff7cc82",
+  "responseHash": "fd1a54bc2d31caebe4efa10cf5ff25d2901dd76fb9b13308d2e38b0d6500b9a6",
+  "commands": [
+    {
+      "version": "prior",
+      "path": "fix-plan/project/reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md",
+      "marker": "PRIOR_4e06ff02-b9cc-4204-839a-c61e9963b334",
+      "cwd": "fix-plan/project",
+      "command": "/bin/zsh -lc 'wc -l reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md; cat reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md'",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": false,
+      "recordedCommandHash": "28e64a69418a3abb58b7bd6603652fe8cfaea74785d5812f5c4c38006b5f7079",
+      "exitCodeScope": "recorded command",
+      "output": "前回の裁定。照合証拠: PRIOR_4e06ff02-b9cc-4204-839a-c61e9963b334",
+      "artifactHash": "ea7bf8074c17621de5d1461082215dac2ee7e04655c5491f0914749e51721170"
+    },
+    {
+      "version": "current",
+      "path": "fix-plan/project/reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md",
+      "marker": "CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+      "cwd": "fix-plan/project",
+      "command": "/bin/zsh -lc \"sed -n '821,1103p' reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md; cat reports/.takt-report-internal/executions/index.json\"",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": false,
+      "recordedCommandHash": "1a19a28d6aa4adae3624e1d41c292ff36d2d1e18872359e18a1005f0b59a7495",
+      "exitCodeScope": "recorded command",
+      "output": "照合証拠: CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+      "artifactHash": "bb1bb5f6db9581537e05ef7788322622544c8b3148418f9226d7edc06cb01176"
+    },
+    {
+      "version": "current",
+      "path": "fix-plan/project/reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md",
+      "marker": "CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+      "cwd": "fix-plan/project",
+      "command": "tail -n 8 reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": true,
+      "recordedCommandHash": "d746dc59203a5cc9679f5a65dd49f2cceb7a896436b7563f1725124601bc0b34",
+      "exitCodeScope": "recorded command",
+      "output": "照合証拠: CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+      "artifactHash": "bb1bb5f6db9581537e05ef7788322622544c8b3148418f9226d7edc06cb01176"
+    }
+  ],
+  "toolCount": 8,
+  "toolTypes": [
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution"
+  ]
+}

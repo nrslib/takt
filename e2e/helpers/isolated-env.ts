@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { inject } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { managedProviderFor } from '../../src/infra/managed-providers/definitions.js';
 
 export interface IsolatedEnv {
   taktDir: string;
@@ -161,6 +163,13 @@ export function createIsolatedEnv(): IsolatedEnv {
       worktree_dir: worktreeDir,
     };
   writeConfigFile(taktDir, config);
+
+  // Share the managed SDK installed once by managed-sdk-setup.ts
+  const managed = provider === undefined ? undefined : managedProviderFor(provider);
+  const managedConfigDir = inject('managedConfigDir');
+  if (managed !== undefined && managedConfigDir) {
+    symlinkSync(join(managedConfigDir, managed), join(taktDir, managed), 'dir');
+  }
 
   // Create isolated Git config file — inherit GitHub credential helper
   // from the real global config so provider tests can push.

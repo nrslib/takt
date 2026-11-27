@@ -4,12 +4,19 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { acquireProjectExecutionLock } from '../infra/task/project-execution-lock.js';
 
 interface WorkerResult {
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+}
+
+interface ProjectShutdown {
+  kind: 'run' | 'watch';
+  trigger: 'sigint' | 'timeout';
+  finishTaskDuringCleanup?: boolean;
 }
 
 function readReadyProcessId(logPath: string): number | undefined {
@@ -74,6 +81,7 @@ function spawnShutdownWorker(
   logPath: string,
   opencodeCommand: string,
   forceFalseSigkillReturn: boolean,
+  projectShutdown: ProjectShutdown | undefined,
 ): {
   worker: ReturnType<typeof spawn>;
   result: Promise<WorkerResult>;
@@ -81,12 +89,28 @@ function spawnShutdownWorker(
   const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
   const serverPoolUrl = pathToFileURL(join(repositoryRoot, 'src/infra/opencode/server-pool.ts')).href;
   const forceShutdownUrl = pathToFileURL(join(repositoryRoot, 'src/features/tasks/execute/forceShutdown.ts')).href;
+  const projectExecutionUrl = pathToFileURL(join(repositoryRoot, 'src/features/tasks/execute/projectExecution.ts')).href;
+  const projectLockUrl = pathToFileURL(join(repositoryRoot, 'src/infra/task/project-execution-lock.ts')).href;
+  const projectCwd = dirname(logPath);
+  const contenderScript = `
+    import { acquireProjectExecutionLock } from ${JSON.stringify(projectLockUrl)};
+    const [cwd, kind, ownerPid] = process.argv.slice(1);
+    try {
+      const lock = acquireProjectExecutionLock(cwd, kind);
+      lock.release();
+      process.exit(0);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('PID ' + ownerPid)) process.exit(10);
+      throw error;
+    }
+  `;
   const workerScript = `
-    import { ChildProcess } from 'node:child_process';
+    import { ChildProcess, spawnSync } from 'node:child_process';
     import { EventEmitter } from 'node:events';
     import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 
     const logPath = ${JSON.stringify(logPath)};
+    const projectShutdown = ${JSON.stringify(projectShutdown ?? null)};
     const originalEmit = EventEmitter.prototype.emit;
     EventEmitter.prototype.emit = function (event, ...args) {
       if (event === 'exit' && typeof this.pid === 'number' && existsSync(logPath)) {
@@ -120,13 +144,39 @@ function spawnShutdownWorker(
     const originalExit = process.exit.bind(process);
     process.exit = (code = 0) => {
       appendFileSync(logPath, 'parent-exit:' + code + '\\n');
+      if (projectShutdown !== null) {
+        appendFileSync(logPath, 'lock-held-at-exit:' + existsSync(${JSON.stringify(join(projectCwd, '.takt', 'execution.lock'))}) + '\\n');
+      }
       return originalExit(code);
     };
 
     const { acquireOpenCodeClient } = await import(${JSON.stringify(serverPoolUrl)});
-    const { forceExitAfterOpenCodeCleanup } = await import(${JSON.stringify(forceShutdownUrl)});
     void acquireOpenCodeClient('opencode/model', undefined, undefined).catch(() => undefined);
-    void forceExitAfterOpenCodeCleanup();
+    if (projectShutdown === null) {
+      const { forceExitAfterOpenCodeCleanup } = await import(${JSON.stringify(forceShutdownUrl)});
+      void forceExitAfterOpenCodeCleanup();
+    } else {
+      const { withProjectExecution } = await import(${JSON.stringify(projectExecutionUrl)});
+      await withProjectExecution(${JSON.stringify(projectCwd)}, projectShutdown.kind, async () => {
+        process.emit('SIGINT');
+        if (projectShutdown.trigger === 'sigint') process.emit('SIGINT');
+        if (projectShutdown.finishTaskDuringCleanup) return;
+        await new Promise(() => {});
+      });
+      if (projectShutdown.finishTaskDuringCleanup) {
+        appendFileSync(logPath, 'task-completed-during-cleanup\\n');
+        for (const kind of ['run', 'watch']) {
+          const contender = spawnSync(process.execPath, [
+            '--import', 'tsx', '--input-type=module', '-e', ${JSON.stringify(contenderScript)},
+            ${JSON.stringify(projectCwd)}, kind, String(process.pid),
+          ], {
+            cwd: ${JSON.stringify(repositoryRoot)}, encoding: 'utf8', timeout: 5_000,
+          });
+          if (contender.error !== undefined) throw contender.error;
+          appendFileSync(logPath, 'contender-' + kind + ':' + contender.status + '\\n');
+        }
+      }
+    }
   `;
   const worker = spawn(process.execPath, [
     '--import',
@@ -140,6 +190,7 @@ function spawnShutdownWorker(
       ...process.env,
       TAKT_OPENCODE_PATH: opencodeCommand,
       TAKT_OPENCODE_VERSION: 'v1',
+      ...(projectShutdown === undefined ? {} : { TAKT_SHUTDOWN_TIMEOUT_MS: '50' }),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -193,16 +244,42 @@ function isProcessAlive(processId: number): boolean {
 
 describe('OpenCode forced shutdown child process integration', () => {
   it.each([
-    { name: 'SIGTERM responsive child', ignoreSigterm: false, forceFalseSigkillReturn: false },
-    { name: 'SIGTERM nonresponsive child', ignoreSigterm: true, forceFalseSigkillReturn: false },
+    { name: 'SIGTERM responsive child', ignoreSigterm: false, forceFalseSigkillReturn: false, projectShutdown: undefined },
+    { name: 'SIGTERM nonresponsive child', ignoreSigterm: true, forceFalseSigkillReturn: false, projectShutdown: undefined },
     {
       name: 'SIGTERM nonresponsive child after SIGKILL returns false despite delivery',
       ignoreSigterm: true,
       forceFalseSigkillReturn: true,
+      projectShutdown: undefined,
     },
-  ])('waits for the $name to exit before the parent exits', async ({
+    {
+      name: 'run child after repeated SIGINT', ignoreSigterm: false, forceFalseSigkillReturn: false,
+      projectShutdown: { kind: 'run', trigger: 'sigint' },
+    },
+    {
+      name: 'watch child after repeated SIGINT', ignoreSigterm: true, forceFalseSigkillReturn: false,
+      projectShutdown: { kind: 'watch', trigger: 'sigint' },
+    },
+    {
+      name: 'run child after shutdown timeout', ignoreSigterm: true, forceFalseSigkillReturn: false,
+      projectShutdown: { kind: 'run', trigger: 'timeout' },
+    },
+    {
+      name: 'watch child after shutdown timeout', ignoreSigterm: false, forceFalseSigkillReturn: false,
+      projectShutdown: { kind: 'watch', trigger: 'timeout' },
+    },
+    {
+      name: 'run child after task completion during forced cleanup', ignoreSigterm: false, forceFalseSigkillReturn: false,
+      projectShutdown: { kind: 'run', trigger: 'sigint', finishTaskDuringCleanup: true },
+    },
+    {
+      name: 'watch child after task completion during forced cleanup', ignoreSigterm: true, forceFalseSigkillReturn: false,
+      projectShutdown: { kind: 'watch', trigger: 'sigint', finishTaskDuringCleanup: true },
+    },
+  ] as const)('waits for the $name to exit before the parent exits', async ({
     ignoreSigterm,
     forceFalseSigkillReturn,
+    projectShutdown,
   }) => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'takt-opencode-forced-shutdown-'));
     const commandPath = join(tempRoot, 'opencode-fixture');
@@ -212,7 +289,7 @@ describe('OpenCode forced shutdown child process integration', () => {
     let processId: number | undefined;
     let worker: ReturnType<typeof spawn> | undefined;
     try {
-      const spawned = spawnShutdownWorker(logPath, commandPath, forceFalseSigkillReturn);
+      const spawned = spawnShutdownWorker(logPath, commandPath, forceFalseSigkillReturn, projectShutdown);
       worker = spawned.worker;
       const workerResult = spawned.result;
       processId = await waitForReadyProcessId(logPath, worker);
@@ -225,6 +302,20 @@ describe('OpenCode forced shutdown child process integration', () => {
       expect(lines).toContain(`observer-exit:${processId}`);
       expect(lines.indexOf(`observer-exit:${processId}`)).toBeLessThan(lines.indexOf('parent-exit:130'));
       expect(isProcessAlive(processId)).toBe(false);
+      if (projectShutdown !== undefined) {
+        expect(lines).toContain('lock-held-at-exit:true');
+        expect(existsSync(join(tempRoot, '.takt', 'execution.lock'))).toBe(false);
+        if ('finishTaskDuringCleanup' in projectShutdown) {
+          expect(lines).toContain('task-completed-during-cleanup');
+          expect(lines).toContain('contender-run:10');
+          expect(lines).toContain('contender-watch:10');
+          for (const kind of ['run', 'watch'] as const) {
+            const lock = acquireProjectExecutionLock(tempRoot, kind);
+            expect(lock.owner.kind).toBe(kind);
+            lock.release();
+          }
+        }
+      }
       if (forceFalseSigkillReturn) {
         expect(lines).toContain(`sigkill-delivered-return-false:${processId}:null:null`);
         expect(lines.indexOf(`sigkill-delivered-return-false:${processId}:null:null`))

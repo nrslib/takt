@@ -1,5 +1,16 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import { daemonEntries, daemonReachability } from './scripts/daemon-reachability.mjs';
+import { daemonRules } from './scripts/daemon-lint-rules.mjs';
+import { catchLintPlugin, catchRules } from './scripts/catch-lint-rules.mjs';
+
+const root = import.meta.dirname;
+const graph = await daemonReachability({ root, entries: await daemonEntries(root) });
+if (graph.issues.length > 0) throw new Error(JSON.stringify(graph.issues));
+const daemonOverrides = [{ files: graph.files, rules: {
+  ...daemonRules,
+  '@typescript-eslint/no-floating-promises': 'error',
+} }];
 
 export default tseslint.config(
   eslint.configs.recommended,
@@ -11,8 +22,12 @@ export default tseslint.config(
           allowDefaultProject: [
             'eval/*.mjs',
             'eval/asserts/*.mjs',
+            'eval/providers/cli-review.test.mjs',
             'eval/scripts/*.mjs',
             'scripts/test-classification.mjs',
+            'scripts/verify-deepseek-sdk-lock.mjs',
+            'scripts/verify-deepseek-sdk-lock.d.mts',
+            'scripts/pi-provider-live-smoke.mjs',
             'src/infra/deepseek-harness/*.mjs',
             'scripts/test-classification.mjs',
           ],
@@ -34,6 +49,7 @@ export default tseslint.config(
         console: 'readonly',
         process: 'readonly',
         AbortController: 'readonly',
+        structuredClone: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
       },
@@ -49,6 +65,21 @@ export default tseslint.config(
     },
   },
   {
+    files: ['scripts/pi-provider-live-smoke.mjs'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
+        URL: 'readonly',
+        fetch: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+      },
+    },
+  },
+  {
     files: ['eval/fixtures/**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
@@ -58,6 +89,12 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
     },
+  },
+  ...daemonOverrides,
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: { takt: catchLintPlugin },
+    rules: catchRules,
   },
   {
     ignores: ['dist/', 'node_modules/', '*.config.js', 'src/__tests__/'],

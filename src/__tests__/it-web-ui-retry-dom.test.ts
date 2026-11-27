@@ -491,7 +491,7 @@ function retryChatSession() {
       generation: 1,
       retryStartOptions: {
         defaultId: 'restart:plan',
-        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+        options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
       },
     },
   } satisfies WebChatSessionDescription;
@@ -651,8 +651,8 @@ describe('Web UI Retry 本番 DOM 経路', () => {
         retryStartOptions: {
           defaultId: 'resume-checkpoint',
           options: [
-            { id: 'resume-checkpoint', label, description, selectable: true },
-            { id: 'restart:plan', label: 'plan', selectable: true },
+            { id: 'resume-checkpoint', label, path: description, description, selectable: true },
+            { id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true },
           ],
         },
       },
@@ -780,7 +780,6 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           locationId: project.locationId,
           canonicalDirectory: project.canonicalDirectory,
           displayName: project.displayName,
-          fingerprint: project.fingerprint,
         });
         const handle = await repository.enqueueAndClaim({
           task: 'original order',
@@ -831,7 +830,7 @@ describe('Web UI Retry 本番 DOM 経路', () => {
             generation: failedTask.generation,
             retryStartOptions: {
               defaultId: 'restart:plan',
-              options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+              options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
             },
           },
         };

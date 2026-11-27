@@ -4,6 +4,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
+  isAgentFailureError,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
 import { PROVIDER_CALL_TIMEOUT_DEFAULT_MS } from '../../shared/types/provider-deadline.js';
@@ -168,7 +169,7 @@ export async function callClaudeTerminal(
   let terminalSession: TerminalSession | undefined;
   let stopRequested = false;
   // Keep adapter disposal reachable even when MCP argument preparation fails.
-  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined || options.callerManagedMcp
     ? undefined
     : () => options.preparedMcp!.dispose();
   let abortHandler: (() => void) | undefined;
@@ -265,7 +266,7 @@ export async function callClaudeTerminal(
     cleanup = async () => {
       const results = await Promise.allSettled([
         legacyCleanup(),
-        ...(options.preparedMcp === undefined ? [] : [options.preparedMcp.dispose()]),
+        ...(options.preparedMcp === undefined || options.callerManagedMcp ? [] : [options.preparedMcp.dispose()]),
       ]);
       const failed = results.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') {
@@ -300,6 +301,7 @@ export async function callClaudeTerminal(
       const startPromise = terminalBackend.start({
         cwd: options.cwd,
         backend: backendName,
+        resumeSessionId: options.sessionId,
         command,
         childProcessEnv: options.childProcessEnv,
       });
@@ -381,6 +383,15 @@ export async function callClaudeTerminal(
       && error.reason === options.abortSignal.reason
     ) {
       return createAbortResponse(agentName, error.reason, responseSessionId);
+    }
+    if (options.sessionId !== undefined && isAgentFailureError(error)
+      && error.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED) {
+      const response = createErrorResponse(agentName, error.message, error.failureCategory, responseSessionId);
+      options.onStream?.({ type: 'result', data: {
+        result: '', success: false, error: error.message, sessionId: options.sessionId,
+        failureCategory: error.failureCategory,
+      } });
+      return response;
     }
     const errorMessage = getErrorMessage(error);
     const classified = classifyAbortSignalReason(errorMessage);

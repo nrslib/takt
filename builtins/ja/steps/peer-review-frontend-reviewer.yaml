@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: frontend-review
+description: 画面の実装が設計に沿っているかを調べ、フロントエンドの問題を報告する
 capabilities: readonly
 tags:
   - review

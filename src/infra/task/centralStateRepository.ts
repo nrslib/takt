@@ -21,11 +21,10 @@ import {
   WorkflowRestartPointSchema,
   WorkflowResumePointSchema,
 } from '../../core/models/workflow-resume-schema.js';
-import { getProcessIdentity, getSelfProcessIdentity, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from './process.js';
+import { getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, type ProcessIdentity } from './process.js';
 import {
   projectIdForCanonicalDirectory,
   resolveRegisteredProject,
-  type DirectoryFingerprint,
 } from '../config/global/projectRegistry.js';
 import { recoverLegacyCentralWorktreeContext } from './centralWorktreeRecovery.js';
 import { boundPersistedFailureText } from '../../shared/utils/persistedFailureText.js';
@@ -55,6 +54,7 @@ export interface CentralExecutionRequest {
   readonly startStep?: string;
   readonly resumePoint?: WorkflowResumePoint;
   readonly restartPoint?: WorkflowRestartPoint;
+  readonly sourceResumePoint?: WorkflowResumePoint;
   readonly retryNote?: string;
 }
 
@@ -63,9 +63,6 @@ export interface CentralStateRecord {
   readonly stateId: string;
   readonly locationId: string;
   readonly canonicalDirectory: string;
-  readonly fingerprint?: DirectoryFingerprint;
-  /** The central runs directory is an inode-pinned trust boundary. */
-  readonly runsRootFingerprint: DirectoryFingerprint;
   readonly displayName: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -130,6 +127,7 @@ export interface CentralTaskRecord {
   /** Latest run pointer retained so workers started before run history support can finish safely. */
   readonly runId?: string;
   readonly runIds: readonly string[];
+  readonly runWarnings?: readonly { readonly runId: string; readonly message: string }[];
   readonly prUrl?: string;
 }
 
@@ -192,19 +190,10 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-function sameFingerprint(
-  first: DirectoryFingerprint | undefined,
-  second: DirectoryFingerprint | undefined,
-): boolean {
-  return first?.dev === second?.dev && first?.ino === second?.ino;
-}
-
 function sameCentralStateIdentity(first: CentralStateRecord, second: CentralStateRecord): boolean {
   return first.stateId === second.stateId
     && first.locationId === second.locationId
-    && first.canonicalDirectory === second.canonicalDirectory
-    && sameFingerprint(first.fingerprint, second.fingerprint)
-    && sameFingerprint(first.runsRootFingerprint, second.runsRootFingerprint);
+    && first.canonicalDirectory === second.canonicalDirectory;
 }
 
 function makeOwnerToken(): string {
@@ -268,6 +257,7 @@ function resetFailedTaskToPending(
     createdAt: task.createdAt,
     updatedAt: now,
     runIds: task.runIds,
+    ...(task.runWarnings === undefined ? {} : { runWarnings: task.runWarnings }),
     ...(executionRequest === undefined ? {} : { executionRequest }),
   };
   return reset;
@@ -306,10 +296,7 @@ async function ensureCentralTree(paths: StatePaths): Promise<void> {
   ].map(ensurePrivateDirectory));
 }
 
-async function verifyRunsRoot(
-  paths: StatePaths,
-  expectedFingerprint?: DirectoryFingerprint,
-): Promise<DirectoryFingerprint> {
+async function verifyRunsRoot(paths: StatePaths): Promise<void> {
   const expectedStateDirectory = resolve(paths.stateDirectory);
   const expectedRunsDirectory = resolve(expectedStateDirectory, 'runs');
   if (resolve(paths.runsDirectory) !== expectedRunsDirectory) {
@@ -338,11 +325,6 @@ async function verifyRunsRoot(
   ) {
     throw new CentralTaskCasError('Central runs root identity changed');
   }
-  const fingerprint = { dev: runsStats.dev, ino: runsStats.ino };
-  if (expectedFingerprint !== undefined && !sameFingerprint(fingerprint, expectedFingerprint)) {
-    throw new CentralTaskCasError('Central runs root fingerprint changed');
-  }
-  return fingerprint;
 }
 
 async function atomicWrite(path: string, content: string): Promise<void> {
@@ -500,12 +482,10 @@ async function readStateLockClaim(claimPath: string): Promise<StateLockClaim | u
 }
 
 function sameLockOwner(first: StateLockOwner, second: StateLockOwner): boolean {
-  const identityMatches = first.processIdentity === undefined && second.processIdentity === undefined
-    || sameProcessIdentity(first.processIdentity, second.processIdentity);
   return first.ownerToken === second.ownerToken
     && first.pid === second.pid
     && first.inode === second.inode
-    && identityMatches;
+    && first.processIdentity?.startTime === second.processIdentity?.startTime;
 }
 
 function lockOwnerIsStale(owner: StateLockOwner): boolean {
@@ -517,9 +497,7 @@ function lockOwnerIsStale(owner: StateLockOwner): boolean {
   }
   if (!alive) return true;
   const currentIdentity = getProcessIdentity(owner.pid);
-  return owner.processIdentity !== undefined
-    && currentIdentity !== undefined
-    && !sameProcessIdentity(owner.processIdentity, currentIdentity);
+  return hasProcessIdentityMismatch(owner.processIdentity, currentIdentity);
 }
 
 function lockClaimOwnerIsStale(claim: StateLockClaim): boolean {
@@ -531,9 +509,7 @@ function lockClaimOwnerIsStale(claim: StateLockClaim): boolean {
   }
   if (!alive) return true;
   const currentIdentity = getProcessIdentity(claim.pid);
-  return claim.processIdentity !== undefined
-    && currentIdentity !== undefined
-    && !sameProcessIdentity(claim.processIdentity, currentIdentity);
+  return hasProcessIdentityMismatch(claim.processIdentity, currentIdentity);
 }
 
 async function compareDeleteClaim(
@@ -759,6 +735,21 @@ async function withLock<T>(paths: StatePaths, action: () => Promise<T>): Promise
   }
 }
 
+function appendRunWarnings(
+  task: CentralTaskRecord,
+  runId: string,
+  warnings: readonly string[] | undefined,
+): CentralTaskRecord {
+  if (warnings === undefined || warnings.length === 0) return task;
+  return {
+    ...task,
+    runWarnings: [
+      ...task.runWarnings ?? [],
+      ...warnings.map((message) => ({ runId, message })),
+    ],
+  };
+}
+
 function normalizeTaskRunHistory(task: StoredCentralTaskRecord): CentralTaskRecord {
   if (task.runIds !== undefined && !Array.isArray(task.runIds)) {
     return task as CentralTaskRecord;
@@ -862,6 +853,9 @@ function validateExecutionRequest(request: CentralExecutionRequest): void {
   if (request.restartPoint !== undefined && !WorkflowRestartPointSchema.safeParse(request.restartPoint).success) {
     throw new CentralTaskCasError('Central execution request restart point is invalid');
   }
+  if (request.sourceResumePoint !== undefined && !WorkflowResumePointSchema.safeParse(request.sourceResumePoint).success) {
+    throw new CentralTaskCasError('Central execution request source resume point is invalid');
+  }
 }
 
 function validateTask(task: CentralTaskRecord): void {
@@ -921,6 +915,17 @@ function validateTask(task: CentralTaskRecord): void {
   }
   if (task.runId !== undefined && task.runId !== task.runIds.at(-1)) {
     throw new CentralTaskCasError('Central task latest run does not match its run history');
+  }
+  if (task.runWarnings !== undefined && (
+    !Array.isArray(task.runWarnings)
+    || task.runWarnings.some((warning: unknown) => {
+      if (warning === null || typeof warning !== 'object' || Array.isArray(warning)) return true;
+      const entry = warning as Record<string, unknown>;
+      return typeof entry.runId !== 'string' || !task.runIds.includes(entry.runId)
+        || typeof entry.message !== 'string' || entry.message.length === 0;
+    })
+  )) {
+    throw new CentralTaskCasError('Central task run warnings are invalid');
   }
   assertIsoTimestamp(task.createdAt, 'task.createdAt');
   assertIsoTimestamp(task.updatedAt, 'task.updatedAt');
@@ -1009,27 +1014,20 @@ function parseState(value: unknown): CentralStateRecord {
   assertStateId(raw.stateId);
   assertIsoTimestamp(raw.createdAt, 'state.createdAt');
   assertIsoTimestamp(raw.updatedAt, 'state.updatedAt');
-  const validateFingerprint = (value: unknown, label: string): DirectoryFingerprint => {
-    const fingerprint = value;
-    if (
-      fingerprint === null
-      || typeof fingerprint !== 'object'
-      || Array.isArray(fingerprint)
-      || !Number.isSafeInteger((fingerprint as Readonly<Record<string, unknown>>).dev)
-      || !Number.isSafeInteger((fingerprint as Readonly<Record<string, unknown>>).ino)
-    ) {
-      throw new CentralTaskCasError(`Central state ${label} is malformed`);
-    }
-    return fingerprint as DirectoryFingerprint;
+  return {
+    version: STATE_VERSION,
+    stateId: raw.stateId,
+    locationId: raw.locationId,
+    canonicalDirectory: raw.canonicalDirectory,
+    displayName: raw.displayName,
+    createdAt: raw.createdAt as string,
+    updatedAt: raw.updatedAt as string,
   };
-  if (raw.fingerprint !== undefined) validateFingerprint(raw.fingerprint, 'fingerprint');
-  const runsRootFingerprint = validateFingerprint(raw.runsRootFingerprint, 'runs root fingerprint');
-  return { ...raw, runsRootFingerprint } as unknown as CentralStateRecord;
 }
 
 /** Revalidate the registered location at every worker/repository attach. */
 async function verifyStateLocationIdentity(
-  state: Pick<CentralStateRecord, 'canonicalDirectory' | 'locationId' | 'fingerprint'>,
+  state: Pick<CentralStateRecord, 'canonicalDirectory' | 'locationId'>,
 ): Promise<void> {
   let currentDirectory: string;
   try {
@@ -1047,12 +1045,6 @@ async function verifyStateLocationIdentity(
   if (projectIdForCanonicalDirectory(currentDirectory) !== state.locationId) {
     throw new CentralTaskCasError('Central project location identity changed');
   }
-  if (
-    state.fingerprint !== undefined
-    && (state.fingerprint.dev !== stats.dev || state.fingerprint.ino !== stats.ino)
-  ) {
-    throw new CentralTaskCasError('Central project directory fingerprint changed; explicit relink is required');
-  }
 }
 
 async function verifyStateRegistryIdentity(
@@ -1068,8 +1060,6 @@ async function verifyStateRegistryIdentity(
   if (
     registered.stateId !== state.stateId
     || registered.canonicalDirectory !== state.canonicalDirectory
-    || registered.fingerprint.dev !== state.fingerprint?.dev
-    || registered.fingerprint.ino !== state.fingerprint?.ino
   ) {
     throw new CentralTaskCasError('Central state identity does not match the project registry');
   }
@@ -1096,7 +1086,7 @@ export class CentralTaskRepository {
   private async verifyProjectIdentityUnlocked(): Promise<void> {
     await verifyStateRegistryIdentity(this.globalConfigDirectory, this.state);
     await verifyStateLocationIdentity(this.state);
-    await verifyRunsRoot(this.paths, this.state.runsRootFingerprint);
+    await verifyRunsRoot(this.paths);
   }
 
   /**
@@ -1111,7 +1101,7 @@ export class CentralTaskRepository {
     }
     await verifyStateRegistryIdentity(this.globalConfigDirectory, persisted);
     await verifyStateLocationIdentity(persisted);
-    await verifyRunsRoot(this.paths, persisted.runsRootFingerprint);
+    await verifyRunsRoot(this.paths);
     return persisted;
   }
 
@@ -1126,14 +1116,12 @@ export class CentralTaskRepository {
     readonly locationId: string;
     readonly canonicalDirectory: string;
     readonly displayName: string;
-    readonly fingerprint?: DirectoryFingerprint;
     readonly executionDirectory?: string;
   }): Promise<CentralTaskRepository> {
     assertStateId(options.stateId);
     await verifyStateLocationIdentity({
       locationId: options.locationId,
       canonicalDirectory: options.canonicalDirectory,
-      ...(options.fingerprint === undefined ? {} : { fingerprint: options.fingerprint }),
     });
     const paths = resolveStatePaths(options.globalConfigDirectory, options.stateId);
     await ensureCentralTree(paths);
@@ -1159,14 +1147,12 @@ export class CentralTaskRepository {
           throw new CentralTaskCasError('Central state is incomplete; state and task ledger must be recovered together');
         }
         const now = new Date().toISOString();
-        const runsRootFingerprint = await verifyRunsRoot(paths);
+        await verifyRunsRoot(paths);
         state = {
           version: STATE_VERSION,
           stateId: options.stateId,
           locationId: options.locationId,
           canonicalDirectory: options.canonicalDirectory,
-          ...(options.fingerprint === undefined ? {} : { fingerprint: options.fingerprint }),
-          runsRootFingerprint,
           displayName: options.displayName,
           createdAt: now,
           updatedAt: now,
@@ -1185,16 +1171,15 @@ export class CentralTaskRepository {
         state.stateId !== options.stateId
         || state.locationId !== options.locationId
         || state.canonicalDirectory !== options.canonicalDirectory
-        || !sameFingerprint(state.fingerprint, options.fingerprint)
       ) {
         throw new CentralTaskCasError('Central state identity does not match the registry');
       }
       // This verification is deliberately inside the same state lock as all
-      // later ownership mutations. It removes the verify -> await -> adopt
-      // race in which the project directory could be swapped in between.
+      // later ownership mutations so the registered state and canonical path
+      // are checked before adoption.
       await verifyStateRegistryIdentity(options.globalConfigDirectory, state);
       await verifyStateLocationIdentity(state);
-      await verifyRunsRoot(paths, state.runsRootFingerprint);
+      await verifyRunsRoot(paths);
       // A state without its task ledger is an incomplete ownership state,
       // not an empty queue. Never repair it implicitly.
       try {
@@ -1212,7 +1197,7 @@ export class CentralTaskRepository {
         executionDirectory: options.executionDirectory ?? options.canonicalDirectory,
         stateDirectory: paths.stateDirectory,
       },
-      { ...paths, runsRootFingerprint: state.runsRootFingerprint },
+      paths,
       state,
       options.globalConfigDirectory,
     );
@@ -1232,7 +1217,6 @@ export class CentralTaskRepository {
       locationId: state.locationId,
       canonicalDirectory: state.canonicalDirectory,
       displayName: state.displayName,
-      ...(state.fingerprint === undefined ? {} : { fingerprint: state.fingerprint }),
       ...(options.executionDirectory === undefined ? {} : { executionDirectory: options.executionDirectory }),
     });
   }
@@ -1890,6 +1874,7 @@ export class CentralTaskRepository {
     readonly status: 'completed' | 'failed';
     readonly failure?: { readonly code: string; readonly message: string };
     readonly prUrl?: string;
+    readonly warnings?: readonly string[];
   }): Promise<CentralTaskRecord> {
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
@@ -1907,6 +1892,7 @@ export class CentralTaskRepository {
           throw new CentralTaskCasError('Central task terminal compare-and-swap failed');
         }
         const now = new Date().toISOString();
+        const warnedTask = appendRunWarnings(task, draining.runId, input.warnings);
         await terminalizeCentralRunArtifact(
           this.paths,
           draining.runId,
@@ -1915,7 +1901,7 @@ export class CentralTaskRepository {
         );
         if (task.requeueAfterDrain !== undefined) {
           const pending = resetFailedTaskToPending(
-            task,
+            warnedTask,
             now,
             task.requeueAfterDrain.task,
             task.requeueAfterDrain.executionRequest,
@@ -1925,7 +1911,7 @@ export class CentralTaskRepository {
           return pending;
         }
         const acknowledged: CentralTaskRecord = {
-          ...task,
+          ...warnedTask,
           generation: task.generation + 1,
           updatedAt: now,
         };
@@ -1939,7 +1925,7 @@ export class CentralTaskRepository {
       }
       const now = new Date().toISOString();
       const terminal: CentralTaskRecord = {
-        ...task,
+        ...appendRunWarnings(task, task.activeExecution.runId, input.warnings),
         generation: task.generation + 1,
         status: input.status,
         updatedAt: now,
@@ -1973,9 +1959,7 @@ export class CentralTaskRepository {
             const currentIdentity = draining.pid > 0 ? getProcessIdentity(draining.pid) : undefined;
             processStale = draining.pid > 0 && !isProcessAlive(draining.pid)
               || draining.pid > 0
-                && draining.processIdentity !== undefined
-                && currentIdentity !== undefined
-                && !sameProcessIdentity(draining.processIdentity, currentIdentity);
+                && hasProcessIdentityMismatch(draining.processIdentity, currentIdentity);
           } catch {
             processStale = false;
           }
@@ -2010,9 +1994,7 @@ export class CentralTaskRepository {
         try {
           processStale = active.pid > 0 && !isProcessAlive(active.pid)
             || active.pid > 0
-              && active.processIdentity !== undefined
-              && currentIdentity !== undefined
-              && !sameProcessIdentity(active.processIdentity, currentIdentity);
+              && hasProcessIdentityMismatch(active.processIdentity, currentIdentity);
         } catch {
           processStale = false;
         }

@@ -12,6 +12,7 @@ import type {
   LiveInterventionChannel,
   LiveInterventionDeliveryContext,
   LiveInterventionDeliveryMode,
+  LiveInterventionInstruction,
   LiveInterventionState,
   PreparedLiveInterventionDelivery,
 } from '../../core/workflow/live-intervention/types.js';
@@ -138,12 +139,20 @@ function reduceEvents(raw: string): LiveInterventionState {
   );
 }
 
+export type LiveInterventionDeliveryPersistence = (
+  instructions: readonly Pick<LiveInterventionInstruction, 'instructionId' | 'issuedAt' | 'content'>[],
+) => void | Promise<void>;
+
 export class LiveInterventionFileStore implements LiveInterventionChannel {
   private readonly runDirectory: string;
   private readonly filePath: string;
   private readonly lockPath: string;
 
-  constructor(projectCwd: string, runSlug: string) {
+  constructor(
+    projectCwd: string,
+    runSlug: string,
+    private readonly persistDelivery?: LiveInterventionDeliveryPersistence,
+  ) {
     assertSafeRunSlug(runSlug);
     this.runDirectory = join(projectCwd, '.takt', 'runs', runSlug);
     this.filePath = join(this.runDirectory, 'interventions.jsonl');
@@ -217,7 +226,7 @@ export class LiveInterventionFileStore implements LiveInterventionChannel {
   }
 
   async commitDelivery(delivery: PreparedLiveInterventionDelivery): Promise<void> {
-    await runPrivateFileExclusiveAsync(this.lockPath, () => {
+    await runPrivateFileExclusiveAsync(this.lockPath, async () => {
       const state = this.read();
       const event: LiveInterventionEvent = {
         type: 'delivered',
@@ -227,6 +236,10 @@ export class LiveInterventionFileStore implements LiveInterventionChannel {
       };
       reduceLiveInterventionEvent(state, event);
       this.append(event);
+      const deliveredIds = new Set(delivery.instructionIds);
+      await this.persistDelivery?.(state.instructions
+        .filter((instruction) => deliveredIds.has(instruction.instructionId))
+        .map(({ instructionId, issuedAt, content }) => ({ instructionId, issuedAt, content })));
     });
   }
 

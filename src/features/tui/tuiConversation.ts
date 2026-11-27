@@ -1,3 +1,4 @@
+import type { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
 /**
  * Session connection layer for the Ink TUI.
  *
@@ -8,7 +9,9 @@
  */
 
 import { SlashCommand } from '../../shared/constants.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { interactiveSessionExists } from '../interactive/interactiveSessionExistence.js';
 import {
   isDisabledVerifyCommand,
   matchSlashCommand,
@@ -57,6 +60,7 @@ export interface TuiConversationOptions {
   undeliveredMessages?: UndeliveredMessages;
   /** Keep temporary provider/model sessions out of persisted `/continue` metadata. */
   persistSession?: boolean;
+  interactiveSessionRecords?: InteractiveSessionRecords;
   sourceContext?: string;
   /** Enable settings handoffs owned by the resident interactive TUI. */
   enableSettingsCommands?: boolean;
@@ -107,11 +111,16 @@ function describeSessionError(
   code: ConversationSessionErrorCode | undefined,
   message: string,
   lang: 'en' | 'ja',
+  retainedArtifactsMessage?: string,
 ): string {
   // No code means the producer only had human-readable text to offer.
-  return code === undefined || code === 'provider_error'
-    ? message
-    : getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
+  if (code === undefined || code === 'provider_error') {
+    return message;
+  }
+  const label = getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
+  return retainedArtifactsMessage === undefined
+    ? label
+    : `${label}\n\n${retainedArtifactsMessage}`;
 }
 
 function createCommandAvailability(
@@ -138,6 +147,7 @@ export interface TuiSubmitInput {
   text: string;
   abortSignal: AbortSignal;
   onAssistantChunk: (chunk: string) => void;
+  onStreamEvent?: StreamCallback;
 }
 
 /**
@@ -156,7 +166,7 @@ export type TuiSubmission =
     notices?: readonly string[];
     commit?: () => void;
   }
-  | { kind: 'error'; message: string; notices?: readonly string[]; commit?: () => void };
+  | { kind: 'error'; message: string; retainedArtifactsMessage?: string; notices?: readonly string[]; commit?: () => void };
 
 /** Commands the TUI settles itself, without contacting the provider. */
 export type TuiLocalCommand =
@@ -176,7 +186,7 @@ export type TuiLocalCommand =
     text?: string;
   }
   | { kind: 'paste_image' }
-  | { kind: 'notice'; message: string };
+  | { kind: 'notice'; message: string; operationResult?: true };
 
 export interface TuiConversation {
   /**
@@ -209,6 +219,7 @@ export interface TuiConversation {
    * session keeps no transcript of its own (exec).
    */
   recordRejectedDraft?(task: string): void;
+  recordOperationResult?(notice: string): void;
   /** Snapshot all user/assistant context needed by a recreated provider session. */
   snapshotHistory?(): readonly ConversationMessage[];
   /** Latest run confirmed by a successful task-state lookup in this conversation. */
@@ -224,6 +235,7 @@ export interface TuiConversation {
 }
 
 export interface TuiConversationWithSourceContext extends TuiConversation {
+  recordOperationResult(notice: string): void;
   /** Replace the Source Context without rebuilding the conversation. */
   setSourceContext(sourceContext: string): void;
   /** Current Source Context to retain when settings rebuild the conversation. */
@@ -235,6 +247,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
   const session = createConversationSession({
     cwd: options.cwd,
+    interactiveSessionRecords: options.interactiveSessionRecords,
     outputMode: 'silent',
     ctx,
     undeliveredMessages: options.undeliveredMessages,
@@ -283,6 +296,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     recordRejectedDraft(task: string): void {
       session.recordRejectedDraft(task);
+    },
+
+    recordOperationResult(notice: string): void {
+      session.recordOperationResult(notice);
     },
 
     snapshotHistory(): readonly ConversationMessage[] {
@@ -335,7 +352,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             return { kind: 'handoff', id: 'assistant-retry', text: match.text || undefined };
           }
           return previousOrder === undefined
-            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang) }
+            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang), operationResult: true }
             : { kind: 'choose_action', task: previousOrder, origin: 'retry' };
         }
         case SlashCommand.Requeue:
@@ -375,7 +392,6 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
-      const text = input.text.trim();
       // This turn's own sinks, closed when the turn ends: a provider that keeps
       // streaming or reporting past its abort reaches a sink nobody is drawing
       // any more, never the turn that took its place.
@@ -384,10 +400,14 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
       let result: ConversationSessionResult;
       try {
         result = await session.handleUserMessage({
-          text,
+          text: input.text,
           abortSignal: input.abortSignal,
+          // Installation prompts belong to the bare-terminal mount preparation.
+          confirmManagedProvider: async () => false,
           onStream: (event) => {
-            if (!turnEnded && event.type === 'text') {
+            if (turnEnded) return;
+            input.onStreamEvent?.(event);
+            if (event.type === 'text') {
               input.onAssistantChunk(event.data.text);
             }
           },
@@ -409,7 +429,8 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case 'error':
           return {
             kind: 'error',
-            message: describeSessionError(result.code, result.message, ctx.lang),
+            message: describeSessionError(result.code, result.message, ctx.lang, result.retainedArtifactsMessage),
+            ...(result.retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage: result.retainedArtifactsMessage }),
             notices,
           };
       }
@@ -423,8 +444,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         result = await session.createTaskInstruction({
           userNote: input.text.trim(),
           abortSignal: input.abortSignal,
+          confirmManagedProvider: async () => false,
           onStream: (event) => {
-            if (!turnEnded && event.type === 'text') {
+            if (turnEnded) return;
+            input.onStreamEvent?.(event);
+            if (event.type === 'text') {
               input.onAssistantChunk(event.data.text);
             }
           },
@@ -449,9 +473,16 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     async resumeSession(sessionId: string): Promise<string | undefined> {
-      session.setSessionId(sessionId);
+      if (await interactiveSessionExists(options.cwd, ctx.providerType, sessionId) === false) {
+        options.interactiveSessionRecords?.discard({ provider: ctx.providerType, sessionId });
+        session.setSessionId(undefined);
+        return getLabel('interactive.resumeSessionFailed', ctx.lang);
+      }
       if (strategy.resolveResumedSessionConfiguration) {
         const configuration = await strategy.resolveResumedSessionConfiguration();
+        if (configuration === null) {
+          return getLabel('interactive.ui.cancelled', ctx.lang);
+        }
         session.setPromptConfiguration(configuration);
         commandAvailability = createCommandAvailability(
           strategy,
@@ -459,6 +490,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           configuration.formalSpec === true,
         );
       }
+      session.setSessionId(sessionId);
       return undefined;
     },
 

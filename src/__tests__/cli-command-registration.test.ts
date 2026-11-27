@@ -4,6 +4,23 @@ import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/c
 import { resolveRemovedRootCommand } from '../app/cli/helpers.js';
 
 describe('CLI command registration', () => {
+  it('describes --resident in daemon help as keeping the daemon running', () => {
+    const daemon = program.commands.find((command) => command.name() === 'daemon');
+    const resident = daemon?.options.find((option) => option.long === '--resident');
+
+    expect(resident).toBeDefined();
+    expect(resident?.description).toMatch(/running|alive|idle|常駐|自動終了/iu);
+    expect(daemon?.helpInformation()).toMatch(/--resident\s+\S/u);
+  });
+
+  it('registers manager as an experimental conversation command without a one-shot argument', () => {
+    const manager = program.commands.find((command) => command.name() === 'manager');
+
+    expect(manager).toBeDefined();
+    expect(manager?.description()).toMatch(/experimental|実験的/iu);
+    expect(manager?.registeredArguments).toEqual([]);
+  });
+
   it('should register the optional task argument on the root command', () => {
     const argumentNames = program.registeredArguments.map((argument) => argument.name());
 
@@ -50,6 +67,12 @@ describe('CLI command registration', () => {
     const command = program.commands.find((item) => item.name() === 'install');
 
     expect(command?.options.some((option) => option.long === '--force')).toBe(true);
+  });
+
+  it('allows updating all installed providers or one explicitly selected provider', () => {
+    const command = program.commands.find((item) => item.name() === 'update');
+    expect(command).toBeDefined();
+    expect(command?.helpInformation()).toMatch(/\[provider\]/u);
   });
 
   it.each([

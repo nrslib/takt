@@ -13,17 +13,25 @@ import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
 import { escapeTemplateChars, prepareTemplatePlaceholders, replaceTemplatePlaceholders } from './escape.js';
 import type { PreparedInstruction } from './prepared-instruction.js';
+import { renderCurrentReport } from './prepared-instruction.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import { renderFallbackNotice } from './fallback-notice.js';
 import {
   trimContextContent,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 import { renderPullRequestContext } from '../pr-context.js';
 import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
 import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
+
+export function renderGoalSpecificationNotice(paths: readonly string[] | undefined, language: Language): string {
+  if (!paths?.length) return '';
+  const label = language === 'ja' ? 'ゴールの保存仕様' : 'Saved goal specifications';
+  return `- ${label}: ${paths.map((path) => `\`${path}\``).join(', ')}`;
+}
 
 export function prepareReferenceContent(
   content: string,
@@ -107,15 +115,13 @@ export class InstructionBuilder {
       : '';
     const hasFallbackNotice = fallbackNotice.length > 0;
 
-    // Workflow structure (loop expansion done in code)
-    const workflowStructure = this.buildWorkflowStructure(language);
-
     // Report info (from output contracts)
-    const hasReport = !!(this.step.outputContracts && this.step.outputContracts.length > 0 && this.context.reportDir);
+    const hasReport = !!(this.context.reportDir && (this.step.outputContracts?.length || this.step.inputReports !== undefined));
     let reportInfo = '';
     if (hasReport && this.step.outputContracts && this.context.reportDir) {
       reportInfo = renderReportContext(this.step.outputContracts, this.context.reportDir);
     }
+    if (hasReport && reportInfo.length === 0) reportInfo = `- Report Directory: ${this.context.reportDir}`;
 
     // Skip auto-injection for sections whose placeholders exist in the template
     const tmpl = this.step.instruction;
@@ -169,7 +175,48 @@ export class InstructionBuilder {
         previousResponseText: previousResponsePrepared || undefined,
       },
     );
-    const instructions = this.appendCompanionInstruction(prepared.text);
+    const referencedDeclaredNames = new Set(
+      [...workflowRules.injectedReports, ...prepared.injectedReports]
+        .filter((report) => report.scope === 'declared-producer')
+        .map((report) => `${report.kind ?? 'current'}:${report.reference}`),
+    );
+    const declaredReports = (this.context.declaredReportInputs ?? []).flatMap(({ reports }) => reports);
+    const unreferencedDeclaredReports = declaredReports
+      .flatMap((report) => [
+        { ...report, content: renderCurrentReport(report, language) },
+        ...(report.history === undefined ? [] : [{ reference: report.reference, scope: report.scope, producer: report.producer,
+          kind: 'history' as const, content: report.history }]),
+      ])
+      .filter((report) => !referencedDeclaredNames.has(`${report.kind ?? 'current'}:${report.reference}`));
+    const reportInstructions = unreferencedDeclaredReports.length === 0
+      ? this.appendCompanionInstruction(prepared.text)
+      : [
+          this.appendCompanionInstruction(prepared.text),
+          '',
+          language === 'ja' ? '## 宣言された成果物入力' : '## Declared report inputs',
+          unreferencedDeclaredReports.map((report) =>
+            `### ${report.producer === undefined ? report.reference : `${report.producer}: ${report.reference}`}${report.kind === 'history' ? ' (history)' : ''}\n${report.content}`,
+          ).join('\n\n'),
+        ].join('\n');
+    const unavailable = (this.context.declaredReportInputs ?? []).flatMap((input) => input.unavailable ?? []);
+    const reportInstructionsWithUnavailable = unavailable.length === 0 ? reportInstructions : [
+      reportInstructions, '', language === 'ja' ? '## 未供給の成果物入力' : '## Unavailable declared report inputs',
+      ...unavailable.map((entry) => `- ${entry.producer}: ${entry.names.join(', ')}; ${language === 'ja' ? 'producer未実行、固定版と実行IDは未供給' : 'producer has not run; fixed version and execution ID not supplied'}`),
+    ].join('\n');
+    const currentExecutions = declaredReports.flatMap((report) => report.execution === undefined ? [] : [
+      `- ${report.producer}: ${report.reference}; execution=${report.execution.id}; order=${report.execution.order}; completion_order=${report.execution.completionOrder ?? 'unavailable'}; producer execution=${report.origin?.id ?? 'unavailable'}; producer start=${report.origin?.order ?? 'unavailable'}; producer completion=${report.origin?.completionOrder ?? 'unavailable'}; ${report.path === undefined ? 'path=unavailable' : `path=\`${report.path}\``}`,
+    ]);
+    const legacyVersions = declaredReports.flatMap((report) => report.legacyPublicBody !== true ? [] : [
+      `- ${report.producer}: ${report.reference}; ${language === 'ja'
+        ? '元の完了実行の固定版と実行IDは未供給' : 'Original completed execution version and ID not supplied'}; ${report.path === undefined
+        ? (language === 'ja' ? '今回のsnapshotなし' : 'no snapshot for this call')
+        : `${language === 'ja' ? '今回作成したsnapshot' : 'snapshot created for this call'}=\`${report.path}\``}`,
+    ]);
+    const instructions = [
+      reportInstructionsWithUnavailable,
+      ...(currentExecutions.length === 0 ? [] : ['', language === 'ja' ? '## 現在レポートの実行記録' : '## Current report executions', ...currentExecutions]),
+      ...(legacyVersions.length === 0 ? [] : ['', language === 'ja' ? '## 旧runの成果物の版情報' : '## Legacy report version status', ...legacyVersions]),
+    ].join('\n');
     const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
       if (!isOutputContractItem(entry)) return [];
       const content = [entry.order, entry.format].filter(Boolean).join('\n\n');
@@ -182,11 +229,6 @@ export class InstructionBuilder {
         reportDir: undefined,
       })}`];
     }).join('\n\n') ?? '';
-
-    // Workflow name and description
-    const workflowName = this.context.workflowName ?? '';
-    const workflowDescription = this.context.workflowDescription ?? '';
-    const hasWorkflowDescription = !!workflowDescription;
 
     // Retry note
     const hasRetryNote = !!this.context.retryNote;
@@ -222,19 +264,17 @@ export class InstructionBuilder {
       : '';
 
     const text = loadTemplate('perform_phase1_message', language, {
+      phaseContext: renderPhaseContext(this.context.workflowAssignment ?? {
+        stepName: this.step.name,
+        stepIteration: this.context.stepIteration,
+      }, 1, language),
       workingDirectory: this.context.cwd,
+      goalSpecificationNotice: renderGoalSpecificationNotice(this.context.goalSpecificationPaths, language),
       hasGitRules,
       gitRules,
       editRule,
       hasFallbackNotice,
       fallbackNotice,
-      workflowName,
-      workflowDescription,
-      hasWorkflowDescription,
-      workflowStructure,
-      iteration: `${this.context.iteration}/${this.context.maxSteps}`,
-      stepIteration: String(this.context.stepIteration),
-      stepName: this.step.name,
       hasReport,
       reportInfo,
       hasTaskSection,
@@ -263,39 +303,21 @@ export class InstructionBuilder {
       hasReportPreparation: reportPreparation.length > 0,
       reportPreparation,
     });
-    const injectedReports = new Map(
-      [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [report.reference, report]),
+    const referencedReports = new Map(
+      [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [`${report.kind ?? 'current'}:${report.reference}`, report]),
     );
     return {
       text,
-      injectedReports: [...injectedReports.values()],
+      requiredReferenceContents: [
+        ...(this.context.policySourcePath !== undefined && policyJoined.length > CONTEXT_MAX_CHARS ? [policyJoined] : []),
+        ...(this.context.knowledgeSourcePath !== undefined && knowledgeJoined.length > CONTEXT_MAX_CHARS ? [knowledgeJoined] : []),
+      ],
+      injectedReports: [...referencedReports.values(), ...unreferencedDeclaredReports],
       reportInputs: {
         userInputs: [...this.context.userInputs],
         ...(previousResponsePrepared ? { previousResponse: previousResponsePrepared } : {}),
       },
     };
-  }
-
-  /**
-   * Build the workflow structure display string.
-   * Returns empty string if no workflow steps are available.
-   */
-  private buildWorkflowStructure(language: Language): string {
-    if (!this.context.workflowSteps || this.context.workflowSteps.length === 0) {
-      return '';
-    }
-
-    const currentStepMarker = language === 'ja' ? '現在' : 'current';
-    const structureHeader = language === 'ja'
-      ? `このワークフローは${this.context.workflowSteps.length}ステップで構成されています:`
-      : `This workflow consists of ${this.context.workflowSteps.length} steps:`;
-    const stepLines = this.context.workflowSteps.map((ws, index) => {
-      const isCurrent = index === this.context.currentStepIndex;
-      const marker = isCurrent ? ` ← ${currentStepMarker}` : '';
-      const desc = ws.description ? `（${ws.description}）` : '';
-      return `- Step ${index + 1}: ${ws.name}${desc}${marker}`;
-    });
-    return [structureHeader, ...stepLines].join('\n');
   }
 
   private appendCompanionInstruction(instructions: string): string {

@@ -2,7 +2,10 @@
  * Tests for OpenCode type definitions and permission mapping
  */
 
-import { describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join, parse } from 'node:path';
 import {
   buildOpenCodePermissionRuleset,
   buildOpenCodePromptTools,
@@ -11,8 +14,35 @@ import {
   OPEN_CODE_MANAGED_TOOL_IDS,
   resolveOpenCodePermissionReply,
 } from '../infra/opencode/types.js';
-import { toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
-import type { PermissionMode } from '../core/models/index.js';
+import { toOpenCodeMcpServerPermission, toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
+import { toV2Tools } from '../infra/opencode/v2-contract.js';
+import {
+  buildOpenCodeV1ExternalDirectoryPermissions,
+  buildOpenCodeV2ExternalDirectoryRules,
+  normalizeOpenCodeExternalDirectories,
+} from '../infra/opencode/external-directories.js';
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories.length = 0;
+});
+
+function createExternalContextDirectories() {
+  const root = mkdtempSync(join(tmpdir(), 'takt-opencode-permissions-'));
+  temporaryDirectories.push(root);
+  const realRunDirectory = join(root, 'real-run');
+  const linkedRunDirectory = join(root, 'run-link');
+  mkdirSync(join(realRunDirectory, 'context'), { recursive: true });
+  symlinkSync(realRunDirectory, linkedRunDirectory, 'dir');
+  return {
+    contextDirectory: join(linkedRunDirectory, 'context'),
+    canonicalContextDirectory: realpathSync(join(realRunDirectory, 'context')),
+  };
+}
 
 describe('mapToOpenCodePermissionReply', () => {
   it('should map readonly to reject', () => {
@@ -25,15 +55,6 @@ describe('mapToOpenCodePermissionReply', () => {
 
   it('should map full to always', () => {
     expect(mapToOpenCodePermissionReply('full')).toBe('always');
-  });
-
-  it('should handle all PermissionMode values', () => {
-    const modes: PermissionMode[] = ['readonly', 'edit', 'full'];
-    const expectedReplies = ['reject', 'once', 'always'];
-
-    modes.forEach((mode, index) => {
-      expect(mapToOpenCodePermissionReply(mode)).toBe(expectedReplies[index]);
-    });
   });
 });
 
@@ -90,11 +111,73 @@ describe('resolveOpenCodePermissionReply', () => {
 });
 
 describe('OpenCode permissions', () => {
+  it.each(['backlog', 'takt-full', 'backlog__main', 'queue_'])(
+    'allows every tool of the assigned server %s while denying other MCP tools', (server) => {
+      const permission = toOpenCodeMcpServerPermission(server);
+      expect(permission).toBe(`${server}_*`);
+      const rules = buildOpenCodePermissionRuleset(undefined, undefined, ['Read'], [permission]);
+      for (const name of ['get_issue', 'add_issue', 'takt_enqueue_goal_task']) {
+        expect(resolveOpenCodePermissionReply(undefined, `${server}_${name}`, rules)).toBe('once');
+      }
+      for (const name of ['other_get_issue', 'takt_takt_enqueue_goal_task', `${server}x_get_issue`, `${server}-other_get_issue`, server]) {
+        expect(resolveOpenCodePermissionReply(undefined, name, rules)).toBe('reject');
+      }
+      const tools = buildOpenCodePromptTools(undefined, undefined, ['Read'], [permission]);
+      expect(tools[permission]).toBe(true);
+      expect(toV2Tools(tools)[permission]).toBe(true);
+    },
+  );
+  it.each([
+    { assigned: 'backlog__main', unassignedTool: 'backlog_get_issue' },
+    { assigned: 'queue_', unassignedTool: 'queue_get_issue' },
+  ])('does not let the server-wide permission of $assigned cover the tool $unassignedTool of a similarly named server', ({ assigned, unassignedTool }) => {
+    const rules = buildOpenCodePermissionRuleset(undefined, undefined, ['Read'], [toOpenCodeMcpServerPermission(assigned)]);
+    expect(resolveOpenCodePermissionReply(undefined, unassignedTool, rules)).toBe('reject');
+  });
+  it('normalizes characters OpenCode does not keep in a server name the same way as in MCP tool names', () => {
+    expect(toOpenCodeMcpServerPermission('github.com')).toBe('github_com_*');
+  });
+  it('limits strict session, prompt and permission replies to read and the named MCP tools', () => {
+    const mcpTools = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `takt_${name}`);
+    const strictTools = ['Read', ...mcpTools];
+    const tools = buildOpenCodePromptTools('readonly', false, ['Read'], mcpTools, strictTools);
+    expect(Object.keys(tools).filter((name) => tools[name]).sort()).toEqual(['read', ...mcpTools].sort());
+    expect(tools['*']).toBe(false);
+    const rules = buildOpenCodeSessionPermission('readonly', false, ['Read'], mcpTools, strictTools);
+    for (const permission of ['read', ...mcpTools]) expect(resolveOpenCodePermissionReply('readonly', permission, rules)).toBe('once');
+    for (const permission of ['write', 'edit', 'patch', 'bash', 'shell', 'websearch', 'webfetch', 'skill', 'list', 'takt_extra']) {
+      expect(resolveOpenCodePermissionReply('readonly', permission, rules)).toBe('reject');
+    }
+    for (const removed of mcpTools) {
+      const remaining = mcpTools.filter((name) => name !== removed);
+      expect(buildOpenCodePromptTools('readonly', false, ['Read'], remaining, strictTools)[removed]).toBeUndefined();
+      expect(resolveOpenCodePermissionReply('readonly', removed, buildOpenCodeSessionPermission('readonly', false, ['Read'], remaining, strictTools))).toBe('reject');
+    }
+  });
   it('should normalize common MCP task-state tool names for OpenCode', () => {
     expect(toOpenCodeMcpToolName('mcp__takt__takt_get_run')).toBe('takt_takt_get_run');
     expect(toOpenCodeMcpToolName('mcp__takt__takt_list_tasks')).toBe('takt_takt_list_tasks');
     expect(toOpenCodeMcpToolName('mcp__github__search')).toBe('github_search');
     expect(toOpenCodeMcpToolName('takt_takt_get_run')).toBeUndefined();
+  });
+
+  it.each([
+    ['mcp__takt_mgr_session__takt_get_run', 'takt_mgr_session_takt_get_run'],
+    ['mcp__takt-mgr_session__get-run', 'takt-mgr_session_get-run'],
+    ['mcp__github.com__search', 'github_com_search'],
+  ])('should preserve underscores and hyphens and normalize the server in %s', (input, expected) => {
+    expect(toOpenCodeMcpToolName(input)).toBe(expected);
+  });
+
+  it.each([
+    'mcp__takt__mgr__get_run',
+    'mcp__takt__get__run',
+    'mcp__takt___get_run',
+    'mcp____get_run',
+    'mcp__takt__',
+    'mcp__takt__*',
+  ])('should reject ambiguous or invalid MCP names: %s', (tool) => {
+    expect(toOpenCodeMcpToolName(tool)).toBeUndefined();
   });
 
   it('should build ruleset for edit mode', () => {
@@ -304,6 +387,56 @@ describe('buildOpenCodeSessionPermission', () => {
     ]) {
       expect(rules).toContainEqual({ permission: 'external_directory', pattern: '*', action: 'deny' });
     }
+  });
+
+  it('allows only the selected external context without denying edits in v1 session rules', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    const rules = buildOpenCodeSessionPermission(
+      'edit', undefined, undefined, undefined, undefined, [contextDirectory],
+    );
+
+    expect(rules.slice(-2)).toEqual([
+      { permission: 'external_directory', pattern: '*', action: 'deny' },
+      { permission: 'external_directory', pattern: join(canonicalContextDirectory, '*'), action: 'allow' },
+    ]);
+    expect(rules.some((rule) => rule.permission === 'edit' && rule.action === 'deny')).toBe(false);
+  });
+});
+
+describe('OpenCode external directory rules', () => {
+  it('builds v1 external permissions without an edit deny rule', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    expect(buildOpenCodeV1ExternalDirectoryPermissions([contextDirectory])).toEqual({
+      external_directory: {
+        '*': 'deny',
+        [join(canonicalContextDirectory, '*')]: 'allow',
+      },
+    });
+  });
+
+  it('builds ordered v2 external permissions with the exact directory exception', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    expect(buildOpenCodeV2ExternalDirectoryRules([contextDirectory])).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
+  it('deduplicates and sorts directories and rejects broad or relative paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-opencode-directory-set-'));
+    temporaryDirectories.push(root);
+    const directoryA = join(root, 'a');
+    const directoryB = join(root, 'b');
+    const directoryBLink = join(root, 'b-link');
+    mkdirSync(directoryA);
+    mkdirSync(directoryB);
+    symlinkSync(directoryB, directoryBLink, 'dir');
+    expect(normalizeOpenCodeExternalDirectories([directoryB, directoryA, directoryB, directoryBLink]))
+      .toEqual([realpathSync(directoryA), realpathSync(directoryB)]);
+    expect(() => normalizeOpenCodeExternalDirectories([join(root, '*')])).toThrow(/wildcard/);
+    expect(() => normalizeOpenCodeExternalDirectories(['relative/context'])).toThrow(/absolute/);
+    expect(() => normalizeOpenCodeExternalDirectories([parse(root).root])).toThrow(/filesystem root/);
   });
 });
 

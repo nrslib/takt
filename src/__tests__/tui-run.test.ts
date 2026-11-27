@@ -4,7 +4,7 @@
  * each of them, and the conversation result reaches the caller.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,15 +20,11 @@ import type { ProviderAgent, ProviderCallOptions } from '../infra/providers/inde
 import { SlashCommand } from '../shared/constants.js';
 import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
-import {
-  getSessionStatePath,
-  saveSessionState,
-  takeSessionState as takeStoredSessionState,
-  type SessionState,
-} from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { describeExecutionResult } from '../features/interactive/operationFeedback.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
+import { inspectProviderInstallation } from '../infra/managed-providers/loader.js';
 
 const {
   mockRender,
@@ -38,10 +34,8 @@ const {
   mockSelectInteractiveProvider,
   mockSelectRecentSession,
   mockSelectAction,
-  mockDisplayAndClearSessionState,
   mockGetWorkflowDescription,
   mockLoadPersonaSessions,
-  mockTakeSessionState,
   mockResolveAssistantProviderModel,
   mockRunTellCommand,
   mockRunAssistantRetryCommand,
@@ -52,6 +46,7 @@ const {
   mockUpdatePersonaSession,
   storeOverride,
   realTuiConversation,
+  mockResolveFormalSpecConfiguration,
 } = vi.hoisted(() => ({
   mockRender: vi.fn(),
   mockCreateTuiConversation: vi.fn(),
@@ -60,10 +55,8 @@ const {
   mockSelectInteractiveProvider: vi.fn(),
   mockSelectRecentSession: vi.fn(),
   mockSelectAction: vi.fn(),
-  mockDisplayAndClearSessionState: vi.fn(),
   mockGetWorkflowDescription: vi.fn(),
   mockLoadPersonaSessions: vi.fn(),
-  mockTakeSessionState: vi.fn(),
   mockResolveAssistantProviderModel: vi.fn(),
   mockRunTellCommand: vi.fn(),
   mockRunAssistantRetryCommand: vi.fn(),
@@ -76,9 +69,29 @@ const {
   storeOverride: { current: undefined as ((cwd: string) => unknown) | undefined },
   /** Lets persistence coverage use the production conversation/session factory. */
   realTuiConversation: { current: false },
+  mockResolveFormalSpecConfiguration: vi.fn(),
 }));
 
+vi.mock('../features/interactive/taskInstructionFormat.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/interactive/taskInstructionFormat.js')>()),
+  resolveFormalSpecConfiguration: mockResolveFormalSpecConfiguration,
+}));
+
+const recordWriteFailure = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../infra/config/project/sessionStore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/project/sessionStore.js')>();
+  return { ...actual, writeFileAtomic: (...args: Parameters<typeof actual.writeFileAtomic>) => {
+    if (recordWriteFailure.enabled && String(args[0]).endsWith('interactive-sessions.json')) throw new Error('write failed');
+    return actual.writeFileAtomic(...args);
+  } };
+});
+
 const mockCreateStore = (cwd: string): unknown => storeOverride.current?.(cwd);
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
 
 vi.mock('ink', () => ({
   render: (...args: unknown[]) => mockRender(...args),
@@ -86,6 +99,7 @@ vi.mock('ink', () => ({
   Box: () => null,
   Text: () => null,
   useInput: () => undefined,
+  useCursor: () => ({ setCursorPosition: () => undefined }),
   useStdout: () => ({ stdout: undefined }),
   useWindowSize: () => ({ columns: 100, rows: 24 }),
 }));
@@ -134,9 +148,19 @@ vi.mock('../features/interactive/sessionSelector.js', () => ({
   selectRecentSession: (...args: unknown[]) => mockSelectRecentSession(...args),
 }));
 
-vi.mock('../features/interactive/conversationLoop.js', () => ({
-  displayAndClearSessionState: (...args: unknown[]) => mockDisplayAndClearSessionState(...args),
-}));
+vi.mock('../infra/config/paths.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/paths.js')>();
+  return {
+    ...actual,
+    getProjectConfigDir: (projectDir: string) => projectDir === '/repo'
+      ? join(actual.getGlobalConfigDir(), 'synthetic-project', '.takt')
+      : actual.getProjectConfigDir(projectDir),
+    ensureDir: (directory: string) => {
+      // The synthetic cwd must not create a directory outside the test sandbox.
+      if (directory !== '/repo/.takt') actual.ensureDir(directory);
+    },
+  };
+});
 
 vi.mock('../features/interactive/interactive-summary.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/interactive-summary.js')>()),
@@ -166,7 +190,6 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../infra/config/index.js')>()),
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
   loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
-  takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
   updatePersonaSession: (...args: unknown[]) => mockUpdatePersonaSession(...args),
 }));
 
@@ -178,9 +201,14 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 import { resolveAssistantProviderModelFromConfig, type AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { composeRuntimeProviderOverride } from '../infra/config/runtime-provider/override.js';
 import { runTui } from '../features/tui/runTui.js';
+import { runTuiTaskConversation } from '../features/tui/runTuiTask.js';
+import { makeSessionContext } from './test-helpers.js';
 import { takeTerminalOwnership } from '../features/tui/terminalOwnership.js';
 import { ProviderNotConfiguredError } from '../features/interactive/sessionInitialization.js';
 import { getProvider } from '../infra/providers/index.js';
+import * as prompt from '../shared/prompt/index.js';
+import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
+import * as sessionExistence from '../features/interactive/interactiveSessionExistence.js';
 
 const originalStdoutWrite = process.stdout.write;
 
@@ -258,7 +286,7 @@ function startRun(overrides?: Partial<RunTuiOptions>) {
 
 function createConversationDouble(
   overrides: Partial<TuiConversationWithSourceContext> = {},
-): TuiConversationWithSourceContext {
+): TuiConversationWithSourceContext & { recordOperationResult: (notice: string) => void } {
   let sourceContext: string | undefined;
   return {
     lang: 'en' as const,
@@ -275,6 +303,7 @@ function createConversationDouble(
     }),
     resumeSession: vi.fn(),
     recordRejectedDraft: vi.fn(),
+    recordOperationResult: vi.fn(),
     snapshotHistory: vi.fn(() => []),
     getSessionId: vi.fn(() => undefined),
     setEffort: vi.fn(),
@@ -345,6 +374,8 @@ afterEach(() => {
   process.stdout.write = originalStdoutWrite;
   storeOverride.current = undefined;
   realTuiConversation.current = false;
+  recordWriteFailure.enabled = false;
+  vi.restoreAllMocks();
   mockSelectAction.mockReset();
 });
 
@@ -355,6 +386,7 @@ beforeEach(() => {
   realTuiConversation.current = false;
   // clearAllMocks keeps implementations, and some cases install a throwing one.
   mockCreateTuiConversation.mockReset();
+  mockResolveFormalSpecConfiguration.mockResolvedValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
   // The run talks to the conversation between mounts — a resumed session, a
   // rejected draft — so the double answers that contract by default.
   mockCreateTuiConversation.mockReturnValue(createConversationDouble());
@@ -374,7 +406,6 @@ beforeEach(() => {
   mockRunAssistantRetryCommand.mockResolvedValue('The task was queued.');
   mockSelectAction.mockResolvedValue('execute');
   mockLoadPersonaSessions.mockReturnValue({});
-  mockTakeSessionState.mockReturnValue(null);
   mockGetWorkflowDescription.mockReturnValue({
     name: 'default',
     description: 'default workflow',
@@ -384,6 +415,360 @@ beforeEach(() => {
 });
 
 describe('runTui', () => {
+  describe('operation feedback in the same conversation', () => {
+    const input = (text: string) => ({
+      text, abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+    });
+
+    it.each([
+      ['tell', 'Sent to running-login-fix (instruction #3).'],
+      ['tell', 'Tell cancelled. No instruction was sent.'],
+      ['tell', 'Tell target is stale: running-login-fix.'],
+      ['tell', 'Tell generation failed: provider unavailable.'],
+      ['tell', getLabel('tui.errors.tellSelectionFailed', 'en', { error: 'Interactive selection input exceeds 65536 byte limit' })],
+      ['assistant-retry', 'Task saved: retried-login-fix.'],
+      ['assistant-retry', 'Retry cancelled. No task was changed.'],
+      ['assistant-retry', 'Retry target is stale: failed-login-fix.'],
+      ['assistant-retry', 'Retry generation failed: provider unavailable.'],
+      ['assistant-requeue', 'Task requeued: failed-login-fix.'],
+      ['assistant-requeue', 'Requeue cancelled. No task was changed.'],
+      ['assistant-requeue', 'Requeue target is stale: failed-login-fix.'],
+      ['assistant-requeue', 'Requeue failed: task storage unavailable.'],
+    ] as const)('should retain the %s notice "%s" in history and the next provider input', async (id, notice) => {
+      realTuiConversation.current = true;
+      const handler = id === 'tell' ? mockRunTellCommand : mockRunAssistantRetryCommand;
+      handler.mockResolvedValueOnce(notice);
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun();
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        first.onExit({ kind: 'handoff', id, text: '' }, { history: ['Prepare a login fix'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        expect(next.initialEntries).toEqual([{ role: 'system', content: notice }]);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        expect(next.conversation.snapshotHistory?.().filter((message) => message.operationResult).map((message) => message.content))
+          .toEqual([notice]);
+        expect(next.conversation.resolveLocalCommand('/accept')).toMatchObject({
+          kind: 'execute', task: 'Original proposal', origin: 'accept',
+        });
+        expect(call).toHaveBeenCalledTimes(1);
+        await expect(next.conversation.submit(input('どうなった？'))).resolves.toMatchObject({ kind: 'assistant_response' });
+        expect(call.mock.calls[1]?.[0]).toContain(notice);
+        expect(call.mock.calls[1]?.[0]).toContain('どうなった？');
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+
+    it.each([
+      ['save_task', 'Task saved: actual-login-fix.'],
+      ['create_issue', 'Issue #42 created. Task saved: actual-issue-fix.'],
+      ['create_issue', 'Issue #42 created. No task was saved: disk full.'],
+      ['execute', 'Execution finished.'],
+      ['execute', describeExecutionResult({ success: false, reason: 'workflow aborted' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false, reason: 'Workflow not found: missing-workflow' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false, reason: 'Managed provider installation was declined' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false }, 'en').notice],
+    ] as const)('should record the /go %s result "%s" in the same conversation', async (action, notice) => {
+      realTuiConversation.current = true;
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+      mockSelectAction.mockResolvedValueOnce(action);
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        first.onExit({ kind: 'choose_action', origin: 'go', task: 'Original proposal' }, { history: ['/go'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        expect(next.initialEntries).toEqual([{ role: 'system', content: notice }]);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        expect(next.conversation.resolveLocalCommand('/accept')).toMatchObject({
+          kind: 'execute', task: 'Original proposal', origin: 'accept',
+        });
+        expect(call).toHaveBeenCalledTimes(1);
+        await next.conversation.submit(input('どうなった？'));
+        expect(call.mock.calls[1]?.[0]).toContain(notice);
+        expect(call.mock.calls[1]?.[0]).toContain('どうなった？');
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+
+    it.each(['tell', 'assistant-retry', 'assistant-requeue'] as const)('should record the %s result after a settings rebuild succeeds or fails', async (id) => {
+      for (const rebuildFails of [true, false]) {
+        realTuiConversation.current = true;
+        mockRunTellCommand.mockClear();
+        mockRunAssistantRetryCommand.mockClear();
+        const handler = id === 'tell' ? mockRunTellCommand : mockRunAssistantRetryCommand;
+        const completedNotice = `${id} completed`;
+        handler.mockResolvedValue(completedNotice);
+        const call = vi.fn().mockResolvedValue({
+          persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+        });
+        const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+        const tree = scriptRender();
+        const run = startRun();
+        try {
+          await waitForMount(tree, 1);
+          const first = tree.conversationProps();
+          await first.conversation.submit(input('Prepare a login fix'));
+          first.onExit({ kind: 'handoff', id: 'model', text: 'temporary-model' }, { history: [], queue: [] });
+          await waitForMount(tree, 2);
+          if (rebuildFails) {
+            mockGetWorkflowDescription.mockImplementationOnce(() => { throw new Error('rebuild failed'); });
+          }
+          tree.conversationProps().onExit({ kind: 'handoff', id, text: 'follow up' }, { history: [], queue: [] });
+          await waitForMount(tree, 3);
+
+          const next = tree.conversationProps();
+          const notice = next.initialEntries.find((entry) => entry.role === 'system')?.content;
+          expect(notice).toBeDefined();
+          if (rebuildFails) {
+            expect(notice).toMatch(/failed/i);
+            expect(notice).toContain('rebuild failed');
+            expect(mockRunTellCommand).not.toHaveBeenCalled();
+            expect(mockRunAssistantRetryCommand).not.toHaveBeenCalled();
+          } else {
+            expect(notice).toBe(completedNotice);
+            expect(handler).toHaveBeenCalledTimes(1);
+            expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+              inlineText: 'follow up',
+              ...(id === 'tell' ? {} : { command: id === 'assistant-retry' ? 'retry' : 'requeue' }),
+            }));
+          }
+          const records = next.conversation.snapshotHistory?.().filter((message) => message.operationResult);
+          expect(records?.map((message) => message.content)).toEqual([notice]);
+          await expect(next.conversation.submit(input('どうなった？'))).resolves.toMatchObject({ kind: 'assistant_response' });
+          expect(call).toHaveBeenCalledTimes(2);
+          expect(call.mock.calls[1]?.[0]).toContain(notice);
+          expect(call.mock.calls[1]?.[0]).toContain('どうなった？');
+        } finally {
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+          );
+          const finished = await run;
+          if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+          setup.mockRestore();
+        }
+      }
+    });
+
+    it.each(['save_task', 'create_issue', 'execute'] as const)('should record a /go %s exception and process the next question in the same run', async (action) => {
+      realTuiConversation.current = true;
+      const reason = 'Active task target already exists: login-fix';
+      const dispatch = vi.fn().mockRejectedValue(new Error(reason));
+      mockSelectAction.mockResolvedValueOnce(action).mockResolvedValue('continue');
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        const instruction = await first.conversation.createInstruction(input(''));
+        expect(instruction).toMatchObject({ kind: 'task_instruction' });
+        if (instruction.kind !== 'task_instruction') throw new Error('Expected a task instruction');
+        first.onExit({ kind: 'choose_action', origin: 'go', task: instruction.task }, { history: ['/go'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        const notice = next.initialEntries.find((entry) => entry.role === 'system')?.content;
+        expect(notice).toContain(reason);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        await next.conversation.submit(input('積まれた？'));
+        expect(call.mock.calls[2]?.[0]).toContain(reason);
+        expect(call.mock.calls[2]?.[0]).toContain('積まれた？');
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run.catch(() => undefined);
+        if (finished?.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+
+    it('should record a cancelled /go save and answer the next question without reopening its selector', async () => {
+      realTuiConversation.current = true;
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
+      mockSelectAction.mockResolvedValueOnce('save_task').mockResolvedValue('continue');
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        first.onExit({ kind: 'choose_action', origin: 'go', task: 'Original proposal' }, { history: ['/go'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        expect(mockSelectAction).toHaveBeenCalledTimes(1);
+        const notice = next.initialEntries.find((entry) => entry.role === 'system')?.content;
+        expect(notice).toMatch(/cancel/i);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        await next.conversation.submit(input('積まれた？'));
+        expect(call.mock.calls[1]?.[0]).toContain(notice);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+  });
+
+  it.each(['en', 'ja'] as const)('reports Issue-only creation as an Issue notice in %s and redisplays the conversation', async (lang) => {
+    const tree = scriptRender();
+    const notice = getLabel('interactive.operation.issueOnlyCreated', lang, { issueNumber: '123' });
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+    mockSelectAction.mockResolvedValueOnce('create_issue_only');
+    const run = startRun({ lang, dispatch });
+    await waitForMount(tree, 1);
+
+    try {
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', origin: 'go', task: 'Issue instruction' }, { history: ['/go'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith('default', expect.objectContaining({
+        action: 'create_issue_only', task: 'Issue instruction',
+      }));
+      expect(tree.conversationProps().initialEntries).toEqual([
+        { role: 'system', content: notice },
+      ]);
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+      );
+      const outcome = await run;
+      outcome.kind === 'selected' && outcome.result.cleanupAttachments?.();
+    }
+  });
+
+  it.each([true, false])('should wait for the initial formal specification answer=%s before mounting Ink', async (mode) => {
+    let answer!: (configuration: { mode: boolean; comments: boolean; modelCheckTimeoutSeconds: number }) => void;
+    mockResolveFormalSpecConfiguration.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    const tree = scriptRender();
+    const run = startRun();
+    await vi.waitFor(() => expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledOnce());
+
+    expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledWith(expect.any(String));
+    expect(mockCreateTuiConversation).not.toHaveBeenCalled();
+    expect(tree.mounts.count).toBe(0);
+    answer({ mode, comments: false, modelCheckTimeoutSeconds: 45 });
+    await waitForMount(tree, 1);
+
+    try {
+      expect(mockCreateTuiConversation).toHaveBeenCalledOnce();
+      expect(mockCreateTuiConversation.mock.calls[0]![0].plan.strategy.formalSpec).toBe(mode);
+      expect(mockCreateTuiConversation.mock.calls[0]![0].plan.strategy.formalSpecComments).toBe(false);
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    }
+  });
+
+  it('should allow cancelling resumed formal specification configuration through the assistant plan', async () => {
+    const tree = scriptRender();
+    const run = startRun();
+    await waitForMount(tree, 1);
+    mockResolveFormalSpecConfiguration.mockResolvedValueOnce(null);
+
+    try {
+      const plan = mockCreateTuiConversation.mock.calls[0]![0].plan;
+      await expect(plan.strategy.resolveResumedSessionConfiguration()).resolves.toBeNull();
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(1, expect.any(String));
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenNthCalledWith(2, expect.any(String), { allowCancel: true });
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    }
+  });
+
+  it('should keep persona mode and carried input after cancelling formal specification during a mode change', async () => {
+    const initial = createConversationDouble();
+    mockCreateTuiConversation.mockReturnValue(initial);
+    mockSelectInteractiveMode.mockResolvedValueOnce('persona').mockResolvedValueOnce('assistant');
+    mockGetWorkflowDescription.mockReturnValue({
+      name: 'default', description: 'default workflow', workflowStructure: '1. plan', stepPreviews: [],
+      firstStep: { personaDisplayName: 'Reviewer', personaContent: 'Review the task.', allowedTools: ['Read'] },
+    });
+    mockResolveFormalSpecConfiguration.mockResolvedValueOnce(null);
+    const tree = scriptRender();
+    const run = startRun();
+    await waitForMount(tree, 1);
+
+    try {
+      tree.conversationProps().onExit(
+        { kind: 'handoff', id: 'mode' },
+        { history: ['prior input'], queue: ['queued input'] },
+      );
+      await waitForMount(tree, 2);
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledOnce();
+      expect(mockResolveFormalSpecConfiguration).toHaveBeenCalledWith(expect.any(String), { allowCancel: true });
+      expect(tree.conversationProps().initialHistory).toEqual(['prior input']);
+      expect(tree.conversationProps().initialQueue).toEqual(['queued input']);
+
+      await tree.conversationProps().conversation.submit({
+        text: 'continue the task', abortSignal: new AbortController().signal, onAssistantChunk: () => undefined,
+      });
+
+      expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+      expect(initial.submit).toHaveBeenCalledOnce();
+    } finally {
+      tree.conversationProps().onExit(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [] },
+      );
+      await run;
+    }
+  });
+
   it('should retain an interrupted message across a model settings rebuild in the same run', async () => {
     realTuiConversation.current = true;
     let settle!: (value: { persona: string; status: 'done'; content: string; timestamp: Date }) => void;
@@ -470,8 +855,6 @@ describe('runTui', () => {
       'en',
       ['assistant', 'grill-me', 'persona'],
     );
-    // The banner is printed where the readline conversation prints it.
-    expect(mockDisplayAndClearSessionState).toHaveBeenCalledWith('/repo', 'en');
     expect(tree.mounts.count).toBe(1);
     const intro = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
     expect(intro).toBe(
@@ -518,6 +901,12 @@ describe('runTui', () => {
       { history: ['carried by the view'], queue: [] },
     );
     await waitForMount(tree, 2);
+    const initialEntries = tree.conversationProps().initialEntries;
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
 
     expect(mockRunTellCommand).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
@@ -528,6 +917,7 @@ describe('runTui', () => {
         { role: 'assistant', content: 'The task is currently in review.' },
       ],
       preferredRunSlug: 'current-run',
+      showProgress: true,
       sessionContext: expect.objectContaining({
         providerType: 'mock',
         lang: 'en',
@@ -535,19 +925,13 @@ describe('runTui', () => {
     }));
     expect(currentReference).toHaveBeenCalled();
     expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
-    expect(tree.conversationProps().initialEntries).toEqual([{
+    expect(initialEntries).toEqual([{
       role: 'system',
       content: 'The instruction was sent.',
     }]);
-
-    tree.conversationProps().onExit(
-      { kind: 'result', result: { action: 'cancel', task: '' } },
-      { history: [], queue: [] },
-    );
-    await run;
   });
 
-  it('should replace Source Context through /issue and keep the TUI conversation active', async () => {
+  it('should generate instructions before and after /issue in the same TUI conversation', async () => {
     realTuiConversation.current = true;
     const issueProvider = installIssueProvider();
     const providerCalls: Array<{ prompt: string; sessionId?: string }> = [];
@@ -556,7 +940,11 @@ describe('runTui', () => {
       return {
         persona: 'interactive',
         status: 'done' as const,
-        content: 'Generated task instruction',
+        content: providerCalls.length === 2
+          ? '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.'
+          : providerCalls.length === 4
+            ? '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.'
+            : 'Conversation response',
         timestamp: new Date(),
         sessionId: 'ai-session',
       };
@@ -584,6 +972,12 @@ describe('runTui', () => {
       expect(providerCalls).toHaveLength(1);
       expect(providerCalls[0]?.prompt).toContain('## Issue #123: Issue 123');
 
+      await expect(conversation.createInstruction(input(''))).resolves.toMatchObject({
+        kind: 'task_instruction', task: '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.',
+      });
+      expect(providerCalls[1]?.prompt).toContain('## Issue #123: Issue 123');
+      conversation.recordRejectedDraft?.('# Fix first Issue\n\nIssue: #123\n\nFix the first problem.');
+
       const command = conversation.resolveLocalCommand('/issue #456');
       expect(conversation.isCommandLine('/issue #456')).toBe(true);
       expect(command).toMatchObject({ kind: 'handoff', text: '#456' });
@@ -594,7 +988,7 @@ describe('runTui', () => {
       tree.conversationProps().onExit(command, { history: ['/issue #456'], queue: [] });
       await waitForMount(tree, 2);
 
-      expect(providerCalls).toHaveLength(1);
+      expect(providerCalls).toHaveLength(2);
       expect(issueProvider.checkCliStatus).toHaveBeenCalledWith('/repo');
       expect(issueProvider.fetchIssue).toHaveBeenCalledWith(456, '/repo');
       expect(tree.conversationProps().initialEntries.some((entry) =>
@@ -603,16 +997,17 @@ describe('runTui', () => {
 
       await expect(tree.conversationProps().conversation.submit(input('after the Issue change')))
         .resolves.toMatchObject({ kind: 'assistant_response' });
-      expect(providerCalls[1]?.prompt).toContain('## Issue #456: Issue 456');
-      expect(providerCalls[1]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[1]?.sessionId).toBe('ai-session');
-
-      await expect(tree.conversationProps().conversation.createInstruction(input('')))
-        .resolves.toMatchObject({ kind: 'task_instruction', task: 'Generated task instruction' });
       expect(providerCalls[2]?.prompt).toContain('## Issue #456: Issue 456');
       expect(providerCalls[2]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[2]?.prompt).toContain('before the Issue change');
-      expect(providerCalls[2]?.prompt).toContain('after the Issue change');
+      expect(providerCalls[2]?.sessionId).toBe('ai-session');
+
+      await expect(tree.conversationProps().conversation.createInstruction(input('')))
+        .resolves.toMatchObject({ kind: 'task_instruction', task: '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.' });
+      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[3]?.prompt).toContain('before the Issue change');
+      expect(providerCalls[3]?.prompt).toContain('after the Issue change');
+      expect(providerCalls[3]?.prompt).toContain('# Fix first Issue\n\nIssue: #123');
 
       const failedCommand = conversation.resolveLocalCommand('/issue 999999');
       expect(failedCommand).toMatchObject({ kind: 'handoff', text: '999999' });
@@ -622,13 +1017,18 @@ describe('runTui', () => {
       tree.conversationProps().onExit(failedCommand, { history: ['/issue 999999'], queue: [] });
       await waitForMount(tree, 3);
 
-      expect(providerCalls).toHaveLength(3);
+      expect(providerCalls).toHaveLength(4);
       expect(tree.conversationProps().initialEntries.some((entry) => entry.content.includes('#999999'))).toBe(true);
+      const failureNotice = tree.conversationProps().initialEntries.find((entry) => entry.content.includes('#999999'))?.content;
+      expect(failureNotice).toBeDefined();
+      expect(tree.conversationProps().conversation.snapshotHistory?.().map((message) => message.content))
+        .not.toContain(failureNotice);
       await expect(tree.conversationProps().conversation.submit(input('after the failed Issue change')))
         .resolves.toMatchObject({ kind: 'assistant_response' });
-      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
-      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[3]?.sessionId).toBe('ai-session');
+      expect(providerCalls[4]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[4]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[4]?.prompt).not.toContain(failureNotice);
+      expect(providerCalls[4]?.sessionId).toBe('ai-session');
     } finally {
       tree.conversationProps().onExit(
         { kind: 'result', result: { action: 'cancel', task: '' } },
@@ -639,7 +1039,7 @@ describe('runTui', () => {
     }
   });
 
-  it('should retain the replaced Source Context when a setting handoff rebuilds the conversation', async () => {
+  it.each([true, false])('should retain the replaced Source Context and permission %s when a setting handoff rebuilds the conversation', async (customScripts) => {
     installIssueProvider();
     mockDetermineWorkflow.mockResolvedValueOnce('default').mockResolvedValueOnce('review');
     const initial = createConversationDouble();
@@ -647,7 +1047,8 @@ describe('runTui', () => {
       .mockReturnValueOnce(initial)
       .mockReturnValueOnce(createConversationDouble());
     const tree = scriptRender();
-    const run = startRun();
+    const policy = { customScripts };
+    const run = startRun({ getWorkflowSystemCommandsPolicy: () => policy });
     await waitForMount(tree, 1);
 
     tree.conversationProps().onExit(
@@ -660,6 +1061,7 @@ describe('runTui', () => {
       { history: [], queue: [] },
     );
     await waitForMount(tree, 3);
+    expect(mockDetermineWorkflow).toHaveBeenLastCalledWith('/repo', undefined, policy);
     await tree.conversationProps().conversation.submit({
       text: 'continue after the workflow change',
       abortSignal: new AbortController().signal,
@@ -669,6 +1071,7 @@ describe('runTui', () => {
     expect(mockCreateTuiConversation.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
       sourceContext: expect.stringContaining('## Issue #456: Issue 456'),
     }));
+    expect(mockGetWorkflowDescription).toHaveBeenLastCalledWith('review', '/repo', undefined, '/repo', undefined, undefined, policy);
 
     tree.conversationProps().onExit(
       { kind: 'result', result: { action: 'cancel', task: '' } },
@@ -760,12 +1163,19 @@ describe('runTui', () => {
       { history: [], queue: [] },
     );
     await waitForMount(tree, 2);
+    const initialEntries = tree.conversationProps().initialEntries;
+    tree.conversationProps().onExit(
+      { kind: 'result', result: { action: 'cancel', task: '' } },
+      { history: [], queue: [] },
+    );
+    await run;
 
     expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
       lang: 'en',
       command: 'retry',
       inlineText: 'restart from the beginning',
+      showProgress: true,
       history,
       sessionContext: expect.objectContaining({
         providerType: 'mock',
@@ -775,16 +1185,10 @@ describe('runTui', () => {
       formalSpec: expect.any(Boolean),
     }));
     expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
-    expect(tree.conversationProps().initialEntries).toEqual([{
+    expect(initialEntries).toEqual([{
       role: 'system',
       content: 'The task was queued.',
     }]);
-
-    tree.conversationProps().onExit(
-      { kind: 'result', result: { action: 'cancel', task: '' } },
-      { history: [], queue: [] },
-    );
-    await run;
   });
 
   it('routes the assistant /requeue handoff as requeue through the shared handler', async () => {
@@ -799,18 +1203,18 @@ describe('runTui', () => {
       { history: [], queue: [] },
     );
     await waitForMount(tree, 2);
-
-    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
-      command: 'requeue',
-      inlineText: 'resume from review',
-      sessionContext: expect.objectContaining({ sessionId: undefined }),
-    }));
-
     tree.conversationProps().onExit(
       { kind: 'result', result: { action: 'cancel', task: '' } },
       { history: [], queue: [] },
     );
     await run;
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'requeue',
+      inlineText: 'resume from review',
+      showProgress: true,
+      sessionContext: expect.objectContaining({ sessionId: undefined }),
+    }));
   });
 
   it.each([
@@ -872,7 +1276,6 @@ describe('runTui', () => {
 
     await expect(startRun()).resolves.toEqual({ kind: 'cancelled' });
     expect(mockRender).not.toHaveBeenCalled();
-    expect(mockDisplayAndClearSessionState).not.toHaveBeenCalled();
   });
 
   describe('interactive setting handoffs', () => {
@@ -880,6 +1283,22 @@ describe('runTui', () => {
       text: 'continue with the task',
       abortSignal: new AbortController().signal,
       onAssistantChunk: vi.fn(),
+    });
+
+    it('uses the retained command permission when changing workflows after a PR execution', async () => {
+      let policy: { customScripts: boolean } | undefined;
+      const tree = scriptRender();
+      const run = startRun({ getWorkflowSystemCommandsPolicy: () => policy });
+      await waitForMount(tree, 1);
+      policy = { customScripts: false };
+      mockDetermineWorkflow.mockResolvedValueOnce('review');
+      tree.conversationProps().onExit({ kind: 'handoff', id: 'workflow' }, { history: [], queue: [] });
+      await waitForMount(tree, 2);
+      expect(mockDetermineWorkflow).toHaveBeenLastCalledWith('/repo', undefined, policy);
+      await tree.conversationProps().conversation.submit(submitInput());
+      expect(mockGetWorkflowDescription).toHaveBeenLastCalledWith('review', '/repo', undefined, '/repo', undefined, undefined, policy);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await run;
     });
 
     describe.each(['workflow', 'mode', 'provider'] as const)('/%s selector cancellation', (id) => {
@@ -1334,7 +1753,7 @@ describe('runTui', () => {
         workflowStructure: '1. plan',
         stepPreviews: [],
       }));
-      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Execution finished.' });
       const tree = scriptRender();
       const run = startRun({ dispatch });
       await waitForMount(tree, 1);
@@ -1819,6 +2238,9 @@ describe('runTui', () => {
 
       expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
       expect(tree.conversationProps().modelLabel()).toContain('claude');
+      expect(inspectProviderInstallation).toHaveBeenLastCalledWith('claude-sdk');
+      expect(vi.mocked(inspectProviderInstallation).mock.invocationCallOrder.at(-1))
+        .toBeLessThan(mockRender.mock.invocationCallOrder[1]!);
       expect(tree.conversationProps().modelLabel()).not.toContain('mock-model');
       expect(recovered.submit).not.toHaveBeenCalled();
       expect(await tree.conversationProps().conversation.submit(submitInput())).toMatchObject({
@@ -1883,6 +2305,65 @@ describe('runTui', () => {
       );
       await run;
     });
+
+    it.each(['assistant', 'grill-me'] as const)(
+      'should switch in %s mode to a provider that rejects the assigned MCP servers and report it when the conversation is rebuilt',
+      async (mode) => {
+        const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-provider-switch-mcp-'));
+        try {
+          mkdirSync(join(projectDir, '.takt'), { recursive: true });
+          // claude accepts sse, codex accepts only stdio and http.
+          writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
+            'version: 1',
+            'mcp:',
+            '  servers:',
+            '    backlog:',
+            '      type: sse',
+            '      url: https://example.test/mcp',
+            '  targets:',
+            '    personas:',
+            '      assistant:',
+            '        servers: [backlog]',
+            '',
+          ].join('\n'));
+          mockSelectInteractiveMode.mockResolvedValue(mode);
+          mockResolveAssistantProviderModel.mockImplementation((
+            _cwd: string,
+            overrides?: { provider?: string; model?: string },
+          ) => ({
+            runtimeManaged: false,
+            provider: overrides?.provider ?? 'claude',
+            model: overrides?.model ?? 'mock-model',
+          }));
+          mockSelectInteractiveProvider.mockResolvedValue('codex');
+          mockCreateTuiConversation.mockReturnValueOnce(createConversationDouble());
+          const tree = scriptRender();
+          const run = startRun({ cwd: projectDir });
+          await waitForMount(tree, 1);
+
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id: 'provider' },
+            { history: ['/provider'], queue: [] },
+          );
+          await waitForMount(tree, 2);
+
+          expect(tree.conversationProps().initialEntries ?? []).toEqual([]);
+          await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toMatchObject({
+            kind: 'error',
+            message: expect.stringContaining('Failed to switch conversation settings:'),
+          });
+          expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+          await expect(run).resolves.toBeDefined();
+        } finally {
+          rmSync(projectDir, { recursive: true, force: true });
+        }
+      },
+    );
 
     it('should retain real conversation history when switching to an MCP-unsupported provider', async () => {
       realTuiConversation.current = true;
@@ -2452,6 +2933,82 @@ describe('runTui', () => {
   });
 
   describe('selectors between mounts', () => {
+    it.each(['resident', 'task'] as const)('keeps resume and subsequent input usable in %s TUI when record recovery cannot write', async (mode) => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-record-recovery-'));
+      const recordsPath = join(projectDir, '.takt', 'interactive-sessions.json');
+      mkdirSync(dirname(recordsPath), { recursive: true });
+      writeFileSync(recordsPath, '{invalid json');
+      recordWriteFailure.enabled = true;
+      realTuiConversation.current = true;
+      const call = vi.fn(async () => ({ persona: 'interactive', status: 'done' as const,
+        content: 'reply', timestamp: new Date(), sessionId: 'conversation' }));
+      vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call } as ProviderAgent);
+      mockSelectRecentSession.mockImplementation(async (...args) => {
+        const actual = await vi.importActual<typeof import('../features/interactive/sessionSelector.js')>('../features/interactive/sessionSelector.js');
+        return actual.selectRecentSession(args[0], args[1], args[2], args[3]);
+      });
+      vi.spyOn(prompt, 'selectOption').mockImplementation(async (_message, choices) => {
+        expect(choices).toEqual(expect.arrayContaining([expect.objectContaining({ label: 'first', value: 'conversation' })]));
+        expect(readFileSync(recordsPath, 'utf8')).toBe('{invalid json');
+        recordWriteFailure.enabled = false;
+        return '__new__';
+      });
+      const tree = scriptRender();
+      const run = mode === 'resident' ? startRun({ cwd: projectDir }) : runTuiTaskConversation({
+        cwd: projectDir, plan: { ctx: makeSessionContext({ provider: getProvider('mock') }), strategy: {
+          systemPrompt: 'system', allowedTools: [], formalSpec: false, modelCheckTimeoutSeconds: 300,
+          transformPrompt: (message: string) => message, introMessage: 'task conversation',
+        } },
+      });
+      const input = (text: string) => ({ text, abortSignal: new AbortController().signal, onAssistantChunk: vi.fn() });
+      try {
+        await waitForMount(tree, 1);
+        await tree.conversationProps().conversation.submit(input('first'));
+        tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
+        await waitForMount(tree, 2);
+        await tree.conversationProps().conversation.submit(input('second'));
+        expect(JSON.parse(readFileSync(recordsPath, 'utf8'))).toMatchObject([
+          { sessionId: 'conversation', inputs: ['first', 'second'], response: 'reply' },
+        ]);
+        tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    });
+
+    it('uses the changed provider for the session list in the same TUI', async () => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-records-'));
+      recordTurn({ cwd: projectDir, provider: 'mock', sessionId: 'mock-session', input: 'mock input', response: 'mock reply' });
+      recordTurn({ cwd: projectDir, provider: 'codex', sessionId: 'codex-session', input: 'codex input', response: 'codex reply' });
+      const displayed: string[][] = [];
+      vi.spyOn(sessionExistence, 'interactiveSessionExists').mockResolvedValue(undefined);
+      vi.spyOn(prompt, 'selectOption').mockImplementation(async (_message, choices) => {
+        displayed.push(choices.map((choice) => String(choice.value)));
+        return '__new__';
+      });
+      mockSelectRecentSession.mockImplementation(async (...args) => {
+        const actual = await vi.importActual<typeof import('../features/interactive/sessionSelector.js')>('../features/interactive/sessionSelector.js');
+        return actual.selectRecentSession(args[0], args[1], args[2], args[3]);
+      });
+      const tree = scriptRender();
+      mockSelectInteractiveProvider.mockResolvedValue('codex');
+      const run = startRun({ cwd: projectDir });
+      try {
+        await waitForMount(tree, 1);
+        tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
+        await waitForMount(tree, 2);
+        tree.conversationProps().onExit({ kind: 'handoff', id: 'provider' }, { history: [], queue: [] });
+        await waitForMount(tree, 3);
+        tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
+        await waitForMount(tree, 4);
+        expect(displayed).toEqual([['__new__', 'mock-session'], ['__new__', 'codex-session']]);
+        tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    });
     it('should run the action selector with Ink unmounted and finish on its choice', async () => {
       const tree = scriptRender();
       mockSelectAction.mockImplementation(() => {
@@ -2473,7 +3030,7 @@ describe('runTui', () => {
       expect(tree.mounts.count).toBe(1);
     });
 
-    it('should reopen the action menu after a cancelled save without showing a saved notice', async () => {
+    it('should return to the conversation after a cancelled save without reopening the action menu', async () => {
       const tree = scriptRender();
       const attachment = {
         placeholder: '[Image #1]',
@@ -2493,7 +3050,7 @@ describe('runTui', () => {
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('continue');
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
       const run = startRun({ dispatch });
       let result: Awaited<typeof run> | undefined;
       let exitRequested = false;
@@ -2507,19 +3064,9 @@ describe('runTui', () => {
         );
         await waitForMount(tree, 2);
 
-        expect(mockSelectAction).toHaveBeenCalledTimes(3);
-        expect(mockSelectAction.mock.calls).toEqual([
-          ['Review task'],
-          ['Review task'],
-          ['Review task'],
-        ]);
-        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(mockSelectAction).toHaveBeenCalledExactlyOnceWith('Review task');
+        expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch).toHaveBeenNthCalledWith(1, 'default', expect.objectContaining({
-          action: 'save_task',
-          task: 'Review task',
-          attachments: [attachment],
-        }));
-        expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({
           action: 'save_task',
           task: 'Review task',
           attachments: [attachment],
@@ -2556,7 +3103,7 @@ describe('runTui', () => {
     });
 
     it.each(['execute', 'create_issue'] as const)(
-      'should dispatch %s after a cancelled save with the confirmed task and attachments',
+      'should dispatch a newly requested %s after returning from a cancelled save with the attachments',
       async (action) => {
         const tree = scriptRender();
         const attachment = {
@@ -2577,8 +3124,8 @@ describe('runTui', () => {
           .mockResolvedValueOnce('save_task')
           .mockResolvedValueOnce(action);
         const dispatch = vi.fn()
-          .mockResolvedValueOnce({ kind: 'cancelled' })
-          .mockResolvedValueOnce({ kind: 'dispatched' });
+          .mockResolvedValueOnce({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' })
+          .mockResolvedValueOnce({ kind: 'dispatched', notice: 'Execution finished.' });
         const run = startRun({ dispatch });
         let result: Awaited<typeof run> | undefined;
         let exitRequested = false;
@@ -2591,6 +3138,13 @@ describe('runTui', () => {
             { history: ['Review task'], queue: [] },
           );
           await waitForMount(tree, 2);
+
+          expect(mockSelectAction).toHaveBeenCalledTimes(1);
+          tree.conversationProps().onExit(
+            { kind: 'choose_action', task: 'Review task', origin: 'go' },
+            { history: ['Review task', '/go'], queue: [] },
+          );
+          await waitForMount(tree, 3);
 
           expect(mockSelectAction.mock.calls).toEqual([
             ['Review task'],
@@ -2608,7 +3162,7 @@ describe('runTui', () => {
           }));
           expect(attachmentStore.cleanup).not.toHaveBeenCalled();
           expect(attachmentStore.seal).not.toHaveBeenCalled();
-          expect(tree.conversationProps().initialHistory).toEqual(['Review task']);
+          expect(tree.conversationProps().initialHistory).toEqual(['Review task', '/go']);
 
           tree.conversationProps().onExit(
             { kind: 'result', result: { action: 'cancel', task: '' } },
@@ -2795,9 +3349,9 @@ describe('runTui', () => {
       });
     });
 
-    it('should load the chosen session and mount the conversation again', async () => {
+    it.each([undefined, 'Cancelled'])('should remount after session selection and propagate the resume notice=%s', async (notice) => {
       const tree = scriptRender();
-      const conversation = { resumeSession: vi.fn(), commandAvailability: {} };
+      const conversation = { resumeSession: vi.fn(async () => notice), commandAvailability: {} };
       mockCreateTuiConversation.mockReturnValue(conversation);
       mockSelectRecentSession.mockResolvedValue('session-abc');
       const run = startRun();
@@ -2806,10 +3360,16 @@ describe('runTui', () => {
       tree.conversationProps().onExit({ kind: 'resume_session' }, { history: ['/resume'], queue: [] });
       await waitForMount(tree, 2);
 
-      expect(mockSelectRecentSession).toHaveBeenCalledWith('/repo', 'en');
+      expect(mockSelectRecentSession).toHaveBeenCalledWith('/repo', 'en', 'mock', expect.anything());
       expect(conversation.resumeSession).toHaveBeenCalledWith('session-abc');
       expect(tree.mounts.count).toBe(2);
       expect(tree.conversationProps().initialHistory).toEqual(['/resume']);
+      expect(tree.conversationProps().initialEntries).toEqual(
+        notice === undefined ? [] : [{ role: 'system', content: notice }],
+      );
+      if (notice !== undefined) {
+        expect(mockInfo).not.toHaveBeenCalledWith(getLabel('interactive.resumeSessionLoaded', 'en'));
+      }
 
       tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
@@ -2914,86 +3474,31 @@ describe('runTui', () => {
     });
   });
 
-  describe('startup session state', () => {
-    it('should consume a saved result without adding it to either Ink startup transcript', async () => {
+  describe('startup transcript', () => {
+    it('should show the conversation intro without consuming an unrelated saved result', async () => {
       const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-stale-state-'));
-      const lang = 'en' as const;
-      const staleState = {
-        status: 'success',
-        workflowName: 'stale-workflow',
-        taskResult: 'stale result that must not be rendered',
-        timestamp: '2026-08-26T00:00:00.000Z',
-      } satisfies SessionState;
-      const staleSuccessNotice = getLabel('interactive.previousTask.success', lang);
-      const cancelExit = {
-        kind: 'result',
-        result: { action: 'cancel', task: '' },
-      } as const;
-      const emptyCarry = { history: [], queue: [] } as const;
-      const startedTrees: MountedTree[] = [];
-      const startedRuns: Array<ReturnType<typeof startRun>> = [];
+      const noticePath = join(projectDir, '.takt', 'session-state.json');
+      const serialized = JSON.stringify({
+        version: 1, publicationId: 'unrelated-run', status: 'pending',
+        state: { status: 'error', workflowName: 'unrelated-workflow',
+          errorMessage: 'unrelated provider unavailable', timestamp: '2026-10-09T00:00:00.000Z' },
+      });
+      mkdirSync(dirname(noticePath), { recursive: true });
+      writeFileSync(noticePath, serialized);
+      const tree = scriptRender();
+      const run = startRun({ cwd: projectDir });
+      await waitForMount(tree, 1);
 
       try {
-        saveSessionState(projectDir, 'stale-publication', staleState);
-        mockTakeSessionState.mockImplementation(
-          (cwd: string) => takeStoredSessionState(cwd),
-        );
-
-        const firstTree = scriptRender();
-        startedTrees.push(firstTree);
-        const firstRun = startRun({ cwd: projectDir, lang });
-        startedRuns.push(firstRun);
-        await waitForMount(firstTree, 1);
-
-        const firstTranscript = firstTree.conversationProps().initialEntries
-          .map((entry) => entry.content)
-          .join('\n');
-        expect(firstTranscript).not.toContain(staleSuccessNotice);
-        expect(firstTranscript).not.toContain(staleState.workflowName);
-        expect(firstTranscript).not.toContain(staleState.taskResult);
-        expect(firstTranscript).not.toContain(staleState.timestamp);
-        const consumedEnvelope = JSON.parse(
-          readFileSync(getSessionStatePath(projectDir), 'utf8'),
-        ) as { readonly status: unknown };
-        expect(consumedEnvelope.status).toBe('consumed');
-
-        firstTree.conversationProps().onExit(
-          cancelExit,
-          emptyCarry,
-        );
-        await firstRun;
-
-        const secondTree = scriptRender();
-        startedTrees.push(secondTree);
-        const secondRun = startRun({ cwd: projectDir, lang });
-        startedRuns.push(secondRun);
-        await waitForMount(secondTree, 1);
-
-        const secondTranscript = secondTree.conversationProps().initialEntries
-          .map((entry) => entry.content)
-          .join('\n');
-        expect(secondTranscript).not.toContain(staleSuccessNotice);
-        expect(secondTranscript).not.toContain(staleState.workflowName);
-        expect(secondTranscript).not.toContain(staleState.taskResult);
-        expect(secondTranscript).not.toContain(staleState.timestamp);
-        expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
-        expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, projectDir);
-        expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, projectDir);
-        expect(mockTakeSessionState.mock.results.map((result) => result.value))
-          .toEqual([staleState, null]);
-
-        secondTree.conversationProps().onExit(
-          cancelExit,
-          emptyCarry,
-        );
-        await secondRun;
+        expect(tree.conversationProps().initialEntries).toEqual([
+          { role: 'system', content: getLabel('interactive.ui.intro', 'en') },
+        ]);
+        expect(readFileSync(noticePath, 'utf8')).toBe(serialized);
       } finally {
-        for (const tree of startedTrees) {
-          if (tree.mounts.count > tree.unmount.mock.calls.length) {
-            tree.conversationProps().onExit(cancelExit, emptyCarry);
-          }
-        }
-        await Promise.allSettled(startedRuns);
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        await run;
         rmSync(projectDir, { recursive: true, force: true });
       }
     });
@@ -3007,7 +3512,7 @@ describe('runTui', () => {
         .mockReturnValueOnce(first)
         .mockReturnValueOnce(rebuilt);
       mockSelectInteractiveProvider.mockResolvedValue('claude');
-      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Execution finished.' });
       const startupOverrides = { provider: 'codex', model: 'workflow-model' } as const;
       const tree = scriptRender();
       const run = startRun({ agentOverrides: startupOverrides, dispatch });
@@ -3029,6 +3534,10 @@ describe('runTui', () => {
       );
       await waitForMount(tree, 4);
 
+      const operationRecordsBeforeDispatch = [
+        vi.mocked(first.recordOperationResult).mock.calls.length,
+        vi.mocked(rebuilt.recordOperationResult).mock.calls.length,
+      ];
       await tree.conversationProps().conversation.createInstruction({
         text: '',
         abortSignal: new AbortController().signal,
@@ -3056,37 +3565,44 @@ describe('runTui', () => {
         { history: [], queue: [] },
       );
       await run;
+      expect(operationRecordsBeforeDispatch).toEqual([0, 0]);
     });
 
     it('should run the decision and come back to the same conversation', async () => {
       const tree = scriptRender();
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      const conversation = { resumeSession: vi.fn(), commandAvailability: {} };
+      const notice = 'Execution finished for ship it.';
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+      const conversation = createConversationDouble();
       mockCreateTuiConversation.mockReturnValue(conversation);
       const run = startRun({ dispatch });
       await waitForMount(tree, 1);
 
-      const first = tree.conversationProps();
-      first.onExit({ kind: 'result', result: { action: 'execute', task: 'ship it' } }, { history: ['ship it'], queue: [] });
-      await waitForMount(tree, 2);
+      try {
+        const first = tree.conversationProps();
+        first.onExit({ kind: 'result', result: { action: 'execute', task: 'ship it' } }, { history: ['ship it'], queue: [] });
+        await waitForMount(tree, 2);
 
-      expect(dispatch).toHaveBeenCalledExactlyOnceWith(
-        'default',
-        expect.objectContaining({ action: 'execute', task: 'ship it' }),
-      );
-      const second = tree.conversationProps();
-      expect(second.initialEntries.map((entry) => entry.content))
-        .toContain(getLabel('tui.ui.runFinished', 'en'));
-      expect(second.initialHistory).toEqual(['ship it']);
-
-      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+          'default',
+          expect.objectContaining({ action: 'execute', task: 'ship it' }),
+        );
+        const second = tree.conversationProps();
+        expect(second.initialEntries.map((entry) => entry.content)).toContain(notice);
+        expect(second.initialHistory).toEqual(['ship it']);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+      }
       await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
     });
 
     it('should put the line the last mount was writing back into the next one', async () => {
       const tree = scriptRender();
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      mockCreateTuiConversation.mockReturnValue({ resumeSession: vi.fn(), commandAvailability: {} });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Execution finished.' });
+      mockCreateTuiConversation.mockReturnValue(createConversationDouble());
       const run = startRun({ dispatch });
       await waitForMount(tree, 1);
 
@@ -3115,77 +3631,60 @@ describe('runTui', () => {
     });
 
     it.each([
-      {
-        outcome: 'successful',
-        sessionState: {
-          status: 'success',
-          workflowName: 'review',
-          taskContent: 'ship it',
-          timestamp: '2026-01-02T03:04:05.000Z',
-        } satisfies SessionState,
-        expectedStatus: 'Previous task completed successfully',
-      },
-      {
-        outcome: 'failed',
-        sessionState: {
-          status: 'error',
-          workflowName: 'review',
-          taskContent: 'ship it',
-          errorMessage: 'provider unavailable',
-          timestamp: '2026-01-02T03:04:05.000Z',
-        } satisfies SessionState,
-        expectedStatus: 'Previous task failed: provider unavailable',
-      },
-    ])('should report a $outcome run and continue the same conversation', async ({
-      sessionState,
-      expectedStatus,
-    }) => {
+      { lang: 'ja', action: 'save_task', label: 'tui.ui.taskSaved' },
+      { lang: 'en', action: 'save_task', label: 'tui.ui.taskSaved' },
+      { lang: 'ja', action: 'create_issue', label: 'tui.ui.issueCreated' },
+      { lang: 'en', action: 'create_issue', label: 'tui.ui.issueCreated' },
+      { lang: 'ja', action: 'execute', label: 'tui.ui.runFinished' },
+      { lang: 'en', action: 'execute', label: 'tui.ui.runFinished' },
+    ] as const)('should keep the $action notice in $lang after another run fails in the same conversation', async ({ lang, action, label }) => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-dispatch-'));
+      const noticePath = join(projectDir, '.takt', 'session-state.json');
       const tree = scriptRender();
       const conversation = createConversationDouble();
-      mockCreateTuiConversation.mockReturnValue(conversation);
-      const startupState: SessionState = {
-        status: 'error',
-        workflowName: 'old-workflow',
-        errorMessage: 'stale provider error',
-        timestamp: '2026-01-01T00:00:00.000Z',
-      };
-      mockTakeSessionState
-        .mockReturnValueOnce(startupState)
-        .mockReturnValueOnce(sessionState)
-        .mockReturnValue(null);
-      const run = startRun({ dispatch: vi.fn().mockResolvedValue(undefined) });
+      mockCreateTuiConversation.mockReturnValueOnce(conversation);
+      mockSelectAction.mockResolvedValue(action);
+      const notice = `${getLabel(label, lang)}: actual-task / #42`;
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+      const run = startRun({ cwd: projectDir, lang, dispatch });
       await waitForMount(tree, 1);
 
-      const first = tree.conversationProps();
-      const startupNotice = first.initialEntries.map((entry) => entry.content).join('\n');
-      expect(startupNotice).not.toContain(startupState.workflowName);
-      expect(startupNotice).not.toContain(startupState.errorMessage);
-      expect(startupNotice).not.toContain(startupState.timestamp);
-      first.onExit(
-        { kind: 'result', result: { action: 'execute', task: 'ship it' } },
-        { history: [], queue: [] },
-      );
-      await waitForMount(tree, 2);
+      try {
+        tree.conversationProps().onExit(
+          { kind: 'choose_action', origin: 'go', task: 'first task' }, { history: ['/go'], queue: [] },
+        );
+        await waitForMount(tree, 2);
+        const expectedNotice = [{ role: 'system', content: notice }];
+        expect(tree.conversationProps().initialEntries).toEqual(expectedNotice);
 
-      const second = tree.conversationProps();
-      const notice = second.initialEntries.map((entry) => entry.content).join('\n');
-      expect(notice).toContain('review');
-      expect(notice).toContain(expectedStatus);
-      expect(notice).toContain(new Date(sessionState.timestamp).toLocaleString('en-US'));
-      expect(mockTakeSessionState).toHaveBeenCalledTimes(2);
-      expect(mockTakeSessionState).toHaveBeenNthCalledWith(1, '/repo');
-      expect(mockTakeSessionState).toHaveBeenNthCalledWith(2, '/repo');
-
-      const nextInput = {
-        text: 'describe the next task',
-        abortSignal: new AbortController().signal,
-        onAssistantChunk: vi.fn(),
-      };
-      await second.conversation.submit(nextInput);
-      expect(conversation.submit).toHaveBeenCalledExactlyOnceWith(nextInput);
-
-      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
-      await run;
+        mkdirSync(dirname(noticePath), { recursive: true });
+        const serialized = JSON.stringify({
+          version: 1, publicationId: 'unrelated-run', status: 'pending',
+          state: { status: 'error', workflowName: 'unrelated-workflow',
+            errorMessage: 'unrelated provider unavailable', timestamp: '2026-10-09T00:00:00.000Z' },
+        });
+        writeFileSync(noticePath, serialized);
+        expect(tree.conversationProps().initialEntries).toEqual(expectedNotice);
+        tree.conversationProps().onExit(
+          { kind: 'choose_action', origin: 'go', task: 'second task' }, { history: ['/go', '/go'], queue: [] },
+        );
+        await waitForMount(tree, 3);
+        const next = tree.conversationProps();
+        expect(next.initialEntries).toEqual(expectedNotice);
+        expect(readFileSync(noticePath, 'utf8')).toBe(serialized);
+        expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({ action, task: 'second task' }));
+        const nextInput = {
+          text: 'describe the next task', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+        };
+        await next.conversation.submit(nextInput);
+        expect(conversation.submit).toHaveBeenCalledExactlyOnceWith(nextInput);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        await run;
+        rmSync(projectDir, { recursive: true, force: true });
+      }
     });
 
     it('should end the run on cancel without dispatching anything', async () => {

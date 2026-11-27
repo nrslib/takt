@@ -14,6 +14,7 @@ import { hasAutoRoutingPoolAssignment, resolveAutoRoutingRuleCandidate, selectRo
 import type { RoutingRuntime } from './runtime.js';
 import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../../shared/types/provider.js';
+import type { WorkflowMeta } from '../../../agents/types.js';
 
 export interface AutoRoutingStepMetadata {
   name: string;
@@ -38,6 +39,7 @@ type CurrentProviderInfo = Pick<
 >;
 
 export interface ResolveAutoRoutingRuntimeInput {
+  workflowMeta?: WorkflowMeta;
   autoRouting: AutoRoutingConfig;
   scope?: string;
   step: AutoRoutingStepMetadata;
@@ -52,6 +54,7 @@ export interface ResolveAutoRoutingRuntimeInput {
 }
 
 export interface ResolveAutoRoutingBatchItem {
+  workflowMeta?: WorkflowMeta;
   id: string;
   scope?: string;
   step: AutoRoutingStepMetadata;
@@ -200,6 +203,7 @@ export async function resolveAutoRoutingRuntime(input: ResolveAutoRoutingRuntime
     const decision = await input.runtime.resolve({
       scope: resolveRoutingScope(input),
       snapshot: input.snapshot,
+      workflowMeta: input.workflowMeta,
       abortSignal: input.abortSignal,
       onStream: input.onStream,
       onActivity: input.onActivity,
@@ -228,6 +232,7 @@ export async function resolveAutoRoutingRuntime(input: ResolveAutoRoutingRuntime
   let estimate: WorkRequirementEstimate;
   try {
     estimate = await input.estimator.estimate(normalizeRoutingWorkSnapshot(input.snapshot), {
+      workflowMeta: input.workflowMeta,
       abortSignal: input.abortSignal,
       onStream: input.onStream,
       onActivity: input.onActivity,

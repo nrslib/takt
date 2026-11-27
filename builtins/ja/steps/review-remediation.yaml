@@ -11,6 +11,7 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+description: レビュー指摘の裁定から修正計画、実装、完了検証までを実行する
 kind: workflow_call
 call: review-remediation
 args:

@@ -37,10 +37,12 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
+  readonly supportsStrictToolAllowlist = true;
+  readonly supportsMcpOnlySideEffects = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
-  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio']);
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

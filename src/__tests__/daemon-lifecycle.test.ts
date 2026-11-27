@@ -1,0 +1,442 @@
+import { EventEmitter } from 'node:events';
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { daemonEntryPath, ensureDaemon, runDaemonForeground, stopDaemon } from '../features/daemon/lifecycle.js';
+import type { DaemonOwner } from '../infra/daemon/owner.js';
+import { packageVersion } from '../shared/package-info.js';
+
+const doubles = vi.hoisted(() => ({
+  read: vi.fn(), running: vi.fn(), remove: vi.fn(), spawn: vi.fn(),
+  open: vi.fn(), close: vi.fn(), delay: vi.fn(), directory: vi.fn(),
+  ready: vi.fn(), entry: vi.fn<() => string | undefined>(),
+}));
+vi.mock('node:url', async (original) => {
+  const actual = await original<typeof import('node:url')>();
+  return { ...actual, fileURLToPath: (...args: Parameters<typeof actual.fileURLToPath>) => doubles.entry() ?? actual.fileURLToPath(...args) };
+});
+vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
+vi.mock('../features/daemon/conversationReadiness.js', () => ({ connectConversationIpc: doubles.ready }));
+vi.mock('../infra/daemon/owner.js', () => ({
+  readDaemonOwner: doubles.read, isDaemonOwnerRunning: doubles.running, removeDaemonOwner: doubles.remove,
+}));
+vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
+vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>(), open: doubles.open }));
+vi.mock('node:timers/promises', () => ({ setTimeout: doubles.delay }));
+vi.mock('../infra/daemon/privateFile.js', () => ({ ensurePrivateDirectory: doubles.directory }));
+vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: daemonEntryPath(), args: [daemonEntryPath()] }) }));
+
+const owner: DaemonOwner = {
+  pid: 4321, identity: { startTime: 'darwin-start-v2:12345' }, version: packageVersion, cliPath: daemonEntryPath(),
+};
+afterEach(() => { vi.restoreAllMocks(); });
+let socket: { destroy: ReturnType<typeof vi.fn> };
+let child: EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null; unref: ReturnType<typeof vi.fn> };
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+  doubles.read.mockReset().mockReturnValue(undefined);
+  doubles.entry.mockReset();
+  doubles.running.mockReset().mockReturnValue(true);
+  socket = { destroy: vi.fn() };
+  doubles.ready.mockReset().mockResolvedValue(socket);
+  doubles.open.mockResolvedValue({ fd: 42, close: doubles.close });
+  doubles.delay.mockReset().mockResolvedValue(undefined);
+  child = Object.assign(new EventEmitter(), { pid: owner.pid, exitCode: null, signalCode: null, unref: vi.fn() });
+  doubles.spawn.mockReset().mockImplementation(() => {
+    queueMicrotask(() => { doubles.read.mockReturnValue(owner); child.emit('spawn'); });
+    return child;
+  });
+});
+
+it('reuses the running daemon with the current version and CLI path', async () => {
+  doubles.read.mockReturnValue(owner);
+  await ensureDaemon();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, owner);
+});
+
+it.each([true, false])('passes the resident startup choice to the foreground daemon child: %s', async (resident) => {
+  const previousExitCode = process.exitCode;
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => child.emit('close', 0, null));
+    return child;
+  });
+  try {
+    await runDaemonForeground(resident);
+
+    expect(doubles.spawn).toHaveBeenCalledExactlyOnceWith(process.execPath,
+      [daemonEntryPath(), ...(resident ? ['--resident'] : [])],
+      expect.objectContaining({ stdio: 'inherit', shell: false }));
+    expect(process.exitCode).toBe(0);
+  } finally { process.exitCode = previousExitCode; }
+});
+
+it('hands off the existing resident daemon connection when version and CLI path match', async () => {
+  const resident = { ...owner, resident: true };
+  doubles.read.mockReturnValue(resident);
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+  const connection = await ensureDaemon({ retainConnection: true });
+
+  expect(connection).toBe(socket);
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, resident);
+  expect(socket.destroy).not.toHaveBeenCalled();
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  connection.destroy();
+});
+
+it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('rejects a differing resident owner without stopping or replacing it: %j', async (difference) => {
+  const { entry } = await installations();
+  const cliPath = entry('takt-custom-a');
+  doubles.entry.mockReturnValue(cliPath);
+  const resident = { ...owner, cliPath, ...difference, pid: 1234, resident: true };
+  doubles.read.mockReturnValue(resident);
+  let running = true;
+  doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== resident.pid || running);
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => { running = false; return true; });
+
+  const failure = await ensureDaemon().then(() => undefined, (error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
+  const message = (failure as Error).message;
+  expect(message).toMatch(/resident/iu);
+  expect(message).toContain(difference.version ?? difference.cliPath);
+  expect(message).toContain(difference.version === undefined ? cliPath : packageVersion);
+  expect(message).toContain('takt daemon stop');
+  expect(message).toContain('takt daemon --resident');
+  expect(message.indexOf('takt daemon stop')).toBeLessThan(message.indexOf('takt daemon --resident'));
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.ready).not.toHaveBeenCalled();
+});
+
+it('waits for authenticated IPC readiness even when the matching owner is already running', async () => {
+  doubles.read.mockReturnValue(owner);
+  doubles.ready.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => socket);
+  await ensureDaemon();
+  expect(doubles.ready).toHaveBeenCalledTimes(2);
+  expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
+  expect(doubles.spawn).not.toHaveBeenCalled();
+});
+
+it('starts detached and confirms its own owner record before returning', async () => {
+  let recorded = false;
+  doubles.read.mockImplementation(() => recorded ? owner : undefined);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  });
+  doubles.delay.mockImplementation(async () => { recorded = true; });
+  await ensureDaemon();
+  expect(doubles.spawn).toHaveBeenCalledWith(process.execPath, [daemonEntryPath()], {
+    cwd: process.env.TAKT_CONFIG_DIR,
+    detached: true, shell: false, stdio: ['ignore', 42, 42],
+    env: expect.objectContaining({ TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR }),
+  });
+  expect(doubles.delay).toHaveBeenCalled();
+  expect(socket.destroy).toHaveBeenCalledOnce();
+  expect(doubles.running).toHaveBeenCalledWith(owner, expect.objectContaining({ timeoutMs: 5000 }));
+  expect(child.unref).toHaveBeenCalledOnce();
+  expect(doubles.close).toHaveBeenCalledWith();
+});
+
+it('waits for IPC readiness after its newly spawned daemon has published the owner', async () => {
+  let releasePoll!: () => void;
+  const poll = new Promise<void>((resolve) => { releasePoll = resolve; });
+  doubles.ready.mockResolvedValue(undefined);
+  doubles.delay.mockReturnValue(poll);
+  let returned = false;
+  const starting = ensureDaemon().then(() => { returned = true; });
+  try {
+    await vi.waitFor(() => expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, owner));
+    expect(doubles.running).toHaveBeenCalledWith(owner, expect.objectContaining({ timeoutMs: 5000 }));
+    expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
+    expect(returned).toBe(false);
+    doubles.ready.mockResolvedValue(socket);
+  } finally { releasePoll(); }
+  await starting;
+  expect(returned).toBe(true);
+  expect(doubles.ready).toHaveBeenCalledTimes(2);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(child.unref).toHaveBeenCalledOnce();
+});
+
+it.each(['new', 'existing'] as const)('hands the authenticated socket to the caller for a %s daemon', async (kind) => {
+  if (kind === 'existing') doubles.read.mockReturnValue(owner);
+  const connection = await ensureDaemon({ retainConnection: true });
+  expect(connection).toBe(socket);
+  expect(socket.destroy).not.toHaveBeenCalled();
+  expect(doubles.spawn).toHaveBeenCalledTimes(kind === 'new' ? 1 : 0);
+  connection.destroy();
+});
+
+it('waits for the winning daemon IPC after its own child loses the startup race', async () => {
+  const winner = { ...owner, pid: owner.pid + 1 };
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => {
+      doubles.read.mockReturnValue(winner);
+      child.exitCode = 0;
+      child.emit('spawn');
+    });
+    return child;
+  });
+  doubles.ready.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => socket);
+
+  await ensureDaemon();
+
+  expect(doubles.ready.mock.calls).toEqual([
+    [process.env.TAKT_CONFIG_DIR, winner],
+    [process.env.TAKT_CONFIG_DIR, winner],
+  ]);
+  expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.close).toHaveBeenCalledExactlyOnceWith();
+});
+
+it('bounds IPC readiness waiting for the winning daemon after its own child exits', async () => {
+  const winner = { ...owner, pid: owner.pid + 1 };
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => {
+      doubles.read.mockReturnValue(winner);
+      child.exitCode = 0;
+      child.emit('spawn');
+    });
+    return child;
+  });
+  doubles.ready.mockResolvedValue(undefined);
+  doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
+
+  await expect(ensureDaemon()).rejects.toThrow();
+
+  expect(now).toBe(5_000);
+  expect(doubles.ready).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, winner);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.close).toHaveBeenCalledExactlyOnceWith();
+});
+
+it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old daemon before replacing a differing owner: %j', async (difference) => {
+  const { entry } = await installations();
+  doubles.entry.mockReturnValue(entry('takt-custom-a'));
+  const old = { ...owner, cliPath: entry('takt-custom-a'), ...difference, pid: 1234 };
+  doubles.read.mockReturnValue(old);
+  let oldRunning = true;
+  doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== old.pid || oldRunning);
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => { oldRunning = false; return true; });
+  await ensureDaemon();
+  expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
+  expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
+  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old, expect.objectContaining({ timeoutMs: 5000 }));
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+});
+
+/**
+ * 版別の配置 `takt-custom-a` / `takt-custom-b` と、切替用リンク `takt-custom`（最初は a を指す）を隔離領域に作る。
+ * Node はモジュールの URL を実パスに解決するため、呼出し側がリンクのパスを持つのは、起動後にその場所がリンクへ置き換わった場合である。
+ */
+async function installations() {
+  const root = join(dirname(process.env.TAKT_CONFIG_DIR!), 'local');
+  const entry = (name: string): string => join(root, name, 'dist/app/daemon/index.js');
+  for (const name of ['takt-custom-a', 'takt-custom-b']) {
+    await mkdir(dirname(entry(name)), { recursive: true });
+    await writeFile(entry(name), '');
+  }
+  const link = join(root, 'takt-custom');
+  await symlink('takt-custom-a', link);
+  return { entry, async switchTo(name: string) { await rm(link); await symlink(name, link); } };
+}
+
+function stoppable(target: DaemonOwner) {
+  let alive = true;
+  doubles.running.mockImplementation((candidate: DaemonOwner) => candidate.pid !== target.pid || alive);
+  return vi.spyOn(process, 'kill').mockImplementation(() => { alive = false; return true; });
+}
+
+it('keeps the running daemon when the caller remembers the link path to the same installation', async () => {
+  const { entry } = await installations();
+  const running = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValue(entry('takt-custom'));
+  doubles.read.mockReturnValue(running);
+  const kill = stoppable(running);
+
+  const connection = await ensureDaemon({ retainConnection: true });
+
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, running);
+  expect(connection).toBe(socket);
+  connection.destroy();
+});
+
+it.each(['takt-custom-a', 'takt-custom-b'])('replaces a daemon whose recorded directory was later turned into a link to %s', async (target) => {
+  const { entry, switchTo } = await installations();
+  const old = { ...owner, pid: 1234, cliPath: entry('takt-custom') };
+  const replacement = { ...owner, cliPath: entry(target) };
+  await switchTo(target);
+  doubles.entry.mockReturnValue(entry(target));
+  doubles.read.mockReturnValue(old);
+  const kill = stoppable(old);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => { doubles.read.mockReturnValue(replacement); child.emit('spawn'); });
+    return child;
+  });
+
+  await ensureDaemon();
+
+  expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
+  expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, replacement);
+});
+
+it('leaves the running daemon alone when its own entry cannot be resolved', async () => {
+  const { entry } = await installations();
+  const running = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValue(entry('takt-custom-removed'));
+  doubles.read.mockReturnValue(running);
+  const kill = stoppable(running);
+
+  await expect(ensureDaemon()).rejects.toMatchObject({ code: 'ENOENT' });
+
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+});
+
+it('connects callers that remember the link path and the real path to the same daemon', async () => {
+  const { entry } = await installations();
+  const running = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValueOnce(entry('takt-custom')).mockReturnValueOnce(entry('takt-custom-a'));
+  doubles.read.mockReturnValue(running);
+  const kill = stoppable(running);
+
+  await Promise.all([ensureDaemon(), ensureDaemon()]);
+
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.ready.mock.calls).toEqual([
+    [process.env.TAKT_CONFIG_DIR, running],
+    [process.env.TAKT_CONFIG_DIR, running],
+  ]);
+});
+
+it('replaces a same-version daemon after the link was switched to another installation', async () => {
+  const { entry, switchTo } = await installations();
+  const old = { ...owner, pid: 1234, cliPath: entry('takt-custom-a') };
+  const replacement = { ...owner, cliPath: entry('takt-custom-b') };
+  await switchTo('takt-custom-b');
+  doubles.entry.mockReturnValue(entry('takt-custom'));
+  doubles.read.mockReturnValue(old);
+  const kill = stoppable(old);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => { doubles.read.mockReturnValue(replacement); child.emit('spawn'); });
+    return child;
+  });
+
+  await ensureDaemon();
+
+  expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
+  expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, replacement);
+});
+
+it('accepts the startup-race winner recorded under the real path when the caller remembers the link path', async () => {
+  const { entry } = await installations();
+  const winner = { ...owner, pid: owner.pid + 1, cliPath: entry('takt-custom-a') };
+  doubles.entry.mockReturnValue(entry('takt-custom'));
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => {
+      doubles.read.mockReturnValue(winner);
+      child.exitCode = 0;
+      child.emit('spawn');
+    });
+    return child;
+  });
+
+  await ensureDaemon();
+
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, winner);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(kill).not.toHaveBeenCalled();
+});
+
+it('waits for process exit before removing the stopped owner record', async () => {
+  doubles.read.mockReturnValue(owner);
+  doubles.running.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(false);
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+  doubles.delay.mockImplementation(async () => { expect(doubles.remove).not.toHaveBeenCalled(); });
+  await stopDaemon();
+  expect(kill).toHaveBeenCalledExactlyOnceWith(owner.pid, 'SIGTERM');
+  expect(doubles.delay).toHaveBeenCalledOnce();
+  expect(doubles.remove).toHaveBeenCalledOnce();
+});
+
+it('does not signal an absent or dead owner', async () => {
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+  await stopDaemon();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  doubles.read.mockReturnValue(owner);
+  doubles.running.mockReturnValue(false);
+  await stopDaemon();
+  expect(kill).not.toHaveBeenCalled();
+  expect(doubles.remove).toHaveBeenCalledOnce();
+});
+
+it('propagates spawn failure and closes the log descriptor', async () => {
+  const failure = new Error('spawn failed');
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => child.emit('error', failure));
+    return child;
+  });
+  await expect(ensureDaemon()).rejects.toBe(failure);
+  expect(doubles.close).toHaveBeenCalledWith();
+});
+
+it('rejects startup when the child exits without an owner record', async () => {
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => { child.exitCode = 1; child.emit('spawn'); });
+    return child;
+  });
+  await expect(ensureDaemon()).rejects.toThrow();
+  expect(doubles.close).toHaveBeenCalledWith();
+});
+
+it.each(['start', 'stop'] as const)('keeps waiting bounded when %s cannot be confirmed', async (operation) => {
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+  if (operation === 'start') {
+    doubles.spawn.mockImplementation(() => { queueMicrotask(() => child.emit('spawn')); return child; });
+    await expect(ensureDaemon()).rejects.toThrow();
+    expect(doubles.close).toHaveBeenCalledWith();
+  } else {
+    doubles.read.mockReturnValue(owner);
+    await expect(stopDaemon()).rejects.toThrow();
+    expect(kill).toHaveBeenCalledOnce();
+    expect(doubles.remove).not.toHaveBeenCalled();
+  }
+  expect(now).toBe(operation === 'start' ? 5_000 : 30_000);
+});
+
+it('allows child shutdown grace, forced termination and cleanup before confirming stop', async () => {
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  doubles.read.mockReturnValue(owner);
+  doubles.running.mockImplementation(() => now < 12_000);
+  doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  await stopDaemon();
+  expect(now).toBe(12_000);
+  expect(doubles.remove).toHaveBeenCalledOnce();
+});

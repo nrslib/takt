@@ -1,3 +1,4 @@
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const {
@@ -15,7 +16,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
-  isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  isWorkflowPath: mockIsWorkflowPath,
   resolveWorkflowConfigValues: vi.fn(() => ({
     language: 'en',
     personaProviders: {},
@@ -40,9 +41,9 @@ vi.mock('../infra/task/index.js', () => ({
   summarizeTaskName: vi.fn(),
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   buildTaskInstruction: vi.fn((_taskDir: string, orderFile: string) => `Primary spec: \`${orderFile}\`.`),
-  TaskRunner: vi.fn(() => ({
-    addTask: vi.fn(),
-  })),
+  TaskRunner: vi.fn(function () {
+    return { addTask: vi.fn() };
+  }),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

@@ -163,7 +163,6 @@ describe('Web UI central launcher', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     await expect(repository.readTasks()).resolves.toHaveLength(1);
   });
@@ -211,7 +210,6 @@ describe('Web UI central launcher', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     await vi.waitFor(async () => {
       const current = await repository.readTasks();

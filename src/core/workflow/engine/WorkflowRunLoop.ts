@@ -1,5 +1,5 @@
 import { resolveProviderAlias } from '../../../shared/types/provider.js';
-import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { PreparedStepInstruction } from '../instruction/prepared-instruction.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { RATE_LIMIT_ERROR_MESSAGE } from '../../models/response.js';
 import type {
@@ -116,7 +116,7 @@ interface WorkflowRunLoopDeps {
   ) => Promise<string>;
   runStep: (
     step: WorkflowStep,
-    prebuiltInstruction?: PreparedInstruction,
+    prebuiltInstruction?: PreparedStepInstruction,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
@@ -141,7 +141,7 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     stepIteration: number,
     fallbackContext?: FallbackContext,
-  ) => PreparedInstruction;
+  ) => PreparedStepInstruction;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   /** Engine が通常 agent ステップに渡す、実行前に一度だけ確定した入力。 */
   prepareNormalStepExecution: (
@@ -150,6 +150,7 @@ interface WorkflowRunLoopDeps {
     runtime?: RuntimeStepResolution,
   ) => Promise<PreparedNormalStepExecution | undefined>;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  buildWorkflowMeta?: (step: WorkflowStep, runtime?: RuntimeStepResolution) => import('../../../agents/types.js').WorkflowMeta;
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
   resolveStepProviderModelBeforeAutoRouting: (
     step: WorkflowStep,
@@ -161,6 +162,7 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    preparingNextStep?: boolean,
   ) => WorkflowCallExecutionToken | undefined;
   cancelPendingStepActivation: () => void;
   addUserInput: (input: string) => void;
@@ -237,6 +239,7 @@ async function resolveStepAutoRoutingRuntime(
 
   const currentProviderInfo = deps.resolveStepProviderModelBeforeAutoRouting(step, runtime);
   const autoRuntime = await resolveAutoRoutingRuntime({
+    workflowMeta: deps.buildWorkflowMeta?.(step, runtime),
     autoRouting: deps.options.autoRouting,
     scope: createRoutingScope({
       workflow: deps.getWorkflowName(),
@@ -450,7 +453,7 @@ function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteratio
   const resolvedStep = deps.getStep(nextStep);
   deps.state.currentStep = nextStep;
   const nextOccurrence = (deps.state.stepIterations.get(nextStep) ?? 0) + 1;
-  deps.setActiveStep(resolvedStep, iteration, nextOccurrence);
+  deps.setActiveStep(resolvedStep, iteration, nextOccurrence, true);
 }
 
 function buildWorkflowAbortResult(
@@ -918,7 +921,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
     let stepRuntime: RuntimeStepResolution | undefined;
     let preparedExecution: PreparedNormalStepExecution | undefined;
     let executionStep: WorkflowStep;
-    let prebuiltInstruction: PreparedInstruction | undefined;
+    let prebuiltInstruction: PreparedStepInstruction | undefined;
     let stepInstruction: string;
     let providerInfo: StepProviderInfo;
     let stepEventWorkflowStack: StepSpanParams['workflowStack'];

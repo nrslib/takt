@@ -19,7 +19,8 @@ import {
   spawnManagedProcess,
 } from '../../shared/utils/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
-import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
+import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import type { CopilotCallOptions } from './types.js';
 import {
   emitStructuredEvents,
@@ -356,24 +357,39 @@ function isAuthenticationError(error: CopilotExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
-function findRateLimitMessage(error: CopilotExecError): string | undefined {
-  for (const line of parseValidJsonLines(error.stdout ?? '')) {
+function findRateLimitMessage(
+  output: Pick<CopilotExecError, 'stdout' | 'stderr'>,
+  stderrFallback = true,
+): { message: string; classification: RateLimitClass } | undefined {
+  // 複数の session.error がある場合は使い切りを優先する（429 の後に 402 が来ても再試行しない）
+  let transient: { message: string; classification: RateLimitClass } | undefined;
+  for (const line of parseValidJsonLines(output.stdout ?? '')) {
     const root = toRecord(line);
     if (root?.type !== 'session.error') {
       continue;
     }
     const data = extractCopilotEventData(root);
     const message = firstNonEmptyString([data.message]);
-    if (
-      data.errorType === 'rate_limit'
-      || data.errorCode === 'rate_limited'
-      || data.statusCode === 429
-    ) {
-      return trimDetail(message, 'Copilot rate limit exceeded');
+    const detail = [message, output.stderr].filter((value) => value !== undefined).join('\n');
+    // 月間クォータ切れ（402）は再試行しても回復しないため、構造化フィールドだけで使い切りと判定する
+    const isQuotaExhausted = data.statusCode === 402 || data.statusCode === '402'
+      || data.errorType === 'quota' || data.errorCode === 'quota_exceeded';
+    const classification = isQuotaExhausted
+      ? 'Exhausted'
+      : classifyRateLimitError(detail, data.statusCode === 429 || data.statusCode === '429'
+        || data.errorType === 'rate_limit' || data.errorCode === 'rate_limited' ? 429 : undefined);
+    if (classification === 'Exhausted') {
+      return { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
+    }
+    if (classification === 'Transient') {
+      transient ??= { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
     }
   }
-  const stderr = error.stderr ?? '';
-  return containsRateLimitError(stderr) ? trimDetail(stderr) : undefined;
+  if (transient !== undefined) return transient;
+  if (!stderrFallback) return undefined;
+  const stderr = output.stderr ?? '';
+  const classification = classifyRateLimitError(stderr);
+  return classification !== 'NotRateLimit' ? { message: trimDetail(stderr), classification } : undefined;
 }
 
 function classifyExecutionError(error: CopilotExecError, options: CopilotCallOptions): string {
@@ -441,6 +457,16 @@ function extractCopilotEventData(root: Record<string, unknown>): Record<string, 
   return toRecord(root.data) ?? root;
 }
 
+/** Text before a tool call is working text (progress notes, commentary); the answer follows the last call. */
+function startsToolCall(type: unknown): boolean {
+  return type === 'tool.execution_start' || type === 'tool.user_requested';
+}
+
+function isToolExecutionEvent(value: unknown): boolean {
+  const type = toRecord(value)?.type;
+  return type === 'tool.execution_start' || type === 'tool.execution_complete';
+}
+
 function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: string } {
   const trimmed = stdout.trim();
   if (!trimmed) {
@@ -455,7 +481,9 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
   }
 
   const parsed = collectCopilotOutput(lines);
-  if (parsed.content.length === 0) {
+  // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+  // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+  if (parsed.content.length === 0 && parsed.events.length === 0) {
     return {
       error: `Failed to extract assistant content from copilot JSONL output: ${trimDetail(trimmed, '<empty>')}`,
     };
@@ -465,7 +493,8 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
 
 function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
   const events: StreamEvent[] = [];
-  let content: string | undefined;
+  let terminalResult: string | undefined;
+  let sawAssistantText = false;
   let assistantMessageContent: string | undefined;
   let assistantDeltaContent = '';
   let sessionId: string | undefined;
@@ -483,7 +512,9 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     ]) ?? sessionId;
     const type = typeof root.type === 'string' ? root.type : undefined;
 
-    if (type === 'tool.execution_start' || type === 'tool.user_requested') {
+    if (startsToolCall(type)) {
+      assistantMessageContent = undefined;
+      assistantDeltaContent = '';
       const id = firstNonEmptyString([data.toolCallId, data.tool_call_id, data.id]);
       const tool = firstNonEmptyString([data.mcpToolName, data.toolName, data.tool_name]);
       if (id !== undefined && tool !== undefined) {
@@ -522,6 +553,7 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     if (type === 'assistant.message') {
       const message = extractStructuredText(data.content ?? data.deltaContent);
       if (message !== undefined && message.length > 0) {
+        sawAssistantText = true;
         assistantMessageContent = message;
       }
       continue;
@@ -530,6 +562,7 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     if (type === 'assistant.message_delta') {
       const message = extractStructuredText(data.content ?? data.deltaContent);
       if (message !== undefined && message.length > 0) {
+        sawAssistantText = true;
         assistantDeltaContent += message;
       }
       continue;
@@ -538,12 +571,17 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     if (type === 'result' || type === 'session.result') {
       const result = extractStructuredText(data.result ?? data.content ?? root.result);
       if (result !== undefined) {
-        content = result;
+        terminalResult = result;
       }
     }
   }
 
-  return { content: content ?? assistantMessageContent ?? assistantDeltaContent, sessionId, events };
+  // The terminal result is not known to leave out the working text before tool calls, so it is the
+  // answer only when the output carries no assistant text; otherwise the text after the last tool call is.
+  const content = sawAssistantText
+    ? assistantMessageContent ?? assistantDeltaContent
+    : terminalResult ?? '';
+  return { content, sessionId, events };
 }
 
 interface CopilotCallOutcome {
@@ -551,6 +589,8 @@ interface CopilotCallOutcome {
   readonly content: string;
   readonly sessionId?: string;
   readonly error?: string;
+  readonly rateLimitClass?: RateLimitClass;
+  readonly toolExecutionObserved?: boolean;
 }
 
 function executionErrorOutcome(
@@ -572,6 +612,7 @@ async function executeCopilotCall(
 ): Promise<CopilotCallOutcome> {
   const resumableSessionId = options.sessionId;
   let promptCleanup: (() => Promise<void>) | undefined;
+  let toolExecutionObserved = false;
   try {
     const preparedPrompt = await prepareCliPromptArgument(
       options.cwd,
@@ -597,16 +638,19 @@ async function executeCopilotCall(
         // Plain-text CLI responses are handled by the final output parser.
         return;
       }
+      if (isToolExecutionEvent(value)) toolExecutionObserved = true;
       const parsed = collectCopilotOutput([value]);
       emitStructuredEvents(options.onStream, parsed.events);
       const root = toRecord(value);
+      // Matches the final content, which starts over at each tool call, so it is not emitted twice.
+      if (startsToolCall(root?.type)) streamedContent = '';
       if (root?.type === 'assistant.message_delta') {
         emitText(streamedContent + parsed.content);
       } else if (root?.type === 'assistant.message') {
         emitText(parsed.content);
       }
     };
-    const { stdout } = await execCopilot(args, options, (text) => {
+    const { stdout, stderr } = await execCopilot(args, options, (text) => {
       pendingLine += text;
       let newline: number;
       while ((newline = pendingLine.indexOf('\n')) !== -1) {
@@ -616,6 +660,17 @@ async function executeCopilotCall(
     });
     if (pendingLine.trim().length > 0) {
       processLine(pendingLine);
+    }
+    const rateLimitMessage = findRateLimitMessage({ stdout, stderr }, false);
+    if (rateLimitMessage !== undefined) {
+      return {
+        status: 'rate_limited',
+        content: rateLimitMessage.message,
+        error: rateLimitMessage.message,
+        rateLimitClass: rateLimitMessage.classification,
+        sessionId: resumableSessionId,
+        toolExecutionObserved,
+      };
     }
     const parsed = parseCopilotOutput(stdout);
     if ('error' in parsed) {
@@ -632,14 +687,19 @@ async function executeCopilotCall(
     };
   } catch (rawError) {
     const error = rawError as CopilotExecError;
+    if (!toolExecutionObserved && error.stdout !== undefined) {
+      toolExecutionObserved = parseValidJsonLines(error.stdout).some(isToolExecutionEvent);
+    }
     const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
     const rateLimitMessage = aborted ? undefined : findRateLimitMessage(error);
     if (rateLimitMessage !== undefined) {
       return {
         status: 'rate_limited',
-        content: rateLimitMessage,
-        error: rateLimitMessage,
+        content: rateLimitMessage.message,
+        error: rateLimitMessage.message,
+        rateLimitClass: rateLimitMessage.classification,
         sessionId: resumableSessionId,
+        toolExecutionObserved,
       };
     }
     return executionErrorOutcome(classifyExecutionError(error, options), resumableSessionId);
@@ -690,23 +750,34 @@ function emitResult(
  */
 export class CopilotClient {
   async call(agentType: string, prompt: string, options: CopilotCallOptions): Promise<AgentResponse> {
-    let shareTmpDir: string | undefined;
-    let shareFilePath: string | undefined;
-    try {
-      const shareTmpParentDir = ensureCurrentTmpDirExists();
-      shareTmpDir = await mkdtemp(join(shareTmpParentDir, 'takt-copilot-'));
-      shareFilePath = join(shareTmpDir, 'session.md');
-    } catch (err) {
-      log.debug('mkdtemp failed, skipping session extraction', { err });
+    let outcome: CopilotCallOutcome;
+    let retries = 0;
+    while (true) {
+      if (options.abortSignal?.aborted) {
+        outcome = executionErrorOutcome(COPILOT_ABORTED_MESSAGE, options.sessionId);
+        break;
+      }
+      let shareTmpDir: string | undefined;
+      let shareFilePath: string | undefined;
+      try {
+        const shareTmpParentDir = ensureCurrentTmpDirExists();
+        shareTmpDir = await mkdtemp(join(shareTmpParentDir, 'takt-copilot-'));
+        shareFilePath = join(shareTmpDir, 'session.md');
+      } catch (err) {
+        log.debug('mkdtemp failed, skipping session extraction', { err });
+      }
+      options.onActivity?.({ kind: 'attempt_started' });
+      const executionOutcome = await executeCopilotCall(prompt, options, shareFilePath);
+      outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+      if (outcome.rateLimitClass !== 'Transient' || outcome.toolExecutionObserved
+        || retries >= RATE_LIMIT_MAX_RETRIES) break;
+      try {
+        await waitForRateLimitRetry(++retries, options.abortSignal);
+      } catch {
+        outcome = executionErrorOutcome(COPILOT_ABORTED_MESSAGE, options.sessionId);
+        break;
+      }
     }
-
-    options.onActivity?.({ kind: 'attempt_started' });
-    const executionOutcome = await executeCopilotCall(
-      prompt,
-      options,
-      shareFilePath,
-    );
-    const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
     emitResult(outcome, options);
     if (outcome.status === 'rate_limited') {
       return {

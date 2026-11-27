@@ -1,3 +1,4 @@
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }));
@@ -25,6 +26,21 @@ function createClientMock(overrides: Record<string, unknown> = {}) {
 describe('OpenCode v1 model resolution', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('reads the effective output limit for the selected project and model', async () => {
+    const list = vi.fn().mockResolvedValue({ data: { all: [
+      { id: 'probe', models: { selected: { limit: { context: 272_000, output: 32_000 } } } },
+    ] } });
+    createClientMock({ provider: { list } });
+    const transport = await createV1Transport('http://localhost');
+    const signal = new AbortController().signal;
+
+    await expect(transport.getModelOutputLimit?.({ directory: '/work', providerID: 'probe', modelID: 'selected' }, { signal }))
+      .resolves.toBe(32_000);
+    expect(list).toHaveBeenCalledWith({ directory: '/work' }, { signal });
+    await expect(transport.getModelOutputLimit?.({ directory: '/work', providerID: 'probe', modelID: 'missing' }))
+      .rejects.toThrow('output limit is unavailable');
+  });
+
   it('uses the selected agent model before session state or the runtime default', async () => {
     const client = createClientMock({
       app: { agents: vi.fn().mockResolvedValue({ data: [{ name: 'takt', model: { providerID: 'probe', modelID: 'agent-model', variant: 'high' } }] }) },
@@ -32,7 +48,7 @@ describe('OpenCode v1 model resolution', () => {
         get: vi.fn(), messages: vi.fn(), create: vi.fn(), prompt: vi.fn(), delete: vi.fn(),
       },
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'agent-model', variant: 'high',
@@ -54,7 +70,7 @@ describe('OpenCode v1 model resolution', () => {
         delete: vi.fn(),
       },
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work', sessionID: 'existing', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'session-model',
@@ -79,7 +95,7 @@ describe('OpenCode v1 model resolution', () => {
         delete: vi.fn(),
       },
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work', sessionID: 'existing', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'session-model', variant: 'high',
@@ -89,7 +105,7 @@ describe('OpenCode v1 model resolution', () => {
 
   it('selects a runtime default in a temporary noReply session and deletes that session', async () => {
     const client = createClientMock();
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'selected',
@@ -117,7 +133,7 @@ describe('OpenCode v1 model resolution', () => {
         delete: vi.fn().mockResolvedValue({ data: false }),
       },
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work' })).rejects.toThrow('was not deleted');
     expect(client.session.delete).toHaveBeenCalledOnce();
@@ -127,7 +143,7 @@ describe('OpenCode v1 model resolution', () => {
     const createFailure = new Error('temporary session create failed');
     const client = createClientMock();
     client.session.create.mockRejectedValueOnce(createFailure);
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work' })).rejects.toBe(createFailure);
     expect(client.session.delete).not.toHaveBeenCalled();
@@ -137,7 +153,7 @@ describe('OpenCode v1 model resolution', () => {
     const promptFailure = new Error('model-selection prompt failed');
     const client = createClientMock();
     client.session.prompt.mockRejectedValueOnce(promptFailure);
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     await expect(transport.resolveModel?.({ directory: '/work' })).rejects.toBe(promptFailure);
     expect(client.session.delete).toHaveBeenCalledWith({
@@ -163,7 +179,7 @@ describe('OpenCode v1 model resolution', () => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
       });
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
     const resolution = transport.resolveModel?.({ directory: '/work' }, { signal: controller.signal });
 
     await promptStarted;
@@ -193,7 +209,7 @@ describe('OpenCode v1 model resolution', () => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
       });
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
     const resolution = transport.resolveModel?.({ directory: '/work' }, { signal: controller.signal });
 
     await promptStarted;
@@ -219,7 +235,7 @@ describe('OpenCode v1 model resolution', () => {
       markCreateStarted();
       return createResponse as never;
     });
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
     const resolution = transport.resolveModel?.({ directory: '/work', agent: 'takt' });
     await createStarted;
 
@@ -237,7 +253,7 @@ describe('OpenCode v1 model resolution', () => {
     const client = createClientMock();
     client.session.prompt.mockRejectedValueOnce(promptFailure);
     client.session.delete.mockRejectedValueOnce(cleanupFailure);
-    const transport = createV1Transport('http://localhost');
+    const transport = await createV1Transport('http://localhost');
 
     let thrown: unknown;
     try {

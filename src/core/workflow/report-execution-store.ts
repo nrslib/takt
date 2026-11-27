@@ -1,0 +1,301 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { relative, resolve, sep } from 'node:path';
+import { z } from 'zod';
+import { REPORT_EXECUTIONS_DIRECTORY, classifyReportRelativePath } from '../models/reserved-report-names.js';
+import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '../../shared/utils/private-file.js';
+import { runPrivateFileExclusive } from '../../shared/utils/private-file-lock.js';
+import { lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
+import { createLogger } from '../../shared/utils/index.js';
+import { pinReportContent } from './report-writer.js';
+import { buildWorkflowCallNamespaceSegment, parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
+import { parseWorkflowExecutionIdentity, serializeWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
+import type { InheritedReportProducer } from './workflow-resume-records.js';
+
+const publicName = z.string().refine((value) => classifyReportRelativePath(value).kind === 'public');
+const versionPath = z.string().refine((value) => value.startsWith(`${REPORT_EXECUTIONS_DIRECTORY}/versions/`)
+  && !value.includes('\\')
+  && value.split('/').every((part) => part !== '..' && part !== '.' && part.length > 0));
+const executionSchema = z.object({
+  id: z.string().uuid(),
+  identity: z.string(),
+  producer: z.string(),
+  namespace: z.string().refine((value) => value === '' || classifyReportRelativePath(value).kind === 'public'),
+  sequence: z.number().int().positive(),
+  completionOrder: z.number().int().positive().optional(),
+  completed: z.boolean(),
+  reports: z.record(publicName, versionPath.nullable()),
+  reportHashes: z.record(publicName, z.string().regex(/^[a-f0-9]{64}$/)).optional(),
+}).strict();
+const storeSchema = z.object({
+  lineage: z.string().uuid(),
+  executions: z.array(executionSchema),
+}).strict();
+type ReportExecution = z.infer<typeof executionSchema>;
+const log = createLogger('report-execution-store');
+
+function reportContentHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+export interface ReportExecutionMetadata {
+  readonly id: string;
+  readonly producer: string;
+  readonly order: number;
+  readonly completionOrder?: number;
+}
+
+function nextExecutionOrder(executions: readonly ReportExecution[]): number {
+  return executions.reduce((order, entry) => Math.max(order, entry.sequence, entry.completionOrder ?? 0), 0) + 1;
+}
+
+function reportOrigin(executions: readonly ReportExecution[], version: string): ReportExecution {
+  return executions.filter((entry) => Object.values(entry.reports).includes(version))
+    .sort((left, right) => right.namespace.length - left.namespace.length || right.sequence - left.sequence)[0]!;
+}
+
+function reportExecutionMetadata(lineage: string, entry: ReportExecution): ReportExecutionMetadata {
+  return {
+    id: `${lineage}/${entry.id}`, producer: entry.producer, order: entry.sequence,
+    ...(entry.completionOrder === undefined ? {} : { completionOrder: entry.completionOrder }),
+  };
+}
+
+function reportProducerPath(path: string): string {
+  const parts = path.split('/');
+  return parts.map((segment, index) => {
+    if (parts[index - 1] !== 'subworkflows' || index === parts.length - 1) return segment;
+    const call = parseWorkflowCallNamespaceSegment(segment);
+    return call === undefined ? segment : buildWorkflowCallNamespaceSegment(call.stepName, call.workflowName, 1);
+  }).join('/');
+}
+
+/** Durable execution identities and immutable bodies; latest participation indexes stay separate. */
+export class ReportExecutionStore {
+  private readonly active = new Set<string>();
+  private readonly started = new Set<string>();
+  private readonly inherited = new Map<string, Map<string, {
+    savedIdentity: string;
+    publicPath: string;
+    fixed?: { path: string; execution: ReportExecutionMetadata; origin: ReportExecutionMetadata; contentSha256?: string };
+  }>>();
+  private resuming = false;
+  private readonly directory: string;
+  private readonly indexPath: string;
+
+  constructor(private readonly reportsRoot: string) {
+    this.directory = resolve(reportsRoot, REPORT_EXECUTIONS_DIRECTORY);
+    this.indexPath = resolve(this.directory, 'index.json');
+  }
+
+  restoreInheritedReports(producers: readonly InheritedReportProducer[]): void {
+    this.resuming = true;
+    const state = this.read();
+    const executions = state?.executions.flatMap((entry) => {
+      const identity = parseWorkflowExecutionIdentity(entry.identity);
+      return identity === undefined ? [] : [{ entry, identity }];
+    }) ?? [];
+    for (const producer of producers) {
+      const identity = parseWorkflowExecutionIdentity(producer.savedIdentity);
+      const parallelParent = parseWorkflowExecutionIdentity(producer.identity)?.parallel_parent;
+      const namespace = producer.reportPath === producer.reportName ? '' : producer.reportPath.slice(0, -producer.reportName.length - 1);
+      const execution = executions.filter((candidate) => candidate.identity.step === identity?.step
+        && (candidate.identity.parallel_parent === identity?.parallel_parent || candidate.identity.parallel_parent === parallelParent)
+        && candidate.entry.namespace === namespace).at(-1)?.entry;
+      const producerName = reportProducerPath(producer.reportName);
+      const version = execution?.reports[producerName];
+      // An execution without completed output must never borrow an older public body.
+      if (execution !== undefined && (!execution.completed || version == null)) continue;
+      const fixed = version == null ? undefined : {
+        path: resolve(this.reportsRoot, version),
+        execution: reportExecutionMetadata(state!.lineage, execution!),
+        origin: reportExecutionMetadata(state!.lineage, reportOrigin(state!.executions, version)),
+        ...(execution?.reportHashes?.[producerName] === undefined ? {} : { contentSha256: execution.reportHashes[producerName] }),
+      };
+      const reports = this.inherited.get(producer.identity) ?? new Map();
+      reports.set(producer.reportName, { savedIdentity: execution?.identity ?? producer.savedIdentity, publicPath: resolve(this.reportsRoot, publicName.parse(producer.reportPath)),
+        ...(fixed === undefined ? {} : { fixed }),
+      });
+      this.inherited.set(producer.identity, reports);
+    }
+  }
+
+  isInheritedProducer(identity: string): boolean {
+    return this.resuming && !this.started.has(identity);
+  }
+
+  rebindInheritedInvocation(from: string, to: string, previousCallInstance: number, callInstance: number): void {
+    const source = parseWorkflowExecutionIdentity(from);
+    const target = parseWorkflowExecutionIdentity(to);
+    if (source === undefined || target === undefined) throw new Error('Invalid inherited invocation identity');
+    const oldPrefix = [...source.calls, { workflow: source.workflow, step: source.step, kind: 'workflow_call' as const, instance: previousCallInstance }];
+    const newPrefix = [...target.calls, { workflow: target.workflow, step: target.step, kind: 'workflow_call' as const, instance: callInstance }];
+    const moves = [...this.inherited].flatMap(([identity, reports]) => {
+      const parsed = parseWorkflowExecutionIdentity(identity);
+      if (parsed === undefined || !oldPrefix.every((frame, index) => {
+        const actual = parsed.calls[index];
+        return actual?.workflow === frame.workflow && actual.step === frame.step && actual.kind === frame.kind && actual.instance === frame.instance;
+      })) return [];
+      return [{ from: identity, to: serializeWorkflowExecutionIdentity({ ...parsed, calls: [...newPrefix, ...parsed.calls.slice(oldPrefix.length)] }), reports }];
+    });
+    for (const move of moves) this.inherited.delete(move.from);
+    for (const move of moves) this.inherited.set(move.to, move.reports);
+  }
+
+  readInherited(identity: string, reportName: string, previous?: number): {
+    content: string; path: string; execution?: ReportExecutionMetadata; origin?: ReportExecutionMetadata; history?: string;
+  } | undefined {
+    const report = this.inherited.get(identity)?.get(reportName);
+    if (report === undefined || !this.isInheritedProducer(identity)) return undefined;
+    const history = previous === undefined ? {} : { history: this.history(report.savedIdentity, reportName, previous) };
+    if (report.fixed !== undefined) {
+      const snapshot = readPrivateFileState(report.fixed.path);
+      if (snapshot.state.exists && 'content' in snapshot) return { ...report.fixed, ...history, content: snapshot.content.toString('utf8') };
+    }
+    // Only the public file explicitly adopted at this call position may replace a missing fixed version.
+    const snapshot = readPrivateFileState(report.publicPath);
+    if (!snapshot.state.exists || !('content' in snapshot)) return undefined;
+    if (report.fixed !== undefined) {
+      if (report.fixed.contentSha256 === undefined) {
+        log.warn('Ignoring inherited public report because its saved content hash is unavailable', { path: report.publicPath });
+        return undefined;
+      }
+      if (snapshot.state.contentSha256 !== report.fixed.contentSha256) {
+        log.warn('Ignoring inherited public report because it differs from the saved version', { path: report.publicPath });
+        return undefined;
+      }
+    }
+    return { path: report.publicPath, ...history, content: snapshot.content.toString('utf8') };
+  }
+
+  private read(): z.infer<typeof storeSchema> | undefined {
+    if (lstatOrUndefined(this.directory) === undefined) return undefined;
+    const snapshot = readPrivateFileState(this.indexPath);
+    return snapshot.state.exists && 'content' in snapshot
+      ? storeSchema.parse(JSON.parse(snapshot.content.toString('utf8')))
+      : undefined;
+  }
+
+  private update<T>(change: (state: z.infer<typeof storeSchema>) => T): T {
+    ensurePrivateDirectory(this.directory);
+    return runPrivateFileExclusive(resolve(this.directory, 'index.lock'), () => {
+      const state = this.read() ?? { lineage: randomUUID(), executions: [] };
+      const result = change(state);
+      writePrivateFile(this.indexPath, JSON.stringify(state));
+      return result;
+    });
+  }
+
+  begin(identity: string, producer: string, reportDir: string, reportNames: readonly string[], resume = false): string {
+    const namespace = relative(resolve(this.reportsRoot), resolve(reportDir)).split(sep).join('/');
+    if (namespace.startsWith('..') || resolve(this.reportsRoot, namespace) !== resolve(reportDir)) {
+      throw new Error('Report execution directory escapes its run');
+    }
+    this.started.add(identity);
+    this.inherited.delete(identity);
+    const id = this.update((state) => {
+      for (const entry of state.executions) {
+        if (entry.identity === identity) this.active.delete(entry.id);
+      }
+      const interrupted = state.executions.filter((entry) => entry.identity === identity).at(-1);
+      if (resume && interrupted !== undefined && !interrupted.completed) return interrupted.id;
+      const execution: ReportExecution = {
+        id: randomUUID(), identity, producer, namespace,
+        sequence: nextExecutionOrder(state.executions),
+        completed: false,
+        reports: Object.fromEntries(reportNames.map((name) => {
+          if (classifyReportRelativePath(name).kind !== 'public') throw new Error(`Invalid report name: ${name}`);
+          return [publicName.parse(reportProducerPath(name)), null];
+        })),
+      };
+      state.executions.push(execution);
+      return execution.id;
+    });
+    this.active.add(id);
+    return id;
+  }
+
+  capture(reportDir: string, reportName: string, content: string): void {
+    if (classifyReportRelativePath(reportName).kind !== 'public') throw new Error(`Invalid report name: ${reportName}`);
+    this.update((state) => {
+      const matching = state.executions.filter((entry) => {
+        if (!this.active.has(entry.id)) return false;
+        const directory = resolve(this.reportsRoot, entry.namespace);
+        const target = resolve(reportDir);
+        return target === directory || target.startsWith(`${directory}${sep}`);
+      });
+      if (matching.length === 0) return;
+      const path = relative(this.reportsRoot, pinReportContent(this.reportsRoot, reportName, content)).split(sep).join('/');
+      const contentSha256 = reportContentHash(content);
+      for (const execution of matching) {
+        const name = relative(resolve(this.reportsRoot, execution.namespace), resolve(reportDir, reportName)).split(sep).join('/');
+        const producerName = publicName.parse(reportProducerPath(name));
+        if (parseWorkflowExecutionIdentity(execution.identity)?.parallel_parent !== undefined
+          && !Object.hasOwn(execution.reports, producerName)) continue;
+        execution.reports[producerName] = path;
+        execution.reportHashes ??= {};
+        execution.reportHashes[producerName] = contentSha256;
+      }
+    });
+  }
+
+  finish(id: string, completed: boolean): void {
+    this.update((state) => {
+      const execution = state.executions.find((entry) => entry.id === id);
+      if (execution === undefined) throw new Error(`Unknown report execution "${id}"`);
+      execution.completed = completed;
+      if (completed) execution.completionOrder = nextExecutionOrder(state.executions);
+      else delete execution.completionOrder;
+    });
+    this.active.delete(id);
+  }
+
+  executions(identity: string): readonly ReportExecution[] {
+    return this.read()?.executions.filter((entry) => entry.identity === identity) ?? [];
+  }
+
+  current(identity: string, reportName: string): {
+    content: string;
+    path: string;
+    execution: ReportExecutionMetadata;
+    origin: ReportExecutionMetadata;
+  } | undefined {
+    const state = this.read();
+    const executions = state?.executions.filter((entry) => entry.identity === identity) ?? [];
+    if (executions.length === 0) return undefined;
+    const current = executions.filter((entry) => entry.completed).at(-1);
+    if (current === undefined) throw new Error(`Report input source "${identity}" has no completed execution`);
+    const version = current.reports[reportProducerPath(reportName)];
+    if (version == null) throw new Error(`Current report "${reportName}" is missing from execution ${current.id}`);
+    const path = resolve(this.reportsRoot, version);
+    const snapshot = readPrivateFileState(path);
+    if (!snapshot.state.exists || !('content' in snapshot)) throw new Error(`Current report version is missing: ${path}`);
+    const origin = reportOrigin(state!.executions, version);
+    return {
+      content: snapshot.content.toString('utf8'), path,
+      execution: reportExecutionMetadata(state!.lineage, current),
+      origin: reportExecutionMetadata(state!.lineage, origin),
+    };
+  }
+
+  history(identity: string, reportName: string, previous: number): string {
+    const state = this.read();
+    const executions = state?.executions.filter((entry) => entry.identity === identity) ?? [];
+    const completed = executions.filter((entry) => entry.completed);
+    const prior = previous === 0 ? [] : completed.slice(0, -1).slice(-previous);
+    const lines = [`History: ${prior.length} / ${previous} completed previous executions${executions.length === 0 ? '; execution history unavailable' : ''}`];
+    for (const entry of prior) {
+      const version = entry.reports[reportProducerPath(reportName)];
+      const path = version == null ? undefined : resolve(this.reportsRoot, version);
+      const snapshot = path === undefined ? undefined : readPrivateFileState(path);
+      const available = snapshot?.state.exists === true && 'content' in snapshot;
+      const origin = version == null ? undefined : reportExecutionMetadata(state!.lineage, reportOrigin(state!.executions, version));
+      lines.push(`- execution=${state!.lineage}/${entry.id} order=${entry.sequence} completion_order=${entry.completionOrder ?? 'unavailable'} status=completed producer=${entry.producer} origin_execution=${origin?.id ?? 'unavailable'} origin_producer=${origin?.producer ?? 'unavailable'} origin_order=${origin?.order ?? 'unavailable'} origin_completion_order=${origin?.completionOrder ?? 'unavailable'} ${available ? `path=\`${path}\`` : 'report=missing'}`);
+    }
+    const incomplete = executions.filter((entry) => !entry.completed);
+    if (incomplete.length > 0) lines.push('Incomplete executions (excluded from completed history):');
+    for (const entry of incomplete) {
+      lines.push(`- execution=${state!.lineage}/${entry.id} order=${entry.sequence} status=incomplete producer=${entry.producer} (excluded from completed history)`);
+    }
+    return lines.join('\n');
+  }
+}

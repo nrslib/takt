@@ -14,6 +14,7 @@ export const DEFAULT_LANGUAGE: Language = 'en';
 /** Companion reviewers are opt-in unless runtime.yaml explicitly enables them. */
 export const DEFAULT_COMPANION_ENABLED = false;
 
+
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
   Accept: '/accept',

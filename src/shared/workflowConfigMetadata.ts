@@ -37,6 +37,11 @@ export function buildOpaqueWorkflowRef(sourcePath: string, trustInfo: { source: 
   return `${trustInfo.source}:sha256:${digest}`;
 }
 
+export function buildBuiltinWorkflowRef(relativePath: string, content: string): string {
+  const digest = createHash('sha256').update(JSON.stringify([relativePath, content])).digest('hex');
+  return `builtin:v2:sha256:${digest}`;
+}
+
 export function attachWorkflowOpaqueRef<T extends object>(workflow: T, opaqueRef: string): T {
   Object.defineProperty(workflow, WORKFLOW_OPAQUE_REF, {
     value: opaqueRef, writable: false, configurable: false, enumerable: false,

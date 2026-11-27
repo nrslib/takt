@@ -1,3 +1,9 @@
+const mockCheckTaskProviders = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
+  checkTaskNameProvider: vi.fn(async () => undefined),
+  checkQueuedTaskProviders: mockCheckTaskProviders,
+  terminalProviderConfirmation: vi.fn(() => undefined),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 
@@ -11,8 +17,11 @@ const {
   mockShowDiffAndPromptActionForTask,
   mockMergeBranch,
   mockDeleteCompletedTask,
+  mockDeleteAllTasks,
+  mockDeleteSelectedTasks,
   mockRequeueExceededTask,
   mockForceFailRunningTask,
+  mockStopRunningTask,
   mockRetryFailedTask,
   mockRequeueFailedTask,
   mockInstructBranch,
@@ -20,6 +29,7 @@ const {
   mockRunTui,
   mockSelectAndExecuteTask,
   mockSaveTaskFromInteractive,
+  mockCreateIssueAndSaveTask,
   mockResolveConfigValues,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
@@ -31,8 +41,11 @@ const {
   mockShowDiffAndPromptActionForTask: vi.fn(),
   mockMergeBranch: vi.fn(),
   mockDeleteCompletedTask: vi.fn(),
+  mockDeleteAllTasks: vi.fn(),
+  mockDeleteSelectedTasks: vi.fn(),
   mockRequeueExceededTask: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
+  mockStopRunningTask: vi.fn(),
   mockRetryFailedTask: vi.fn(),
   mockRequeueFailedTask: vi.fn(),
   mockInstructBranch: vi.fn(),
@@ -40,6 +53,7 @@ const {
   mockRunTui: vi.fn(),
   mockSelectAndExecuteTask: vi.fn(),
   mockSaveTaskFromInteractive: vi.fn(),
+  mockCreateIssueAndSaveTask: vi.fn(),
   mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3 })),
 }));
 
@@ -79,7 +93,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
   deleteTaskByKind: mockDeleteCompletedTask,
-  deleteAllTasks: vi.fn(),
+  deleteAllTasks: mockDeleteAllTasks,
+  deleteSelectedTasks: mockDeleteSelectedTasks,
 }));
 
 vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
@@ -90,6 +105,8 @@ vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
 vi.mock('../features/tasks/list/taskForceFailActions.js', () => ({
   forceFailRunningTask: mockForceFailRunningTask,
 }));
+
+vi.mock('../features/tasks/list/taskStopActions.js', () => ({ stopRunningTask: mockStopRunningTask }));
 
 vi.mock('../features/tui/index.js', () => ({
   runTui: (...args: unknown[]) => mockRunTui(...args),
@@ -103,11 +120,13 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', async (importOriginal) 
 vi.mock('../features/tasks/add/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   saveTaskFromInteractive: (...args: unknown[]) => mockSaveTaskFromInteractive(...args),
+  createIssueAndSaveTask: (...args: unknown[]) => mockCreateIssueAndSaveTask(...args),
+  promptLabelSelection: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveConfigValues: mockResolveConfigValues,
 }));
 
 import { listTasks } from '../features/tasks/list/index.js';
@@ -166,7 +185,132 @@ const runningInteractiveTask: TaskListItem = {
 
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
+    mockSelectAndExecuteTask.mockResolvedValue({ success: true });
+    mockSaveTaskFromInteractive.mockResolvedValue({ taskName: 'saved-task', tasksFile: '/project/.takt/tasks.yaml' });
     vi.clearAllMocks();
+    mockSelectOption.mockReset();
+    mockCheckTaskProviders.mockResolvedValue(undefined);
+    mockDeleteSelectedTasks.mockReset();
+  });
+
+  it('shows Delete selected… alongside All Delete and the task entries', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch, failedTask]);
+    mockSelectOption.mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    const options = mockSelectOption.mock.calls[0]![1] as Array<{ label: string }>;
+    expect(options.map((option) => option.label)).toEqual(expect.arrayContaining([
+      '[completed] completed-task (takt/completed-task)',
+      '[failed] failed-task (takt/failed-task)', 'Delete selected…', 'All Delete',
+    ]));
+    expect(mockDeleteSelectedTasks).not.toHaveBeenCalled();
+    expect(mockDeleteAllTasks).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('returns to the same list and allows individual deletion after selected deletion returns %s', async (result) => {
+    const tasks = [completedTaskWithBranch, failedTask];
+    mockListAllTaskItems.mockReturnValue(tasks);
+    mockDeleteSelectedTasks.mockResolvedValueOnce(result);
+    mockSelectOption
+      .mockImplementationOnce(async (_message: string, options: Array<{ label: string; value: string }>) => {
+        const selected = options.find((option) => option.label === 'Delete selected…');
+        expect(selected).toBeDefined();
+        return selected!.value;
+      })
+      .mockResolvedValueOnce('failed:1')
+      .mockResolvedValueOnce('delete')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockDeleteSelectedTasks).toHaveBeenCalledExactlyOnceWith(tasks);
+    expect(mockDeleteCompletedTask).toHaveBeenCalledExactlyOnceWith(failedTask);
+    expect(mockDeleteAllTasks).not.toHaveBeenCalled();
+    expect(mockListAllTaskItems).toHaveBeenCalledTimes(3);
+    expect(mockSelectOption.mock.calls.map(([message]) => message)).toEqual([
+      'List Tasks', 'List Tasks', 'Action for failed-task:', 'List Tasks',
+    ]);
+  });
+
+  it('keeps All Delete routed directly to deletion and returns to the list', async () => {
+    const tasks = [runningTask, completedTaskWithBranch];
+    mockListAllTaskItems.mockReturnValue(tasks);
+    mockSelectOption
+      .mockImplementationOnce(async (_message: string, options: Array<{ label: string; value: string }>) => {
+        const selected = options.find((option) => option.label === 'All Delete');
+        expect(selected).toBeDefined();
+        return selected!.value;
+      })
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockDeleteAllTasks).toHaveBeenCalledExactlyOnceWith(tasks);
+    expect(mockDeleteSelectedTasks).not.toHaveBeenCalled();
+    expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    expect(mockSelectOption.mock.calls.map(([message]) => message)).toEqual(['List Tasks', 'List Tasks']);
+  });
+
+  it('should accept a different action in the same task list after instruction cancellation', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch, failedTask]);
+    mockInstructBranch.mockResolvedValue(false);
+    mockCreatePullRequestForTask.mockResolvedValue(false);
+    mockShowDiffAndPromptActionForTask.mockResolvedValueOnce('instruct');
+    mockSelectOption
+      .mockResolvedValueOnce('completed:0')
+      .mockResolvedValueOnce('failed:1')
+      .mockResolvedValueOnce('create_pr')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockInstructBranch).toHaveBeenCalledWith('/project', completedTaskWithBranch, undefined);
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', failedTask);
+    expect(mockSelectOption).toHaveBeenCalledTimes(4);
+    expect(mockDeleteTask).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
+  it('failed merge taskのPRとcloneを表示しCreate PRまたは再キューを選べる', async () => {
+    const mergeTask: TaskListItem = {
+      ...failedTask,
+      name: 'merge-pr-123', branch: 'main',
+      worktreePath: '/project/.takt/worktrees/merge-pr-123',
+      data: { task: 'merge PR', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'main', merge_task: true },
+      failure: { error: 'merge conflict remains' },
+    };
+    mockListAllTaskItems.mockReturnValue([mergeTask]);
+    mockSelectOption.mockResolvedValueOnce('failed:0').mockResolvedValueOnce('requeue')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('  PR: #123');
+    expect(mockInfo).toHaveBeenCalledWith(`  Clone: ${mergeTask.worktreePath}`);
+    expect(mockInfo).toHaveBeenCalledWith('  Failure: merge conflict remains');
+    expect(mockSelectOption.mock.calls[1]?.[1].map((option: { value: string }) => option.value))
+      .toEqual(['requeue', 'retry', 'create_pr', 'delete']);
+    expect(mockRequeueFailedTask).toHaveBeenCalledWith(mergeTask, '/project');
+    expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
+  });
+
+  it('failed merge taskのCreate PRを既存のPR操作へ渡す', async () => {
+    const mergeTask: TaskListItem = {
+      ...failedTask,
+      name: 'merge-pr-123', branch: 'feature/pr-123',
+      data: { task: 'Merge PR #123', workflow: 'merge-review-fix-simple',
+        source: 'pr_review', pr_number: 123, branch: 'feature/pr-123', merge_task: true },
+    };
+    mockListAllTaskItems.mockReturnValue([mergeTask]);
+    mockSelectOption.mockResolvedValueOnce('failed:0').mockResolvedValueOnce('create_pr')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockCreatePullRequestForTask).toHaveBeenCalledWith('/project', mergeTask);
+    expect(mockRequeueFailedTask).not.toHaveBeenCalled();
   });
 
   it('running タスクで mark as failed 選択時は forceFailRunningTask を呼ぶ', async () => {
@@ -185,8 +329,10 @@ describe('listTasks interactive status actions', () => {
         value: 'force_fail',
         description: expect.any(String),
       },
+      { label: 'Stop', value: 'stop', description: expect.any(String) },
     ]);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
+    expect(mockStopRunningTask).not.toHaveBeenCalled();
   });
 
   it('running タスクでキャンセル時は forceFailRunningTask を呼ばない', async () => {
@@ -204,7 +350,18 @@ describe('listTasks interactive status actions', () => {
         value: 'force_fail',
         description: expect.any(String),
       },
+      { label: 'Stop', value: 'stop', description: expect.any(String) },
     ]);
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+    expect(mockStopRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('dispatches Stop with the selected execution identity and leaves force fail untouched', async () => {
+    const task = { ...runningTask, executionId: 'selected-execution' };
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('stop').mockResolvedValueOnce(null);
+    await listTasks('/project');
+    expect(mockStopRunningTask).toHaveBeenCalledWith(task, '/project', 'en');
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
   });
 
@@ -219,7 +376,7 @@ describe('listTasks interactive status actions', () => {
     }) => {
       await options.dispatch('default', {
         action: 'execute',
-        task: 'task for Issue #456',
+        task: '# Fix Issue\n\nIssue: #456\n\nFix the reported problem.',
         issueContextReplacement: { issueNumber: 456 },
       });
       return { kind: 'cancelled' };
@@ -229,7 +386,7 @@ describe('listTasks interactive status actions', () => {
 
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/project',
-      'task for Issue #456',
+      '# Fix Issue\n\nIssue: #456\n\nFix the reported problem.',
       expect.objectContaining({
         traceTaskContext: { source: 'issue', issueNumber: 456 },
       }),
@@ -260,9 +417,58 @@ describe('listTasks interactive status actions', () => {
       '/project',
       'task for multiple Issues',
       'default',
-      {},
+      { allowCancel: true },
     );
   });
+
+  it.each(['execute', 'save_task', 'create_issue'] as const)(
+    'resolves bound and unrelated instructions separately for list action %s', async (action) => {
+      const bound = '# Fix Issue\n\nIssue: #456\n\nFix the reported problem.';
+      const unrelated = '# Update logs\n\n```text\nIssue: #456\n```';
+      mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('running:0')
+        .mockResolvedValueOnce('interactive')
+        .mockResolvedValueOnce(null);
+      mockRunTui.mockImplementation(async (options: {
+        dispatch: (workflowId: string, result: unknown) => Promise<void>;
+      }) => {
+        for (const task of [bound, unrelated]) {
+          await options.dispatch('default', {
+            action, task, issueContextReplacement: { issueNumber: 456 },
+          });
+        }
+        return { kind: 'cancelled' };
+      });
+
+      await listTasks('/project');
+
+      if (action === 'execute') {
+        expect(mockSelectAndExecuteTask.mock.calls.map((call) => ({
+          task: call[1], issue: call[2]?.traceTaskContext?.issueNumber,
+          skipTaskList: call[2]?.skipTaskList,
+        }))).toEqual([
+          { task: bound, issue: 456, skipTaskList: true },
+          { task: unrelated, issue: undefined, skipTaskList: true },
+        ]);
+        expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+      } else if (action === 'save_task') {
+        expect(mockSaveTaskFromInteractive.mock.calls.map((call) => ({
+          task: call[1], issue: call[3]?.issue,
+        }))).toEqual([
+          { task: bound, issue: 456 }, { task: unrelated, issue: undefined },
+        ]);
+      } else {
+        expect(mockCreateIssueAndSaveTask.mock.calls.map((call) => ({
+          task: call[1], sourceIssue: call[3]?.sourceIssue,
+        }))).toEqual([
+          { task: bound, sourceIssue: { number: 456, language: 'en' } },
+          { task: unrelated, sourceIssue: undefined },
+        ]);
+      }
+      expect(mockSelectOption).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it('running task の対話から複数Issueへの置換を実行番号なしで渡す', async () => {
     mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);
@@ -378,6 +584,21 @@ describe('listTasks interactive status actions', () => {
 
       expect(mockRequeueExceededTask).toHaveBeenCalledWith('exceeded-task');
       expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    });
+
+    it('provider preflight failure is displayed and leaves the list loop available', async () => {
+      mockListAllTaskItems.mockReturnValue([exceededTask]);
+      mockCheckTaskProviders.mockRejectedValueOnce(new Error('Managed provider installation was declined'));
+      mockSelectOption
+        .mockResolvedValueOnce('exceeded:0')
+        .mockResolvedValueOnce('requeue')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockInfo).toHaveBeenCalledWith('Managed provider installation was declined');
+      expect(mockRequeueExceededTask).not.toHaveBeenCalled();
+      expect(mockSelectOption).toHaveBeenCalledTimes(3);
     });
 
     it('exceeded delete 選択時は deleteTaskByKind を呼ぶ', async () => {

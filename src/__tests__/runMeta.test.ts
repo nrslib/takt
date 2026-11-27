@@ -1,3 +1,5 @@
+import type { WorkflowResumePoint } from '../core/models/types.js';
+import type { WorkflowTraceDiscovery } from '../core/workflow/observability/traceDiscovery.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildRunPaths, type RunPaths } from '../core/workflow/run/run-paths.js';
 
@@ -8,12 +10,47 @@ vi.mock('../infra/config/index.js', () => ({
 
 import { ensureDir, writeFileAtomic } from '../infra/config/index.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
+import { parseRunMeta } from '../core/workflow/run/run-meta.js';
 
 function createRunPaths(): RunPaths {
   return buildRunPaths('/tmp/project', '20260409-force-fail-test');
 }
 
 describe('RunMetaManager', () => {
+  it.each([
+    ['FAKE_VALUE', 'a9 [REDACTED]'],
+    ['a', '[REDACTED]9 FAKE_VALUE'],
+  ])('preserves run control fields while redacting %s in the same metadata', (secret, reason) => {
+    setExecutionSecrets([secret]);
+    try {
+      const manager = new RunMetaManager(createRunPaths(), 'a9 FAKE_VALUE', 'default');
+      const resumePoint: WorkflowResumePoint = { version: 2,
+        stack: [{ workflow: 'default', workflow_ref: 'project:sha256:default', step: 'analyze', kind: 'agent', occurrence: 1,
+          step_iterations: { analyze: 1 } }],
+        iteration: 2, elapsed_ms: 123, workflow_call_invocations: {}, workflow_step_participations: {} };
+      manager.updateStep('analyze', 2, resumePoint);
+      manager.projectTerminal({ status: 'failed', iterations: 2, reason: 'a9 FAKE_VALUE',
+        failure: { step: 'analyze', error: 'a9 FAKE_VALUE' }, endTime: '2026-11-17T00:00:00.000Z' });
+      const saved = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1]));
+      expect(saved).toMatchObject({ task: reason, status: 'failed', workflow: 'default',
+        runSlug: createRunPaths().slug, currentStep: 'analyze', currentIteration: 2,
+        iterations: 2, reason, failure: { step: 'analyze', error: reason } });
+      expect(parseRunMeta(saved)).toMatchObject({ status: 'failed', runSlug: createRunPaths().slug,
+        currentStep: 'analyze', resumePoint, reason, failure: { step: 'analyze', error: reason } });
+    } finally { setExecutionSecrets([]); }
+  });
+  it('redacts a distributed credential in terminal failure metadata before writing the file', () => {
+    setExecutionSecrets(['fake-distributed-meta-value']);
+    try {
+      const manager = new RunMetaManager(createRunPaths(), 'task', 'default');
+      manager.projectTerminal({ status: 'failed', iterations: 1, reason: 'provider fake-distributed-meta-value',
+        failure: { step: 'work', error: 'fake-distributed-meta-value' }, endTime: new Date().toISOString() });
+      const saved = String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1]);
+      expect(saved).not.toContain('fake-distributed-meta-value');
+      expect(JSON.parse(saved)).toMatchObject({ status: 'failed', reason: 'provider [REDACTED]', failure: { error: '[REDACTED]' } });
+    } finally { setExecutionSecrets([]); }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -104,7 +141,7 @@ describe('RunMetaManager', () => {
 
   it('should refresh resume point without rolling back current step metadata', () => {
     const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
-    const staleResumePoint = {
+    const staleResumePoint: WorkflowResumePoint = {
       version: 2,
       stack: [
         { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
@@ -115,7 +152,7 @@ describe('RunMetaManager', () => {
       workflow_call_invocations: {},
       workflow_step_participations: {},
     };
-    const refreshedResumePoint = {
+    const refreshedResumePoint: WorkflowResumePoint = {
       version: 2,
       stack: [
         { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
@@ -140,7 +177,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should persist trace discovery metadata through progress updates', () => {
-    const traceDiscovery = {
+    const traceDiscovery: WorkflowTraceDiscovery = {
       serviceName: 'takt',
       runId: '20260409-force-fail-test',
       workflowName: 'default',
@@ -288,4 +325,33 @@ describe('RunMetaManager', () => {
       expect(meta).not.toHaveProperty('prContext');
     }
   });
+});
+
+it('counts executed steps across child workflow invocations without treating phases or inherited counts as new executions', async () => {
+  const { parseRunMeta } = await import('../core/workflow/run/run-meta.js');
+  const manager = new RunMetaManager(createRunPaths(), 'task', 'root');
+  expect(JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1])).stepExecutions).toEqual([]);
+  for (const call of [1, 2]) {
+    const parent = { workflow: 'root', workflow_ref: 'root.yaml', step: 'delegate', kind: 'workflow_call' as const,
+      occurrence: call, call_instance: call, step_iterations: { delegate: call } };
+    manager.recordWorkflowCall([parent]);
+    for (const occurrence of [1, 2, 3]) {
+      manager.recordStep('review', [parent, { workflow: 'child', workflow_ref: 'child.yaml', step: 'review', kind: 'agent', occurrence }]);
+      manager.updateStep('delegate', occurrence, { version: 2, iteration: occurrence, elapsed_ms: 0,
+        stack: [parent, { workflow: 'child', workflow_ref: 'child.yaml', step: 'review', kind: 'agent', occurrence,
+          step_iterations: { review: occurrence + 100 } }], workflow_call_invocations: {}, workflow_step_participations: {} });
+      manager.updatePhase('delegate', occurrence, 2);
+      manager.updateResumePoint();
+    }
+  }
+  const saved = () => parseRunMeta(JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1])));
+  expect(saved().stepExecutions).toMatchObject([
+    { workflow: 'root', step: 'delegate', count: 2 }, { workflow: 'child', step: 'review', count: 6 },
+  ]);
+  manager.updateStep('review', 99);
+  manager.recordStep('review', []);
+  expect(saved().stepExecutions).toMatchObject([
+    { workflow: 'root', step: 'delegate', count: 2 }, { workflow: 'child', step: 'review', count: 6 },
+    { workflow: 'root', step: 'review', count: 1 },
+  ]);
 });

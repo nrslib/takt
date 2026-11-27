@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
+vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: [] }; } } }));
+import { beforeEach,describe,expect,it,vi } from 'vitest';
 import type { runWithWorkerPool as RunWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 
 const mocks = vi.hoisted(() => ({
@@ -15,15 +17,29 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../infra/task/index.js', () => ({
-  TaskRunner: vi.fn().mockImplementation(() => ({
-    failInterruptedRunningTasks: mocks.failInterruptedRunningTasks,
-    getTasksFilePath: mocks.getTasksFilePath,
-    claimNextTasks: mocks.claimNextTasks,
-  })),
+  TaskRunner: vi.fn().mockImplementation(function () {
+    return {
+      failInterruptedRunningTasks: mocks.failInterruptedRunningTasks,
+      listTaskStateItems: vi.fn(() => []),
+      getTasksFilePath: mocks.getTasksFilePath,
+      claimNextTasks: mocks.claimNextTasks,
+    };
+  }),
 }));
 
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.runWithWorkerPool,
+}));
+vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
+  forceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../infra/task/project-execution-lock.js', () => ({
+  acquireProjectExecutionLock: vi.fn(() => ({
+    owner: { ownerId: 'watch-test-owner', pid: process.pid, kind: 'watch', state: 'starting',
+      processIdentity: { startTime: 'test-process-start' } },
+    updateState: vi.fn(), release: vi.fn(),
+  })),
 }));
 vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: mocks.resolveWorkflowConfigValues,
@@ -36,6 +52,7 @@ vi.mock('../shared/utils/index.js', () => ({
   notifySuccess: mocks.notifySuccess,
   notifyError: mocks.notifyError,
   sendSlackNotification: mocks.sendSlackNotification,
+  createLogger: () => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), enter: vi.fn(), exit: vi.fn() }),
 }));
 
 import { watchTasks } from '../features/tasks/watch/index.js';

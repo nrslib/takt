@@ -1,0 +1,160 @@
+ja:
+  lang: ja
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  projectConfig: &projectConfig
+    assistant:
+      formal_spec:
+        mode: true
+        comments: true
+  previousTurns:
+    - event: &previousEvent
+        kind: watch_observation
+        observation:
+          kind: pr_conflicting
+          repositoryDirectory: /workspace/project
+          goalId: 650e8400-e29b-41d4-a716-446655440000
+          url: https://github.com/example/project/pull/42
+          targetId: help-pr
+          generation: conflict-1
+          observedAt: 2026-11-08T01:00:00.000Z
+      response:
+        message: ヘルプ更新のPRに取り込み先との衝突があります。既存の仕上げタスクで衝突の解消を進めます。
+        summary: null
+  user: |-
+    分割アップロード（putChunk / sealUpload / cancelUpload）について、PRのレビューで次の指摘が出た。本当に起きるかを調べて、起きるものは直して。
+    1. 同じチャンク番号の再送で受信バイト数が二重に加算される。
+    2. チェックサム不一致で sealUpload が失敗しても、保存された状態が ready になる。
+    3. cancelUpload のAPIを使うと、他の利用者のアップロードも取り消せる。
+    4. キャンセル済みのアップロードも進行中の一覧に残る。
+  readResults: &readResults
+    - tool: Bash
+      arguments:
+        command: rg -n 'putChunk|sealUpload|cancelUpload|listActiveUploads' src/uploads
+      result: |-
+        src/uploads/routes.ts:2:import { putChunk, sealUpload, cancelUpload } from './service.js';
+        src/uploads/routes.ts:4:import { listActiveUploads } from './queries.js';
+        src/uploads/service.ts:5:export async function putChunk(upload, index, data) {
+        src/uploads/service.ts:12:export async function sealUpload(upload, expectedDigest) {
+        src/uploads/service.ts:22:export async function cancelUpload(upload) {
+        src/uploads/queries.ts:2:export function listActiveUploads(ownerId) {
+    - tool: Bash
+      arguments:
+        command: cat src/uploads/routes.ts
+      result: |-
+        import { getUpload } from './store.js';
+        import { putChunk, sealUpload, cancelUpload } from './service.js';
+        import { requireOwner } from './access.js';
+        import { listActiveUploads } from './queries.js';
+
+        export async function dispatch(request) {
+          if (request.operation === 'list') return listActiveUploads(request.user.id);
+          const upload = getUpload(request.params.id);
+          requireOwner(upload, request.user.id);
+          switch (request.operation) {
+            case 'chunk': return putChunk(upload, request.body.index, request.body.data);
+            case 'seal': return sealUpload(upload, request.body.digest);
+            case 'cancel': return cancelUpload(upload);
+            default: throw new Error('Unknown operation');
+          }
+        }
+    - tool: Bash
+      arguments:
+        command: cat src/uploads/store.ts
+      result: |-
+        export type Upload = {
+          id: string;
+          ownerId: string;
+          status: 'receiving' | 'ready' | 'cancelled';
+          chunks: Record<number, string>;
+          receivedBytes: number;
+        };
+        const uploads = new Map<string, Upload>();
+        export function getUpload(id: string): Upload {
+          const upload = uploads.get(id);
+          if (!upload) throw new Error('Not found');
+          return structuredClone(upload);
+        }
+        export async function saveUpload(upload: Upload): Promise<void> {
+          uploads.set(upload.id, structuredClone(upload));
+        }
+        export function allUploads(): Upload[] {
+          return [...uploads.values()].map(upload => structuredClone(upload));
+        }
+    - tool: Bash
+      arguments:
+        command: sed -n '1,11p' src/uploads/service.ts
+      result: |-
+        import { saveUpload } from './store.js';
+        import { combineChunks, sha256 } from './encoding.js';
+        function requireReceiving(upload) { if (upload.status !== 'receiving') throw new Error('Invalid state'); }
+
+        export async function putChunk(upload, index, data) {
+          requireReceiving(upload);
+          upload.chunks[index] = data;
+          upload.receivedBytes += Buffer.byteLength(data);
+          await saveUpload(upload);
+          return upload;
+        }
+    - tool: Bash
+      arguments:
+        command: sed -n '12,21p' src/uploads/service.ts
+      result: |-
+        export async function sealUpload(upload, expectedDigest) {
+          requireReceiving(upload);
+          const body = combineChunks(upload.chunks);
+          upload.status = 'ready';
+          await saveUpload(upload);
+          if (sha256(body) !== expectedDigest) {
+            throw new Error('Checksum mismatch');
+          }
+          return upload;
+        }
+    - tool: Bash
+      arguments:
+        command: cat src/uploads/access.ts
+      result: |-
+        export function requireOwner(upload, actorId) {
+          if (upload.ownerId !== actorId) throw new Error('Forbidden');
+        }
+    - tool: Bash
+      arguments:
+        command: sed -n '22,27p' src/uploads/service.ts
+      result: |-
+        export async function cancelUpload(upload) {
+          requireReceiving(upload);
+          upload.status = 'cancelled';
+          await saveUpload(upload);
+          return upload;
+        }
+    - tool: Bash
+      arguments:
+        command: cat src/uploads/queries.ts
+      result: |-
+        import { allUploads } from './store.js';
+        export function listActiveUploads(ownerId) {
+          return allUploads().filter(upload => upload.ownerId === ownerId && upload.status === 'receiving');
+        }
+en:
+  lang: en
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  projectConfig: *projectConfig
+  previousTurns:
+    - event: *previousEvent
+      response:
+        message: The help update PR conflicts with its target branch. The existing finishing task will handle the conflict.
+        summary: null
+  user: |-
+    A PR review raised the following findings about chunked uploads (putChunk / sealUpload / cancelUpload). Investigate whether they can actually occur, and fix the ones that can.
+    1. Resending the same chunk index counts its received bytes twice.
+    2. Even when sealUpload fails with a checksum mismatch, the persisted status becomes ready.
+    3. The cancelUpload API lets a user cancel another user's upload.
+    4. Cancelled uploads remain in the list of active uploads.
+  readResults: *readResults

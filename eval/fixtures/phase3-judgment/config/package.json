@@ -1,0 +1,6 @@
+{
+  "name": "application-config-loader",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

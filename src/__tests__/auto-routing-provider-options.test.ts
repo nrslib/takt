@@ -28,9 +28,10 @@ function createBuilder(engineOverrides: Partial<WorkflowEngineOptions>): Options
     () => undefined,
     () => '.takt/runs/auto-routing/reports',
     () => 'ja',
-    () => [{ name: 'implement' }],
     () => 'auto-routing-provider-options',
-    () => 'Auto routing provider options test workflow',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
   );
 }
 

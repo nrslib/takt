@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import chalk from 'chalk';
 import type { TaskInfo } from '../infra/task/types.js';
+import type { ProjectExecutionLock } from '../infra/task/project-execution-lock.js';
 import type { TaskExecutionParallelOptions } from '../features/tasks/execute/types.js';
 import type { RunAllTasksOptions } from '../features/tasks/execute/types.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
@@ -11,13 +13,34 @@ import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/ta
 const { executeRunTaskAndComplete } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn<typeof ExecuteRunTask>(),
 }));
-vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({ executeRunTaskAndComplete }));
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete,
+  executeRunTaskAndCompleteWithDetails: vi.fn(async (...args: Parameters<typeof ExecuteRunTask>) => {
+    const success = await executeRunTaskAndComplete(...args);
+    return { success, runSlug: 'test-run', completion: { success, interrupted: false } };
+  }),
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, openSync: vi.fn(actual.openSync), writeFileSync: vi.fn(actual.writeFileSync) };
+});
+vi.mock('../infra/task/process.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/task/process.js')>()),
+  getSelfProcessIdentity: () => ({ startTime: '2026-10-03T14:23:40.1234567Z' }),
+  getProcessIdentity: (pid: number) => pid === process.pid
+    ? { startTime: '2026-10-03T14:23:40.1234567Z' }
+    : undefined,
+}));
 import { TaskRunner } from '../infra/task/runner.js';
 import { watchTasks } from '../features/tasks/watch/index.js';
 import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
 import { attemptAutoRequeueTask, requeueExistingFailedTasks } from '../features/tasks/execute/parallelExecution.js';
+import * as providerPreflight from '../features/tasks/execute/providerPreflight.js';
 import { enterInputWait, leaveInputWait } from '../features/tasks/execute/inputWait.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import * as privateFiles from '../shared/utils/private-file.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 
 const taskNames = [
   { name: 'alpha', displayName: 'alpha' },
@@ -56,6 +79,13 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
 
   function state(name: string) {
     return records().find((task) => task.name === name);
+  }
+
+  function executionOwner(): ProjectExecutionLock['owner'] {
+    const directory = join(projectDir, '.takt', 'execution.lock');
+    const files = readdirSync(directory).filter((name) => name.endsWith('.json'));
+    expect(files).toHaveLength(1);
+    return JSON.parse(readFileSync(join(directory, files[0]!), 'utf8')) as ProjectExecutionLock['owner'];
   }
 
   function writeSavedTask(name: string, overrides: Record<string, unknown> = {}): void {
@@ -106,6 +136,46 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     return added;
   }
 
+  async function injectClaimFailure(stage: 'create' | 'metadata' | 'persistence', failures: number) {
+    const nativeFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    const claimNextTasks = TaskRunner.prototype.claimNextTasks;
+    let claiming = false;
+    let lockDescriptor: number | undefined;
+    const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks').mockImplementation(function (this: TaskRunner, count) {
+      claiming = true;
+      try {
+        return claimNextTasks.call(this, count);
+      } finally {
+        claiming = false;
+        lockDescriptor = undefined;
+      }
+    });
+    const fail = () => {
+      if (failures > 0) {
+        failures--;
+        throw failure;
+      }
+    };
+    vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
+      const claimLock = claiming && path === `${runner.getTasksFilePath()}.lock` && flags === 'wx';
+      if (claimLock && stage === 'create') fail();
+      const descriptor = nativeFs.openSync(path, flags, mode);
+      if (claimLock) lockDescriptor = descriptor;
+      return descriptor;
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data, options) => {
+      if (claiming && stage === 'metadata' && file === lockDescriptor) fail();
+      return nativeFs.writeFileSync(file, data, options);
+    });
+    const write = privateFiles.writePrivateFileWithMode;
+    vi.spyOn(privateFiles, 'writePrivateFileWithMode').mockImplementation((file, data, mode) => {
+      if (claiming && stage === 'persistence' && file === runner.getTasksFilePath()) fail();
+      return write(file, data, mode);
+    });
+    return { claim, failure };
+  }
+
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mkdirSync(join(process.cwd(), '.takt'), { recursive: true });
@@ -149,6 +219,114 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     });
     vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it.each([
+    { mode: 'run', stage: 'create', belongsToGoal: false },
+    { mode: 'run', stage: 'metadata', belongsToGoal: false },
+    { mode: 'run', stage: 'create', belongsToGoal: true },
+    { mode: 'watch', stage: 'create', belongsToGoal: false },
+  ] as const)('$mode は実TaskStoreの $stage ENOSPCから同じ所有者で5秒後に回復する（goal所有=$belongsToGoal）', async ({ mode, stage, belongsToGoal }) => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    if (belongsToGoal) await new GoalStore(projectDir).create(goalRecord());
+    const task = runner.addTask('recover claim', belongsToGoal ? { goal_id: goalRecord().id } : undefined);
+    const { claim } = await injectClaimFailure(stage, 1);
+    const entry = mode === 'run' ? runAllTasks(projectDir) : watchTasks(projectDir);
+    const outcome = entry.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const owner = executionOwner();
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(state(task.name)?.status).toBe('pending');
+      expect(existsSync(`${runner.getTasksFilePath()}.lock`)).toBe(false);
+      expect(executions).toHaveLength(0);
+      if (mode === 'run') {
+        expect(vi.mocked(console.log).mock.calls.some(([message]) => String(message).includes('Running tasks'))).toBe(false);
+      }
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(executions).toHaveLength(0);
+      expect(executionOwner()).toEqual(owner);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(executions.map(({ task }) => task.name)).toEqual([task.name]);
+      expect(state(task.name)?.status).toBe('running');
+      expect(executionOwner()).toEqual(owner);
+      executions[0]!.finish(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state(task.name)?.status).toBe('completed');
+      expect(executions).toHaveLength(1);
+      if (mode === 'watch') {
+        await vi.advanceTimersByTimeAsync(500);
+        expect(executionOwner()).toEqual(owner);
+        expect(executions).toHaveLength(1);
+        interrupt();
+      } else {
+        const messages = vi.mocked(console.log).mock.calls.map(([message]) => String(message));
+        expect(messages.filter((message) => message.includes('Running tasks'))).toHaveLength(1);
+        expect(messages.some((message) => message.includes('Tasks Summary'))).toBe(true);
+      }
+      expect(await outcome).toBeUndefined();
+      expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      interrupt();
+      for (const execution of executions) execution.finish(true);
+      await outcome;
+    }
+  });
+
+  it('実取得ENOSPCでも対象pendingがなければ待たない', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const { claim, failure } = await injectClaimFailure('create', 1);
+
+    await expect(runAllTasks(projectDir)).rejects.toMatchObject({ cause: failure });
+
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(executions).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+  });
+
+  it('実TaskStoreの取得後永続化ENOSPCは変換せずに伝播する', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const task = runner.addTask('persistence failure');
+    const { claim, failure } = await injectClaimFailure('persistence', 1);
+
+    await expect(runAllTasks(projectDir)).rejects.toBe(failure);
+
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(state(task.name)?.status).toBe('pending');
+    expect(executions).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['run', 'watch'] as const)('%s の実取得ENOSPC待機中の中断は再取得せずタイマーを解除する', async (mode) => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const task = runner.addTask('interrupt claim wait');
+    const { claim } = await injectClaimFailure('create', Infinity);
+    const entry = mode === 'run' ? runAllTasks(projectDir) : watchTasks(projectDir);
+    const outcome = entry.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(executionOwner()).toMatchObject({ kind: mode, state: 'running' });
+      interrupt();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await outcome).toBeUndefined();
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(state(task.name)?.status).toBe('pending');
+      expect(executions).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+    } finally {
+      interrupt();
+      await outcome;
+    }
   });
 
   it.each(taskNames)('watch 起動時に保存名 $displayName を安全に表示し、原名で再投入・完了する', async ({ name, displayName }) => {
@@ -230,11 +408,66 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(console.log).not.toHaveBeenCalled();
   });
 
+  it('新しい同PR mergeが実行中なら旧失敗mergeを保持し、次のfailed taskを再投入する', () => {
+    const mergeInput = {
+      prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: '/fork.git', headRepositoryPushUrls: ['/fork.git'],
+      workflow: 'merge-review', method: 'squash' as const,
+      threatCheckMaxDiffBytes: 1000,
+    };
+    const old = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'old-clone') });
+    runner.forceFailRunningTask(old.name, { step: 'review', error: 'Manually marked as failed' });
+    const oldRecord = state(old.name);
+    const fresh = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'new-clone') });
+    const next = addFailedTask('another failed task');
+
+    expect(requeueExistingFailedTasks(runner, 1)).toBe(1);
+
+    expect(state(old.name)).toEqual(oldRecord);
+    expect(state(fresh.name)?.status).toBe('running');
+    expect(state(next.name)).toMatchObject({ status: 'pending', auto_requeue_count: 1 });
+  });
+
+  it('同PR mergeの競合時は旧workflowのprovider確認をせず他の失敗タスクを実行する', async () => {
+    writeConfig({ auto_requeue_max_attempts: 1 });
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), stringifyYaml({ notification_sound: false }));
+    const mergeInput = {
+      prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: '/fork.git', headRepositoryPushUrls: ['/fork.git'],
+      workflow: 'missing-old-workflow', method: 'squash' as const,
+      threatCheckMaxDiffBytes: 1000,
+    };
+    const old = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'old-clone') });
+    runner.forceFailRunningTask(old.name, { step: 'review', error: 'Manually marked as failed' });
+    const oldRecord = state(old.name);
+    const fresh = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'new-clone') });
+    const next = addFailedTask('another failed task');
+    const preflight = vi.spyOn(providerPreflight, 'checkQueuedTaskProviders');
+
+    expect(runner.isAutoRequeueEligible(old.name, 1)).toBe(false);
+    const run = runAllTasks(projectDir);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executions.map(({ task }) => task.name)).toEqual([next.name]);
+    } finally {
+      for (const execution of executions) execution.finish(true);
+      await run;
+    }
+
+    expect(preflight.mock.calls.map(([, task]) => task.name)).not.toContain(old.name);
+    expect(state(old.name)).toEqual(oldRecord);
+    expect(state(fresh.name)?.status).toBe('running');
+    expect(state(next.name)).toMatchObject({ status: 'completed', auto_requeue_count: 1 });
+  });
+
   afterEach(async () => {
     interrupt();
     for (const execution of executions) execution.finish(true);
     await vi.advanceTimersByTimeAsync(0);
     await watchPromise;
+    const nativeFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(fs.openSync).mockImplementation(nativeFs.openSync);
+    vi.mocked(fs.writeFileSync).mockImplementation(nativeFs.writeFileSync);
     while (inputWaitCount > 0) resumeInput();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -319,12 +552,15 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(executions).toHaveLength(2);
     expect(tasks.slice(0, 2).map(({ name }) => state(name)?.status)).toEqual(['running', 'running']);
+    const ownerBefore = executionOwner();
+    expect(ownerBefore).toMatchObject({ kind: 'watch', state: 'running', pid: process.pid });
     const signals = executions.map(({ parallel }) => parallel?.abortSignal);
     for (const signal of signals) {
       expect(signal).toBeInstanceOf(AbortSignal);
       expect(signal?.aborted).toBe(false);
     }
     interrupt();
+    expect(executionOwner()).toEqual({ ...ownerBefore, state: 'stopping' });
     const claimCount = claim.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(500);
@@ -338,6 +574,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(state(tasks[0]!.name)?.status).toBe(firstStatus);
     expect(state(tasks[1]!.name)?.status).toBe('running');
     expect(completionOrder).toEqual([tasks[0]!.name]);
+    expect(executionOwner()).toEqual({ ...ownerBefore, state: 'stopping' });
     executions[1]!.finish(true);
     await vi.advanceTimersByTimeAsync(0);
     await watchPromise;
@@ -351,7 +588,88 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(requeue).not.toHaveBeenCalled();
     expect(state(tasks[2]!.name)?.status).toBe('pending');
     expect(process.rawListeners('SIGINT')).toEqual(listenersBefore);
+    expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each((['run', 'watch'] as const).flatMap((mode) =>
+    (['completion-claim', 'requeue', 'poll-claim'] as const).flatMap((failure) =>
+      (failure === 'completion-claim' ? [true, false] : [true]).map((remainingSuccess) => ({ mode, failure, remainingSuccess }))),
+  ))('$mode の $failure 例外でも残存結果=$remainingSuccess の保存完了まで実行ロックを保持する', async ({ mode, failure, remainingSuccess }) => {
+    writeConfig({ concurrency: 2, task_poll_interval_ms: 500, auto_requeue_max_attempts: failure === 'requeue' ? 1 : 0 });
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), stringifyYaml({ notification_sound: false }));
+    const first = runner.addTask('first task');
+    if (failure !== 'poll-claim') runner.addTask('remaining task');
+    const listenersBefore = process.rawListeners('SIGINT');
+    const originalError = new Error(`failure at ${failure}`);
+    const claimImplementation = TaskRunner.prototype.claimNextTasks;
+    let failClaim = false;
+    const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks').mockImplementation(function (this: TaskRunner, count) {
+      if (failClaim) throw originalError;
+      return claimImplementation.call(this, count);
+    });
+    const requeue = vi.spyOn(TaskRunner.prototype, 'autoRequeueFailedTask');
+    if (failure === 'requeue') requeue.mockImplementation(() => { throw originalError; });
+    let settled = false;
+    const entry = mode === 'run' ? runAllTasks(projectDir) : watchTasks(projectDir);
+    const outcome = entry.then(() => { settled = true; return undefined; }, (error: unknown) => {
+      settled = true;
+      return error;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const owner = executionOwner();
+      const remaining = executions[failure === 'poll-claim' ? 0 : 1]!;
+      const queued = runner.addTask('must remain pending');
+      if (failure === 'poll-claim') {
+        failClaim = true;
+        await vi.advanceTimersByTimeAsync(500);
+      } else {
+        failClaim = failure === 'completion-claim';
+        executions[0]!.finish(failure !== 'requeue');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(state(first.name)?.status).toBe(failure === 'requeue' ? 'failed' : 'completed');
+      }
+      const claimCount = claim.mock.calls.length;
+      const requeueCount = requeue.mock.calls.length;
+      expect(failure === 'requeue' ? requeue.mock.results.at(-1)?.type : claim.mock.results.at(-1)?.type).toBe('throw');
+      expect(remaining.settled).toBe(false);
+      expect(state(remaining.task.name)?.status).toBe('running');
+      expect(settled).toBe(false);
+      expect(executionOwner()).toEqual(owner);
+      for (const next of [runAllTasks, watchTasks]) {
+        await expect(next(projectDir)).rejects.toThrow(new RegExp(`${mode}.*${process.pid}|${process.pid}.*${mode}`));
+      }
+      if (mode === 'watch') {
+        interrupt();
+        expect(remaining.parallel?.abortSignal?.aborted).toBe(false);
+        expect(executionOwner()).toEqual({ ...owner, state: 'stopping' });
+      }
+      remaining.finish(remainingSuccess);
+      expect(await outcome).toBe(originalError);
+      expect(state(remaining.task.name)?.status).toBe(remainingSuccess ? 'completed' : 'failed');
+      expect(state(queued.name)?.status).toBe('pending');
+      expect(claim).toHaveBeenCalledTimes(claimCount);
+      expect(requeue).toHaveBeenCalledTimes(requeueCount);
+      expect(executions).toHaveLength(failure === 'poll-claim' ? 1 : 2);
+      expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+      expect(process.rawListeners('SIGINT')).toEqual(listenersBefore);
+      claim.mockRestore();
+      requeue.mockRestore();
+      for (const next of [runAllTasks, watchTasks]) {
+        interrupted = false;
+        const restarted = next(projectDir);
+        await vi.advanceTimersByTimeAsync(0);
+        for (const execution of executions) execution.finish(true);
+        if (next === watchTasks) interrupt();
+        await restarted;
+        expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+      }
+      expect(state(queued.name)?.status).toBe('completed');
+    } finally {
+      for (const execution of executions) execution.finish(true);
+      await outcome;
+    }
   });
 
   it('アイドル中の SIGINT は次の poll を待たずに watch を終了する', async () => {
@@ -537,3 +855,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(executions[0]!.runContext?.ignoreIterationLimit).toBe(expected);
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

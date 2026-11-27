@@ -1,5 +1,5 @@
 name: development-core
-description: Shared development flow with injectable planning, testing, implementation, peer review, adjudication, verified remediation, and a final requirement check.
+description: Shared development flow with planning, testing, implementation, peer review, adjudicated repair, and a final requirement check.
 all_steps:
   rules:
     - ref: findings-handling
@@ -178,13 +178,21 @@ steps:
         next: ABORT
 
   - name: replan
+    description: Assess implementation and verification gaps and constraints, and decide whether to continue implementation, proceed to independent review, or stop.
+    input_reports:
+      from_step: peer-review
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     tags:
       - plan
     edit: false
     capabilities: readonly
     persona: planner
     policy:
+      - process-deviation
       - contract-change
+      - applicable-inputs
       - $param: plan_policy
     knowledge:
       $param: plan_knowledge
@@ -241,9 +249,9 @@ steps:
       testing_report_format:
         $param: testing_report_format
     rules:
-      - condition: Test creation is complete
+      - condition: Test work is complete
         next: implement
-      - condition: Test creation is skipped because the target is not implemented
+      - condition: Necessary tests cannot be created until after implementation
         next: implement
       - condition: Test creation cannot proceed
         next: plan
@@ -253,6 +261,7 @@ steps:
         interactive_only: true
 
   - name: implement
+    description: Implement the plan and run required verification, addressing gaps or reporting the need to replan.
     kind: workflow_call
     call:
       $param: implementation_workflow
@@ -280,6 +289,7 @@ steps:
         next: replan
 
   - name: peer-review
+    description: Adjudicate specialist review findings, fix and verify them, then assess requirement fulfillment to decide whether to complete or replan.
     kind: workflow_call
     call:
       $param: peer_review_workflow

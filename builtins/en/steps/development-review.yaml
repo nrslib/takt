@@ -1,4 +1,5 @@
 name: review
+description: Run specialist reviews suited to the changes in parallel and decide whether fixes are needed.
 tags: [review]
 parallel:
   fixed: []

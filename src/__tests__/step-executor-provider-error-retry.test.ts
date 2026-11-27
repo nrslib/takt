@@ -62,6 +62,7 @@ function queueAgentResponse(response: AgentResponse): void {
 function makeNormalDeps(cwd: string, runPaths: RunPaths): StepExecutorDeps {
   return {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd,
         projectCwd: cwd,
@@ -85,8 +86,9 @@ function makeNormalDeps(cwd: string, runPaths: RunPaths): StepExecutorDeps {
     getWorkflowSteps: () => [{ name: 'review' }],
     getWorkflowName: () => 'test-workflow',
     getTask: () => 'task',
-    getWorkflowDescription: () => undefined,
     getWorkflowRules: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),

@@ -11,11 +11,15 @@ import {
   type TaskListItem,
 } from '../../../infra/task/index.js';
 import { info } from '../../../shared/ui/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
+import { resolveConfigValue } from '../../../infra/config/index.js';
+import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
+import { selectTasksForDeletion, type DeletableTaskStatus } from './taskDeleteSelection.js';
+import { executeTaskDeletion } from './taskDeleteExecution.js';
 import {
   type ListAction,
   tryMergeBranch,
   mergeBranch,
-  deleteBranch,
   showDiffStatForTask,
   syncBranchWithRoot,
 } from './taskActions.js';
@@ -25,12 +29,14 @@ export interface ListNonInteractiveOptions {
   enabled: boolean;
   action?: string;
   branch?: string;
+  status?: DeletableTaskStatus[];
+  goal?: string;
   format?: string;
   yes?: boolean;
 }
 
-function isValidAction(action: string): action is ListAction {
-  return action === 'diff' || action === 'sync' || action === 'try' || action === 'merge' || action === 'delete';
+function isValidAction(action: string): action is Exclude<ListAction, 'delete'> {
+  return action === 'diff' || action === 'sync' || action === 'try' || action === 'merge';
 }
 
 function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
@@ -48,6 +54,61 @@ function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
   }
 }
 
+function deleteFilteredTasks(tasks: TaskListItem[], options: ListNonInteractiveOptions, cwd: string): void {
+  const language = resolveConfigValue(cwd, 'language');
+  let targets: TaskListItem[];
+  try {
+    targets = selectTasksForDeletion(tasks, {
+      status: options.status,
+      goal: options.goal,
+      branch: options.branch,
+    });
+  } catch {
+    info(getLabel('taskDeletion.filtersRequired', language));
+    process.exit(1);
+  }
+
+  if (!options.yes) {
+    if (options.format === 'json') {
+      printNonInteractiveList(targets, 'json');
+      return;
+    }
+    if (targets.length === 0) {
+      info(getLabel('taskDeletion.empty', language));
+      return;
+    }
+    info(getLabel('taskDeletion.preview', language));
+    for (const task of targets) {
+      info(getLabel('taskDeletion.previewTask', language, {
+        name: sanitizeTerminalText(task.name),
+        status: task.kind,
+        branch: sanitizeTerminalText(task.branch ?? '-'),
+        goal: sanitizeTerminalText(task.goalId ?? '-'),
+      }));
+    }
+    return;
+  }
+
+  if (targets.length === 0) {
+    info(getLabel('taskDeletion.empty', language));
+    return;
+  }
+  const results = executeTaskDeletion(targets);
+  for (const result of results) {
+    const name = sanitizeTerminalText(result.task.name);
+    if (result.success) {
+      info(getLabel('taskDeletion.deleted', language, { name }));
+    } else if (result.error !== undefined) {
+      info(getLabel('taskDeletion.failedWithError', language, {
+        name, error: sanitizeTerminalText(getErrorMessage(result.error)),
+      }));
+    } else {
+      info(getLabel('taskDeletion.failed', language, { name }));
+    }
+  }
+  if (results.some((result) => !result.success)) process.exit(1);
+}
+
 /**
  * Run list-tasks in non-interactive mode.
  */
@@ -57,6 +118,11 @@ export async function listTasksNonInteractive(
 ): Promise<void> {
   const runner = new TaskRunner(cwd);
   const tasks = runner.listAllTaskItems();
+
+  if (nonInteractive.action === 'delete') {
+    deleteFilteredTasks(tasks, nonInteractive, cwd);
+    return;
+  }
 
   if (tasks.length === 0) {
     if (nonInteractive.format === 'json') {
@@ -103,15 +169,6 @@ export async function listTasksNonInteractive(
       return;
     case 'merge':
       if (mergeBranch(cwd, task)) {
-        runner.deleteTask(task.name, 'completed');
-      }
-      return;
-    case 'delete':
-      if (!nonInteractive.yes) {
-        info('Delete requires --yes in non-interactive mode.');
-        process.exit(1);
-      }
-      if (deleteBranch(cwd, task)) {
         runner.deleteTask(task.name, 'completed');
       }
       return;

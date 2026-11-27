@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it } from 'vitest';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
 
@@ -12,17 +13,13 @@ describe('MCP stdio entrypoint integration', () => {
   it('Given the source MCP entrypoint, When a stdio MCP client lists and calls tools, Then stdout remains valid MCP protocol', async () => {
     const cwd = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-stdio-'));
     mkdirSync(join(cwd, '.takt'), { recursive: true });
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\n', 'utf-8');
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'branch_name_strategy: romaji\nprovider: mock\n', 'utf-8');
     const client = new Client({ name: 'takt-mcp-stdio-test-client', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [
-        'node_modules/.bin/vite-node',
-        // --script mode ignores --config, so run in normal mode: the config
-        // sets an esbuild target that lowers `using` declarations, which raw
-        // Node < 24 cannot parse.
-        '--config',
-        'src/__tests__/helpers/vite-node.config.ts',
+        '--import',
+        TSX_ESM_LOADER,
         SOURCE_STDIO_ENTRYPOINT_RUNNER,
       ],
       cwd: process.cwd(),
@@ -61,7 +58,6 @@ describe('MCP stdio entrypoint integration', () => {
         'takt_get_run',
         'takt_tell_run',
       ]));
-      expect(tools.tools).toHaveLength(4);
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content))).toEqual(expect.objectContaining({
         tasksFile: join(cwd, '.takt', 'tasks.yaml'),

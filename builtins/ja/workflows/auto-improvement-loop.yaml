@@ -8,6 +8,7 @@ schemas:
   pr-followup-task: pr-followup-task
 steps:
   - name: route_context
+    description: タスクの待ち行列と対象 PR・Issue を取得し、待機・PR 対応・改善計画の分岐を選択する
     mode: system
     system_inputs:
       - type: task_context
@@ -56,6 +57,7 @@ steps:
         next: plan_fresh_improvement
 
   - name: plan_from_issue
+    description: Issue とコードを確認し、既存 PR・他の Issue と重複しない改善タスクを1件計画する
     tags:
       - plan
     persona: supervisor
@@ -120,6 +122,7 @@ steps:
         next: wait_before_next_scan
 
   - name: enqueue_from_issue
+    description: Issue に基づく改善タスクを、専用 worktree と PR の作成を伴う実行待ちとして登録する
     mode: system
     effects:
       - type: enqueue_task
@@ -145,6 +148,7 @@ steps:
         next: wait_before_next_scan
 
   - name: plan_fresh_improvement
+    description: コードからユーザー価値のある改善を探し、既存 PR・Issue と重複しないタスクを1件計画する
     tags:
       - plan
     persona: supervisor
@@ -198,6 +202,7 @@ steps:
         next: wait_before_next_scan
 
   - name: enqueue_fresh
+    description: 新規改善タスクを、Issue・専用 worktree・PR の作成を伴う実行待ちとして登録する
     mode: system
     effects:
       - type: enqueue_task
@@ -222,6 +227,7 @@ steps:
         next: wait_before_next_scan
 
   - name: plan_from_existing_pr
+    description: PR の要件充足・差分・検証・レビューを確認し、修正・マージ・クローズ・待機を判断する
     tags:
       - plan
     persona: supervisor
@@ -287,6 +293,7 @@ steps:
         next: wait_before_next_scan
 
   - name: reject_pr
+    description: 救済できないと判断された対象 PR をクローズする
     mode: system
     effects:
       - type: close_pr
@@ -296,6 +303,7 @@ steps:
         next: wait_before_next_scan
 
   - name: enqueue_from_pr
+    description: 対象 PR の問題を修正するタスクを、PR を引き継ぐ実行待ちとして登録する
     mode: system
     effects:
       - type: enqueue_task
@@ -315,6 +323,7 @@ steps:
         next: wait_before_next_scan
 
   - name: prepare_merge
+    description: PR にベースブランチを取り込み、マージの準備をする
     mode: system
     effects:
       - type: sync_with_root
@@ -326,6 +335,7 @@ steps:
         next: resolve_conflicts
 
   - name: resolve_conflicts
+    description: ベースブランチの取り込みで発生した競合を AI で解消し、マージ可能な状態にする
     mode: system
     effects:
       - type: resolve_conflicts_with_ai
@@ -337,6 +347,7 @@ steps:
         next: enqueue_conflict_resolution_task
 
   - name: enqueue_conflict_resolution_task
+    description: 自動で解消できなかった PR の競合を解消するタスクを実行待ちとして登録する
     mode: system
     effects:
       - type: enqueue_task
@@ -358,6 +369,7 @@ steps:
         next: wait_before_next_scan
 
   - name: merge_pr
+    description: 準備が整った対象 PR をマージする
     mode: system
     effects:
       - type: merge_pr
@@ -367,6 +379,7 @@ steps:
         next: wait_before_next_scan
 
   - name: wait_before_next_scan
+    description: 他タスクの待機・実行状況を60秒ごとに確認し、待ち行列が空になるまで待機する
     mode: system
     delay_before_ms: 60000
     system_inputs:

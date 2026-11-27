@@ -278,6 +278,7 @@ async function runExecConversation(
       cwd,
       lang: ctx.lang,
       conversation,
+      getProvider: () => ctx.providerType,
       initialEntries: [
         { role: 'system', content: formatExecConfigSummary(currentRuntimeConfig) },
         { role: 'system', content: '/setup to edit configuration, /go to execute, /cancel to exit' },

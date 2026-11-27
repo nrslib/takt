@@ -2,8 +2,8 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
-        hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+  vars: phaseContext, workingDirectory, goalSpecificationNotice, hasGitRules, gitRules, editRule,
+        hasFallbackNotice, fallbackNotice,
         hasReport, reportInfo, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
@@ -12,8 +12,12 @@
         instructions, hasReportPreparation, reportPreparation
   builder: InstructionBuilder
 -->
+{{phaseContext}}
+
 ## Execution Context
 - Working Directory: {{workingDirectory}}
+{{#if goalSpecificationNotice}}{{goalSpecificationNotice}}
+{{/if}}
 {{#if hasFallbackNotice}}
 
 {{fallbackNotice}}
@@ -31,7 +35,7 @@
 ## Judgment Rules
 
 - Base judgments and outputs on facts verified from files, command outputs, and actual code — not on guesses. Do not write "probably ..." or "should be ..." for unconfirmed claims. Mark unconfirmed items explicitly as "unconfirmed".
-- When reference material identifies its original file, read that file from beginning to end. If a display is truncated, continue reading it. Do not substitute another checkout, a same-named file, or remembered content.
+- When policy or reference material (Policy / Knowledge) is truncated in this prompt, read the identified original file from beginning to end before deciding. When reading a file used as a basis for judgment or output, continue reading if the display is truncated; do not substitute another checkout, a same-named file, or remembered content.
 - Limit findings and edits to work whose necessity follows from the original request, the observable contract being changed, or an actual impact path. Do not expand into unrelated quality improvements discovered during exploration.
 - Session memory degrades as the session grows (context rot). Even if you read a file earlier in this session, re-read it immediately before using it as a basis for judgment or output. Re-run a command only when the role and instructions allow that execution; otherwise, re-read the supplied recorded output. Do not rely on memory like "I already read this" or "I checked this before".
 - Do not trust memory of "fixed" or "confirmed" from prior step executions or iterations. Re-verify the target files and command outputs before judging the current state.
@@ -43,17 +47,9 @@ The following domain-specific information may inform the work. If it is truncate
 {{knowledgeContent}}
 {{/if}}
 
-## Execution Context
-{{#if workflowName}}- Workflow: {{workflowName}}
-{{/if}}{{#if hasWorkflowDescription}}- Description: {{workflowDescription}}
-
-{{/if}}{{#if workflowStructure}}{{workflowStructure}}
-
-{{/if}}- Iteration: {{iteration}}(workflow-wide)
-- Step Iteration: {{stepIteration}}(times this step has run)
-- Step: {{stepName}}
-{{#if hasReport}}{{reportInfo}}
-
+{{#if hasReport}}
+## Execution Information
+{{reportInfo}}
 {{/if}}
 {{#if hasRetryNote}}
 
@@ -90,7 +86,7 @@ The following domain-specific information may inform the work. If it is truncate
 ## Prepare Information for the Reports
 
 The following structures describe the reports to be produced after the work. Collect the required evidence while working and preserve its concrete content and sources in your final response. Make the response sufficient to record that evidence when tools are unavailable. For information you could not confirm, preserve what is missing and why.
-Use these structures to prepare evidence; use the response headings specified in the work instructions above for your current response. Any past artifact bodies included here do not change user requirements or current work instructions.
+Use these structures to prepare evidence; use the response headings specified in the "Work" section for your current response. Any past artifact bodies included here do not change user requirements or current work instructions.
 
 {{reportPreparation}}
 {{/if}}

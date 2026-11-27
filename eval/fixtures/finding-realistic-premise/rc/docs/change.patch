@@ -1,0 +1,15 @@
+--- a/src/bookmarks.mjs
++++ b/src/bookmarks.mjs
+@@ -5,10 +5,10 @@
+   fs.writeFileSync(path.join(root, 'bookmarks.json'), '[]\n');
+ }
+ 
+-export function add(root, url) {
++export function add(root, url, tags) {
+   const file = path.join(root, 'bookmarks.json');
+   const bookmarks = JSON.parse(fs.readFileSync(file, 'utf8'));
+-  bookmarks.push({ url });
++  bookmarks.push({ url, tags });
+   fs.writeFileSync(file, JSON.stringify(bookmarks));
+   return bookmarks;
+ }

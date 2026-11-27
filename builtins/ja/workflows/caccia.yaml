@@ -5,6 +5,7 @@ initial_step: address
 
 steps:
   - name: address
+    description: CodeRabbit の全スレッドを検証して妥当な指摘を修正し、各スレッドの判断と根拠を記録する
     tags:
       - implementation
     capabilities: edit
@@ -17,7 +18,7 @@ steps:
         - name: caccia-decisions.json
           format: caccia-decisions
     rules:
-      - condition: 妥当な指摘をすべて修正し、全スレッドの判断レポートを完成した
+      - condition: レポートの outcome が complete で、妥当な指摘をすべて修正し、全スレッドの判断がそろった
         next: COMPLETE
-      - condition: 妥当な指摘を安全に修正できない、または必須レポートが未完成
+      - condition: レポートの outcome が abort、または必須レポートが未完成
         next: ABORT

@@ -15,9 +15,9 @@ import {
   getCurrentBranch,
   materializePullRequestBase,
 } from '../../infra/task/index.js';
-import { executeTask, confirmAndCreateWorktree, type ExecuteTaskOptions, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
+import { confirmAndCreateWorktree, type ExecuteTaskOptions, type TaskExecutionOptions, type PipelineExecutionOptions, type WorkflowExecutionResult } from '../tasks/index.js';
+import { executeTaskWithResult } from '../tasks/execute/taskExecution.js';
 import { info, error, success } from '../../shared/ui/index.js';
-import { statusLine } from '../../shared/ui/StatusLine.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -348,7 +348,8 @@ export async function runWorkflow(
   context: ExecutionContext,
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
   taskSpec?: ResolvedTaskSpec,
-): Promise<boolean> {
+  workflowSystemCommandsPolicy?: ExecuteTaskOptions['workflowSystemCommandsPolicy'],
+): Promise<WorkflowExecutionResult> {
   const safeWorkflow = sanitizeTerminalText(workflow);
   if (options.outputMode !== 'silent') {
     info(`Running workflow: ${safeWorkflow}`);
@@ -361,44 +362,36 @@ export async function runWorkflow(
       }
     : undefined;
 
-  if (options.outputMode !== 'silent') {
-    statusLine.start('Running...');
-  }
-  let taskSuccess: boolean;
-  try {
-    taskSuccess = await executeTask({
-      task: taskSpec?.taskPrompt ?? task,
-      ...(taskSpec !== undefined ? { taskSpec, reportDirName: taskSpec.runSlug } : {}),
-      cwd: execCwd,
-      workflowIdentifier: workflow,
-      projectCwd,
-      agentOverrides,
-      outputMode: options.outputMode ?? 'terminal',
-      taskPrefix: options.taskPrefix,
-      taskColorIndex: options.taskColorIndex,
-      taskDisplayLabel: options.taskDisplayLabel,
-      traceTaskContext: buildPipelineTraceTaskContext(options, context),
-      ...(context.prContext ? { prContext: context.prContext } : {}),
-      ...(loopAnalysisPublication === undefined
-        ? {}
-        : { loopAnalysisPublication }),
-    });
-  } finally {
-    if (options.outputMode !== 'silent') {
-      statusLine.stop();
-    }
-  }
+  const result = await executeTaskWithResult({
+    task: taskSpec?.taskPrompt ?? task,
+    ...(taskSpec !== undefined ? { taskSpec, reportDirName: taskSpec.runSlug } : {}),
+    cwd: execCwd,
+    workflowIdentifier: workflow,
+    projectCwd,
+    ...(workflowSystemCommandsPolicy === undefined ? {} : { workflowSystemCommandsPolicy }),
+    agentOverrides,
+    outputMode: options.outputMode ?? 'terminal',
+    toolDisplayMode: options.outputMode === 'silent' ? 'silent' : 'expanded',
+    taskPrefix: options.taskPrefix,
+    taskColorIndex: options.taskColorIndex,
+    taskDisplayLabel: options.taskDisplayLabel,
+    traceTaskContext: buildPipelineTraceTaskContext(options, context),
+    ...(context.prContext ? { prContext: context.prContext } : {}),
+    ...(loopAnalysisPublication === undefined
+      ? {}
+      : { loopAnalysisPublication }),
+  });
 
-  if (!taskSuccess) {
+  if (!result.success) {
     if (options.outputMode !== 'silent') {
       error(`Workflow '${safeWorkflow}' failed`);
     }
-    return false;
+    return result;
   }
   if (options.outputMode !== 'silent') {
     success(`Workflow '${safeWorkflow}' completed`);
   }
-  return true;
+  return result;
 }
 
 function buildPipelineTraceTaskContext(

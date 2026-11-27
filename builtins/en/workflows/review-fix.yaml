@@ -1,5 +1,7 @@
 name: review-fix
-description: Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check.
+subworkflow:
+  callable: true
+description: Multi-perspective review with dynamic reviewer selection, adjudicated repair, follow-up review, and final requirement check.
 all_steps:
   rules:
     - ref: findings-handling
@@ -24,6 +26,7 @@ steps:
           - {Question 2}
 
   - name: reviewers
+    description: Select reviewers for the changes, adjudicate findings, apply fixes, conduct follow-up review, and confirm requirement fulfillment.
     kind: workflow_call
     call: peer-review
     args:

@@ -4,6 +4,7 @@ max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    description: 調査依頼を分解し、調査項目・候補となる情報源・優先順位を含む計画を作成する
     capabilities: readonly
     tags:
       - plan
@@ -17,6 +18,7 @@ steps:
       - condition: 情報が不足しており計画を立てられない
         next: ABORT
   - name: dig
+    description: 調査項目を独立した担当へ分担して並列に調査し、出典と取得日を含むデータを保存する
     capabilities: edit
     tags:
       - plan
@@ -43,6 +45,7 @@ steps:
       - condition: 調査を実行できない
         next: ABORT
   - name: analyze
+    description: 調査結果の発見と不足を分析・保存し、追加調査の指示または全体サマリーを作成する
     capabilities: edit
     tags:
       - plan
@@ -57,6 +60,7 @@ steps:
       - condition: 十分に掘り下げた
         next: supervise
   - name: supervise
+    description: 調査が元の依頼に十分答えているかを評価し、完了か再計画かを判定して調査レポートを作成する
     capabilities: readonly
     tags:
       - review

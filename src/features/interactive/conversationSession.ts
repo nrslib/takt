@@ -1,12 +1,14 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import type { InteractiveSessionRecords } from './interactiveSessionRecords.js';
 import { updatePersonaSession } from '../../infra/config/index.js';
 import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
 import {
   resolveFormalSpecCommandAvailability,
   type CommandAvailability,
 } from './slashCommandRegistry.js';
-import { prependInitialPromptContext } from './promptSections.js';
+import { prependInitialPromptContext, type InlineUtteranceSource } from './promptSections.js';
+import { createOperationMessage, prependOperationResults } from './operationFeedback.js';
 import { UndeliveredMessages } from './undeliveredMessages.js';
 import {
   buildConversationSummaryPrompt,
@@ -33,6 +35,7 @@ import {
   buildFormalSpecInterpretationPrompt,
   buildFormalSpecInterpretationSystemPrompt,
   getFormalSpecVerificationArtifactPaths,
+  getFormalSpecRetainedArtifactsMessage,
 } from './formalSpecPrompts.js';
 
 export interface ConversationSessionStrategy {
@@ -76,6 +79,7 @@ export interface ConversationSessionStrategy {
 
 export interface ConversationSessionOptions {
   cwd: string;
+  interactiveSessionRecords?: InteractiveSessionRecords;
   formalSpec: boolean;
   /** Resolved setting propagated to this session's summary prompt. */
   formalSpecComments?: boolean;
@@ -108,6 +112,7 @@ export interface ConversationSessionOptions {
 
 /** What one turn is given: how to stop it, and where its own stream goes. */
 export interface ConversationTurnInput {
+  confirmManagedProvider?: import('../../infra/managed-providers/preflight.js').ConfirmManagedProvider;
   abortSignal?: AbortSignal;
   /**
    * Receives this turn's chunks. A provider that ignores its abort can still
@@ -155,11 +160,12 @@ export type ConversationSessionResult =
       /** Absent when a producer only has human-readable text to offer. */
       code?: ConversationSessionErrorCode;
       message: string;
+      retainedArtifactsMessage?: string;
     };
 
 export interface ConversationSession {
   handleUserMessage(input: ConversationTurnInput & { text: string }): Promise<ConversationSessionResult>;
-  createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult>;
+  createTaskInstruction(input: ConversationTurnInput & { userNote: string; userNoteSource?: InlineUtteranceSource }): Promise<ConversationSessionResult>;
 }
 
 /**
@@ -174,8 +180,9 @@ export interface InteractiveConversationSession extends ConversationSession {
    * revision starts from what was proposed rather than from nothing.
    */
   recordRejectedDraft(task: string): void;
+  recordOperationResult(notice: string): void;
   /** Continue from a previously recorded provider session (/resume). */
-  setSessionId(nextSessionId: string): void;
+  setSessionId(nextSessionId: string | undefined): void;
   /** Current provider session used by this conversation. */
   getSessionId(): string | undefined;
   /** Apply the prompt configuration resolved for the selected session. */
@@ -255,6 +262,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
   let sessionId = options.ctx.sessionId;
+  let selectedResumePending = false;
   let formalSpec = options.formalSpec;
   let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
   let modelCheckTimeoutSeconds = options.modelCheckTimeoutSeconds;
@@ -265,6 +273,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     ? options.handoffHistory.map((message) => ({ ...message }))
     : undefined;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
+  let shouldSendSeededContext = initialUserMessage !== undefined && sessionId === undefined && !formalSpec;
   async function refreshPromptConfiguration(): Promise<void> {
     const resolved = await options.strategy.resolveCurrentPromptConfiguration?.();
     if (resolved === undefined) {
@@ -285,6 +294,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * over the current one would undo a turn the user has already seen answered.
    */
   let currentTurn = 0;
+  let unidentifiedInputs: string[] = [];
   /**
    * What the front-end gates its own command list with. Sharing it is what keeps
    * a disabled command from being re-read as a command down here.
@@ -343,9 +353,18 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
   async function handleRegularMessage(
     message: string,
-    input: ConversationTurnInput,
+    input: ConversationTurnInput & { text: string },
   ): Promise<ConversationSessionResult> {
     const isLatestTurn = beginTurn(input.abortSignal);
+    let recordedSessionId = sessionId;
+    let inputRevision: number | undefined;
+    if (options.interactiveSessionRecords !== undefined) {
+      if (recordedSessionId === undefined) {
+        unidentifiedInputs = [...unidentifiedInputs, input.text].slice(-3);
+      } else {
+        inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId: recordedSessionId, input: input.text });
+      }
+    }
     const turn = undeliveredMessages.begin(message);
     const isCurrentTurn = (): boolean => isLatestTurn() && !turn.interrupted;
     const previousHistory = history;
@@ -363,10 +382,14 @@ export function createConversationSession(options: ConversationSessionOptions): 
         return { kind: 'error', code: 'provider_error', message: 'The message was interrupted or superseded.' };
       }
       const prompt = prependInitialPromptContext(
-        options.strategy.transformPrompt(turn.prompt, sourceContext),
-        shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
+        prependInitialPromptContext(
+          prependOperationResults(options.strategy.transformPrompt(turn.prompt, sourceContext), history, ctx.lang),
+          shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
+        ),
+        shouldSendSeededContext ? initialUserMessage : undefined,
       );
       const providerPrompt = resolveProviderPrompt(prompt);
+      const selectedSessionId = selectedResumePending ? sessionId : undefined;
       // Resolve placeholders after adding the handoff transcript so images from
       // the prior session remain attached to the first call of the new session.
       // A placeholder whose file went missing is the user's problem to fix, not a
@@ -398,10 +421,29 @@ export function createConversationSession(options: ConversationSessionOptions): 
           permissionMode: options.strategy.permissionMode,
           imageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+          ...(selectedSessionId === undefined ? {} : { onSessionResumeFailure: () => {
+            if (!isCurrentTurn() || !selectedResumePending || sessionId !== selectedSessionId) return;
+            options.interactiveSessionRecords?.discard({ provider: ctx.providerType, sessionId: selectedSessionId });
+            unidentifiedInputs = [...unidentifiedInputs, input.text].slice(-3);
+            input.onNotice?.(getLabel('interactive.resumeSessionFailed', ctx.lang));
+          } }),
+          ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (isCurrentTurn()) {
         sessionId = newSessionId;
+        selectedResumePending = false;
+        if (options.interactiveSessionRecords !== undefined && sessionId !== undefined && recordedSessionId !== sessionId) {
+          recordedSessionId = sessionId;
+          if (unidentifiedInputs.length > 0) {
+            for (const pendingInput of unidentifiedInputs) {
+              inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId, input: pendingInput });
+            }
+            unidentifiedInputs = [];
+          } else {
+            inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId, input: input.text });
+          }
+        }
       }
 
       if (!result) {
@@ -438,7 +480,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
         referenceRunSlug = result.referenceRunSlug;
       }
       shouldSendInitialPromptContext = false;
+      shouldSendSeededContext = false;
       history = [...history, { role: 'assistant', content: result.content }];
+      if (options.interactiveSessionRecords !== undefined && sessionId !== undefined && inputRevision !== undefined) {
+        options.interactiveSessionRecords.recordResponse({ provider: ctx.providerType, sessionId, inputRevision, response: result.content });
+      }
       return {
         kind: 'assistant_response',
         content: result.content,
@@ -465,10 +511,13 @@ export function createConversationSession(options: ConversationSessionOptions): 
       };
     }
     const isCurrentTurn = beginTurn(input.abortSignal);
-    const interrupted = (): ConversationSessionResult => ({
+    const interrupted = (retainedArtifactsMessage?: string): ConversationSessionResult => ({
       kind: 'error',
       code: 'provider_error',
-      message: 'Formal specification verification was interrupted.',
+      message: retainedArtifactsMessage === undefined
+        ? 'Formal specification verification was interrupted.'
+        : `Formal specification verification was interrupted.\n\n${retainedArtifactsMessage}`,
+      ...(retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage }),
     });
     if (!isCurrentTurn()) {
       return interrupted();
@@ -502,6 +551,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         internalAgentIsolation: 'strict-readonly',
         imageAttachments: generationImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
     if (!isCurrentTurn()) {
@@ -529,14 +579,20 @@ export function createConversationSession(options: ConversationSessionOptions): 
       }
       return { kind: 'error', message: getErrorMessage(error) };
     }
+    const retainedArtifactsMessage = getFormalSpecRetainedArtifactsMessage(verification, ctx.lang);
+    const retainedArtifacts = retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage };
+    const withArtifactsMessage = (message: string): string => retainedArtifactsMessage === undefined
+      ? message
+      : `${message}\n\n${retainedArtifactsMessage}`;
     try {
       if (!isCurrentTurn()) {
-        return interrupted();
+        return interrupted(retainedArtifactsMessage);
       }
       const generationSessionId = generation.sessionId ?? generation.result.sessionId;
       if (!verification.verificationStarted) {
         consumeHandoffHistory(generationPrompt.handoffHistory);
         shouldSendInitialPromptContext = false;
+        shouldSendSeededContext = false;
         history = [...history, { role: 'assistant', content: generation.result.content }];
         sessionId = generationSessionId;
         if (options.persistSession !== false && generationSessionId !== undefined) {
@@ -544,7 +600,8 @@ export function createConversationSession(options: ConversationSessionOptions): 
         }
         return {
           kind: 'error',
-          message: verification.message ?? 'Formal specification verification failed.',
+          message: withArtifactsMessage(verification.message ?? 'Formal specification verification failed.'),
+          ...retainedArtifacts,
         };
       }
 
@@ -557,12 +614,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
       try {
         interpretationImageAttachments = options.resolveImageAttachments?.(interpretationPrompt);
       } catch (error) {
-        return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)), ...retainedArtifacts };
       }
 
       const interpretation = await callAIWithRetry(
         interpretationPrompt,
-        buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+        buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
         ['Read'],
         options.cwd,
         { ...ctx, sessionId: generationSessionId, disableSessionRetry: true },
@@ -577,22 +634,23 @@ export function createConversationSession(options: ConversationSessionOptions): 
           readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
           imageAttachments: interpretationImageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (!isCurrentTurn()) {
-        return interrupted();
+        return interrupted(retainedArtifactsMessage);
       }
 
       if (!interpretation.result) {
         return interpretation.error === undefined
-          ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
-          : { kind: 'error', code: 'provider_error', message: interpretation.error };
+          ? { kind: 'error', code: 'empty_ai_response', message: withArtifactsMessage('AI response was empty'), ...retainedArtifacts }
+          : { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.error), ...retainedArtifacts };
       }
       if (!interpretation.result.success) {
-        return { kind: 'error', code: 'provider_error', message: interpretation.result.content };
+        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.result.content), ...retainedArtifacts };
       }
       if (!isCurrentTurn()) {
-        return interrupted();
+        return interrupted(retainedArtifactsMessage);
       }
 
       const finalSessionId = interpretation.sessionId
@@ -600,10 +658,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
         ?? generationSessionId;
       consumeHandoffHistory(generationPrompt.handoffHistory);
       shouldSendInitialPromptContext = false;
+      shouldSendSeededContext = false;
+      const interpretationContent = withArtifactsMessage(interpretation.result.content);
       history = [
         ...history,
         { role: 'assistant', content: generation.result.content },
-        { role: 'assistant', content: interpretation.result.content },
+        { role: 'assistant', content: interpretationContent },
       ];
       sessionId = finalSessionId;
       if (options.persistSession !== false && finalSessionId !== undefined) {
@@ -612,9 +672,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
       return {
         kind: 'assistant_response',
-        content: `${generation.result.content}\n\n${interpretation.result.content}`,
+        content: `${generation.result.content}\n\n${interpretationContent}`,
         ...(finalSessionId === undefined ? {} : { sessionId: finalSessionId }),
       };
+    } catch (error) {
+      if (!isCurrentTurn()) return interrupted(retainedArtifactsMessage);
+      return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)), ...retainedArtifacts };
     } finally {
       cleanupFormalSpecVerificationArtifacts(verification);
     }
@@ -622,7 +685,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
   async function handleGoCommand(
     userNote: string,
-    input: ConversationTurnInput,
+    input: ConversationTurnInput & { userNoteSource?: InlineUtteranceSource },
   ): Promise<ConversationSessionResult> {
     // `/go` is a turn like any other: opening it supersedes a chat turn that is
     // still running, so that one no longer writes history or session id when it
@@ -649,6 +712,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         formalSpec,
         formalSpecComments,
         userNote,
+        ...(input.userNoteSource === undefined ? {} : { userNoteSource: input.userNoteSource }),
       })
       : buildConversationSummaryPrompt(
         history,
@@ -657,6 +721,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         options.strategy.summaryPromptContext,
         formalSpec,
         {
+          ...(input.userNoteSource === undefined ? {} : { userNoteSource: input.userNoteSource }),
           ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
           ...(sourceContext ? { sourceContext } : {}),
           ...(resumedSessionNote === undefined ? {} : { resumedSessionNote }),
@@ -692,6 +757,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         permissionMode: options.strategy.permissionMode,
         imageAttachments: summaryImageAttachments,
         ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+        ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
       },
     );
 
@@ -750,16 +816,20 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return referenceRunSlug;
     },
     getLatestAssistantMessage(): string | null {
-      for (let index = history.length - 1; index >= 0; index -= 1) {
-        const message = history[index];
-        if (message?.role === 'assistant') {
+      const messages = [...(pendingHandoffHistory ?? []), ...history];
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message?.role === 'assistant' && !message.operationResult) {
           return message.content;
         }
       }
       return null;
     },
 
-    setSessionId(nextSessionId: string): void {
+    setSessionId(nextSessionId: string | undefined): void {
+      currentTurn += 1;
+      unidentifiedInputs = [];
+      selectedResumePending = nextSessionId !== undefined;
       sessionId = nextSessionId;
     },
 
@@ -782,7 +852,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
       history = [...history, { role: 'assistant', content: task }];
     },
 
-    createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult> {
+    recordOperationResult(notice: string): void {
+      history = [...history, createOperationMessage(notice)];
+    },
+
+    createTaskInstruction(input: ConversationTurnInput & { userNote: string; userNoteSource?: InlineUtteranceSource }): Promise<ConversationSessionResult> {
       return handleGoCommand(input.userNote, input);
     },
 

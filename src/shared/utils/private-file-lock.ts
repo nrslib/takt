@@ -3,17 +3,23 @@ import { unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   ensurePrivateDirectory,
+  PrivateArtifactContentWriteFailedError,
   PrivateArtifactPublicationConflictError,
   readPrivateFileState,
   writeNewPrivateFileWithMode,
   type PrivateFileState,
 } from './private-file.js';
-import { assertAncestorIdentities, inspectPrivateArtifactPath } from './private-path-identity.js';
 
 const LOCK_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 10;
 const LOCK_TIMEOUT_MS = 10_000;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+export class PrivateFileLockAcquisitionError extends Error {
+  constructor(message: string, readonly code: string, readonly errno: number | undefined, options: ErrorOptions) {
+    super(message, options);
+  }
+}
 
 export interface PrivateFileExclusiveAsyncOptions {
   timeoutMs?: number;
@@ -91,19 +97,6 @@ function removeLockIfUnchanged(
   }
 }
 
-function recoverDeadHolder(lockPath: string): void {
-  const inspection = inspectPrivateArtifactPath(lockPath, 'file');
-  try {
-    recoverUnchangedDeadHolder(lockPath);
-  } catch (error) {
-    if (!(error instanceof PrivateArtifactPublicationConflictError)) throw error;
-    // A living owner can release or replace the lock while a waiter reads it.
-    // Retry only leaf contention; ancestor swaps and unsafe paths still fail.
-    assertAncestorIdentities(inspection.ancestorIdentities);
-    inspectPrivateArtifactPath(lockPath, 'file');
-  }
-}
-
 function recoverUnchangedDeadHolder(lockPath: string): void {
   const current = readPrivateFileState(lockPath);
   if (!current.state.exists) {
@@ -124,7 +117,16 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
   const holder: LockHolder = { pid: process.pid, token: randomUUID() };
   const content = JSON.stringify(holder);
   try {
-    writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
+    try {
+      writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
+    } catch (error) {
+      // Only a failed unpublished temporary artifact is safe to retry.
+      if (((error as NodeJS.ErrnoException).code === 'ENOSPC')
+        || error instanceof PrivateArtifactContentWriteFailedError) {
+        throw new PrivateFileLockAcquisitionError(error instanceof Error ? error.message : String(error), 'ENOSPC', (error as NodeJS.ErrnoException).errno, { cause: error });
+      }
+      throw error;
+    }
     const acquired = readPrivateFileState(lockPath);
     if (!acquired.state.exists
       || !('content' in acquired)
@@ -138,7 +140,11 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
       throw error;
     }
   }
-  recoverDeadHolder(lockPath);
+  try { recoverUnchangedDeadHolder(lockPath); } catch (error) {
+    // A holder can release the lock between the recovery snapshot's stat and open.
+    if (!(error instanceof PrivateArtifactPublicationConflictError)
+      && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   return undefined;
 }
 

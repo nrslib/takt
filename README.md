@@ -31,7 +31,7 @@
 
 TAKT is an open-source CLI that turns AI coding agents into repeatable development workflows. Define planning, implementation, review, fix loops, human checkpoints, permissions, and output contracts in YAML, then run tasks with isolated worktrees and traceable logs.
 
-Instead of asking one agent to remember the whole process, TAKT gives each step its own role, context, and transition rules. Agents can code, but the workflow decides what happens next.
+TAKT gives each step its own role, context, and transition rules. The workflow manages both the coding work and the transition to the next phase.
 
 ![TAKT workflow control for AI coding agents](./docs/assets/description/01-hero.png)
 
@@ -42,7 +42,7 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 
 **T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with review loops, managed prompts, and per-step permissions.
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. YAML workflow files define the planning, implementation, review, and fix loops. Each agent works with its assigned role, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -54,9 +54,7 @@ AI coding agents do not automatically create a stable development process. In lo
 
 Adding more rules to prompts, `CLAUDE.md`, or skills can help, but it cannot enforce the process. Whether the rules are followed is still left to the agent's behavior.
 
-TAKT treats AI agents as something to be controlled from the outside, not simply trusted.
-
-Workflows define the phases, and each step receives its own persona, policy, knowledge, instruction, and output contract. TAKT manages implementation, review, fix, and re-review flows declaratively. By separating responsibilities, knowledge, and constraints, then giving each agent only what it needs for the current step, TAKT improves task quality without bloating context.
+TAKT controls agent work through the phases defined in a workflow. Each step receives its own persona, policy, knowledge, instruction, and output contract. The workflow specifies the order of implementation, review, fixes, and re-review, including where to return when fixes are needed. By separating responsibilities, knowledge, and constraints, then giving each agent only what it needs for the current step, TAKT improves task quality without bloating context.
 
 Reviews cannot be silently skipped. Findings route work back to fix steps, and human judgment can be requested when needed. Tasks run in isolated worktrees, and each step leaves logs and reports so the path from task to PR remains traceable.
 
@@ -69,7 +67,10 @@ From a Git repository with at least one commit:
 ```bash
 npm install -g takt
 
-# Talk to AI, describe a task, use /go, then choose "Queue as task"
+# Install the SDK for the default provider (claude-sdk)
+takt install claude-sdk
+
+# Talk to AI, describe a task, use /go, then choose "Save as Task"
 takt
 
 # Execute queued tasks in isolated worktrees
@@ -79,11 +80,11 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `pi`, and `deepseek-harness` run with Node.js. Run `takt install deepseek-harness` before using DeepSeek Harness. CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers (`claude-sdk`, `codex`, `opencode`, `pi`, and `deepseek-harness`) run with Node.js; run `takt install <provider>` once before using one. CLI-based providers require their external CLIs.
 
 ## CodeRabbit Review Loop
 
-On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. The same loop can run after TAKT creates or updates a PR when `caccia.enabled` is enabled; linked execution is disabled by default. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
+On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. Merge workflows call the loop through an explicit `caccia` effect. `caccia.enabled` controls whether that effect waits for CodeRabbit and defaults to false. Git push itself does not start Caccia. When enabled, worktree tasks with `auto_pr` and Pipeline with `--auto-pr` also run Caccia after successful PR publication, subject to the exclusions and ordering rules in the configuration guide. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
 
 ### Video Tutorial
 
@@ -107,46 +108,31 @@ Follow the [written tutorial](./docs/tutorial.md) with these hands-on walkthroug
 
 ## Requirements
 
-TAKT requires Node.js `>=22.22.0`.
+TAKT requires Node.js `>=22.22.0` and Git `>=2.38` (goal completion compares trees with `git merge-tree --write-tree`).
 
 The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
 
 The default provider is `claude-sdk` (Claude Agent SDK). `claude` is an alias for `claude-sdk`.
 
-To keep using the previous headless Claude Code CLI provider, change `provider: claude` to `provider: claude-headless` in `runtime.yaml` profiles or legacy `config.yaml` settings, and use `--provider claude-headless` for CLI overrides. Move provider-specific permission settings to `provider_profiles.claude-headless`. To use the new SDK default or explicit `claude-sdk`, move those settings to `provider_profiles.claude-sdk`; an explicit `claude` alias still uses the `provider_profiles.claude` key. For example, with the provider omitted, an old `provider_profiles.claude.default_permission_mode: readonly` no longer applies and the new default can fall back to builtin `edit` unless the profile is moved. The shared `provider_options.claude` key stays the same. Existing sessions labeled `claude` start fresh after this change. `claude-terminal` is unchanged.
+To continue using the Claude Code CLI, select `claude-headless` in your provider configuration or pass `--provider claude-headless`. Move any provider permission profile to the selected provider name; the default is now `claude-sdk`, so an old `provider_profiles.claude` setting may no longer apply. Existing sessions labeled `claude` start fresh. See [permission resolution](./docs/configuration.md#permission-resolution-priority) for the migration details.
 
-These providers run via SDK (no CLI required, Node.js only):
+These providers run via SDK (no CLI required, Node.js only). The SDK is not bundled with TAKT; run `takt install <provider>` once before use, and `takt update` after upgrading TAKT. In a terminal, TAKT offers to install a missing SDK; in CI and other non-interactive runs, install it beforehand. See [Managed SDK installation and updates](./docs/cli-reference.md#managed-sdk-installation-and-updates).
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
 
-The `deepseek-harness` provider runs on Node.js through the official TypeScript SDK and the matching DeepSeek Harness runtime. Run `takt install deepseek-harness` once before using it; the pinned SDK and runtime are installed in TAKT's managed directory, separate from TAKT's npm dependencies. Repeat the command to repair damage detected by TAKT. If the provider still malfunctions, run `takt install deepseek-harness --force` to reinstall it even when integrity checks pass. The supported platforms are Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. No Python or uv setup is required.
-
-A session supports multiple FIFO-serialized turns while its runtime stays alive with the same supported configuration. The SDK cannot restore persisted history after runtime restart/teardown or replace runtime settings while keeping that history. In those cases TAKT refuses the old session with a fixed diagnostic; start a new TAKT session or run with a new session identity to use new settings. This is a deliberate breaking reduction, and cross-runtime history preservation is deferred. TAKT does not automatically remove files from an earlier Python/uv installation; review and remove that old managed environment manually if desired. Existing credential files remain user-owned and are not migrated or deleted.
-
-TAKT disables the runtime's JSONL session-persistence plugin so newly written session logs cannot retain provider errors that echo credentials. Multiple turns still work in the live runtime; TAKT leaves existing DeepSeek session files untouched.
-
-The standard SDK file/search, shell, and delegated-execution tools are enabled for coding. As with other local coding providers, use trusted workspaces and prompts. A credential reference is not an OS-level read-isolation boundary: local tools may access files and environment variables permitted by the host and SDK policy.
-
-Default interactive conversations use these native tools without a TAKT allowlist. Explicit tool restrictions (including `[]`) are rejected before SDK startup. DeepSeek cannot enforce the tool-free report/status phases, so those phases fail before execution; use a compatible provider for workflows requiring them.
-
-Session-history restoration remains unsupported pending SDK support; an interactive SDK session ID may change. A continuation refusal fails the current turn without retrying it, clears its saved ID, and warns that the next user turn starts a fresh SDK session without replaying the previous history. A rejected tool/permission constraint is not retried without an ID; a still-live session can remain usable. In persona conversations, an undeclared tool list uses native defaults, but an explicit `[]` stays a restriction and is rejected.
-
-TeamLeader first-step metadata also distinguishes undeclared `inspect_tools` from explicit `[]`. A supplied SDK session ID can only continue a matching live runtime: even an unregistered saved ID is refused before SDK startup. Credential binding changes are distinct, non-retryable credential-binding errors, not recoverable continuation errors; they keep the saved ID and require a new TAKT session/run rather than silently starting under a new credential binding.
-
-Credentials use the official store at `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) or the selected environment variable such as `DEEPSEEK_API_KEY`. TAKT keeps that credential source separate from its managed runtime home and never reads, copies, or rewrites stored secret values. See the [Configuration Guide](./docs/configuration.md#deepseek-harness-deepseek-harness) for settings and session limits.
-
-Idle runtime retention is bounded at eight per process; active and queued turns are protected. Evicted sessions cannot restore history. A healthy foreign TAKT process exclusively using the same managed home reports a busy-home error: wait for it to close or use another `TAKT_CONFIG_DIR`, never delete its state. For legacy Python cleanup and stale-lock recovery, follow the concrete **Manual migration cleanup** steps in the linked guide; retain your credential store and never remove the whole managed-home directory.
+The `deepseek-harness` provider uses the official TypeScript SDK and its runtime. Run `takt install deepseek-harness` before use. It supports Linux x64/arm64 with glibc `>= 2.28` and macOS arm64 `>= 14.0`. Sessions cannot restore history after the runtime exits; start a new TAKT session or run after changing its settings. See the [configuration guide](./docs/configuration.md#deepseek-harness-deepseek-harness) for credentials, supported tools, permissions, migration, and recovery.
 
 These providers require an external CLI:
 
-- `opencode` — [OpenCode](https://opencode.ai/) CLI. v1 is the default; v2 is opt-in ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
+- `opencode` — [OpenCode](https://opencode.ai/) CLI, plus `takt install opencode` for its SDK. v2 is the default; select v1 explicitly ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
 - `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
+- `devin` — [Devin CLI](https://devin.ai/)
 
 Optional:
 
@@ -162,6 +148,7 @@ Optional:
 
 ```bash
 npm install -g takt
+takt install claude-sdk   # or codex, opencode, pi, deepseek-harness
 ```
 
 With Nix flakes:
@@ -194,13 +181,15 @@ Proposed task:
   ...
 
 What would you like to do?
-    Execute now
-    Create GitHub Issue
-  ❯ Queue as task          # ← normal flow
-    Continue conversation
+  ❯ Save as Task           # ← normal flow and initial selection
+    Create Issue
+    Execute here now
+    Continue editing
 ```
 
-Choosing "Queue as task" saves the task to `.takt/tasks/`. Run `takt run` to execute — TAKT creates an isolated worktree, runs the workflow (plan → implement → review → fix loop), and offers to create a PR when done.
+Choosing "Save as Task" saves the task to `.takt/tasks/`. Run `takt run` to execute — TAKT creates an isolated worktree, runs the workflow (plan → implement → review → fix loop), and offers to create a PR when done.
+
+"Create Issue" asks "Save as a task too? [Y/n]" before creating anything. Y or Enter creates the Issue and continues through the existing task-saving and worktree settings flow. n creates only the Issue. Esc returns to the same menu without creating an Issue or task. The Issue option is hidden in `--pr` sessions.
 
 In an ordinary assistant conversation, use `/issue 123` or `/issue 12 34` to replace the current Issue context and continue the same conversation. The next message and `/go` use the fetched Issue content.
 
@@ -209,21 +198,23 @@ In an ordinary assistant conversation, use `/issue 123` or `/issue 12 34` to rep
 takt run
 
 # You can also queue from GitHub Issues
-takt add #6
-takt add #12
+takt add '#6'
+takt add '#12'
 
 # Execute all pending tasks
 takt run
 ```
 
-> **"Execute now"** runs the workflow directly in your current directory without worktree isolation. Useful for quick experiments, but note that changes go straight into your working tree.
+> **"Execute here now"** first explains that this TUI will be unavailable until the workflow finishes and that the normal flow is to save the task and use `takt run`. The confirmation defaults to No (`[y/N]`): only y starts the existing execution flow in the current directory without worktree isolation. N, Enter, or Esc returns to the menu with the selection preserved. Esc in the menu returns to conversation input.
 
 ### Manage results
 
 ```bash
-# List task branches — merge, retry, requeue, force-fail, or delete
+# List task branches — merge, retry, requeue, stop, force-fail, or delete
 takt list
 ```
+
+**Stop** requests a stop for one running task; the worker interrupts itself and determines the final state. **Mark as failed** only changes status and does not stop the worker.
 
 ## How It Works
 
@@ -298,15 +289,60 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
-| `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
+| `takt manager` | Open the experimental goal conversation TUI to discuss, queue, and run tasks with AI. See [Goal Management](./docs/goal-management.md) |
+| `takt director` | Open the experimental conversation TUI for oversight across managers; see [Director](#director-experimental) |
+| `takt list` | Manage task branches (merge, retry, requeue, stop, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
+| `takt merge` | Review, fix, and merge pull requests with a workflow |
+| `takt install <provider>` | Install the SDK for an SDK-based provider |
+| `takt update` | Update installed provider SDKs to the versions pinned by TAKT |
 | `takt eject` | Copy builtin workflows/facets for customization |
 | `takt workflow init` | Create a new workflow scaffold |
 | `takt workflow doctor` | Validate workflow definitions |
 | `takt workflow inspect` | Inspect a workflow's configuration and resolution sources |
 | `takt repertoire add` | Install a repertoire package from GitHub |
+| `takt daemon stop` | Stop the background daemon |
+| `takt caccia` | Handle CodeRabbit review threads for a PR |
+| `takt resume` | Resume the latest failed or aborted direct run |
+| `takt clear` | Clear agent conversation sessions |
+| `takt reset config` | Restore the global configuration template with a backup |
+| `takt reset categories` | Restore builtin workflow categories |
+| `takt prompt` | Preview each step's assembled prompts |
+| `takt export-cc` | Export workflows and agents as a Claude Code skill |
+| `takt export-codex` | Export workflows and agents as a Codex skill |
+| `takt catalog` | List available facets |
+| `takt workflow bundle attach` | Attach a historical workflow bundle to a legacy run |
+| `takt metrics review` | Show review quality metrics |
+| `takt purge` | Remove old analytics event files |
+| `takt telemetry status`, `takt telemetry enable`, `takt telemetry disable` | Inspect or change local routing event recording |
+| `takt repertoire remove`, `takt repertoire list` | Remove or list installed repertoire packages |
+
+Manager conversations run in the daemon, so work continues after you close the TUI. Reopen it for the same repository or workspace to continue the conversation. See [Goal Management](./docs/goal-management.md) for goal registration, conversation recovery, and interruption. Use `takt daemon stop` to stop the daemon.
+
+Manager accepts pasted images and keeps referenced images with the conversation. When manager includes a saved image path in a task's instructions, TAKT copies the image into the task's attachments for the workflow to read. Finished goals stay out of the active goal context; use `Ctrl+G` to find them and choose Delete.
+
+Set `manager.runtime_assignments` in `config.yaml` to list the runtime assignments manager may choose for each task. The names refer to `provider.assignments` in `runtime.yaml`; a task keeps its selected assignment when retried or requeued. `manager.refresh_interval_ms` or `TAKT_MANAGER_REFRESH_INTERVAL_MS` controls the TUI refresh interval. See [Goal Management](./docs/goal-management.md) and the [configuration guide](./docs/configuration.md).
+
+Manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, incurring provider API costs.
+
+**Slack conversations:** You can also talk to the same manager conversation from a configured Slack channel. Replies stay in the thread where you sent the message; TUI replies are not forwarded to Slack. See [Slack conversations with manager](./docs/configuration.md#slack-conversations-with-manager) for the Socket Mode App manifest, token environment variables, repository settings, and how to answer inquiries. Completion notices continue to use the separate `TAKT_NOTIFY_WEBHOOK` Incoming Webhook.
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
+
+`takt list --non-interactive --action delete` accepts `--status <status...>` to select one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`. `running` is not allowed because running tasks cannot be deleted. `--goal <goalId>` selects tasks belonging to that goal. `--branch <branch>` is also available; when used alone, it targets only `completed` tasks.
+
+At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
+
+Deletion targets the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. For clone tasks, it also targets the branch with the same name in the original repository using `git branch -d`. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed. See [Task Management](./docs/task-management.md) for branch-retention conditions and other details.
+
+```bash
+# Preview matching tasks, then delete them after checking the list
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# Preview as JSON
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 The Web UI defaults to Japanese. Use the language control in the header to switch
 between Japanese and English; the selection is saved in the browser for the next
@@ -316,7 +352,16 @@ and `/go`.
 
 TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks. Use `takt run` or `takt watch` to execute pending tasks.
 
+The MCP tool `takt_cleanup_tasks` lets you preview matching tasks before deleting them. `takt_stop_goal_task` requests a stop for one running goal task while other tasks and the goal continue. See [Task Management](./docs/task-management.md) and [Goal Management](./docs/goal-management.md) for arguments, deletion scope, and behavior after a stop or interruption.
+
 The ordinary `takt` assistant conversation has the same read-only task-state view when its provider supports MCP. Use `/go` to turn a new task into an execution or queued task, `/tell` to select and confirm an additional instruction for a running worktree clone, and `/requeue` or `/retry` to return a failed task to the queue after confirmation.
+
+### Manager judgment and work
+
+Manager investigates, implements, verifies, performs Git operations, and delegates work as needed to complete assigned goals. It uses normal provider tools and assigned MCP servers, preserving configured provider options. Permissions default to `auto`. See the [configuration guide](./docs/configuration.md#manager-task-workflows) for permissions and task workflow selection.
+
+Merges, force pushes, and deletion of remote branches or unsaved work follow explicit human instructions. See [Goal Management](./docs/goal-management.md) for how instructions are handled, secret protection, and migration from legacy settings.
+
 
 ### Instant exec mode
 
@@ -326,23 +371,44 @@ Exec starts from the previous exec configuration, or the default configuration o
 
 See [Instant Exec Mode](./docs/cli-reference.md#instant-exec-mode) in the CLI Reference for preset resolution order, `/setup` persistence, image handling limits, and `session_key` behavior.
 
+## Director (experimental)
+
+Open the director conversation TUI in an interactive terminal:
+
+```bash
+takt director
+takt director --help
+```
+
+The daemon owns the conversation. Close and reopen the TUI to continue it; starting from another assigned repository connects to the same conversation. Previous messages and replies are not redisplayed. Director is experimental: behavior and saved data formats may change without notice. Human and event turns call the provider and incur costs; a clock alone does not trigger a model call.
+
+Manager advances goals within its repository or workspace, submits tasks, integrates results, and requests completion. Director checks goals and unanswered inquiries across all managers, notifies the human when attention is needed, and communicates through manager conversations. Human decisions remain with the human: director only relays an explicit request to merge to the responsible manager and never performs the merge itself.
+
+Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing reports unreadable projects with reasons and continues with readable managers.
+
+Set `director.slack.channel_id` and `director.slack.allowed_user_ids` in global `~/.takt/config.yaml`. See the [global config field reference](./docs/configuration.md#global-config-field-reference).
+
+**Director on Slack:** Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` as manager, invite the bot to the director channel, and restart the daemon after changing Slack settings. Configuring `director.slack` enables grouped notices and conversations with permitted users; replies stay in the original thread. See [Slack conversations with director](./docs/configuration.md#slack-conversations-with-director) for setup and [Director responsibilities](./docs/goal-management.md#director-responsibilities) for the full responsibilities and restrictions.
+
 ## Configuration
 
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
 
 Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
-files under `.takt/runs/<run>/`. Resume and requeue preserve the applicable run
-state and reports.
+files under `.takt/runs/<run>/`. Resuming partway through a workflow uses the saved
+results and reports for the selected position. Requeueing from the beginning does
+not resume the previous execution state. See [Task Management](./docs/task-management.md)
+for the details of what is inherited.
 
-Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
+To select providers or models for individual steps, configure auto routing. Run `takt telemetry enable` to record routing decisions locally. See the [Configuration Guide](./docs/configuration.md) for details.
 
-Or use provider credentials directly (DeepSeek Harness requires `takt install deepseek-harness`; OpenCode also requires its CLI):
+Or use provider credentials directly (SDK-based providers require `takt install <provider>`; OpenCode also requires its CLI):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
@@ -365,16 +431,25 @@ events continue to arrive. Raise the limit with
 profiles and per-model overrides are described in
 [Provider inactivity deadline and OpenCode execution guards](./docs/configuration.md#provider-inactivity-deadline-and-opencode-execution-guards).
 
+`provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`.
+`Read(` rules stop Claude's built-in file tools (Claude applies `Read` rules to tools such as Grep and Glob on a best-effort basis) and the file commands Claude Code recognizes in Bash, such as `cat` and `head`.
+They do not stop a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself.
+To block the shell commands Claude runs in the sandbox, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the Claude Code sandbox with filesystem isolation. Do not set `sandbox.filesystem.disabled` to `true`, because that setting lets sandboxed commands read host files. Commands that run outside the sandbox, such as commands matched by `excludedCommands` or run with `allow_unsandboxed_commands`, are not blocked.
+Processes in the sandbox can still read paths that have no deny rule.
+Hooks, MCP servers, and other processes outside the sandbox are not blocked.
+Set `provider_options.claude.permissions.import_user_read_deny: true` to also import the `Read(` rules from `~/.claude/settings.json`.
+Neither key is set by default, and `claude-terminal` is not affected.
+See [Claude Code read-deny rules](./docs/configuration.md#claude-read-deny-rules).
+
 ### Dedicated provider configuration (`runtime.yaml`)
 
-Provider, model, provider options, auto routing, and internal-agent assignment
-can live in a dedicated layer instead of `config.yaml`: `~/.takt/runtime.yaml`
-and `<project>/.takt/runtime.yaml`, with the project layer winning. Workflow
-YAML has no provider/model/options/routing layer. Runtime mode is enabled by an
-active `provider` section, not by the file existing; mixing an active
-`runtime.yaml` provider section with the legacy provider keys is rejected with
-a diagnostic naming the file and the key to migrate to. Without an active
-provider section, `config.yaml` behaves exactly as before.
+You can keep provider, model, and routing settings in `~/.takt/runtime.yaml`
+or `<project>/.takt/runtime.yaml`; the project settings take precedence. Use
+this to keep execution settings separate from workflow definitions. When
+switching to `runtime.yaml`, do not mix in legacy provider settings. See the
+[Configuration Guide](./docs/configuration.md) for migration steps.
+
+Codex and OpenCode profiles accept `context_window: auto`, a fixed positive integer, or `{ initial: 500000, auto_expand: true }`. Automatic selection and expansion use confirmed model limits; `auto` keeps native defaults when those limits cannot be confirmed. A fixed number keeps the capacity fixed. See [context window selection](./docs/configuration.md).
 
 Companion reviewers are disabled by default. Enable them with the top-level
 `companion.enabled: true` policy in `runtime.yaml`; global and project policies
@@ -448,12 +523,12 @@ Workflow definitions are stored under `workflows/`.
 
 ## Adopting Spec-Driven Development
 
-TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure suits Spec-Driven Development (SDD), where the spec stays at the center of the process. Once the spec is defined, the workflow enforces phase transitions, routes detected deviations back to fix steps, and does not complete until the verification gate passes.
+TAKT workflows can express SDD stages with output contracts and review steps.
 
-For users who want to adopt SDD, the community provides [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) as a ready-made implementation. It ships workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Install in one command:
+The community project [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) provides workflows and facets for requirements, implementation, and validation. It supports Claude and Codex. Install it with:
 
 ```bash
-npx create-takt-sdd
+npm install -g takt-sdd
 ```
 
 See [External Integrations](./docs/external-integrations.md) for other community integrations.
@@ -466,7 +541,6 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [CLI Reference](./docs/cli-reference.md) | All commands and options |
 | [Configuration](./docs/configuration.md) | Global and project settings |
 | [Observability](./docs/observability.md) | Phase-level usage events and analysis workflow |
-| [Design Philosophy](./docs/design-philosophy.md) | Why TAKT is built around workflows, facets, feedback loops, and traceability |
 | [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
@@ -482,7 +556,7 @@ See [External Integrations](./docs/external-integrations.md) for other community
 
 Simplified Chinese documentation uses the `.zh-CN.md` suffix so it can coexist with the English and Japanese pages. Start with the [Chinese documentation index](./docs/README.zh-CN.md).
 
-Translated coverage includes the onboarding path (README, tutorial, configuration, and CLI reference), workflow authoring, provider/external integrations, and task management. The remaining catalog, observability, design, prompting, token-saving, repertoire, CI/CD, testing, contributing, changelog, and internal design/development pages remain available in English or Japanese and are intentionally not duplicated here.
+Translated coverage includes the onboarding path (README, tutorial, configuration, and CLI reference), workflow authoring, provider/external integrations, and task management. Other guides are available in English or Japanese.
 
 ## Sponsors
 

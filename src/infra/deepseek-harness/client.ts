@@ -1,15 +1,18 @@
-import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { withUpdateAdvice } from '../managed-providers/messages.js';
+import { realpathSync, unwatchFile, watchFile } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DeepSeekHarness, HarnessNotification } from '@deepseek-ai/dsh-sdk-client';
+import type { DeepSeekHarness, HarnessNotification } from './sdk-types.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
+  observabilitySnapshotOf,
   pickNestedObservabilityEnv,
 } from '../../shared/telemetry/index.js';
+import { pickRepositoryIdentityEnv } from '../../shared/utils/repository-identity-env.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
@@ -26,15 +29,11 @@ import {
   sanitizeTerminalText,
 } from '../../shared/utils/index.js';
 import {
-  sanitizeSensitiveTextWithKnownValues,
-  sanitizeSensitiveValueWithKnownValues,
+  createBoundedSensitiveValues,
 } from '../../shared/utils/sensitiveText.js';
-import {
-  collectEmbeddedSensitiveValues,
-  hasPotentialSensitiveTextSuffix,
-  SENSITIVE_TEXT_BOUNDARY_WINDOW,
-} from '../../shared/utils/sensitive-text.js';
-import { collectSensitiveStringValues } from '../../shared/utils/sensitive-value.js';
+import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
+import { sanitizeSensitiveValueWithStringReplacer } from '../../shared/utils/sensitive-value.js';
+import { maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges } from '../../shared/utils/sensitive-text.js';
 import type {
   DeepSeekHarnessProviderOptions,
   DeepSeekReasoningEffort,
@@ -47,6 +46,11 @@ import {
   type ManagedDeepSeekHarnessModules,
 } from './managed-package.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
+import { DeepSeekHarnessNpmPluginResolutionError } from './npm-plugin.js';
+import {
+  resolveDeepSeekHarnessPlugins,
+  type ResolvedDeepSeekHarnessPlugins,
+} from './plugin-resolution.js';
 import { type DeepSeekCredentialHomeOrigin } from './credential-home.js';
 import { resolveConfiguredDeepSeekEndpoint } from './endpoint-consistency.js';
 import {
@@ -80,6 +84,7 @@ import {
   deepSeekCleanupBlockedMessage,
   deepSeekContinuationMessage,
   getDeepSeekRuntimePaths,
+  acknowledgeDeepSeekRuntimeCleanup,
   markDeepSeekSessionUsed,
   markDeepSeekCleanupFailure,
   withDeepSeekRuntimeCreation,
@@ -88,10 +93,13 @@ import type { DeepSeekHarnessCallOptions } from './types.js';
 const DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS = 30_000;
 const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
 const DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS = 1_000;
+const DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS = 15_000;
 const DEEPSEEK_HARNESS_MAX_ERROR_BYTES = 8 * 1024;
-const DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH = 10_000;
 const DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS = 2_147_483_647;
 const DEEPSEEK_HARNESS_RUNTIME_ENV_NAMES = ['PATH'] as const;
+const DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MARKER = 'TAKT_DSH_CORDIS_NPM_PLUGIN_LOAD_FAILURE';
+const DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MESSAGE =
+  'DeepSeek Harness npm plugin failed to load';
 
 interface HarnessRunResult {
   sessionId: string;
@@ -105,9 +113,10 @@ interface ResponseTextChunk {
 }
 
 interface ResponseRedactionContext {
-  pendingText: string;
   pendingChunks: ResponseTextChunk[];
-  failClosed: boolean;
+  buffer: SensitiveTextStreamBuffer;
+  toolInputValues: ReturnType<typeof createBoundedSensitiveValues>;
+  toolBoundaryText: string;
 }
 
 interface HarnessStreamState {
@@ -117,6 +126,7 @@ interface HarnessStreamState {
   pendingTextDeltasBySession: Set<string>;
   pendingThinkingDeltasBySession: Set<string>;
   responseRedactionContext: ResponseRedactionContext;
+  answerBySession: Map<string, string>;
   emittedToolUses: Set<string>;
   emittedToolResults: Set<string>;
   finishReason?: string;
@@ -412,7 +422,11 @@ function getAmbientEnvironment(): Record<string, string> {
 function getProcessNestedObservabilityFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
-  return getNestedObservabilityEnvFingerprint(childProcessEnv ?? getAmbientEnvironment());
+  const environment = observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment();
+  return getNestedObservabilityEnvFingerprint({
+    ...environment,
+    ...pickRepositoryIdentityEnv(childProcessEnv),
+  });
 }
 
 /** Separate credential source from runtime home and disable unsafe SDK logs. */
@@ -429,7 +443,11 @@ function resolveProcessEnvironment(
       env[name] = value;
     }
   }
-  Object.assign(env, pickNestedObservabilityEnv(childProcessEnv ?? getAmbientEnvironment()));
+  Object.assign(
+    env,
+    pickNestedObservabilityEnv(observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment()),
+    pickRepositoryIdentityEnv(childProcessEnv),
+  );
 
   // Only the selected reference is propagated: an unselected credential variable must
   // never stand in for the reference the settings selector chose.
@@ -493,21 +511,26 @@ function processKey(
   });
 }
 
-/** Remove known secret values and credential fields from complete text. */
-function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>): string {
-  let sanitized = sanitizeSensitiveTextWithKnownValues(text, knownSecrets);
-  for (const value of Object.values(knownSecrets)
-    .filter((candidate) => candidate.length > 0)
-    .sort((left, right) => right.length - left.length)) {
-    sanitized = sanitized.split(value).join('[REDACTED]');
+/** Configured credentials retain DeepSeek's substring contract; input candidates retain the shared rules. */
+function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>, values?: ReadonlySet<string>): string {
+  if (values === undefined) {
+    const configured = createBoundedSensitiveValues();
+    configured.collect({ token: Object.values(knownSecrets) });
+    values = configured.values;
   }
-  return sanitized;
+  return maskSensitiveRanges(text, [
+    ...sensitiveTextRanges(text, values),
+    ...substringSensitiveRanges(text, Object.values(knownSecrets)),
+  ]);
 }
 
 /** Convert diagnostic values into redacted, control-character-safe text. */
-function safeMessage(value: unknown, knownSecrets: Record<string, string>): string {
+function safeMessage(value: unknown, knownSecrets: Record<string, string>, toolInputValues: ReturnType<typeof createBoundedSensitiveValues>): string {
+  const known = createBoundedSensitiveValues();
+  known.collect({ token: Object.values(knownSecrets) });
+  known.collect(toolInputValues);
   const sanitized = sanitizeTerminalText(
-    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets),
+    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets, known.values),
   );
   if (Buffer.byteLength(sanitized, 'utf8') <= DEEPSEEK_HARNESS_MAX_ERROR_BYTES) {
     return sanitized;
@@ -515,86 +538,14 @@ function safeMessage(value: unknown, knownSecrets: Record<string, string>): stri
   return `${Buffer.from(sanitized).subarray(0, DEEPSEEK_HARNESS_MAX_ERROR_BYTES).toString('utf8')}...`;
 }
 
-/** Retain a possible secret prefix at a chunk boundary until more text arrives. */
-function longestKnownSecretPrefixSuffix(
-  text: string,
-  knownSecrets: Record<string, string>,
-): string {
-  let longest = '';
-  for (const value of Object.values(knownSecrets)) {
-    if (value.length < 2) {
-      continue;
-    }
-    const maximumLength = Math.min(value.length - 1, text.length);
-    for (let length = maximumLength; length > longest.length; length -= 1) {
-      const suffix = value.slice(0, length);
-      if (text.endsWith(suffix)) {
-        longest = suffix;
-        break;
-      }
-    }
-  }
-  return longest;
-}
-
-/** Detect credential-field boundaries requiring buffered redaction. */
-function hasSensitiveCredentialBoundary(text: string): boolean {
-  return /(?:api[_-]?key|token|password|secret|credential|authorization|cookie|session[_-]?id)(?:\s*[:=]|\s*$)/iu.test(text);
-}
-
-/** Emit only safe buffered text, preserving channels and possible secret suffixes. */
+/** Mask the whole committed span before splitting it back into its original channels. */
 function drainResponseRedactedChunks(
   context: ResponseRedactionContext,
-  knownSecrets: Record<string, string>,
-  length = context.pendingText.length,
+  commit: SensitiveTextCommit,
 ): ResponseTextChunk[] {
-  const { values, exhausted } = collectSensitiveStringValues(knownSecrets);
-  context.failClosed ||= exhausted;
-  if (context.failClosed) {
-    const chunks = context.pendingChunks.map((chunk) => ({ field: chunk.field, text: '[REDACTED]' }));
-    context.pendingText = '';
-    context.pendingChunks = [];
-    return chunks;
-  }
-  collectEmbeddedSensitiveValues(context.pendingText, values);
-  // Mark source positions before replacing secrets: a replacement may span
-  // several chunks, but safe text must stay in the stream that produced it.
-  const sensitive = new Uint8Array(context.pendingText.length);
-  for (const value of values) {
-    if (value.length === 0) continue;
-    let offset = context.pendingText.indexOf(value);
-    while (offset >= 0) {
-      sensitive.fill(1, offset, offset + value.length);
-      offset = context.pendingText.indexOf(value, offset + 1);
-    }
-  }
-  // Never drain half of a redacted value and leave its unrecognizable suffix.
-  while (length > 0 && sensitive[length - 1] === 1 && sensitive[length] === 1) length -= 1;
-  let offset = 0;
-  const chunks: ResponseTextChunk[] = [];
-  const pendingChunks: ResponseTextChunk[] = [];
-  for (const chunk of context.pendingChunks) {
-    const consumed = Math.min(chunk.text.length, Math.max(0, length - offset));
-    let text = '';
-    let redacting = false;
-    for (let index = 0; index < consumed; index += 1) {
-      const redact = sensitive[offset + index] === 1;
-      if (redact) {
-        if (!redacting) text += '[REDACTED]';
-      } else {
-        text += chunk.text[index];
-      }
-      redacting = redact;
-    }
-    if (text.length > 0) chunks.push({ field: chunk.field, text });
-    if (consumed < chunk.text.length) {
-      pendingChunks.push({ field: chunk.field, text: chunk.text.slice(consumed) });
-    }
-    offset += chunk.text.length;
-  }
-  context.pendingText = context.pendingText.slice(length);
-  context.pendingChunks = pendingChunks;
-  return chunks;
+  const { committed, pending } = maskSensitiveTextChunks(commit, context.pendingChunks);
+  context.pendingChunks = pending;
+  return committed;
 }
 
 /** Convert a redacted text/thinking chunk into a provider-neutral event. */
@@ -604,6 +555,24 @@ function responseTextEvent(chunk: ResponseTextChunk): StreamEvent {
     : { type: 'thinking', data: { thinking: chunk.text } };
 }
 
+/** Mask a current chunk even when it contains only the next, still-incomplete part of a known value. */
+function knownContinuationRanges(boundary: string, text: string, values: ReadonlySet<string>) {
+  const ranges: { start: number; end: number }[] = [];
+  let complete = false;
+  for (const value of values) {
+    for (let split = 1; split < value.length; split += 1) {
+      if (!boundary.endsWith(value.slice(0, split))) continue;
+      const remainder = value.slice(split);
+      const length = text.startsWith(remainder)
+        ? remainder.length
+        : remainder.startsWith(text) ? text.length : 0;
+      if (length > 0) ranges.push({ start: 0, end: length });
+      if (text.startsWith(remainder)) complete = true;
+    }
+  }
+  return { ranges, complete };
+}
+
 /** Buffer text so credentials split across notifications remain redacted. */
 function writeResponseRedactedChunks(
   context: ResponseRedactionContext,
@@ -611,71 +580,34 @@ function writeResponseRedactedChunks(
   field: ResponseTextChunk['field'],
   knownSecrets: Record<string, string>,
 ): ResponseTextChunk[] {
-  const combined = context.pendingText + text;
-  context.pendingText = combined;
+  if (field === 'text' && context.toolBoundaryText.length > 0 && text.length > 0) {
+    const combined = context.toolBoundaryText + text;
+    const boundary = context.toolBoundaryText.length;
+    const values = new Set(Object.values(knownSecrets));
+    for (const value of context.buffer.sensitiveValues.values) values.add(value);
+    const knownRanges = substringSensitiveRanges(combined, values);
+    // Do not join a capitalized natural-language sentence to the earlier assignment. Short credential
+    // fragments still need the generic pattern check, including when the next chunk completes them.
+    const startsNaturalLanguage = /^[A-Z]/u.test(text) && /\s/u.test(text);
+    const candidateRanges = startsNaturalLanguage ? [] : sensitiveTextRanges(combined, new Set());
+    const boundaryRanges = [...knownRanges, ...candidateRanges]
+      .filter((range) => range.end > boundary)
+      .map((range) => ({
+        start: Math.max(0, range.start - boundary),
+        end: Math.min(text.length, range.end - boundary),
+      }));
+    const continuation = knownContinuationRanges(context.toolBoundaryText, text, values);
+    const ranges = [...boundaryRanges, ...continuation.ranges];
+    text = maskSensitiveRanges(text, ranges);
+    context.toolBoundaryText = continuation.complete || /\s/u.test(text) ? '' : combined.slice(-4096);
+  }
   const previous = context.pendingChunks.at(-1);
   if (previous?.field === field) {
     previous.text += text;
   } else {
     context.pendingChunks.push({ field, text });
   }
-  context.failClosed ||= combined.length > DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH
-    && (Object.values(knownSecrets).some((value) => value.length > 0) || hasPotentialSensitiveTextSuffix(combined));
-  if (context.failClosed) return drainResponseRedactedChunks(context, knownSecrets);
-  const knownPrefixSuffix = longestKnownSecretPrefixSuffix(combined, knownSecrets);
-  const containsKnownSecret = Object.values(knownSecrets)
-    .some((value) => value.length > 0 && combined.includes(value));
-  const shouldHold = knownPrefixSuffix.length > 0
-    || (
-      !containsKnownSecret
-      && hasSensitiveCredentialBoundary(combined)
-      && hasPotentialSensitiveTextSuffix(combined)
-    );
-  if (!shouldHold) {
-    return drainResponseRedactedChunks(context, knownSecrets);
-  }
-  if (Object.values(knownSecrets).some((value) => value.length > 0)) {
-    const retainedLength = Math.max(SENSITIVE_TEXT_BOUNDARY_WINDOW, knownPrefixSuffix.length);
-    return drainResponseRedactedChunks(context, knownSecrets, Math.max(0, combined.length - retainedLength));
-  }
-  return [];
-}
-
-/** Redact final values against unfinished streamed credential boundaries. */
-function redactCrossBoundaryFinalValue(
-  value: string,
-  pendingText: string,
-  knownSecrets: Record<string, string>,
-): string {
-  let continuationLength = 0;
-  for (const secret of Object.values(knownSecrets)) {
-    if (secret.length < 2) {
-      continue;
-    }
-    for (let split = 1; split < secret.length; split += 1) {
-      if (
-        pendingText.endsWith(secret.slice(0, split))
-        && value.startsWith(secret.slice(split))
-      ) {
-        continuationLength = Math.max(continuationLength, secret.length - split);
-      }
-    }
-  }
-  if (continuationLength > 0) {
-    return '[REDACTED]' + sanitizeSensitiveTextWithKnownValues(
-      value.slice(continuationLength),
-      knownSecrets,
-    );
-  }
-  const combined = pendingText + value;
-  if (
-    pendingText.length > 0
-    && sanitizeSensitiveTextWithKnownValues(pendingText, knownSecrets) === pendingText
-    && sanitizeSensitiveTextWithKnownValues(combined, knownSecrets) !== combined
-  ) {
-    return '[REDACTED]';
-  }
-  return sanitizeSensitiveTextWithKnownValues(value, knownSecrets);
+  return drainResponseRedactedChunks(context, context.buffer.write(text, { token: Object.values(knownSecrets) }, Object.values(knownSecrets)));
 }
 
 /** Deliver sanitized events while preserving already-validated opaque identifier fields. */
@@ -692,13 +624,25 @@ function invokeStream(
     const streamValue = eventData[streamField];
     if (typeof streamValue === 'string') {
       const chunks = writeResponseRedactedChunks(responseRedactionContext, streamValue, streamField, knownSecrets);
-      for (const chunk of chunks) {
-        invokeStream(onStream, responseTextEvent(chunk), knownSecrets);
-      }
+      for (const chunk of chunks) onStream?.(responseTextEvent(chunk));
       return;
     }
   }
-  const sanitized = sanitizeSensitiveValueWithKnownValues(event, knownSecrets) as StreamEvent;
+  if (responseRedactionContext !== undefined) {
+    if (event.type === 'tool_use') {
+      responseRedactionContext.toolInputValues.collect(event.data.input);
+      responseRedactionContext.buffer.sensitiveValues.collect(event.data.input);
+      responseRedactionContext.toolBoundaryText = responseRedactionContext.pendingChunks
+        .map((chunk) => chunk.text).join('').slice(-4096);
+    }
+    flushHarnessResponseRedactor(responseRedactionContext, onStream, knownSecrets);
+  }
+  const known = createBoundedSensitiveValues();
+  known.collect({ token: Object.values(knownSecrets) });
+  if (responseRedactionContext !== undefined) known.collect(responseRedactionContext.toolInputValues);
+  known.collect(event);
+  const sanitized = { ...event, data: sanitizeSensitiveValueWithStringReplacer(event.data,
+    (text) => ({ value: sanitizeKnownSecrets(text, knownSecrets, known.values) })) } as StreamEvent;
   if (preserveValidatedField === undefined) {
     onStream?.(sanitized);
     return;
@@ -717,27 +661,14 @@ function invokeStream(
   } as unknown as StreamEvent);
 }
 
-/** Flush buffered text on completion/failure with conservative redaction. */
+/** Non-text delivery, completion and failure use the same masked flush. */
 function flushHarnessResponseRedactor(
-  state: HarnessStreamState,
+  context: ResponseRedactionContext,
   onStream: StreamCallback | undefined,
   knownSecrets: Record<string, string>,
-  discardPending = false,
 ): void {
-  const context = state.responseRedactionContext;
-  const hadPending = context.pendingText.length > 0;
-  const hasKnownSecretPending = hadPending
-    && longestKnownSecretPrefixSuffix(context.pendingText, knownSecrets).length > 0;
-  if (hasKnownSecretPending && !discardPending) {
-    return;
-  }
-  if (discardPending && hadPending) {
-    context.pendingText = '';
-    context.pendingChunks = [];
-    return;
-  }
-  for (const chunk of drainResponseRedactedChunks(context, knownSecrets)) {
-    invokeStream(onStream, responseTextEvent(chunk), knownSecrets);
+  for (const chunk of drainResponseRedactedChunks(context, context.buffer.flush({ token: Object.values(knownSecrets) }, Object.values(knownSecrets)))) {
+    onStream?.(responseTextEvent(chunk));
   }
 }
 
@@ -747,10 +678,11 @@ function redactFinalResponse(
   value: string,
   knownSecrets: Record<string, string>,
 ): string {
-  const finalResponse = redactCrossBoundaryFinalValue(value, context.pendingText, knownSecrets);
-  context.pendingText = '';
-  context.pendingChunks = [];
-  return finalResponse;
+  const known = createBoundedSensitiveValues();
+  known.collect({ token: Object.values(knownSecrets) });
+  known.collect(context.buffer.sensitiveValues);
+  known.collect(value);
+  return sanitizeKnownSecrets(value, knownSecrets, known.values);
 }
 
 /** Require an SDK event data object before reading type-specific fields. */
@@ -772,6 +704,38 @@ function textFromContentBlocks(value: unknown): string {
     .filter((block) => block.type === 'text')
     .map((block) => requireString(block.text, 'text content block'))
     .join('');
+}
+
+/** Redact final values against unfinished streamed credential boundaries. */
+function redactCrossBoundaryFinalValue(
+  value: string,
+  pendingText: string,
+  knownSecrets: Record<string, string>,
+): string {
+  const combined = pendingText + value;
+  const ranges = sensitiveTextRanges(combined, new Set(Object.values(knownSecrets)))
+    .filter((range) => range.end > pendingText.length)
+    .map((range) => ({
+      start: Math.max(0, range.start - pendingText.length),
+      end: Math.min(value.length, range.end - pendingText.length),
+    }));
+  return maskSensitiveRanges(value, ranges);
+}
+
+/**
+ * Text before a message's last tool call is working text, so only the text after it can be the answer.
+ * Redact it against that earlier text: a credential split by the tool call must not leave its suffix.
+ */
+function redactedAnswerAfterLastToolCall(
+  blocks: readonly Record<string, unknown>[],
+  knownSecrets: Record<string, string>,
+): string {
+  const answerStart = blocks.reduce((start, block, index) => (block.type === 'tool-call' ? index + 1 : start), 0);
+  return redactCrossBoundaryFinalValue(
+    textFromContentBlocks(blocks.slice(answerStart)),
+    textFromContentBlocks(blocks.slice(0, answerStart)),
+    knownSecrets,
+  );
 }
 
 /** Decode tool arguments into a validated object or fixed protocol failure. */
@@ -828,6 +792,7 @@ function normalizeHarnessEvent(
     if (chunkType === 'text-delta') {
       const text = requireString(chunk.text, 'assistant text delta');
       if (text.length > 0) {
+        state.answerBySession.delete(sessionId);
         state.sawTextBySession.add(sessionId);
         state.pendingTextDeltasBySession.add(sessionId);
         invokeStream(
@@ -862,6 +827,7 @@ function normalizeHarnessEvent(
     const blocks = contentBlocks(message.content);
     const hasTextDelta = state.pendingTextDeltasBySession.delete(sessionId);
     const text = textFromContentBlocks(blocks);
+    state.answerBySession.set(sessionId, redactedAnswerAfterLastToolCall(blocks, knownSecrets));
     if (!hasTextDelta && text.length > 0) {
       state.sawTextBySession.add(sessionId);
       invokeStream(
@@ -895,7 +861,7 @@ function normalizeHarnessEvent(
         const name = requireString(block.name, 'tool-call name');
         if (!state.emittedToolUses.has(id)) {
           state.emittedToolUses.add(id);
-          invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(block.arguments)), knownSecrets, 'id');
+          invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(block.arguments)), knownSecrets, 'id', state.responseRedactionContext);
         }
       }
       if (block.type === 'tool-result') {
@@ -907,7 +873,7 @@ function normalizeHarnessEvent(
             id,
             textFromContentBlocks(block.content),
             block.isError === true,
-          ), knownSecrets, 'id');
+          ), knownSecrets, 'id', state.responseRedactionContext);
         }
       }
     }
@@ -921,7 +887,7 @@ function normalizeHarnessEvent(
     const name = requireString(data.name, 'tool-call name');
     if (!state.emittedToolUses.has(id)) {
       state.emittedToolUses.add(id);
-      invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(data.arguments)), knownSecrets, 'id');
+      invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(data.arguments)), knownSecrets, 'id', state.responseRedactionContext);
     }
     return;
   }
@@ -943,7 +909,7 @@ function normalizeHarnessEvent(
         id,
         resultContent,
         toolResultBlock?.isError === true || (data.error !== undefined && data.error !== null),
-      ), knownSecrets, 'id');
+      ), knownSecrets, 'id', state.responseRedactionContext);
     }
     return;
   }
@@ -955,7 +921,7 @@ function normalizeHarnessEvent(
     if (state.finishReason === 'error') {
       recordFailureReason(state, reason);
     }
-    flushHarnessResponseRedactor(state, onStream, knownSecrets);
+    flushHarnessResponseRedactor(state.responseRedactionContext, onStream, knownSecrets);
   }
 }
 
@@ -978,7 +944,7 @@ function normalizeHarnessNotification(
   if (method === 'session.started') {
     if (!state.initializedSessions.has(sessionId)) {
       state.initializedSessions.add(sessionId);
-      invokeStream(onStream, { type: 'init', data: { model, sessionId } }, knownSecrets, 'sessionId');
+      invokeStream(onStream, { type: 'init', data: { model, sessionId } }, knownSecrets, 'sessionId', state.responseRedactionContext);
     }
     return;
   }
@@ -990,7 +956,15 @@ function normalizeHarnessNotification(
 }
 
 class DeepSeekHarnessProcess {
+  get stale(): boolean { return this.modules.stale === true; }
   private closed = false;
+  private runtimeStartAttempted = false;
+  private resourceDisposal: Promise<void> | undefined;
+  private cleanupReconciliation: {
+    allowMissingOwnerAfterSdkClose: boolean;
+    promise: Promise<boolean | undefined | null>;
+  } | undefined;
+  private cleanupReceiptListener: (() => void) | undefined;
   activeTurns = 1;
   lastUsed = ++runtimeUseSequence;
   sessionId: string | undefined;
@@ -1001,12 +975,18 @@ class DeepSeekHarnessProcess {
     private readonly configuration: ResolvedDeepSeekConfiguration,
     private readonly environment: ProcessEnvironmentResolution,
     private readonly credentialPatch: DeepSeekCredentialPatch,
+    private readonly pluginResolution: ResolvedDeepSeekHarnessPlugins,
     readonly identity: string,
     readonly credentialFingerprint: string,
     private readonly modules: ManagedDeepSeekHarnessModules,
   ) {
     const runtimePaths = getDeepSeekRuntimePaths();
-    this.cleanupConfirmationPath = path.join(path.dirname(credentialPatch.path), 'runtime-exit-confirmed');
+    const patchDirectory = path.dirname(credentialPatch.path);
+    this.cleanupConfirmationPath = path.join(
+      runtimePaths.state,
+      'cleanup-receipts',
+      `${path.basename(patchDirectory)}.confirmed`,
+    );
     const supervisorPath = fileURLToPath(new URL('./runtime-supervisor.mjs', import.meta.url));
     const env: NodeJS.ProcessEnv = {
       ...environment.env,
@@ -1014,6 +994,12 @@ class DeepSeekHarnessProcess {
       TAKT_DSH_STATE_DIRECTORY: runtimePaths.state,
       TAKT_DSH_PARENT_PID: String(process.pid),
       TAKT_DSH_CLEANUP_CONFIRMATION: this.cleanupConfirmationPath,
+      TAKT_DSH_CLEANUP_ROOT: path.dirname(patchDirectory),
+      TAKT_DSH_CLEANUP_PATHS: JSON.stringify([
+        patchDirectory,
+        ...pluginResolution.cleanupPaths,
+      ]),
+      TAKT_DSH_NPM_PLUGIN_ENTRYPOINTS: JSON.stringify(pluginResolution.npmPluginEntrypoints),
       TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: modules.directory,
     };
     this.harness = new modules.sdk.DeepSeekHarness({
@@ -1026,8 +1012,8 @@ class DeepSeekHarnessProcess {
       initializeTimeoutMs: DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS,
       requestTimeoutMs: configuration.requestTimeoutMs,
       shutdownTimeoutMs: configuration.shutdownTimeoutMs,
-      disposeEofGraceMs: DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS,
-      disposeGraceMs: DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS,
+      disposeEofGraceMs: DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS,
+      disposeGraceMs: DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS,
       cwd: configuration.cwd,
       provider: configuration.provider,
       model: configuration.model,
@@ -1052,34 +1038,24 @@ class DeepSeekHarnessProcess {
   async start(abortSignal?: AbortSignal): Promise<void> {
     if (this.closed) throw new this.modules.sdk.TransportClosedError('closed');
     if (isAbortSignalAborted(abortSignal)) throw abortError(abortSignal?.reason);
-    let failureCleanupError: Error | undefined;
     try {
       await withDeepSeekRuntimeCreation(
         async () => {
           if (isAbortSignalAborted(abortSignal)) throw abortError(abortSignal?.reason);
+          this.runtimeStartAttempted = true;
           await waitForAbortable(this.harness.start(), abortSignal);
         },
         async () => {
           if (this.closed) return true;
           try {
             await this.harness.close();
+            return true;
           } catch {
-            if (!(await this.hasCleanupConfirmation())) return false;
+            return this.hasCleanupConfirmation();
           }
-          this.closed = true;
-          try {
-            await this.credentialPatch.dispose();
-          } catch {
-            failureCleanupError = new DeepSeekHarnessTransportError(
-              'DeepSeek Harness credential patch cleanup failed.',
-              'credential-patch-cleanup-failed',
-            );
-          }
-          return true;
         },
       );
     } catch (error) {
-      if (failureCleanupError !== undefined) throw failureCleanupError;
       if (isAbortSignalAborted(abortSignal)) {
         if (!this.closed) await this.close();
         throw abortError(abortSignal?.reason);
@@ -1142,34 +1118,160 @@ class DeepSeekHarnessProcess {
     }
   }
 
-  /** Close SDK/patch; failed SDK cleanup carries confirmed quarantine status, while patch cleanup never does. */
+  /** Close the SDK runtime and dispose resources only after its supervisor confirms process-group exit. */
   async close(): Promise<void> {
     if (this.closed) return;
+    let sdkCloseSucceeded = false;
     try {
       await this.harness.close();
+      sdkCloseSucceeded = true;
     } catch {
-      if (!(await this.hasCleanupConfirmation())) {
-        let cleanupBarrierPersisted = false;
-        try {
-          await markDeepSeekCleanupFailure();
-          cleanupBarrierPersisted = true;
-        } catch {
-          // Admission retains its fail-closed lock; do not claim a durable barrier.
+      // A failed SDK close needs a durable supervisor receipt before cleanup is acknowledged.
+    }
+    let cleanupConfirmed = false;
+    let cleanupBarrierPersisted = false;
+    cleanupConfirmed = await this.waitForRuntimeExitConfirmation(sdkCloseSucceeded);
+    if (cleanupConfirmed) {
+      return;
+    }
+
+    try {
+      await markDeepSeekCleanupFailure();
+      cleanupBarrierPersisted = true;
+    } catch {
+      // Admission retains its fail-closed lock; do not claim a durable barrier.
+    }
+    this.retainPendingCleanupOwnership();
+    throw new DeepSeekHarnessTransportError(
+      deepSeekCleanupBlockedMessage(), 'cleanup-failed', undefined, cleanupBarrierPersisted,
+    );
+  }
+
+  /** Reconcile the durable owner and dispose resources only after process-group exit is proven. */
+  async disposeAfterConfirmedExit(allowMissingOwnerAfterSdkClose = false): Promise<boolean> {
+    return (await this.reconcileRuntimeExit(allowMissingOwnerAfterSdkClose)) === true;
+  }
+
+  /** Share receipt consumption and disposal with close so neither can recreate a resolved barrier. */
+  private async reconcileRuntimeExit(allowMissingOwnerAfterSdkClose: boolean): Promise<boolean | undefined | null> {
+    if (this.closed) {
+      this.releasePendingCleanupOwnership();
+      return true;
+    }
+    const pending = this.cleanupReconciliation;
+    if (pending !== undefined) {
+      const confirmation = await pending.promise;
+      if (pending.allowMissingOwnerAfterSdkClose === allowMissingOwnerAfterSdkClose || this.closed) {
+        return confirmation;
+      }
+      // Different policies still serialize receipt consumption, then confirm under their own policy.
+      return this.reconcileRuntimeExit(allowMissingOwnerAfterSdkClose);
+    }
+    const reconciliation = (async (): Promise<boolean | undefined | null> => {
+      const confirmation = await this.confirmRuntimeExit(allowMissingOwnerAfterSdkClose);
+      if (confirmation !== true) return confirmation;
+      await this.disposeResources();
+      this.closed = true;
+      this.releasePendingCleanupOwnership();
+      return true;
+    })();
+    this.cleanupReconciliation = { allowMissingOwnerAfterSdkClose, promise: reconciliation };
+    try {
+      return await reconciliation;
+    } finally {
+      if (this.cleanupReconciliation?.promise === reconciliation) this.cleanupReconciliation = undefined;
+    }
+  }
+
+  /** Wait a bounded grace period for durable process-group exit evidence. */
+  private async waitForRuntimeExitConfirmation(allowMissingOwnerAfterSdkClose: boolean): Promise<boolean> {
+    const deadline = Date.now() + DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS;
+    while (true) {
+      let cleanupAcknowledged: boolean | undefined | null;
+      try {
+        cleanupAcknowledged = await this.reconcileRuntimeExit(allowMissingOwnerAfterSdkClose);
+      } catch (error) {
+        // Exit confirmation failure is quarantinable; resource disposal failure must withhold completion.
+        if (error instanceof DeepSeekHarnessTransportError
+          && (error.sdkCode === 'credential-patch-cleanup-failed' || error.sdkCode === 'plugin-cleanup-failed')) {
+          throw error;
         }
+        return false;
+      }
+      if (cleanupAcknowledged === true) return true;
+      if (cleanupAcknowledged === undefined || cleanupAcknowledged === null || Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /** Reconcile this runtime's receipt, permitting a missing owner only after successful SDK close. */
+  private async confirmRuntimeExit(
+    allowMissingOwnerAfterSdkClose: boolean,
+  ): Promise<boolean | undefined | null> {
+    if (!this.runtimeStartAttempted) return true;
+    const cleanupAcknowledged = await acknowledgeDeepSeekRuntimeCleanup(this.cleanupConfirmationPath);
+    if (cleanupAcknowledged === undefined && allowMissingOwnerAfterSdkClose) return true;
+    return cleanupAcknowledged;
+  }
+
+  /** Share concurrent resource disposal and classify failures without exposing plugin or credential data. */
+  private async disposeResources(): Promise<void> {
+    if (this.resourceDisposal !== undefined) return this.resourceDisposal;
+    const disposal = (async (): Promise<void> => {
+      const [patchResult, pluginResult] = await Promise.allSettled([
+        this.credentialPatch.dispose(),
+        this.pluginResolution.dispose(),
+      ]);
+      if (patchResult.status === 'rejected') {
         throw new DeepSeekHarnessTransportError(
-          deepSeekCleanupBlockedMessage(), 'cleanup-failed', undefined, cleanupBarrierPersisted,
+          'DeepSeek Harness credential patch cleanup failed.',
+          'credential-patch-cleanup-failed',
         );
       }
-    }
+      if (pluginResult.status === 'rejected') {
+        throw new DeepSeekHarnessTransportError(
+          'DeepSeek Harness plugin cleanup failed.',
+          'plugin-cleanup-failed',
+          'DeepSeek Harness plugin cleanup failed',
+        );
+      }
+    })();
+    this.resourceDisposal = disposal;
     try {
-      await this.credentialPatch.dispose();
-    } catch {
-      throw new DeepSeekHarnessTransportError(
-        'DeepSeek Harness credential patch cleanup failed.',
-        'credential-patch-cleanup-failed',
-      );
+      await disposal;
+    } finally {
+      if (this.resourceDisposal === disposal) this.resourceDisposal = undefined;
     }
-    this.closed = true;
+  }
+
+  /** Retain cleanup ownership and retry when a delayed supervisor receipt changes. */
+  private retainPendingCleanupOwnership(): void {
+    pendingCleanupProcesses.add(this);
+    if (this.cleanupReceiptListener === undefined) {
+      const listener = (): void => {
+        void this.disposeAfterConfirmedExit().then(
+          () => undefined,
+          (error: unknown) => { pendingCleanupFailures.set(this, error); },
+        );
+      };
+      this.cleanupReceiptListener = listener;
+      try {
+        watchFile(this.cleanupConfirmationPath, { interval: 100, persistent: false }, listener);
+      } catch (error) {
+        pendingCleanupFailures.set(this, error);
+      }
+    }
+    this.cleanupReceiptListener?.();
+  }
+
+  /** Release receipt watching and pending-failure bookkeeping after confirmed cleanup. */
+  private releasePendingCleanupOwnership(): void {
+    pendingCleanupProcesses.delete(this);
+    pendingCleanupFailures.delete(this);
+    if (this.cleanupReceiptListener !== undefined) {
+      unwatchFile(this.cleanupConfirmationPath, this.cleanupReceiptListener);
+      this.cleanupReceiptListener = undefined;
+    }
   }
 
   /** Accept only this instance's supervisor receipt written after proven group exit. */
@@ -1181,6 +1283,9 @@ class DeepSeekHarnessProcess {
     }
   }
 }
+
+const pendingCleanupProcesses = new Set<DeepSeekHarnessProcess>();
+const pendingCleanupFailures = new Map<DeepSeekHarnessProcess, unknown>();
 
 /** Map SDK error types to fixed diagnostics without exposing raw upstream data. */
 function mapSdkError(error: unknown, sdk: ManagedDeepSeekHarnessModules['sdk']): Error {
@@ -1212,6 +1317,13 @@ function mapSdkError(error: unknown, sdk: ManagedDeepSeekHarnessModules['sdk']):
     return new DeepSeekHarnessProtocolError('DeepSeek Harness SDK protocol validation failed');
   }
   if (error instanceof sdk.TransportClosedError) {
+    if (error.message.includes(DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MARKER)) {
+      return new DeepSeekHarnessTransportError(
+        `${DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MESSAGE}. Check the package entrypoint and configuration, then retry.`,
+        'npm-plugin-load-failed',
+        DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MESSAGE,
+      );
+    }
     return new DeepSeekHarnessTransportError(
       'DeepSeek Harness runtime connection closed. Upstream error details are withheld.',
       'transport-closed',
@@ -1299,12 +1411,24 @@ async function getOrCreateProcess(
   assertSupportedDeepSeekHarnessPlatform();
   const providerOptions = options.providerOptions;
   const configuration = resolveDeepSeekConfiguration(options, providerOptions);
-  const binding = await resolveDeepSeekCredentialBinding({
+  const sourceBinding = await resolveDeepSeekCredentialBinding({
     childProcessEnv: options.childProcessEnv,
     ambientEnv: getAmbientEnvironment(),
     userHome: os.homedir(),
     providerOptions,
   });
+  const explicitCredential = options.childProcessEnv?.[sourceBinding.ref];
+  const preferLaunchEnvironmentCredential = (explicitCredential?.length ?? 0) > 0;
+  // The same selected value can come from ambient env or an explicit per-call
+  // override. rc.2 gives those modes different store precedence, so they must
+  // never share a live session even when the source binding is otherwise equal.
+  const binding: DeepSeekCredentialBinding = {
+    ...sourceBinding,
+    fingerprint: createHash('sha256').update(JSON.stringify({
+      sourceFingerprint: sourceBinding.fingerprint,
+      preferLaunchEnvironmentCredential,
+    })).digest('hex'),
+  };
   credentialFailureContext.sourceHomeOrigin = binding.home.origin;
   credentialFailureContext.reference = binding.ref;
   const runtimePaths = getDeepSeekRuntimePaths();
@@ -1347,13 +1471,29 @@ async function getOrCreateProcess(
 
   await assertDeepSeekRuntimeCreationAllowed();
   const managedModules = await loadManagedDeepSeekHarnessModules();
-  const credentialPatch = await createDeepSeekCredentialPatch(binding, configuration.systemPrompt);
+  const pluginResolution = await resolveDeepSeekHarnessPlugins(providerOptions?.plugins, options.abortSignal);
+  let credentialPatch: DeepSeekCredentialPatch | undefined;
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {
+    // The SDK's local provider resolves stored references before ambient environment.
+    // A per-runtime reference selects the explicit value without copying or changing the store.
+    const runtimeCredentialReference = preferLaunchEnvironmentCredential
+      ? `TAKT_DSH_EXPLICIT_${randomBytes(16).toString('hex').toUpperCase()}`
+      : binding.ref;
+    if (preferLaunchEnvironmentCredential && explicitCredential !== undefined) {
+      environment.env[runtimeCredentialReference] = explicitCredential;
+    }
+    credentialPatch = await createDeepSeekCredentialPatch(
+      binding,
+      configuration.systemPrompt,
+      pluginResolution.plugins,
+      preferLaunchEnvironmentCredential ? { runtimeCredentialReference } : {},
+    );
     processRecord = new DeepSeekHarnessProcess(
       configuration,
       environment,
       credentialPatch,
+      pluginResolution,
       identity,
       binding.fingerprint,
       managedModules,
@@ -1362,7 +1502,8 @@ async function getOrCreateProcess(
     return processRecord;
   } catch (error) {
     if (processRecord !== undefined) removeProcess(processRecord);
-    await credentialPatch.dispose().catch(() => undefined);
+    if (credentialPatch !== undefined) await credentialPatch.dispose().catch(() => undefined);
+    await pluginResolution.dispose();
     throw error;
   }
 }
@@ -1445,8 +1586,7 @@ function failureDetail(
     return createProviderErrorFailure(error.message);
   }
   if (isAbortSignalAborted(options.abortSignal) || (error instanceof Error && error.name === 'AbortError')) {
-    const detail = classifyAbortSignalReason(options.abortSignal?.reason ?? error);
-    return { ...detail, reason: safeMessage(detail.reason, knownSecrets) };
+    return classifyAbortSignalReason(options.abortSignal?.reason ?? error);
   }
   if (
     error instanceof DeepSeekHarnessTimeoutError
@@ -1459,6 +1599,14 @@ function failureDetail(
   }
   if (error instanceof DeepSeekHarnessContinuationError) {
     return createSessionContinuationUnsupportedFailure(deepSeekContinuationMessage());
+  }
+  if (error instanceof DeepSeekHarnessNpmPluginResolutionError) {
+    const diagnostic = {
+      source: 'DeepSeek Harness npm plugin source acquisition failed. Verify the package spec and registry access, then retry.',
+      install: 'DeepSeek Harness npm plugin installation failed. Check package dependencies and npm configuration, then retry.',
+      entrypoint: 'DeepSeek Harness npm plugin entrypoint could not be resolved. Add a valid exports or main entrypoint, then retry.',
+    }[error.stage];
+    return createProviderErrorFailure(diagnostic);
   }
   if (error instanceof DeepSeekCredentialDiagnosticError) {
     const diagnostic = credentialDiagnosticDetail(
@@ -1511,8 +1659,7 @@ function failureDetail(
     return credentialDiagnosticDetail('runtime-failure', {}, credentialFailureContext)
       ?? createProviderErrorFailure('DeepSeek Harness runtime failed; verify credentials and endpoint, then retry.');
   }
-  const reason = safeMessage(error, knownSecrets);
-  return createProviderErrorFailure(reason);
+  return createProviderErrorFailure(getErrorMessage(error));
 }
 
 /** Emit terminal failure with the requested session retention policy. */
@@ -1582,23 +1729,28 @@ function createSuccessResponse(
   if (result.finishReason !== 'completed') {
     throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned an unsupported turn completion reason');
   }
-  const finalResponse = redactFinalResponse(
+  // The SDK's finalResponse joins every text block of the last assistant message, including text
+  // before its tool calls, so it is the answer only when no assistant message was observed.
+  flushHarnessResponseRedactor(state.responseRedactionContext, options.onStream, knownSecrets);
+  const answer = redactFinalResponse(
     state.responseRedactionContext,
-    result.finalResponse,
+    state.answerBySession.get(result.sessionId) ?? result.finalResponse,
     knownSecrets,
   );
   assertSafeSessionId(result.sessionId);
   assertOpaqueSessionId(result.sessionId, knownSecrets);
-  if (finalResponse.length === 0) {
+  // A turn that ends with a tool call has no answer yet; returning an empty done keeps
+  // its session for the empty continuation instead of a fresh retry that repeats the tools.
+  if (answer.length === 0 && state.emittedToolUses.size === 0) {
     throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned no assistant text');
   }
-  if (!state.sawTextBySession.has(result.sessionId)) {
-    invokeStream(options.onStream, { type: 'text', data: { text: finalResponse } }, knownSecrets);
+  if (answer.length > 0 && !state.sawTextBySession.has(result.sessionId)) {
+    invokeStream(options.onStream, { type: 'text', data: { text: answer } }, knownSecrets);
   }
   invokeStream(options.onStream, {
     type: 'result',
     data: {
-      result: finalResponse,
+      result: answer,
       success: true,
       sessionId: result.sessionId,
     },
@@ -1606,7 +1758,7 @@ function createSuccessResponse(
   return {
     persona: agentType,
     status: 'done',
-    content: finalResponse,
+    content: answer,
     timestamp: new Date(),
     sessionId: result.sessionId,
   };
@@ -1644,10 +1796,12 @@ export async function callDeepSeekHarness(
     pendingTextDeltasBySession: new Set(),
     pendingThinkingDeltasBySession: new Set(),
     responseRedactionContext: {
-      pendingText: '',
       pendingChunks: [],
-      failClosed: false,
+      buffer: new SensitiveTextStreamBuffer(),
+      toolInputValues: createBoundedSensitiveValues(),
+      toolBoundaryText: '',
     },
+    answerBySession: new Map(),
     emittedToolUses: new Set(),
     emittedToolResults: new Set(),
   };
@@ -1689,10 +1843,13 @@ export async function callDeepSeekHarness(
         await pruneIdleProcesses(currentProcess);
         return createSuccessResponse(agentType, result, state, turnOptions, currentProcess.knownSecrets);
       } catch (error) {
+        const isTimeout = error instanceof DeepSeekHarnessTimeoutError
+          || (error instanceof Error && error.name === 'TimeoutError');
         try {
           await currentProcess.close();
         } catch (cleanupError) {
           removeProcess(currentProcess);
+          if (isTimeout) throw error;
           throw cleanupError;
         }
         removeProcess(currentProcess);
@@ -1708,23 +1865,28 @@ export async function callDeepSeekHarness(
   } catch (error) {
     const knownSecrets = processRecord?.knownSecrets
       ?? resolveKnownSecretsForFailure(turnOptions.providerOptions, turnOptions.childProcessEnv);
-    flushHarnessResponseRedactor(state, turnOptions.onStream, knownSecrets, true);
+    flushHarnessResponseRedactor(state.responseRedactionContext, turnOptions.onStream, knownSecrets);
     let reportedError = error;
     if (processRecord !== undefined) {
       try {
         await processRecord.close();
       } catch (cleanupError) {
-        reportedError = cleanupError;
+        const isTimeout = error instanceof DeepSeekHarnessTimeoutError
+          || (error instanceof Error && error.name === 'TimeoutError');
+        if (!isTimeout) reportedError = cleanupError;
       }
       removeProcess(processRecord);
     }
-    const detail = failureDetail(
+    const classified = failureDetail(
       reportedError,
       turnOptions,
       knownSecrets,
       credentialFailureContext,
     );
-    const content = formatAgentFailure(detail);
+    const detail = { ...classified, reason: safeMessage(classified.reason, knownSecrets, state.responseRedactionContext.toolInputValues) };
+    const content = processRecord?.stale === true
+      ? withUpdateAdvice(formatAgentFailure(detail), 'deepseek-harness')
+      : formatAgentFailure(detail);
     const responseStatus = error instanceof DeepSeekHarnessTurnEndError
       ? error.responseStatus
       : 'error';
@@ -1768,8 +1930,19 @@ export async function closeDeepSeekHarnessProcesses(): Promise<void> {
   processes.clear();
   sessionBindings.clear();
   const results = await Promise.allSettled(active.map((processRecord) => processRecord.close()));
+  const pending = [...pendingCleanupProcesses];
+  const pendingResults = await Promise.allSettled(
+    pending.map((processRecord) => processRecord.disposeAfterConfirmedExit()),
+  );
   sessionDispatchQueue.clear();
-  if (results.some((result) => result.status === 'rejected')) {
+  if (
+    results.some((result) => result.status === 'rejected')
+    || pendingResults.some((result, index) => result.status === 'rejected'
+      || (result.status === 'fulfilled' && !result.value
+        && (pendingCleanupProcesses.has(pending[index]!) || pendingCleanupFailures.has(pending[index]!))))
+    || pendingCleanupProcesses.size > 0
+    || pendingCleanupFailures.size > 0
+  ) {
     throw new Error(deepSeekCleanupBlockedMessage());
   }
 }

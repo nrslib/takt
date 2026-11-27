@@ -11,6 +11,8 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { delimiter, dirname } from 'node:path';
 import type { PermissionMode } from '../../core/models/index.js';
+import { PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME } from '../../shared/types/provider.js';
+import { parseMcpToolName } from '../providers/mcp/tool-name.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { taktPermissionModeToClaudeExpression } from './permission-mode-expression.js';
@@ -27,6 +29,7 @@ import type {
 import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-user-question-handler.js';
 
 const log = createLogger('claude-sdk');
+
 
 function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
   const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv) as Record<string, string>;
@@ -67,11 +70,21 @@ export class SdkOptionsBuilder {
   }
 
   build(): Options {
+    const strictTools = this.options.mcpOnlySideEffects ?? this.options.strictToolAllowlist;
+    if (strictTools !== undefined && (
+      this.options.permissionMode !== 'readonly'
+      || this.options.bypassPermissions === true
+      || strictTools.some((tool) => tool !== 'Read' && (
+        parseMcpToolName(tool) === undefined || !/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/u.test(tool)
+      ))
+    )) {
+      throw new Error('Strict tool execution requires readonly permissions and exact Read/MCP tool names');
+    }
     const isStrictReadonly = this.options.internalAgentIsolation === 'strict-readonly';
     const readonlyArtifactPaths = isStrictReadonly
       ? resolveReadonlyArtifactReadPaths(this.options)
       : [];
-    const canUseTool = this.options.onPermissionRequest
+    const canUseTool = this.options.mcpOnlySideEffects === undefined && this.options.onPermissionRequest
       ? SdkOptionsBuilder.createCanUseToolCallback(this.options.onPermissionRequest)
       : undefined;
 
@@ -110,8 +123,12 @@ export class SdkOptionsBuilder {
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
-      settingSources: isStrictReadonly ? [] : ['project'],
+      settingSources: isStrictReadonly || strictTools !== undefined ? [] : ['project'],
     };
+
+    if (permissionMode === 'bypassPermissions') {
+      sdkOptions.allowDangerouslySkipPermissions = true;
+    }
 
     if (isStrictReadonly) {
       sdkOptions.tools = readonlyArtifactPaths.length > 0 ? ['Read'] : [];
@@ -174,8 +191,47 @@ export class SdkOptionsBuilder {
       sdkOptions.sandbox = this.options.sandbox;
     }
 
+    if (this.options.denyRules !== undefined) {
+      sdkOptions.settings = { permissions: { deny: this.options.denyRules } };
+    }
+
     if (this.options.pathToClaudeCodeExecutable) {
       sdkOptions.pathToClaudeCodeExecutable = this.options.pathToClaudeCodeExecutable;
+    }
+
+    if (strictTools !== undefined) {
+      const isAllowed = (tool: string): boolean => strictTools.includes(tool)
+        || (this.options.outputSchema !== undefined && tool === PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME);
+      sdkOptions.tools = strictTools.filter((tool) => tool === 'Read');
+      sdkOptions.allowedTools = [...strictTools];
+      sdkOptions.skills = [];
+      sdkOptions.agents = {};
+      sdkOptions.plugins = [];
+      sdkOptions.strictMcpConfig = true;
+      sdkOptions.sandbox = { enabled: true, allowUnsandboxedCommands: false };
+      // Auto-approved tools also pass this hook; canUseTool alone does not guard them.
+      hooks.PreToolUse = [
+        ...(hooks.PreToolUse ?? []),
+        {
+          hooks: [async (input): Promise<HookJSONOutput> => {
+            const tool = (input as PreToolUseHookInput).tool_name;
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: isAllowed(tool) ? 'allow' : 'deny',
+                permissionDecisionReason: 'Strict tool allowlist',
+              },
+            };
+          }],
+        },
+      ];
+      // Bare allowedTools shadow canUseTool; keep the strict allowlist enforced here.
+      if (this.options.mcpOnlySideEffects === undefined) {
+        sdkOptions.canUseTool = async (toolName, input): Promise<PermissionResult> =>
+          isAllowed(toolName)
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: 'Tool is outside the strict allowlist' };
+      }
     }
 
     return sdkOptions;
@@ -186,6 +242,9 @@ export class SdkOptionsBuilder {
   }
 
   private resolvePermissionMode(): SdkPermissionMode {
+    if (this.options.aiReviewPermissions) {
+      return 'auto';
+    }
     if (this.options.bypassPermissions) {
       return 'bypassPermissions';
     }

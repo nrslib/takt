@@ -68,8 +68,10 @@ subworkflow:
 initial_step: reviewers
 steps:
   - name: reviewers
+    description: Run the common review suite, frontend review, and CQRS review in parallel to determine whether fixes are needed.
     parallel:
       - name: base-reviewers
+        description: Review architecture, tests, code, and AI-specific issues, check vulnerabilities when needed, and determine whether fixes are needed.
         kind: workflow_call
         call: peer-review-suite-base
         args:

@@ -18,7 +18,7 @@ import {
   sep,
 } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { isScopeRef, parseScopeRef } from 'faceted-prompting';
+import { isScopeRef, parseScopeRef } from '#faceted-prompting';
 import type { FacetType } from '../../infra/config/paths.js';
 import {
   getBuiltinWorkflowsDir,

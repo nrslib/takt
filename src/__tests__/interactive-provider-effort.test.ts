@@ -2,21 +2,27 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 const {
   mockCallCodex,
+  mockCallCodexCustom,
   mockCallClaude,
   mockCallClaudeHeadless,
   mockCallClaudeTerminal,
   mockCallCopilot,
+  mockResolveClaudeCliPath,
+  mockResolveCodexCliPath,
 } = vi.hoisted(() => ({
   mockCallCodex: vi.fn(),
+  mockCallCodexCustom: vi.fn(),
   mockCallClaude: vi.fn(),
   mockCallClaudeHeadless: vi.fn(),
   mockCallClaudeTerminal: vi.fn(),
   mockCallCopilot: vi.fn(),
+  mockResolveClaudeCliPath: vi.fn(),
+  mockResolveCodexCliPath: vi.fn(),
 }));
 
 vi.mock('../infra/codex/index.js', () => ({
   callCodex: mockCallCodex,
-  callCodexCustom: vi.fn(),
+  callCodexCustom: mockCallCodexCustom,
 }));
 
 vi.mock('../infra/claude/client.js', () => ({
@@ -37,11 +43,17 @@ vi.mock('../infra/copilot/index.js', () => ({
   callCopilotCustom: vi.fn(),
 }));
 
+vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/config/global/globalConfig.js')>()),
+  resolveClaudeCliPath: mockResolveClaudeCliPath,
+  resolveCodexCliPath: mockResolveCodexCliPath,
+}));
+
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../infra/config/index.js')>()),
   resolveAnthropicApiKey: vi.fn(() => undefined),
-  resolveClaudeCliPath: vi.fn(() => undefined),
-  resolveCodexCliPath: vi.fn(() => undefined),
+  resolveClaudeCliPath: mockResolveClaudeCliPath,
+  resolveCodexCliPath: mockResolveCodexCliPath,
   resolveCopilotCliPath: vi.fn(() => undefined),
   resolveCopilotGithubToken: vi.fn(() => undefined),
   resolveOpenaiApiKey: vi.fn(() => undefined),
@@ -53,6 +65,7 @@ import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
 import { ClaudeTerminalProvider } from '../infra/providers/claude-terminal.js';
 import { CopilotProvider } from '../infra/providers/copilot.js';
 import type { Provider, ProviderCallOptions } from '../infra/providers/types.js';
+import { resolveClaudeCliPath, resolveCodexCliPath } from '../infra/config/index.js';
 
 interface EffortAdapterCase {
   readonly name: string;
@@ -66,7 +79,7 @@ const cases: readonly EffortAdapterCase[] = [
   {
     name: 'Codex',
     provider: () => new CodexProvider(),
-    client: mockCallCodex,
+    client: mockCallCodexCustom,
     optionName: 'reasoningEffort',
     configuredOptions: { codex: { reasoningEffort: 'low' } },
   },
@@ -103,6 +116,8 @@ const cases: readonly EffortAdapterCase[] = [
 describe('interactive effort adapter mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveClaudeCliPath).mockReturnValue(undefined);
+    vi.mocked(resolveCodexCliPath).mockReturnValue(undefined);
     for (const testCase of cases) {
       testCase.client.mockResolvedValue({
         persona: 'interactive',
@@ -111,6 +126,15 @@ describe('interactive effort adapter mapping', () => {
         timestamp: new Date(),
       });
     }
+  });
+
+  it.each([
+    { name: 'Claude SDK', provider: () => new ClaudeProvider(), resolver: resolveClaudeCliPath, client: mockCallClaude, option: 'pathToClaudeCodeExecutable' },
+    { name: 'Codex', provider: () => new CodexProvider(), resolver: resolveCodexCliPath, client: mockCallCodexCustom, option: 'codexPathOverride' },
+  ])('preserves an explicitly configured CLI path through the $name adapter', async ({ provider, resolver, client, option }) => {
+    vi.mocked(resolver).mockReturnValue('/explicit/provider-cli');
+    await provider().setup({ name: 'interactive' }).call('prompt', { cwd: '/repo' });
+    expect(client.mock.calls[0]?.at(-1)).toEqual(expect.objectContaining({ [option]: '/explicit/provider-cli' }));
   });
 
   it.each(cases)(

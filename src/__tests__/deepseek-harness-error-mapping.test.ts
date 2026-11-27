@@ -2,18 +2,16 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadDeepSeekTestModules } from './helpers/deepseek-managed-sdk.js';
+const managedTestModules = await loadDeepSeekTestModules();
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
-  const [sdk, llm] = await Promise.all([
-    import('@deepseek-ai/dsh-sdk-client'),
-    import('@deepseek-ai/dsh-llm'),
-  ]);
   return {
     ...managed,
     loadManagedDeepSeekHarnessModules: async () => ({
-      directory: process.cwd(),
-      sdk,
-      llm,
+      directory: managedTestModules.directory,
+      sdk: testSdk,
+      llm: managedTestModules.llm,
     }),
   };
 });
@@ -22,12 +20,14 @@ const runtimeBehavior = vi.hoisted(() => ({
   runError: undefined as unknown,
   closeError: undefined as unknown,
   notifications: [] as unknown[],
+  finalResponse: 'ok',
   startCount: 0,
   runCount: 0,
   closeCount: 0,
   instanceCount: 0,
   uniqueSessions: false,
   confirmedExit: false,
+  cleanupReceipts: [] as string[],
   runGate: undefined as ((prompt: string) => Promise<void>) | undefined,
   onClose: undefined as (() => Promise<void>) | undefined,
 }));
@@ -36,56 +36,94 @@ const runtimeStateBehavior = vi.hoisted(() => ({
   failBarrierPublication: false,
   failPatchDisposal: false,
 }));
+const pluginResolutionBehavior = vi.hoisted(() => ({
+  failureStage: undefined as 'source' | 'install' | 'entrypoint' | undefined,
+  failFirstPluginDisposal: false,
+  pluginResolutionCount: 0,
+}));
 
-vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
+vi.mock('../infra/deepseek-harness/plugin-resolution.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/deepseek-harness/plugin-resolution.js')>();
   return {
     ...actual,
-    DeepSeekHarness: class {
-      private readonly id = runtimeBehavior.uniqueSessions ? `cache-session-${++runtimeBehavior.instanceCount}` : 'error-mapping-session';
-      /** Capture the mocked SDK environment so cleanup tests can publish the configured exit receipt. */
-      constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {}
-
-      /** Count SDK startup calls without creating a runtime process. */
-      async start(): Promise<void> {
-        runtimeBehavior.startCount += 1;
+    resolveDeepSeekHarnessPlugins: async (...args: Parameters<typeof actual.resolveDeepSeekHarnessPlugins>) => {
+      if (pluginResolutionBehavior.failureStage !== undefined) {
+        const { DeepSeekHarnessNpmPluginResolutionError } = await import('../infra/deepseek-harness/npm-plugin.js');
+        throw new DeepSeekHarnessNpmPluginResolutionError(pluginResolutionBehavior.failureStage);
       }
-
-      /** Simulate SDK events or a controlled rejection, allowing tests to gate execution and inspect failure mapping. */
-      async run(
-        _prompt: string,
-        options?: { onNotification?: (notification: unknown) => void },
-      ): Promise<{ sessionId: string; finalResponse: string; finishReason: 'completed' }> {
-        runtimeBehavior.runCount += 1;
-        await runtimeBehavior.runGate?.(_prompt);
-        if (runtimeBehavior.runError !== undefined) {
-          throw runtimeBehavior.runError;
-        }
-        for (const notification of runtimeBehavior.notifications) {
-          options?.onNotification?.(notification);
-        }
-        if (runtimeBehavior.uniqueSessions) {
-          options?.onNotification?.({ method: 'session.event', params: { sessionId: this.id, event: {
-            type: 'turn/end', data: { reason: { kind: 'completed' } },
-          } } });
-        }
-        return { sessionId: this.id, finalResponse: 'ok', finishReason: 'completed' };
+      const [options] = args;
+      if (pluginResolutionBehavior.failFirstPluginDisposal
+        && options?.some((plugin) => typeof plugin === 'string' || plugin.source.startsWith('npm:'))) {
+        const failDisposal = pluginResolutionBehavior.pluginResolutionCount === 0;
+        pluginResolutionBehavior.pluginResolutionCount += 1;
+        return {
+          plugins: options.map((plugin, index) => ({
+            ...(typeof plugin === 'string' || plugin.id === undefined ? {} : { id: plugin.id }),
+            name: index === 0
+              ? 'file:///tmp/takt-deepseek-git-plugin/index.js'
+              : 'file:///tmp/takt-deepseek-npm-plugin/index.js',
+            ...(typeof plugin !== 'string' && plugin.config !== undefined ? { config: plugin.config } : {}),
+          })),
+          npmPluginEntrypoints: ['file:///tmp/takt-deepseek-npm-plugin/index.js'],
+          cleanupPaths: ['/tmp/takt-deepseek-git-plugin', '/tmp/takt-deepseek-npm-plugin'],
+          dispose: async (): Promise<void> => {
+            if (failDisposal) throw new Error('temporary plugin cleanup failed');
+          },
+        };
       }
-
-      /** Simulate cleanup, optionally write a proven-exit receipt, then inject the configured close failure. */
-      async close(): Promise<void> {
-        runtimeBehavior.closeCount += 1;
-        await runtimeBehavior.onClose?.();
-        if (runtimeBehavior.confirmedExit && this.options.env?.TAKT_DSH_CLEANUP_CONFIRMATION) {
-          await writeFile(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION, 'confirmed\n');
-        }
-        if (runtimeBehavior.closeError !== undefined) {
-          throw runtimeBehavior.closeError;
-        }
-      }
+      return actual.resolveDeepSeekHarnessPlugins(...args);
     },
   };
 });
+
+const DeepSeekHarness = class {
+  private readonly id = runtimeBehavior.uniqueSessions ? `cache-session-${++runtimeBehavior.instanceCount}` : 'error-mapping-session';
+  /** Capture the mocked SDK environment so cleanup tests can publish the configured exit receipt. */
+  constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {
+    const receipt = options.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+    if (receipt !== undefined) runtimeBehavior.cleanupReceipts.push(receipt);
+  }
+
+  /** Count SDK startup calls without creating a runtime process. */
+  async start(): Promise<void> {
+    runtimeBehavior.startCount += 1;
+  }
+
+  /** Simulate SDK events or a controlled rejection, allowing tests to gate execution and inspect failure mapping. */
+  async run(
+    _prompt: string,
+    options?: { onNotification?: (notification: unknown) => void },
+  ): Promise<{ sessionId: string; finalResponse: string; finishReason: 'completed' }> {
+    runtimeBehavior.runCount += 1;
+    await runtimeBehavior.runGate?.(_prompt);
+    if (runtimeBehavior.runError !== undefined) {
+      throw runtimeBehavior.runError;
+    }
+    for (const notification of runtimeBehavior.notifications) {
+      options?.onNotification?.(notification);
+    }
+    if (runtimeBehavior.uniqueSessions) {
+      options?.onNotification?.({ method: 'session.event', params: { sessionId: this.id, event: {
+        type: 'turn/end', data: { reason: { kind: 'completed' } },
+      } } });
+    }
+    return { sessionId: this.id, finalResponse: runtimeBehavior.finalResponse, finishReason: 'completed' };
+  }
+
+  /** Simulate cleanup, optionally write a proven-exit receipt, then inject the configured close failure. */
+  async close(): Promise<void> {
+    runtimeBehavior.closeCount += 1;
+    await runtimeBehavior.onClose?.();
+    if (runtimeBehavior.confirmedExit && this.options.env?.TAKT_DSH_CLEANUP_CONFIRMATION) {
+      await mkdir(path.dirname(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION), { recursive: true });
+      await writeFile(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION, 'confirmed\n');
+    }
+    if (runtimeBehavior.closeError !== undefined) {
+      throw runtimeBehavior.closeError;
+    }
+  }
+};
+const testSdk = { ...managedTestModules.sdk, DeepSeekHarness };
 
 vi.mock('../infra/deepseek-harness/credential-patch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/deepseek-harness/credential-patch.js')>();
@@ -123,12 +161,12 @@ vi.mock('../infra/deepseek-harness/runtime-state.js', async (importOriginal) => 
   };
 });
 
-import {
+const {
   JsonRpcResponseError,
   RequestTimeoutError,
   SdkProtocolError,
   TransportClosedError,
-} from '@deepseek-ai/dsh-sdk-client';
+} = managedTestModules.sdk;
 import { callDeepSeekHarness, closeDeepSeekHarnessProcesses } from '../infra/deepseek-harness/index.js';
 import {
   DeepSeekRuntimeCreationBlockedError,
@@ -136,6 +174,8 @@ import {
   getDeepSeekRuntimePaths,
   withDeepSeekRuntimeCreation,
 } from '../infra/deepseek-harness/runtime-state.js';
+import * as runtimeStateModule from '../infra/deepseek-harness/runtime-state.js';
+import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 
@@ -143,9 +183,86 @@ const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEE
 const savedEnvironment = new Map<string, string | undefined>();
 const RAW_FAILURE_SENTINEL = 'TAKT_RAW_SDK_FAILURE_SENTINEL';
 let temporaryRoot: string;
+let resourceCleanup: Promise<void> | undefined;
+const drainGatedTurns: (() => Promise<void>)[] = [];
+
+/** Create an explicit arrival/release boundary for deterministic async lifecycle tests. */
+function createSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((notify) => { resolve = notify; });
+  return { promise, resolve };
+}
+
+/** Track gated turns so fixture teardown drains startup and pruning before removing their root. */
+function createRunGate(prompts: string[]) {
+  const release = createSignal();
+  const arrivals = new Map(prompts.map((prompt) => [prompt, createSignal()]));
+  const gatedTurns = new Map<string, ReturnType<typeof callDeepSeekHarness>>();
+  const turns: ReturnType<typeof callDeepSeekHarness>[] = [];
+  let draining = false;
+
+  runtimeBehavior.runGate = async (prompt) => {
+    const arrival = arrivals.get(prompt);
+    if (arrival === undefined) return;
+    arrival.resolve();
+    await release.promise;
+  };
+
+  const drain = async () => {
+    draining = true;
+    release.resolve();
+    // Cleanup must wait for startup and pruning, even when a test assertion failed.
+    await Promise.allSettled(turns);
+  };
+  drainGatedTurns.push(drain);
+
+  return {
+    startTurn(prompt: string, sessionId?: string) {
+      if (draining) throw new Error('Cannot start a turn after cleanup has begun.');
+      const turn = callDeepSeekHarness('worker', prompt, { cwd: temporaryRoot, sessionId });
+      turns.push(turn);
+      if (arrivals.has(prompt)) gatedTurns.set(prompt, turn);
+      return turn;
+    },
+    async waitForArrivals() {
+      await Promise.all([...arrivals].map(([prompt, arrival]) => {
+        const turn = gatedTurns.get(prompt)!;
+        return Promise.race([
+          arrival.promise,
+          turn.then(() => { throw new Error('A turn completed before reaching the SDK gate.'); }),
+        ]);
+      }));
+    },
+    release: release.resolve,
+    drain,
+  };
+}
+
+/** Drain all turns and runtime cleanup before removing fixtures and restoring their environment. */
+function cleanupTestResources(): Promise<void> {
+  if (resourceCleanup === undefined) {
+    resourceCleanup = (async () => {
+      try {
+        for (const drain of drainGatedTurns) await drain();
+        await closeDeepSeekHarnessProcesses().catch(() => undefined);
+        await rm(temporaryRoot, { recursive: true, force: true });
+      } finally {
+        for (const key of environmentKeys) {
+          const value = savedEnvironment.get(key);
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        savedEnvironment.clear();
+      }
+    })();
+  }
+  return resourceCleanup;
+}
 
 describe('DeepSeek Harness SDK error mapping', () => {
   beforeEach(async () => {
+    resourceCleanup = undefined;
+    drainGatedTurns.length = 0;
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-error-mapping-'));
     process.env.TMPDIR = path.join(temporaryRoot, 'tmp');
@@ -161,27 +278,57 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeStateBehavior.failBarrierPublication = false;
     runtimeStateBehavior.failPatchDisposal = false;
     runtimeBehavior.notifications = [];
+    runtimeBehavior.finalResponse = 'ok';
     runtimeBehavior.startCount = 0;
     runtimeBehavior.runCount = 0;
     runtimeBehavior.closeCount = 0;
     runtimeBehavior.instanceCount = 0;
     runtimeBehavior.uniqueSessions = false;
     runtimeBehavior.confirmedExit = false;
+    runtimeBehavior.cleanupReceipts.length = 0;
     runtimeBehavior.runGate = undefined;
     runtimeBehavior.onClose = undefined;
+    pluginResolutionBehavior.failureStage = undefined;
+    pluginResolutionBehavior.failFirstPluginDisposal = false;
+    pluginResolutionBehavior.pluginResolutionCount = 0;
   });
 
-  afterEach(async () => {
+  afterEach(cleanupTestResources);
+
+  it('shares in-flight receipt reconciliation between the watcher and explicit shutdown', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    expect((await callDeepSeekHarness('worker', 'fresh', { cwd: temporaryRoot })).status).toBe('done');
+    const receipt = runtimeBehavior.cleanupReceipts[0]!;
+    const arrived = createSignal();
+    const release = createSignal();
+    let acknowledgementCount = 0;
+    const acknowledgement = vi.spyOn(runtimeStateModule, 'acknowledgeDeepSeekRuntimeCleanup')
+      .mockImplementation(async () => {
+        acknowledgementCount += 1;
+        if (acknowledgementCount === 1) return undefined;
+        arrived.resolve();
+        await release.promise;
+        return false;
+      });
+    runtimeBehavior.closeError = new Error('unconfirmed cleanup');
+    const closing = closeDeepSeekHarnessProcesses();
+    // Attach a rejection handler before controlling the asynchronous receipt boundary.
+    void closing.catch(() => undefined);
     try {
-      await closeDeepSeekHarnessProcesses().catch(() => undefined);
-      await rm(temporaryRoot, { recursive: true, force: true });
+      await arrived.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(acknowledgementCount).toBe(2);
+      release.resolve();
+      await expect(closing).rejects.toThrow('cleanup is unconfirmed');
+      expect(acknowledgementCount).toBe(2);
     } finally {
-      for (const key of environmentKeys) {
-        const value = savedEnvironment.get(key);
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      savedEnvironment.clear();
+      release.resolve();
+      await closing.catch(() => undefined);
+      acknowledgement.mockRestore();
+      // The SDK is entirely mocked: confirm its no-process fixture so no watcher escapes this test.
+      await mkdir(path.dirname(receipt), { recursive: true });
+      await writeFile(receipt, 'confirmed\n');
+      await closeDeepSeekHarnessProcesses();
     }
   });
 
@@ -200,9 +347,17 @@ describe('DeepSeek Harness SDK error mapping', () => {
     ],
     [
       'transport closure errors',
-      new TransportClosedError(`runtime closed; stderr ${RAW_FAILURE_SENTINEL}`),
+      new TransportClosedError(
+        `runtime closed; dsh: startup failed: 1 required plugins did not activate; stderr ${RAW_FAILURE_SENTINEL}`,
+      ),
       AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
       'DeepSeek Harness runtime connection closed. Verify the runtime installation and retry. Upstream error details are withheld.',
+    ],
+    [
+      'official Cordis npm plugin load diagnostics',
+      new TransportClosedError('runtime closed; TAKT_DSH_CORDIS_NPM_PLUGIN_LOAD_FAILURE'),
+      AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      'DeepSeek Harness npm plugin failed to load. Check the package entrypoint and configuration, then retry. Upstream error details are withheld.',
     ],
     [
       'request timeout errors',
@@ -224,6 +379,36 @@ describe('DeepSeek Harness SDK error mapping', () => {
       data: { success: false, error: expected, result: expected, failureCategory: category },
     });
     expect(JSON.stringify({ response, events })).not.toContain(RAW_FAILURE_SENTINEL);
+  });
+
+  it.each([
+    [
+      'source',
+      'DeepSeek Harness npm plugin source acquisition failed. Verify the package spec and registry access, then retry.',
+    ],
+    [
+      'install',
+      'DeepSeek Harness npm plugin installation failed. Check package dependencies and npm configuration, then retry.',
+    ],
+    [
+      'entrypoint',
+      'DeepSeek Harness npm plugin entrypoint could not be resolved. Add a valid exports or main entrypoint, then retry.',
+    ],
+  ] as const)('reports an actionable npm plugin %s failure', async (stage, expected) => {
+    pluginResolutionBehavior.failureStage = stage;
+    const response = await callDeepSeekHarness('worker', 'trigger an npm plugin failure', {
+      cwd: temporaryRoot,
+      providerOptions: { plugins: ['npm:fixture-plugin@1.0.0'] },
+    });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      content: expected,
+      error: expected,
+    });
+    expect(runtimeBehavior.startCount).toBe(0);
+    expect(runtimeBehavior.runCount).toBe(0);
   });
 
   it('classifies the SDK duplicate-session response as unsupported continuation', async () => {
@@ -318,7 +503,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
       onStream: (streamEvent) => events.push(streamEvent),
     });
 
-    expect(response).toMatchObject({ status: 'done', content: 'ok', sessionId });
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId });
     expect(events.map((streamEvent) => streamEvent.type)).toEqual([
       'init',
       'text',
@@ -339,6 +524,343 @@ describe('DeepSeek Harness SDK error mapping', () => {
       content: 'README content',
       isError: false,
     });
+  });
+
+  const toolEndedTurnNotifications = (sessionId: string, afterToolCall: readonly string[] = []): unknown[] => {
+    const event = (value: Record<string, unknown>) => ({
+      method: 'session.event',
+      params: { sessionId, event: value },
+    });
+    return [
+      { method: 'session.started', params: { sessionId } },
+      event({
+        type: 'assistant/message',
+        data: {
+          message: {
+            content: [
+              { type: 'text', text: 'Note: editing retry.ts next.' },
+              { type: 'tool-call', id: 'edit-1', name: 'Edit', arguments: '{"path":"retry.ts"}' },
+              ...afterToolCall.map((text) => ({ type: 'text', text })),
+            ],
+          },
+        },
+      }),
+      event({
+        type: 'tool/result',
+        data: {
+          message: {
+            source: { callId: 'edit-1' },
+            content: [{ type: 'tool-result', content: [{ type: 'text', text: 'edited' }], isError: false }],
+          },
+        },
+      }),
+      event({ type: 'turn/end', data: { reason: { kind: 'completed' } } }),
+    ];
+  };
+
+  it('returns an empty done result with the session ID when a completed turn ends with a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
+    // The SDK's finalResponse joins every text block of the last assistant message, including the note before its tool call.
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'edit retry.ts', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId });
+    expect(response.error).toBeUndefined();
+    expect(events.map((streamEvent) => streamEvent.type)).toEqual(['init', 'text', 'tool_use', 'tool_result', 'result']);
+    expect(events[1]?.data).toEqual({ text: 'Note: editing retry.ts next.' });
+    expect(events.at(-1)?.data).toEqual({ result: '', success: true, sessionId });
+  });
+
+  it('keeps a completed turn with neither assistant text nor a tool call as a provider error', async () => {
+    runtimeBehavior.notifications = [{
+      method: 'session.event',
+      params: { sessionId: 'error-mapping-session', event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+    }];
+    runtimeBehavior.finalResponse = '';
+
+    const response = await callDeepSeekHarness('worker', 'say nothing', { cwd: temporaryRoot });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('answers with the text after the last tool call of the last assistant message', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId, ['Edited retry.ts.']);
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.Edited retry.ts.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'edit retry.ts', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Edited retry.ts.', sessionId });
+    expect(events.filter((streamEvent) => streamEvent.type === 'text').map((streamEvent) => streamEvent.data))
+      .toEqual([{ text: 'Note: editing retry.ts next.Edited retry.ts.' }]);
+    expect(events.at(-1)?.data).toEqual({ result: 'Edited retry.ts.', success: true, sessionId });
+  });
+
+  it('answers with the SDK finalResponse when no assistant message was observed', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = 'Final answer.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'answer', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Final answer.', sessionId });
+    expect(events.map((streamEvent) => streamEvent.type)).toEqual(['init', 'text', 'result']);
+    expect(events[1]?.data).toEqual({ text: 'Final answer.' });
+  });
+
+  it('keeps a credential split by the tool call out of the answer and the stream', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = process.env.DEEPSEEK_API_KEY!;
+    const split = Math.floor(credential.length / 2);
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/message',
+        data: { message: { content: [
+          { type: 'text', text: `Key ${credential.slice(0, split)}` },
+          { type: 'tool-call', id: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+          { type: 'text', text: `${credential.slice(split)} is configured.` },
+        ] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `Key ${credential} is configured.`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the key', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', sessionId });
+    expect(response.content).toMatch(/ is configured\.$/);
+    for (const fragment of [credential.slice(0, split), credential.slice(split), 'Key ']) {
+      expect(response.content).not.toContain(fragment);
+    }
+    expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+  });
+
+  it('masks a credential assignment split by a tool call even when it is not a configured secret', async () => {
+    const sessionId = 'error-mapping-session';
+    const suffix = 'rivateValue987654321';
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/message',
+        data: { message: { content: [
+          { type: 'text', text: 'password=p' },
+          { type: 'tool-call', id: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+          { type: 'text', text: suffix },
+        ] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `password=p${suffix}`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '[REDACTED]', sessionId });
+    expect(response.content).not.toContain(suffix);
+    expect(JSON.stringify(events)).not.toContain(`password=p${suffix}`);
+    expect(JSON.stringify(events)).not.toContain(suffix);
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('masks a credential split across assistant chunks and a standalone tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    const fragment = 'rivateValue987654321';
+    const suffix = `${fragment} is configured.\n`;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 'password=p' } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: suffix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `password=p${suffix}`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(response.content).toContain('password=[REDACTED] is configured.');
+    expect(JSON.stringify(events)).not.toContain(fragment);
+    expect(events.at(-1)?.data).toEqual({ result: response.content, success: true, sessionId });
+  });
+
+  it('masks an unregistered credential continued by short chunks after a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    const fragments = ['password=p', 'riv', 'ateValue987654321\n'];
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[0] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[1] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[2] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = fragments.join('');
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(fragments[1]!);
+    expect(JSON.stringify(events)).not.toContain(fragments[2]!);
+    expect(JSON.stringify(events)).not.toContain(fragments[2]!.trim());
+    expect(response.content.trim()).toBe('password=[REDACTED]');
+  });
+
+  it('keeps both halves of a configured credential split across ordinary chunks out of the stream', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = process.env.DEEPSEEK_API_KEY!;
+    const split = credential.length - 1;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: credential.slice(0, split) } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: `${credential.slice(split)}\n` } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = credential;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(credential.slice(0, split));
+    expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('keeps the tool boundary until a configured credential split across several later chunks is resolved', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = 'opaqueValue987654321';
+    process.env.DEEPSEEK_API_KEY = credential;
+    const prefix = credential.slice(0, -5);
+    const middle = credential.slice(-5, -3);
+    const suffix = `${credential.slice(-3)}\n`;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: prefix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'reasoning-delta', text: 'analysis' } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: middle } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: suffix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = credential;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(prefix);
+    expect(JSON.stringify(events)).not.toContain(middle);
+    expect(JSON.stringify(events)).not.toContain(credential.slice(-5));
+    expect(JSON.stringify(events)).not.toContain(credential.slice(-3));
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('continues the same session instead of a fresh retry when Phase 1 ends with a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.';
+    const requestedSessionIds: (string | undefined)[] = [];
+
+    const recovered = await runPhase1WithEmptyRecovery({
+      instruction: 'edit retry.ts',
+      initialSessionId: undefined,
+      execute: (attempt) => {
+        if (attempt.reason === 'empty_continuation') {
+          runtimeBehavior.notifications = [
+            {
+              method: 'session.event',
+              params: { sessionId, event: {
+                type: 'assistant/message',
+                data: { message: { content: [{ type: 'text', text: 'Edit complete.' }] } },
+              } },
+            },
+            {
+              method: 'session.event',
+              params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+            },
+          ];
+          runtimeBehavior.finalResponse = 'Edit complete.';
+        }
+        requestedSessionIds.push(attempt.sessionId);
+        return callDeepSeekHarness('worker', attempt.instruction, { cwd: temporaryRoot, sessionId: attempt.sessionId });
+      },
+      discardSession: vi.fn(),
+    });
+
+    expect(recovered.response).toMatchObject({ status: 'done', content: 'Edit complete.', sessionId });
+    expect(recovered.finalAttempt).toMatchObject({ reason: 'empty_continuation', sessionId });
+    expect(requestedSessionIds).toEqual([undefined, sessionId]);
+    expect(runtimeBehavior.runCount).toBe(2);
   });
 
   it('reports cleanup failure with a fixed diagnostic and prevents later runtime creation', async () => {
@@ -372,6 +894,36 @@ describe('DeepSeek Harness SDK error mapping', () => {
     });
     expect(runtimeBehavior.startCount).toBe(1);
     expect(runtimeBehavior.runCount).toBe(1);
+  });
+
+  it('reports a generic plugin cleanup failure when the combined Git and npm resolution is disposed', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    runtimeBehavior.confirmedExit = true;
+    pluginResolutionBehavior.failFirstPluginDisposal = true;
+    const providerOptions = {
+      plugins: [
+        { id: 'git-fixture', source: 'git:file:///unused/git-fixture.git' },
+        'npm:fixture-plugin@1.0.0',
+      ],
+    };
+    let response: Awaited<ReturnType<typeof callDeepSeekHarness>> | undefined;
+    for (let index = 0; index < 9; index += 1) {
+      response = await callDeepSeekHarness('worker', `create runtime ${index}`, {
+        cwd: temporaryRoot,
+        providerOptions,
+      });
+    }
+
+    const expected = 'DeepSeek Harness plugin cleanup failed. Verify temporary storage access and retry. Upstream error details are withheld.';
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      content: expected,
+      error: expected,
+    });
+    expect(runtimeBehavior.startCount).toBe(9);
+    expect(runtimeBehavior.runCount).toBe(9);
+    expect(JSON.stringify(response)).not.toContain('Git plugin cleanup failed');
   });
 
   it('fails closed with a fixed diagnostic when shared runtime state cannot be read', async () => {
@@ -485,46 +1037,134 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect((await callDeepSeekHarness('worker', 'still live', { cwd: temporaryRoot, sessionId: sessions[0] })).status).toBe('done');
   });
 
+  it.each([false, true])('drains twelve turns before deleting their root with early SDK failure=%s', async (failBeforeArrival) => {
+    runtimeBehavior.uniqueSessions = true;
+    const start = vi.spyOn(DeepSeekHarness.prototype, 'start');
+    if (failBeforeArrival) start.mockRejectedValueOnce(new Error('controlled startup failure'));
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
+    const completed: string[] = [];
+    const turns = prompts.map((prompt) => gate.startTurn(prompt).then((turn) => {
+      completed.push(turn.status);
+      return turn;
+    }));
+    runtimeBehavior.onClose = async () => {
+      await writeFile(path.join(temporaryRoot, 'cleanup-observed'), 'closed');
+    };
+    try {
+      if (failBeforeArrival) {
+        await expect(gate.waitForArrivals()).rejects.toThrow('A turn completed before reaching the SDK gate.');
+      } else {
+        await gate.waitForArrivals();
+        expect(completed).toHaveLength(0);
+        expect(runtimeBehavior.runCount).toBe(12);
+        gate.release();
+        expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
+        expect(runtimeBehavior.closeCount).toBe(4);
+      }
+    } finally {
+      try {
+        await cleanupTestResources();
+      } finally {
+        start.mockRestore();
+      }
+    }
+    if (failBeforeArrival) {
+      expect(runtimeBehavior.runCount).toBe(11);
+      expect(completed.filter((status) => status === 'error')).toHaveLength(1);
+      expect(completed.filter((status) => status === 'done')).toHaveLength(11);
+    } else {
+      expect(completed).toEqual(Array.from({ length: 12 }, () => 'done'));
+    }
+    await expect(readFile(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(() => gate.startTurn('after cleanup')).toThrow();
+  });
+
+  it('preserves an arrival-wait failure while draining twelve quarantined turns before root deletion', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    runtimeBehavior.closeError = new Error('unconfirmed cleanup');
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
+    const completed: string[] = [];
+    for (const prompt of prompts) {
+      void gate.startTurn(prompt).then((turn) => { completed.push(turn.status); });
+    }
+    const failure = new Error('controlled arrival-wait failure');
+    const exercise = async () => {
+      try {
+        await gate.waitForArrivals().then(() => {
+          expect(completed).toHaveLength(0);
+          throw failure;
+        });
+      } finally {
+        await cleanupTestResources();
+      }
+    };
+    await expect(exercise()).rejects.toBe(failure);
+    expect(completed).toEqual(Array.from({ length: 12 }, () => 'done'));
+    await expect(readFile(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a short-turn assertion failure while draining the held long turn before root deletion', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    const gate = createRunGate(['hold-first']);
+    let longStatus: string | undefined;
+    let assertionFailure: unknown;
+    void gate.startTurn('hold-first').then((turn) => { longStatus = turn.status; });
+    const exercise = async () => {
+      try {
+        await gate.waitForArrivals();
+        const short = await gate.startTurn('fresh');
+        expect(short.status).toBe('done');
+        expect(longStatus).toBeUndefined();
+        try {
+          expect(short.status).toBe('error');
+        } catch (error) {
+          assertionFailure = error;
+          throw error;
+        }
+      } finally {
+        await cleanupTestResources();
+      }
+    };
+    const result = await exercise().catch((error: unknown) => error);
+    expect(assertionFailure).toBeInstanceOf(Error);
+    expect(result).toBe(assertionFailure);
+    expect(longStatus).toBe('done');
+    await expect(readFile(temporaryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does not evict active or queued turns when pruning idle runtimes', async () => {
     runtimeBehavior.uniqueSessions = true;
     const first = await callDeepSeekHarness('worker', 'first', { cwd: temporaryRoot });
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = async (prompt) => { if (prompt === 'hold') await gate; };
-    const active = callDeepSeekHarness('worker', 'hold', { cwd: temporaryRoot, sessionId: first.sessionId });
-    const turns = [active];
+    const gate = createRunGate(['hold']);
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(2), { timeout: 30_000 });
-      const queued = callDeepSeekHarness('worker', 'queued', { cwd: temporaryRoot, sessionId: first.sessionId });
-      turns.push(queued);
+      const active = gate.startTurn('hold', first.sessionId);
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(2);
+      const queued = gate.startTurn('queued', first.sessionId);
       for (let index = 0; index < 9; index += 1) {
-        expect((await callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot })).status).toBe('done');
+        expect((await gate.startTurn(`fresh ${index}`)).status).toBe('done');
       }
-      release();
+      gate.release();
       expect((await active).status).toBe('done');
       expect((await queued).status).toBe('done');
-    } finally {
-      release();
-      await Promise.allSettled(turns);
-    }
-    expect((await callDeepSeekHarness('worker', 'still live', { cwd: temporaryRoot, sessionId: first.sessionId })).status).toBe('done');
+      expect((await gate.startTurn('still live', first.sessionId)).status).toBe('done');
+    } finally { await gate.drain(); }
   });
 
   it('bounds the idle cache after simultaneous fresh-turn completions', async () => {
     runtimeBehavior.uniqueSessions = true;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = () => gate;
-    const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12), { timeout: 30_000 });
-      release();
+      const turns = prompts.map((prompt) => gate.startTurn(prompt));
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(12);
+      gate.release();
       expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
       expect(runtimeBehavior.closeCount).toBe(4);
-    } finally {
-      release();
-      await Promise.allSettled(turns);
-    }
+    } finally { await gate.drain(); }
   });
 
   it('preserves a completed turn when failed idle eviction has a confirmed quarantine barrier', async () => {
@@ -561,47 +1201,38 @@ describe('DeepSeek Harness SDK error mapping', () => {
 
   it('keeps a just-completed long turn live when newer short turns fill the idle cache', async () => {
     runtimeBehavior.uniqueSessions = true;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = async (prompt) => { if (prompt === 'hold-first') await gate; };
-    const longTurn = callDeepSeekHarness('worker', 'hold-first', { cwd: temporaryRoot });
+    const gate = createRunGate(['hold-first']);
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(1), { timeout: 30_000 });
+      const longTurn = gate.startTurn('hold-first');
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(1);
       for (let index = 0; index < 8; index += 1) {
-        expect((await callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot })).status).toBe('done');
+        expect((await gate.startTurn(`fresh ${index}`)).status).toBe('done');
       }
-      release();
+      gate.release();
       const completed = await longTurn;
       expect(completed.status).toBe('done');
       expect(runtimeBehavior.closeCount).toBe(1);
-      expect((await callDeepSeekHarness('worker', 'continue completed', {
-        cwd: temporaryRoot, sessionId: completed.sessionId,
-      })).status).toBe('done');
-    } finally {
-      release();
-      await Promise.allSettled([longTurn]);
-    }
+      expect((await gate.startTurn('continue completed', completed.sessionId)).status).toBe('done');
+    } finally { await gate.drain(); }
   });
 
   it('still bounds the idle cache when simultaneous evictions are durably quarantined', async () => {
     runtimeBehavior.uniqueSessions = true;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    runtimeBehavior.runGate = () => gate;
+    const prompts = Array.from({ length: 12 }, (_, index) => `fresh ${index}`);
+    const gate = createRunGate(prompts);
     runtimeBehavior.closeError = new Error('unconfirmed cleanup');
-    const turns = Array.from({ length: 12 }, (_, index) => callDeepSeekHarness('worker', `fresh ${index}`, { cwd: temporaryRoot }));
     try {
-      await vi.waitFor(() => expect(runtimeBehavior.runCount).toBe(12), { timeout: 30_000 });
-      release();
+      const turns = prompts.map((prompt) => gate.startTurn(prompt));
+      await gate.waitForArrivals();
+      expect(runtimeBehavior.runCount).toBe(12);
+      gate.release();
       expect((await Promise.all(turns)).every((turn) => turn.status === 'done')).toBe(true);
       expect(runtimeBehavior.closeCount).toBe(4);
       const starts = runtimeBehavior.startCount;
-      expect((await callDeepSeekHarness('worker', 'blocked', { cwd: temporaryRoot })).status).toBe('error');
+      expect((await gate.startTurn('blocked')).status).toBe('error');
       expect(runtimeBehavior.startCount).toBe(starts);
-    } finally {
-      release();
-      await Promise.allSettled(turns);
-    }
+    } finally { await gate.drain(); }
   });
 
   it('withholds completion when the evicted runtime credential patch cannot be disposed', async () => {

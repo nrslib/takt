@@ -1,6 +1,8 @@
 import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { join, parse, relative, resolve, sep } from 'node:path';
 
+export class UnsafePrivateArtifactPathError extends Error {}
+
 export interface DirectoryIdentity {
   path: string;
   stat: Stats;
@@ -10,18 +12,6 @@ export interface DirectoryIdentity {
 export interface PrivateFileInspection {
   ancestorIdentities: DirectoryIdentity[];
   expectedStat: Stats | undefined;
-}
-
-export class PrivateArtifactAncestorIdentityMismatchError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'PrivateArtifactAncestorIdentityMismatchError';
-  }
-}
-
-function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 export function lstatOrUndefined(path: string): Stats | undefined {
@@ -72,11 +62,11 @@ export function assertSafePath(targetPath: string, targetIsDirectory: boolean): 
   const { trustedRoot, rejectTrustedRootSymlink } = boundary;
   const rootLinkStat = lstatSync(trustedRoot);
   if (rejectTrustedRootSymlink && rootLinkStat.isSymbolicLink()) {
-    throw new Error(`Private artifact trusted root is a symlink: ${trustedRoot}`);
+    throw new UnsafePrivateArtifactPathError(`Private artifact trusted root is a symlink: ${trustedRoot}`);
   }
   const rootStat = statSync(trustedRoot);
   if (!rootStat.isDirectory()) {
-    throw new Error(`Private artifact trusted root is not a directory: ${trustedRoot}`);
+    throw new UnsafePrivateArtifactPathError(`Private artifact trusted root is not a directory: ${trustedRoot}`);
   }
 
   let current = trustedRoot;
@@ -85,14 +75,14 @@ export function assertSafePath(targetPath: string, targetIsDirectory: boolean): 
     const stat = lstatOrUndefined(current);
     if (stat === undefined) continue;
     if (stat.isSymbolicLink()) {
-      throw new Error(`Private artifact path contains a symlink: ${current}`);
+      throw new UnsafePrivateArtifactPathError(`Private artifact path contains a symlink: ${current}`);
     }
     const isTarget = current === targetPath;
     if ((!isTarget || targetIsDirectory) && !stat.isDirectory()) {
-      throw new Error(`Private artifact path contains a non-directory: ${current}`);
+      throw new UnsafePrivateArtifactPathError(`Private artifact path contains a non-directory: ${current}`);
     }
     if (isTarget && !targetIsDirectory && !stat.isFile()) {
-      throw new Error(`Private artifact path is not a regular file: ${current}`);
+      throw new UnsafePrivateArtifactPathError(`Private artifact path is not a regular file: ${current}`);
     }
   }
 }
@@ -158,26 +148,10 @@ export function hasMatchingDirectoryIdentity(expected: Stats, actual: Stats): bo
     && expected.isDirectory() === actual.isDirectory();
 }
 
+/** 古い Store が渡すディレクトリ一覧の種別だけを確認する。祖先の同一性は検査しない。 */
 export function assertAncestorIdentities(identities: readonly DirectoryIdentity[]): void {
   for (const identity of identities) {
-    let current: Stats;
-    try {
-      current = identity.followSymbolicLink
-        ? statSync(identity.path) as Stats
-        : lstatSync(identity.path) as Stats;
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      throw new PrivateArtifactAncestorIdentityMismatchError(
-        `Private artifact ancestor disappeared while opening: ${identity.path}`,
-        { cause: error },
-      );
-    }
-    if (!current.isDirectory() || !hasMatchingDirectoryIdentity(identity.stat, current)) {
-      throw new PrivateArtifactAncestorIdentityMismatchError(
-        `Private artifact ancestor identity changed while opening: ${identity.path}`,
-      );
-    }
+    const stat = identity.followSymbolicLink ? statSync(identity.path) : lstatSync(identity.path);
+    if (!stat.isDirectory()) throw new Error(`Private artifact ancestor is not a directory: ${identity.path}`);
   }
 }

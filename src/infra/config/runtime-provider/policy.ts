@@ -3,7 +3,7 @@
  *
  * `validateRuntimeProviderSection` takes a validated `provider` section, resolves every
  * `extends` chain, and validates all profile/pool references up front — unknown references,
- * cyclic `extends`, and profiles missing provider/model fail fast at compile time (before any
+ * cyclic `extends`, missing providers, and OpenCode profiles missing models fail fast (before any
  * agent runs), never via a silent fallback.
  *
  * Runtime-v1 resolution itself (defaults/personas/tags/steps → provider/model, plus the
@@ -18,21 +18,29 @@ import type {
   RuntimeProviderAssignment,
 } from './schema.js';
 import { hasActiveProviderContent } from './schema.js';
+import type { ContextWindowSetting } from '../../../core/models/workflow-provider-options.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
 
 export interface FlatProfile {
   provider?: string;
   model?: string;
+  contextWindow?: ContextWindowSetting;
   options?: Record<string, unknown>;
   capabilities?: string | string[];
   capabilitiesOriginProfile?: string;
   permissionMode?: 'readonly' | 'edit' | 'full';
 }
 
+export interface RuntimeProviderAssignmentOrigins {
+  readonly defaults?: string;
+  readonly targets?: string;
+}
+
 /**
  * Validate every profile/pool reference in the section up front. Throws on unknown
- * references, cyclic `extends`, and referenced profiles missing `provider`/`model`.
+ * references, cyclic `extends`, missing providers, and OpenCode profiles missing models.
  */
-export function validateRuntimeProviderSection(section: RuntimeProviderSection): void {
+export function validateRuntimeProviderSection(section: RuntimeProviderSection, origins?: RuntimeProviderAssignmentOrigins): void {
   if (hasActiveProviderContent(section) && section.defaults === undefined) {
     throw new Error('runtime.yaml active provider section must specify `provider.defaults`');
   }
@@ -43,7 +51,7 @@ export function validateRuntimeProviderSection(section: RuntimeProviderSection):
 
   const flatProfiles = flattenProfiles(section.profiles ?? {});
   const poolNames = new Set(Object.keys(section.auto_routing?.pools ?? {}));
-  validateReferences(section, flatProfiles, poolNames);
+  validateReferences(section, flatProfiles, poolNames, origins);
 }
 
 /** Resolve every `extends` chain into flat profiles; throw on cycles and unknown parents. */
@@ -73,6 +81,9 @@ export function flattenProfiles(
     if (profile.model !== undefined) {
       flat.model = profile.model;
     }
+    if (profile.context_window !== undefined) {
+      flat.contextWindow = profile.context_window;
+    }
     if (profile.options !== undefined) {
       flat.options = profile.options;
     }
@@ -100,16 +111,24 @@ function validateReferences(
   section: RuntimeProviderSection,
   flatProfiles: Map<string, FlatProfile>,
   poolNames: Set<string>,
+  origins?: RuntimeProviderAssignmentOrigins,
 ): void {
   const assertProfile = (name: string, referencedBy: string): void => {
     const profile = flatProfiles.get(name);
     if (!profile) {
       throw new Error(`Unknown profile "${name}" referenced by ${referencedBy}`);
     }
-    if (!profile.provider || !profile.model) {
+    if (!profile.provider) {
       throw new Error(
-        `Profile "${name}" referenced by ${referencedBy} must define both \`provider\` and \`model\``,
+        `Profile "${name}" referenced by ${referencedBy} must define \`provider\``,
       );
+    }
+    if (profile.model === undefined) {
+      try {
+        validateProviderModelRequirements(profile.provider, profile.model);
+      } catch (error) {
+        throw new Error(`Profile "${name}" referenced by ${referencedBy}: ${(error as Error).message}`);
+      }
     }
   };
   const assertPool = (name: string, referencedBy: string): void => {
@@ -155,10 +174,10 @@ function validateReferences(
   };
 
   if (section.defaults) {
-    assertAssignment(section.defaults, 'defaults');
+    assertAssignment(section.defaults, origins?.defaults ?? 'defaults');
   }
 
-  assertTargetMaps(section.targets, 'targets');
+  assertTargetMaps(section.targets, origins?.targets ?? 'targets');
 
   for (const [assignmentName, assignmentSet] of Object.entries(section.assignments ?? {})) {
     if (assignmentSet.defaults !== undefined) {

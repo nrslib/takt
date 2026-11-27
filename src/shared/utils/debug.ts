@@ -13,6 +13,7 @@ import {
 } from './private-file.js';
 import { normalizeLogMetadata, normalizeLogValue, truncateLogText } from './logMetadata.js';
 import { sanitizeSensitiveText } from './sensitiveText.js';
+import { diagnosticLoggingSuppressed } from './diagnostic-context.js';
 
 const MAX_DEBUG_DATA_LENGTH = 50_000;
 
@@ -163,6 +164,7 @@ export class DebugLogger {
 
   /** Write a log entry to verbose console (stderr) and/or file */
   writeLog(level: string, component: string, message: string, data?: unknown): void {
+    if (diagnosticLoggingSuppressed()) return;
     if (this.verboseConsoleEnabled) {
       process.stderr.write(DebugLogger.formatConsoleMessage(level, component, message) + '\n');
     }

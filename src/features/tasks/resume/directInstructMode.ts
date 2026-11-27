@@ -1,5 +1,4 @@
 import {
-  displayAndClearSessionState,
   runConversationLoop,
   type ConversationStrategy,
   type SessionContext,
@@ -91,8 +90,6 @@ export async function runDirectInstructMode(
 
   const baseCtx = initializeSession(options.cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };
-  displayAndClearSessionState(options.cwd, ctx.lang);
-
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
   const canonicalTaskContent = (options.previousOrderContent ?? options.taskContent).trim();
   const systemPrompt = prependSourceContextGuardToSystemPrompt(

@@ -1,9 +1,12 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
+import { GoalAnswerInputSchema, GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalSummarySchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
+import { MCP_TEXT_PAGE_BYTES } from './response.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
 } from '../tasks/taskContextValidation.js';
+import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 
 const MCP_TASK_MAX_LENGTH = 128 * 1024;
 const MCP_WORKFLOW_MAX_LENGTH = 128;
@@ -68,14 +71,199 @@ const taskSaveOptionsSchema = z.object({
 
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
 
+const goalReadLimitSchema = z.number().int().min(1).max(50).optional();
+const readOffsetSchema = z.number().int().safe().nonnegative().optional();
+const textReadShape = {
+  textOffset: readOffsetSchema.describe('UTF-8 byte offset into the selected string.'),
+  maxBytes: z.number().int().min(4).max(MCP_TEXT_PAGE_BYTES).optional().describe('Maximum UTF-8 text bytes, up to 4096; the complete response is bounded to 64 KiB.'),
+};
+const goalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute path to the TAKT project where goals are stored in .takt/goals/.'),
+}).strict();
+export const listGoalsInputSchema = goalIdentityInputSchema.extend({
+  limit: goalReadLimitSchema,
+  offset: readOffsetSchema,
+  errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
+  state: z.enum(['open', 'finished', 'all']).optional()
+    .describe('Goals to list: open (not finished), finished (completed or aborted), or all. Defaults to all. offset, limit and totalCount apply to the filtered goals.'),
+});
+export const getWorkflowInputSchema = goalIdentityInputSchema.extend({
+  workflow: z.string().trim().min(1).describe('Workflow name, scope reference or file path from takt_list_workflows.'),
+  callPath: z.array(z.number().int().safe().nonnegative()).optional()
+    .describe('Workflow-call step indices returned in getInput; preserves parent resolution and callable arguments.'),
+  limit: goalReadLimitSchema,
+  offset: readOffsetSchema,
+});
+export type GetWorkflowInput = z.infer<typeof getWorkflowInputSchema>;
+export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
+export const createGoalInputSchema = GoalCreateInputSchema;
+export const abortGoalInputSchema = goalWriteInputSchema.extend({
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. This tool does not save the reason; use takt_record_goal_work_log to record it.'),
+});
+export type AbortGoalInput = z.infer<typeof abortGoalInputSchema>;
+export const reopenGoalInputSchema = goalWriteInputSchema.extend({
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for reopening the goal. Saved in the work log without trimming.'),
+});
+export type ReopenGoalInput = z.infer<typeof reopenGoalInputSchema>;
+export const updateGoalBranchesInputSchema = goalWriteInputSchema.extend({
+  integrationBranch: GoalSummarySchema.shape.integrationBranch.unwrap()
+    .describe('Corrected destination branch for the goal pull request. Must differ from the goal branch. Saved as the goal integration branch and, when completion evidence is saved, as the completion target branch.'),
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for correcting the saved branches. Saved in the work log without trimming.'),
+});
+export type UpdateGoalBranchesInput = z.infer<typeof updateGoalBranchesInputSchema>;
+export const getGoalInputSchema = goalWriteInputSchema.extend({
+  path: z.string().max(512).regex(/^(createdAt|objective|outOfScope|acceptanceCriteria|specifications|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|gherkin|quint|alloy|body|summary|humanChecks|number|url|error|goalSha|recordedAt|id|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
+    .describe('Saved field path, for example workLog.0.summary or completion.summary. Array indices refer to saved order.'),
+  recordId: z.uuid().optional().describe('Select a saved record by ID when path selects questions, workLog or notifications.'),
+  limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
+});
+export const recordGoalWorkLogInputSchema = goalWriteInputSchema.extend(GoalWorkLogInputSchema.shape);
+export const listGoalRecordsInputSchema = goalWriteInputSchema.extend({ limit: goalReadLimitSchema, offset: readOffsetSchema });
+export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
+  workKey: z.string().min(1).max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0).optional()
+    .describe('Stable work key used to find work already submitted to this goal.'),
+  purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
+  task: taskContentSchema.describe('Self-contained instructions for ready goal work.'),
+  workflow: workflowSchema.describe('Workflow name, scope reference or file path selected by the manager.'),
+  runtimeAssignment: z.string().trim().min(1).max(MCP_WORKFLOW_MAX_LENGTH).optional()
+    .describe('Runtime assignment name from takt_list_runtime_assignments. Omit to use the default selection.'),
+  autoPr: z.boolean().optional().describe('Push and create a PR after successful worktree execution. Omission saves false.'),
+  shouldPublishBranchToOrigin: z.boolean().optional().describe('Publish the task branch to origin. Omission saves false; autoPr true also publishes it.'),
+});
+export const askGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  ...GoalQuestionInputSchema.shape,
+  kind: z.enum(['question', 'operation_request'], {
+    error: 'Tool approvals are retired. Only question and operation_request are supported; human answers cannot be issued by the manager.',
+  }).default('question'),
+  targetSha: GoalInquiryInputSchema.shape.targetSha,
+});
+export const askStandaloneQuestionInputSchema = askGoalQuestionInputSchema.omit({ goalId: true });
+export type AskStandaloneQuestionInput = z.infer<typeof askStandaloneQuestionInputSchema>;
+export const getGoalQuestionInputSchema = goalWriteInputSchema.extend({ questionId: z.uuid(),
+  path: z.string().regex(/^(body|recommendation|answer\.text|options\.\d+|withdrawalReason)$/).optional(), ...textReadShape });
+export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit: goalReadLimitSchema, offset: readOffsetSchema });
+export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
+});
+export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
+});
+export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
+const goalProposalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager conversation holds its pending goal proposal.'),
+}).strict();
+export const listGoalProposalsInputSchema = goalProposalIdentityInputSchema;
+const goalProposalRevisionSchema = z.number().int().safe().positive()
+  .describe('Revision of the pending goal proposal returned by takt_list_goal_proposals.');
+const goalProposalOwnerSchema = {
+  conversationId: ConversationIdSchema.describe('conversationId of the proposal returned by takt_list_goal_proposals. The request is refused unless it identifies the conversation that owns the pending proposal.'),
+};
+export const getGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  ...goalProposalOwnerSchema,
+  path: z.string().max(128).regex(/^summary\.(objective|startBranch|integrationBranch|(outOfScope|acceptanceCriteria|constraints)(\.\d+)?|specifications\.(gherkin|quint|alloy))$/).optional()
+    .describe('Proposal field path from the fields list of takt_list_goal_proposals, for example summary.objective or summary.acceptanceCriteria.0. Array indices refer to saved order.'),
+  limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
+});
+export const approveGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  revision: goalProposalRevisionSchema,
+  ...goalProposalOwnerSchema,
+});
+export const rejectGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  revision: goalProposalRevisionSchema,
+  ...goalProposalOwnerSchema,
+});
+export const createGoalProposalInputSchema = goalProposalIdentityInputSchema.extend({
+  summary: GoalSummarySchema.describe('Contents of the goal proposal to create, in the same shape as the summary a manager presents for registration: objective, outOfScope, acceptanceCriteria (at least one), constraints, optional specifications (gherkin, quint, alloy), and optional startBranch and integrationBranch.'),
+});
+export type ListGoalProposalsInput = z.infer<typeof listGoalProposalsInputSchema>;
+export type GetGoalProposalInput = z.infer<typeof getGoalProposalInputSchema>;
+export type ApproveGoalProposalInput = z.infer<typeof approveGoalProposalInputSchema>;
+export type RejectGoalProposalInput = z.infer<typeof rejectGoalProposalInputSchema>;
+export type CreateGoalProposalInput = z.infer<typeof createGoalProposalInputSchema>;
+const standaloneInquiryIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
+}).strict();
+export const listStandaloneInquiriesInputSchema = standaloneInquiryIdentityInputSchema.extend({
+  limit: goalReadLimitSchema, offset: readOffsetSchema,
+});
+export const withdrawStandaloneInquiryInputSchema = standaloneInquiryIdentityInputSchema.extend({
+  id: z.uuid(),
+  reason: GoalQuestionSchema.shape.withdrawalReason.unwrap()
+    .describe('Required reason for withdrawing an obsolete pending inquiry. Original whitespace is preserved.'),
+});
+export type ListStandaloneInquiriesInput = z.infer<typeof listStandaloneInquiriesInputSchema>;
+export type WithdrawStandaloneInquiryInput = z.infer<typeof withdrawStandaloneInquiryInputSchema>;
+export const notifyGoalInputSchema = goalWriteInputSchema.extend({
+  ...GoalNotificationInputSchema.omit({ source: true }).shape, kind: z.enum(['blocked', 'custom']),
+});
+export type AskGoalQuestionInput = z.input<typeof askGoalQuestionInputSchema>;
+export type GetGoalQuestionInput = z.infer<typeof getGoalQuestionInputSchema>;
+export type NotifyGoalInput = z.infer<typeof notifyGoalInputSchema>;
+const reviewedShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+const goalTaskNameSchema = z.string().min(1).max(1024);
+export const mergeGoalTaskInputSchema = goalWriteInputSchema.extend({
+  taskName: goalTaskNameSchema, expectedSha: reviewedShaSchema,
+});
+export const completeGoalInputSchema = goalWriteInputSchema.extend({
+  expectedSha: reviewedShaSchema, summary: taskContentSchema.describe('Satisfied acceptance criteria and their supporting evidence.'),
+  humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR unless retrying the same SHA with saved humanChecks. Same-SHA PR preparation retries reuse saved humanChecks; a supplied value is saved only when humanChecks was missing. Review an advanced goal tip again and provide new humanChecks with its new expectedSha and summary.'),
+});
+export const mergeGoalPrInputSchema = goalWriteInputSchema.extend({
+  prNumber: z.number().int().safe().positive().describe('Saved goal PR number.'),
+  until: z.enum(['prepare', 'merge']).describe('Prepare the PR for human merge, or finish by merging it.'),
+});
+export type MergeGoalPrInput = z.infer<typeof mergeGoalPrInputSchema>;
+export const goalDiffInputSchema = goalWriteInputSchema.extend({
+  taskName: goalTaskNameSchema.optional(), file: z.string().min(1).max(4096).refine((value) => !value.includes('\0')).optional(),
+  limit: goalReadLimitSchema,
+});
+export const goalHistoryInputSchema = goalWriteInputSchema.extend({
+  taskName: goalTaskNameSchema.optional(), limit: goalReadLimitSchema,
+});
+export type EnqueueGoalTaskInput = z.infer<typeof enqueueGoalTaskInputSchema>;
+export type MergeGoalTaskInput = z.infer<typeof mergeGoalTaskInputSchema>;
+export type CompleteGoalInput = z.infer<typeof completeGoalInputSchema>;
+export type GoalDiffInput = z.infer<typeof goalDiffInputSchema>;
+export type GoalHistoryInput = z.infer<typeof goalHistoryInputSchema>;
+export type ListGoalsInput = z.infer<typeof listGoalsInputSchema>;
+export type GetGoalInput = z.infer<typeof getGoalInputSchema>;
+export type GoalIdentityInput = z.infer<typeof goalWriteInputSchema>;
+
 export const listTasksInputSchema = z.object({
   cwd: absolutePathSchema,
+  view: z.literal('workspace').optional().describe('Manager only: read the current assigned workspace. cwd is validated as an absolute path but does not select the workspace.'),
+  limit: goalReadLimitSchema, offset: readOffsetSchema,
+  path: z.string().max(512).regex(/^(name|repositoryDirectories\.\d+)$/).optional()
+    .describe('Workspace string to read; repository indices refer to saved order.'),
+  ...textReadShape,
 }).strict();
+
+export const cleanupTasksInputSchema = z.object({
+  cwd: absolutePathSchema,
+  statuses: z.array(z.enum(['pending', 'completed', 'failed', 'exceeded', 'pr_failed'])).min(1).optional(),
+  goalId: GoalIdSchema.optional(),
+  branch: branchSchema.optional(),
+  reason: taskContentSchema.describe('Required reason for cleaning up the selected stopped tasks.'),
+  confirm: z.boolean().optional().describe('Omit or pass false to preview. Only true deletes the selected stopped tasks and their existing cleanup resources.'),
+}).strict();
+
+export type CleanupTasksInput = z.infer<typeof cleanupTasksInputSchema>;
 
 export const getRunInputSchema = z.object({
   cwd: absolutePathSchema,
   runSlug: z.string().trim().min(1).max(255),
-}).strict();
+  view: z.enum(['summary', 'log', 'report', 'instructions', 'task']).optional(),
+  instructionId: z.number().int().safe().positive().optional()
+    .describe('Saved instruction ID from tell or the instructions list; requires view instructions. Omit to list instructions.'),
+  stepIndex: z.number().int().safe().nonnegative().optional().describe('Index from stepLogs; omission selects the last completed step.'),
+  report: z.string().min(1).max(4096).refine((value) => !value.includes('\0')).optional().describe('Relative filename from the report list; required for view report.'),
+  limit: goalReadLimitSchema,
+  offset: readOffsetSchema.describe('List offset, bytes skipped backwards from the log end, or forward UTF-8 bytes in task text, a report or selected instruction.'),
+  maxBytes: textReadShape.maxBytes,
+}).strict().refine((input) => input.instructionId === undefined || input.view === 'instructions', {
+  message: 'instructionId requires view instructions',
+  path: ['instructionId'],
+});
 
 export const tellRunInputSchema = z.object({
   cwd: absolutePathSchema,
@@ -85,6 +273,12 @@ export const tellRunInputSchema = z.object({
   }).describe('Additional instruction to deliver to the selected running clone task.'),
 }).strict();
 
+export const tellGoalRunInputSchema = goalWriteInputSchema.extend({
+  taskName: goalTaskNameSchema,
+  content: tellRunInputSchema.shape.content,
+});
+
+export type TellGoalRunInput = z.infer<typeof tellGoalRunInputSchema>;
 export type EnqueueTaskInput = z.infer<typeof enqueueTaskInputSchema>;
 export type ListTasksInput = z.infer<typeof listTasksInputSchema>;
 export type GetRunInput = z.infer<typeof getRunInputSchema>;

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getEventListeners } from 'node:events';
-import { confirmWithCancel, promptInputWithCancel } from '../shared/prompt/confirm.js';
+import { PassThrough } from 'node:stream';
+import { confirm, confirmWithCancel, promptInputWithCancel } from '../shared/prompt/confirm.js';
 import { ESCAPE_SEQUENCE_TIMEOUT_MS } from '../shared/prompt/select-key-input.js';
 import { statusLine } from '../shared/ui/StatusLine.js';
 
@@ -105,6 +106,90 @@ afterEach(() => {
 });
 
 describe('cancellable prompts', () => {
+  it.each([
+    { answer: 'y', defaultYes: false, expected: true },
+    { answer: 'n', defaultYes: true, expected: false },
+  ])('keeps the legacy confirmation pending after Escape until answer="$answer"', async ({ answer, defaultYes, expected }) => {
+    const stream = new PassThrough();
+    vi.spyOn(process, 'stdin', 'get').mockReturnValue(stream as unknown as typeof process.stdin);
+    const stdin = setupPromptStdin();
+    let settled = false;
+    const confirmation = confirm('Initial confirmation?', defaultYes);
+    void confirmation.then(() => { settled = true; });
+
+    stdin.send('\x1B');
+    await new Promise((resolve) => setTimeout(resolve, ESCAPE_SEQUENCE_TIMEOUT_MS + 20));
+
+    expect(settled).toBe(false);
+    stdin.send(`${answer}\r`);
+    await expect(confirmation).resolves.toBe(expected);
+    stream.destroy();
+  });
+
+  it.each([
+    { description: 'one chunk', chunks: ['\x1B[A'] },
+    { description: 'split chunks', chunks: ['\x1B', '[', 'A'] },
+  ])('keeps the confirmation active for an arrow sequence delivered in $description', async ({ chunks }) => {
+    const stdin = setupPromptStdin();
+    let settled = false;
+    const confirmation = confirmWithCancel('Continue?', false);
+    void confirmation.then(() => { settled = true; });
+    for (const chunk of chunks) stdin.send(chunk);
+    await new Promise((resolve) => setTimeout(resolve, ESCAPE_SEQUENCE_TIMEOUT_MS + 20));
+
+    expect(settled).toBe(false);
+    stdin.send('y\r');
+    await expect(confirmation).resolves.toEqual({ kind: 'value', value: true });
+    expect(process.stdin.isRaw).toBe(false);
+  });
+
+  it.each([
+    { kind: 'confirm', reuseInput: false },
+    { kind: 'confirm', reuseInput: true },
+    { kind: 'input', reuseInput: false },
+    { kind: 'input', reuseInput: true },
+  ])('accepts the next $kind answer immediately after Escape with reuseInput=$reuseInput', async ({ kind, reuseInput }) => {
+    const stream = new PassThrough();
+    vi.spyOn(process, 'stdin', 'get').mockReturnValue(stream as unknown as typeof process.stdin);
+    const stdin = setupPromptStdin();
+    if (reuseInput) {
+      const previous = confirmWithCancel('Previous confirmation?', false);
+      stdin.send('y\r');
+      await expect(previous).resolves.toEqual({ kind: 'value', value: true });
+    }
+
+    const cancelled = kind === 'confirm'
+      ? confirmWithCancel('First confirmation?', true)
+      : promptInputWithCancel('First input');
+    stdin.send('\x1B');
+    await expect(cancelled).resolves.toEqual({ kind: 'cancelled' });
+    expect(process.stdin.isRaw).toBe(false);
+
+    const next = kind === 'confirm'
+      ? confirmWithCancel('Next confirmation?', false)
+      : promptInputWithCancel('Next input');
+    stdin.send(kind === 'confirm' ? 'y\r' : 'feature/topic\r');
+    await expect(next).resolves.toEqual({
+      kind: 'value',
+      value: kind === 'confirm' ? true : 'feature/topic',
+    });
+    expect(process.stdin.isRaw).toBe(false);
+    stream.destroy();
+  });
+
+  it('should accept a new confirmation after standalone Escape releases the previous input', async () => {
+    const stdin = setupPromptStdin();
+    const cancelled = confirmWithCancel('First confirmation?', true);
+    stdin.send('\x1B');
+    await expect(cancelled).resolves.toEqual({ kind: 'cancelled' });
+    expect(process.stdin.isRaw).toBe(false);
+
+    const next = confirmWithCancel('Next confirmation?', false);
+    stdin.send('y\r');
+
+    await expect(next).resolves.toEqual({ kind: 'value', value: true });
+    expect(process.stdin.isRaw).toBe(false);
+  });
   it('cancels an active confirmation on abort and releases input listeners', async () => {
     setupPromptStdin();
     const controller = new AbortController();

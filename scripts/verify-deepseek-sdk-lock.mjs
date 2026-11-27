@@ -2,20 +2,54 @@
 
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
+import { posix } from 'node:path';
+import process from 'node:process';
+import { satisfies } from 'semver';
 
-const sdkVersion = '0.2.0-rc.2';
-const managedBase = 'managed/deepseek-harness/';
+const sdkVersion = '0.2.1-rc.5';
 
-export function verifyDeepSeekManagedLock(root, managed, lock, constants) {
-  if (Object.keys(root.dependencies).some((name) => name.startsWith('@deepseek-ai/'))
+/** Resolve a peer at the declaring package's placement level, then at ancestor levels. */
+function resolvePeerEntry(packages, packagePath, peerName) {
+  for (let directory = posix.dirname(packagePath); directory !== '.'; directory = posix.dirname(directory)) {
+    if (posix.basename(directory) !== 'node_modules') continue;
+    const candidate = `${directory}/${peerName}`;
+    if (Object.hasOwn(packages, candidate)) return packages[candidate];
+  }
+  return undefined;
+}
+
+/**
+ * Verify the managed SDK/runtime graph and keep every DeepSeek package out of the root graph.
+ * Also enforce required SDK peers and safety overrides.
+ * @throws {Error} If a manifest, lock entry, version constant, or packaging contract is inconsistent.
+ */
+export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constants) {
+  const hasDeepSeekPackage = (dependencies) => Object.keys(dependencies ?? {})
+    .some((name) => name.startsWith('@deepseek-ai/'));
+  if (hasDeepSeekPackage(root.dependencies)
+    || hasDeepSeekPackage(root.devDependencies)
+    || hasDeepSeekPackage(root.optionalDependencies)
+    || hasDeepSeekPackage(root.overrides)
     || root.bundleDependencies?.some((name) => name.startsWith('@deepseek-ai/'))
-    || !root.files.includes(managedBase)) {
-    throw new Error('The TAKT package must ship the managed assets without production DeepSeek dependencies');
+    || hasDeepSeekPackage(rootLock.packages?.['']?.dependencies)
+    || hasDeepSeekPackage(rootLock.packages?.['']?.devDependencies)
+    || Object.keys(rootLock.packages ?? {}).some((path) => path.includes('node_modules/@deepseek-ai/'))
+    || !['package.json', 'package-lock.json'].every((name) => root.files.includes(`managed/*/${name}`))) {
+    throw new Error('The TAKT package must ship the managed assets without root DeepSeek dependencies');
   }
   for (const name of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-sdk-client']) {
-    if (managed.dependencies[name] !== sdkVersion || root.devDependencies[name] !== sdkVersion) {
-      throw new Error(`${name} must be pinned for managed runtime and development types`);
+    if (managed.dependencies[name] !== sdkVersion) {
+      throw new Error(`${name} must be pinned for the managed runtime and SDK boundary`);
+    }
+  }
+  if (managed.dependencies['@deepseek-ai/cordis'] !== '4.0.5'
+    || managed.dependencies['@deepseek-ai/cordis-plugin-group'] !== '1.0.5') {
+    throw new Error('The managed npm project must pin Cordis and cordis-plugin-group within the SDK peer ranges');
+  }
+  for (const [name, version] of Object.entries(managed.dependencies)) {
+    if ((name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) && version !== sdkVersion) {
+      throw new Error(`${name} must be pinned to ${sdkVersion} in the managed npm project`);
     }
   }
   if (!constants.includes(`DEEPSEEK_HARNESS_SDK_VERSION = '${sdkVersion}'`)
@@ -25,6 +59,10 @@ export function verifyDeepSeekManagedLock(root, managed, lock, constants) {
   if (managed.overrides?.fflate !== '0.8.3'
     || lock.packages?.['node_modules/fflate']?.version !== '0.8.3') {
     throw new Error('The managed npm project must resolve fflate 0.8.3');
+  }
+  if (managed.overrides?.['@earendil-works/pi-ai'] !== '1.5.2'
+    || lock.packages?.['node_modules/@earendil-works/pi-ai']?.version !== '1.5.2') {
+    throw new Error('The managed npm project must resolve the transitive Pi AI dependency to 1.5.2');
   }
   if (managed.dependencies['@deepseek-ai/libreoffice-kit'] !== '0.1.5') {
     throw new Error('The managed npm project must pin libreoffice-kit 0.1.5');
@@ -37,15 +75,37 @@ export function verifyDeepSeekManagedLock(root, managed, lock, constants) {
   }
   const peers = lock.packages['node_modules/@deepseek-ai/dsh-sdk-client']?.peerDependencies;
   for (const [name, version] of Object.entries(peers ?? {})) {
-    const pinned = name === '@deepseek-ai/cordis' ? '4.0.4' : version;
+    const pinned = name === '@deepseek-ai/cordis' ? '4.0.5' : version;
     if (managed.dependencies[name] !== pinned) {
       throw new Error(`${name} SDK peer must be explicitly pinned in the managed npm project`);
     }
   }
+  for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
+    if (!packagePath.startsWith('node_modules/')) continue;
+    for (const [peerName, peerRange] of Object.entries(entry?.peerDependencies ?? {})) {
+      const peerEntry = resolvePeerEntry(lock.packages, packagePath, peerName);
+      const optional = entry?.peerDependenciesMeta?.[peerName]?.optional === true;
+      if ((!peerEntry && !optional)
+        || (peerEntry && (typeof peerEntry.version !== 'string' || !satisfies(peerEntry.version, peerRange)))) {
+        throw new Error(`${packagePath} peer ${peerName}@${peerRange} must resolve in the managed npm lock`);
+      }
+    }
+  }
 }
 
-export function verifyStartupBundleLock(root, lock) {
-  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react']) {
+/**
+ * Require CLI startup dependencies to be exactly pinned, locked, and bundled.
+ * @throws {Error} If any required startup dependency violates the publish contract.
+ */
+export function verifyStartupBundleLock(root, lock, quint) {
+  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
+    if (/(?:^|\/)node_modules\/(?:update-notifier|boxen)$/.test(path)
+      || (/(?:^|\/)node_modules\/wrap-ansi$/.test(path) && entry.version?.startsWith('9.'))
+      || (/(?:^|\/)node_modules\/widest-line$/.test(path) && entry.version?.startsWith('5.'))) {
+      throw new Error(`Removed notification dependency remains: ${path}@${entry.version}`);
+    }
+  }
+  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react', '@informalsystems/quint', 'wrap-ansi']) {
     const version = lock.packages?.[`node_modules/${name}`]?.version;
     if (!version
       || root.dependencies?.[name] !== version
@@ -54,13 +114,25 @@ export function verifyStartupBundleLock(root, lock) {
       throw new Error(`${name} must be explicitly pinned, locked and bundled`);
     }
   }
+  const admZipRange = quint.dependencies?.['adm-zip'];
+  const admZipVersion = lock.packages?.['node_modules/adm-zip']?.version;
+  if (admZipRange !== root.overrides?.['adm-zip']
+    || !admZipVersion || !admZipRange || !satisfies(admZipVersion, admZipRange)) {
+    throw new Error('Bundled Quint must declare the shipped adm-zip version range');
+  }
 }
 
+/**
+ * Check an npm pack inventory for managed manifests and every declared startup bundle.
+ * @throws {Error} If a required managed asset or bundled package manifest is missing.
+ */
 export function verifyDeepSeekPackAssets(files, root) {
   const paths = new Set(files.map((file) => file.path));
-  for (const name of ['package.json', 'package-lock.json']) {
-    if (!paths.has(`${managedBase}${name}`)) {
-      throw new Error(`DeepSeek managed ${name} is missing from npm pack`);
+  for (const provider of ['deepseek-harness', 'claude-sdk', 'codex', 'opencode', 'pi']) {
+    for (const name of ['package.json', 'package-lock.json']) {
+      if (!paths.has(`managed/${provider}/${name}`)) {
+        throw new Error(`${provider} managed ${name} is missing from npm pack`);
+      }
     }
   }
   for (const name of root.bundleDependencies) {
@@ -76,13 +148,30 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const managed = JSON.parse(readFileSync(new URL('../managed/deepseek-harness/package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(readFileSync(new URL('../managed/deepseek-harness/package-lock.json', import.meta.url), 'utf8'));
   const constants = readFileSync(new URL('../src/infra/deepseek-harness/constants.ts', import.meta.url), 'utf8');
-  verifyDeepSeekManagedLock(root, managed, lock, constants);
-  verifyStartupBundleLock(root, rootLock);
+  const quint = JSON.parse(readFileSync(new URL('../node_modules/@informalsystems/quint/package.json', import.meta.url), 'utf8'));
+  verifyDeepSeekManagedLock(root, rootLock, managed, lock, constants);
+  verifyStartupBundleLock(root, rootLock, quint);
+  for (const provider of ['claude-sdk', 'codex', 'opencode', 'pi']) {
+    const manifest = JSON.parse(readFileSync(new URL(`../managed/${provider}/package.json`, import.meta.url), 'utf8'));
+    const managedLock = JSON.parse(readFileSync(new URL(`../managed/${provider}/package-lock.json`, import.meta.url), 'utf8'));
+    for (const [name, version] of Object.entries(manifest.dependencies)) {
+      if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u.test(version)
+        || root.devDependencies?.[name] !== version
+        || root.dependencies?.[name] !== undefined
+        || root.optionalDependencies?.[name] !== undefined
+        || root.bundleDependencies?.includes(name)
+        || rootLock.packages?.[`node_modules/${name}`]?.dev !== true
+        || managedLock.packages?.['']?.dependencies?.[name] !== version
+        || managedLock.packages?.[`node_modules/${name}`]?.version !== version) {
+        throw new Error(`${name} must be pinned in ${provider} managed assets and excluded from production dependencies`);
+      }
+    }
+  }
   if (process.argv.includes('--pack')) {
     const inventory = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
       cwd: new URL('..', import.meta.url), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
     }));
     verifyDeepSeekPackAssets(inventory[0].files, root);
   }
-  process.stdout.write(`DeepSeek managed npm lock verified at ${sdkVersion}\n`);
+  process.stdout.write(`Managed provider npm locks verified (DeepSeek ${sdkVersion})\n`);
 }

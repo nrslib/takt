@@ -1,10 +1,12 @@
-import { OpenCode, type SessionMessageInfo, type FormInfo } from '@opencode/client';
+import type { SessionMessageInfo, FormInfo } from '@opencode/client';
+import { loadManagedSdk } from '../managed-providers/loader.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { OpenCodeTransport, OpenCodeMessage, OpenCodeResolvedModel } from './transport.js';
+import type { ManagedOpenCodeTransport, OpenCodeMessage, OpenCodeResolvedModel } from './transport.js';
 import type { OpenCodeStreamEvent } from './OpenCodeStreamHandler.js';
 import { TAKT_V2_METADATA_KEY, TAKT_V2_PLUGIN_ID, toV2Tools } from './v2-contract.js';
 import { v2EventTranslator } from './v2-events.js';
 import { OPEN_CODE_MANAGED_TOOL_IDS } from './types.js';
+import { buildOpenCodeV2ExternalDirectoryRules } from './external-directories.js';
 
 const managedTools = new Set(OPEN_CODE_MANAGED_TOOL_IDS);
 // v2 records session state changes as messages. They carry no model-facing
@@ -38,11 +40,14 @@ function messageFromV2(message: SessionMessageInfo): OpenCodeMessage {
   };
 }
 
-export function createV2Transport(baseUrl: string, password: string, mcpServerNames: readonly string[] = []): OpenCodeTransport {
+export async function createV2Transport(baseUrl: string, password: string, mcpServerNames: readonly string[] = []): Promise<ManagedOpenCodeTransport> {
+  const { modules, directory, stale } = await loadManagedSdk('opencode');
+  const { OpenCode } = modules[1];
   const client = OpenCode.make({ baseUrl, headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` } });
   const forms = new Map<string, FormInfo>();
 
   return {
+    sdkState: { directory, stale },
     nativeStructuredOutput: false,
     requiresExplicitMcpTools: true,
     async resolveModel(input, options): Promise<OpenCodeResolvedModel> {
@@ -113,7 +118,8 @@ export function createV2Transport(baseUrl: string, password: string, mcpServerNa
         if (input.format !== undefined) throw new Error('OpenCode v2 requires formatless structured output');
         const tools = toV2Tools(input.tools);
         const expectedMcpTools = Object.entries(input.tools).filter(([name, enabled]) => enabled && !managedTools.has(name)).map(([name]) => name);
-        if (expectedMcpTools.length > 0 || input.allowConfiguredMcpTools === true) {
+        const approvedServers = input.allowedMcpServers ?? [];
+        if (expectedMcpTools.length > 0 || input.allowConfiguredMcpTools === true || approvedServers.length > 0) {
           // v2 connects MCP asynchronously and debounces tool registration after discovery.
           // Wait for the actual registry, not merely the server's connected status.
           const readySignal = options?.signal === undefined ? AbortSignal.timeout(30_000) : AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]);
@@ -124,8 +130,10 @@ export function createV2Transport(baseUrl: string, password: string, mcpServerNa
             const enabled = servers.filter((server) => mcpServerNames.includes(server.name) && server.status.status !== 'disabled');
             const failed = enabled.find((server) => server.status.status === 'failed' || server.status.status === 'needs_auth');
             if (failed !== undefined) throw new Error(`OpenCode v2 MCP server ${failed.name} is ${failed.status.status}`);
-            const namespaces = (input.allowConfiguredMcpTools === true ? mcpServerNames.filter((name) => !servers.some((server) => server.name === name && server.status.status === 'disabled')) : [])
-              .map((name) => name.replace(/[^a-zA-Z0-9_-]/g, '_'));
+            const configuredServers = input.allowConfiguredMcpTools === true
+              ? mcpServerNames.filter((name) => !servers.some((server) => server.name === name && server.status.status === 'disabled'))
+              : [];
+            const namespaces = [...configuredServers, ...approvedServers].map((name) => name.replace(/[^a-zA-Z0-9_-]/g, '_'));
             if (expectedMcpTools.every((name) => registered.some((tool) => tool.id === name)) && namespaces.every((namespace) => registered.some((tool) => tool.namespace === namespace))) {
               for (const tool of registered) {
                 if (tool.namespace !== undefined && namespaces.includes(tool.namespace)) tools[tool.id] = true;
@@ -149,7 +157,7 @@ export function createV2Transport(baseUrl: string, password: string, mcpServerNa
               ? [...deniedActions].map((action) => ({ action, resource: '*', effect: 'deny' as const }))
               : [{ action: '*', resource: '*', effect: 'deny' as const }]),
             ...[...actions].map((action) => ({ action, resource: '*', effect: 'allow' as const })),
-            { action: 'external_directory', resource: '*', effect: 'deny' },
+            ...buildOpenCodeV2ExternalDirectoryRules(input.externalDirectoryAllowlist),
           ],
           metadata: { ...session.metadata, [TAKT_V2_METADATA_KEY]: { system: input.system ?? '', tools } },
         }, options);

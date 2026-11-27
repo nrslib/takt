@@ -14,6 +14,8 @@ import type { WorkflowEngine } from '../../../core/workflow/engine/WorkflowEngin
 export interface AbortHandlerOptions {
   /** 外部から渡された AbortSignal（並列実行モード） */
   externalSignal?: AbortSignal;
+  /** 外部 signal とは独立した、単独実行での SIGINT の担当。 */
+  handleSigint?: boolean;
   /** 外部シグナルがない場合に使う内部中断制御 */
   internalController: {
     readonly signal: AbortSignal;
@@ -45,34 +47,38 @@ export class AbortHandler {
       throw err;
     };
 
-    const prepareAbort = (): WorkflowEngine => {
+    const prepareAbort = (reason?: unknown): WorkflowEngine => {
       const engine = getEngine();
       if (!engine || !this.onEpipe) {
         throw new Error('Abort handler invoked before WorkflowEngine initialization');
       }
       if (!internalController.signal.aborted) {
-        internalController.abort();
+        internalController.abort(reason);
       }
       process.on('uncaughtException', this.onEpipe);
-      interruptAllQueries();
       return engine;
     };
 
     if (externalSignal) {
       // 並列実行モード: 外部シグナルへ委譲
       this.onAbortSignal = () => {
-        prepareAbort();
+        prepareAbort(externalSignal.reason);
       };
       if (externalSignal.aborted) {
         this.onAbortSignal();
       } else {
         externalSignal.addEventListener('abort', this.onAbortSignal, { once: true });
       }
-    } else {
+    }
+    if (this.options.handleSigint ?? externalSignal === undefined) {
       // シングル実行モード: SIGINT を自前でハンドリング
       this.shutdownManager = new ShutdownManager({
         callbacks: {
-          onGraceful: () => prepareAbort().abort(),
+          onGraceful: () => {
+            const engine = prepareAbort();
+            interruptAllQueries();
+            engine.abort();
+          },
           onForceKill: () => { void forceExitAfterOpenCodeCleanup(); },
         },
       });

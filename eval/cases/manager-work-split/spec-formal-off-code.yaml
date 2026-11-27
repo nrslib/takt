@@ -1,0 +1,32 @@
+ja:
+  lang: ja
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  projectConfig:
+    assistant:
+      formal_spec: false
+  user: |-
+    通知サービスの再送処理を修正するゴールについて、次の内容で合意しました。
+    同じ通知IDの送信要求を再試行しても、送信済みなら追加送信せず、未送信なら送信成功後に送信済みとして保存します。送信に失敗した通知は未送信のまま残し、次の要求で再試行できるようにします。
+    対象は送信処理とそのテストです。画面と外部サービスの契約変更は範囲外です。既存の通知IDと保存形式を維持します。
+    送信成功、送信失敗後の再試行、送信済みIDへの再要求をテストで確認できれば完了です。人が決める必要のあることはもうありません。この内容でゴールの登録案を作ってください。
+  readResults: []
+en:
+  lang: en
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  projectConfig:
+    assistant:
+      formal_spec: false
+  user: |-
+    We have agreed on the following goal to fix notification retries.
+    When a send request is retried with the same notification ID, an already sent notification produces no additional send. An unsent notification is persisted as sent after a successful send. A failed send leaves the notification unsent so a later request can retry it.
+    The scope is the sending code and its tests. UI changes and changes to the external service contract are out of scope. Preserve existing notification IDs and the storage format.
+    The goal is complete when tests verify successful sending, retry after failure, and repeated requests for an already sent ID. There are no remaining decisions for me to make. Prepare the goal registration proposal from this agreement.
+  readResults: []

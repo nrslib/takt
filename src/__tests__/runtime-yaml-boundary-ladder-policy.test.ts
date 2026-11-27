@@ -4,11 +4,10 @@ import type { RuntimeProviderSection } from '../infra/config/runtime-provider/sc
 
 /**
  * Issue #1208 Stage 1 — ladder profile references are validated at load time.
- * Implemented in the following `implement` step; assertions expected to fail until then.
  *
  * Contract (plan.md 完了契約):
- * - CT-LAD-5 every profile named in a `ladder` must resolve to a defined profile that carries both
- *   `provider` and `model`; an unresolved name fails fast at load time (order.md:157).
+ * - Every profile named in a `ladder` must resolve to a defined profile with a provider;
+ *   model omission follows the runtime profile policy.
  *
  * The section objects carry the not-yet-typed `ladder` key, so they are built loosely and cast to
  * the parameter type. This mirrors the existing assertProfile checks (runtime-provider-policy.test.ts)
@@ -35,9 +34,14 @@ describe('CT-LAD-5 ladder profile references validated at load time', () => {
     expect(() => validateRuntimeProviderSection(section)).toThrow(/ghost|unknown profile/i);
   });
 
-  it('should fail fast when a ladder profile is missing `model`', () => {
+  it('should accept a ladder profile that delegates its model to the provider', () => {
     const section = sectionWithLadder(['real', 'half'], { half: { provider: 'claude' } });
-    expect(() => validateRuntimeProviderSection(section)).toThrow(/half|provider|model/i);
+    expect(() => validateRuntimeProviderSection(section)).not.toThrow();
+  });
+
+  it('should fail fast when a ladder profile is missing its provider', () => {
+    const section = sectionWithLadder(['real', 'half'], { half: { model: 'fixed' } });
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/provider/i);
   });
 });
 

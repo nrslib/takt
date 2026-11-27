@@ -18,13 +18,15 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
+`npm install` applies the repository's Ink patch automatically. If you need to reapply it after changing dependencies, run `npm run patch:dependencies`.
+
 If you use Nix flakes, `nix develop` opens a shell with the project Node.js runtime and Bun available:
 
 ```bash
 nix develop
 ```
 
-Before a release, run `npm run sync:nix-deps` and commit the updated `package-lock.json` and `flake.nix`. It updates the lockfile within the ranges in `package.json` and recomputes `npmDepsHash`, so the Nix build bundles the same dependencies as `npm install`.
+When changing the root npm dependencies, run `npm run sync:nix-deps` in an environment with Nix installed. This updates dependency versions within their declared ranges, reinstalls them, and synchronizes `package-lock.json` with `flake.nix`'s `npmDepsHash`. Include the resulting changes to both files in the same commit as the dependency change so the Nix PR build uses the matching hash.
 
 ## How to Contribute
 
@@ -50,7 +52,9 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
-`npm test` is the fast unit gate for the development loop. Local unit runs use an adaptive shard count based on `availableParallelism()` (capped at 8), while the main pull-request CI workflow keeps 8 isolated unit runners. CI prioritizes wall-clock time over runner minutes, so each runner repeats the fixed `npm ci` and `npm run build` cost. Run `npm run test:it` after implementation for light integration coverage of real filesystem, bounded storage, and multi-component contracts. Heavy integration uses one worker locally; pull-request CI shards it across isolated runners for real child processes, Git, complete engines, integration/regression/performance suites, and measured resource-heavy serial groups. If you add or change an IT, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. If it is a heavy IT, also run that file yourself with `npm test -- <test-file>` before submitting; PR-wide execution must not be its first run. The deterministic OpenCode prompt smoke suite runs through `npm run test:opencode-probe`. Release maintainers can run `npm run check:release` for the complete local path: adaptive local fast unit, light IT, heavy IT, and all provider E2E suites. The 8-runner unit matrix belongs to the separate main pull-request CI workflow; local `check:release` does not run that matrix.
+`npm test` runs the fast unit tests. Its DeepSeek type-contract step installs `managed/deepseek-harness` and checks the product-owned SDK boundary against the real managed SDK; the normal build does not require this managed installation. After implementation, run `npm run test:it` for light integration coverage. If you add or change an integration test, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` separately. For a changed heavy integration test, also run its file with `npm test -- <test-file>` before submitting the PR. `npm run test:opencode-probe` checks the OpenCode prompts.
+
+GitHub Actions pull requests run the full Heavy IT gate. To run Heavy IT locally, specify the test files. To intentionally run the full suite locally, use `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy`.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 
@@ -77,7 +81,7 @@ If CodeRabbit reviews your PR, go through each comment, decide whether it should
 
 ## PR Comment Commands (permission-gated)
 
-Comment commands consume paid AI API credits, so they are permission-gated: `/review` responds to the repository owner, org members, and collaborators; `/resolve`, `/ci`, and `@takt` respond to the owner only. On PRs from external contributors these commands do not respond (the workflow simply does not start) — that's expected, not a bug. Regular CI runs automatically on every PR; if you think an extra run would help, just ask in a comment.
+Comment commands consume paid AI API credits, so access is limited. `/review` responds to comments from the repository owner, organization members, and collaborators; `/resolve`, `/ci`, and `@takt` respond to the owner. Regular CI runs on every PR. If an extra run would help, ask in a comment.
 
 ## Code Style
 
@@ -85,16 +89,9 @@ Comment commands consume paid AI API credits, so they are permission-gated: `/re
 - ESLint for linting
 - Prefer simple, readable code over clever solutions
 
-## Canary runs for instruction / facet changes
+## Checking instruction / facet changes
 
-Changes that affect prompt assembly — `InstructionBuilder`, `builtins/{lang}/facets/instructions`, and the like — can destabilize tool calling on weaker models in ways unit tests do not catch (real example: injecting objection-filing guidance while the ledger was still empty caused consecutive `implement` failures). For such changes, a canary run against a real provider is recommended.
-
-```bash
-npm run build
-npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
-```
-
-This runs one small `implement` pass with the current instruction assembly and checks that it completes, along with the tool error count. It is not a required PR gate (real-provider runs cost money).
+Changes to prompt assembly, including `InstructionBuilder` and `builtins/{lang}/facets/instructions`, can destabilize tool calling on weaker models in ways unit tests do not catch. We recommend trying one small `implement` task with the changed prompts against a real provider. Check that it completes and check the tool error count. This is not a required PR check because real-provider runs cost money.
 
 ## License
 

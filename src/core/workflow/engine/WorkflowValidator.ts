@@ -1,3 +1,5 @@
+import { reportInputEntries } from '../../models/workflow-report-input.js';
+import { reportInputNames } from '../report-input-contract.js';
 import type { AutoRoutingConfig } from '../../models/config-types.js';
 import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
 import {
@@ -35,6 +37,10 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
+import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import { MAX_SYSTEM_WAIT_INTERVAL_MS } from '../../models/workflow-types.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
+import { getReportFiles } from '../output-contract-files.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -258,6 +264,27 @@ function findWorkflowCallStep(
   return undefined;
 }
 
+export function validateWorkflowReportInputContracts(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const context = {
+    workflowCallResolver: options.workflowCallResolver,
+    projectCwd: options.projectCwd,
+    lookupCwd: options.projectCwd,
+  };
+  for (const [stepIndex, step] of config.steps.entries()) {
+    try {
+      reportInputNames(config, step, context);
+      for (const subStep of step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)) {
+        reportInputNames(config, subStep, context);
+      }
+    } catch (error) {
+      throw withWorkflowStepErrorPath(error, ['steps', stepIndex]);
+    }
+  }
+  for (const monitor of config.loopMonitors ?? []) {
+    reportInputNames(config, { name: loopJudgeStepName(monitor.cycle), inputReports: monitor.judge.inputReports }, context);
+  }
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
@@ -291,6 +318,48 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   for (const [stepIndex, step] of config.steps.entries()) {
     try {
       const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
+      const validateReportInput = (consumer: WorkflowStep, consumerPath: readonly PropertyKey[]) => {
+        if (consumer.inputReports === undefined) return;
+        for (const input of reportInputEntries(consumer.inputReports)) {
+          for (const [field, name] of [['from_step', input.fromStep], ['fallback_from_step', input.fallbackFromStep]] as const) {
+            if (name === undefined) continue;
+            const sourceIndex = config.steps.findIndex((candidate) => candidate.name === name);
+            const source = config.steps[sourceIndex];
+            if (source === undefined || source.kind === 'system'
+              || sourceIndex === stepIndex && !(field === 'from_step' && input.previousOnly === true)) {
+              throw withWorkflowStepErrorPath(
+                new Error(`input_reports.${field} must name a report-producing step in this workflow: "${name}"`),
+                [...consumerPath, 'input_reports', field],
+              );
+            }
+            if (source.kind !== 'workflow_call'
+              && source.parallel === undefined
+              && getReportFiles(source.outputContracts).length === 0) {
+              throw withWorkflowStepErrorPath(
+                new Error(`input_reports.${field} "${name}" has no report output contract`),
+                [...consumerPath, 'input_reports', field],
+              );
+            }
+          }
+          if (input.reports !== 'all') {
+            for (const [reportIndex, report] of input.reports.entries()) {
+              if (classifyReportRelativePath(report).kind !== 'public' || report.includes('/')) {
+                throw withWorkflowStepErrorPath(
+                  new Error(`input_reports.reports requires a public report file name: "${report}"`),
+                  [...consumerPath, 'input_reports', 'reports', reportIndex],
+                );
+              }
+            }
+          }
+        }
+      };
+      if (step.kind === 'system' && step.inputReports !== undefined) {
+        throw withWorkflowStepErrorPath(
+          new Error('input_reports requires an executing agent or workflow_call step'),
+          [...stepPath, 'input_reports'],
+        );
+      }
+      validateReportInput(step, stepPath);
       try {
         validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
       } catch (error) {
@@ -308,6 +377,30 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         [...stepPath, 'rules'],
       );
       validateSemanticAppendices(step.rules ?? [], `Invalid rule in step "${step.name}"`, [...stepPath, 'rules']);
+      if (step.kind === 'system' && step.wait) {
+        if (!Number.isSafeInteger(step.wait.maxRetries) || step.wait.maxRetries < 0) {
+          throw withWorkflowStepErrorPath(
+            new Error('wait.max_retries must be a nonnegative safe integer'),
+            [...stepPath, 'wait', 'max_retries'],
+          );
+        }
+        if (!Number.isInteger(step.wait.intervalMs)
+          || step.wait.intervalMs < 1 || step.wait.intervalMs > MAX_SYSTEM_WAIT_INTERVAL_MS) {
+          throw withWorkflowStepErrorPath(
+            new Error(`wait.interval_ms must be a positive integer no greater than ${MAX_SYSTEM_WAIT_INTERVAL_MS}`),
+            [...stepPath, 'wait', 'interval_ms'],
+          );
+        }
+        if (!stepNames.has(step.wait.onTimeout)) {
+          throw withWorkflowStepErrorPath(
+            new Error(`Unknown wait timeout target "${step.wait.onTimeout}"`),
+            [...stepPath, 'wait', 'on_timeout'],
+          );
+        }
+        if (parseWorkflowRuleCondition(step.wait.until).kind !== 'when') {
+          throw withWorkflowStepErrorPath(new Error('wait.until requires when(...)'), [...stepPath, 'wait', 'until']);
+        }
+      }
       for (const [ruleIndex, rule] of (step.rules ?? []).entries()) {
         if (rule.next && !stepNames.has(rule.next)) {
           throw withWorkflowStepErrorPath(
@@ -320,6 +413,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       for (const [subStepIndex, subStep] of subSteps.entries()) {
         const subStepPath = findWorkflowStepLocation(config, subStep)
           ?? ['steps', stepIndex, 'parallel', subStepIndex];
+        validateReportInput(subStep, subStepPath);
           validateAggregateRulePlacement(
             subStep.rules ?? [],
             false,
@@ -364,6 +458,9 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       'Invalid loop_monitor judge rule',
       ['loop_monitors', monitorIndex, 'judge', 'rules'],
     );
+    for (const input of reportInputEntries(monitor.judge.inputReports)) {
+      if (!monitor.cycle.includes(input.fromStep)) throw new Error(`Invalid loop_monitor: report input source "${input.fromStep}" is outside cycle`);
+    }
     for (const cycleName of monitor.cycle) {
       if (!stepNames.has(cycleName)) {
         throw new Error(`Invalid loop_monitor: cycle references unknown step "${cycleName}"`);

@@ -141,6 +141,15 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
     });
   }
 
+  async function sendPendingMcpUnavailableNotice(sessionId: string): Promise<void> {
+    const { pendingMcpUnavailableNotice: notice, ...session } = requireAcpSession(sessions, sessionId);
+    if (notice === undefined) {
+      return;
+    }
+    sessions.set(sessionId, session);
+    await sendAgentMessage(sessionId, notice);
+  }
+
   async function executeRequestedWorkflow(
     sessionId: string,
     result: ConversationSessionResult & { kind: 'workflow_execution_requested' },
@@ -288,14 +297,18 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
       }
 
       const sessionId = randomUUID();
+      const mcpUnavailableNotices: string[] = [];
       const conversationSession = createSession({
         cwd,
         outputMode: 'silent',
+        onMcpUnavailableNotice: (notice) => { mcpUnavailableNotices.push(notice); },
       });
+      const [pendingMcpUnavailableNotice] = mcpUnavailableNotices;
       sessions.set(sessionId, {
         cwd,
         conversationSession,
         defaultAction: sessionDefaultAction,
+        ...(pendingMcpUnavailableNotice === undefined ? {} : { pendingMcpUnavailableNotice }),
         ...(params.taskContext && hasAcpTaskContext(params.taskContext)
           ? { taskContext: params.taskContext }
           : {}),
@@ -314,6 +327,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
 
       const abortController = startOperation(sessions, params.sessionId);
       try {
+        await sendPendingMcpUnavailableNotice(params.sessionId);
         let session = requireAcpSession(sessions, params.sessionId);
         const intent = resolveAcpPromptIntent(text, session.defaultAction);
         if (intent.kind === 'task_instruction') {
@@ -328,6 +342,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
           }
           const result = await session.conversationSession.createTaskInstruction({
             userNote: intent.userNote,
+            userNoteSource: intent.userNoteSource,
             abortSignal: abortController.signal,
           });
           if (abortController.signal.aborted) {
@@ -343,6 +358,9 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
           abortSignal: abortController.signal,
         });
         if (abortController.signal.aborted) {
+          if (result.kind === 'error' && result.retainedArtifactsMessage !== undefined) {
+            await sendAgentMessage(params.sessionId, result.retainedArtifactsMessage);
+          }
           return {
             stopReason: 'cancelled',
           };

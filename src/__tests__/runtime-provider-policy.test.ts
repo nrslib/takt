@@ -8,7 +8,7 @@ import type { RuntimeProviderSection } from '../infra/config/runtime-provider/sc
 /**
  * `validateRuntimeProviderSection` performs the up-front reference validation for a runtime.yaml
  * `provider` section (issue #1136): it resolves every `extends` chain and asserts that every
- * profile/pool reference exists and that referenced profiles define provider+model, failing fast
+ * profile/pool reference exists and that referenced profiles define a provider, failing fast
  * (before any agent runs) with no silent fallback.
  *
  * Runtime-v1 resolution itself (priority ladder + same-priority tag conflict fail-fast) is
@@ -123,12 +123,12 @@ describe('validateRuntimeProviderSection — unknown reference fail-fast (C10)',
     expect(() => validateRuntimeProviderSection(section)).toThrow(/ghost|unknown profile/i);
   });
 
-  it('fails fast on a referenced profile missing provider or model', () => {
+  it('fails fast on a referenced profile missing provider', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'partial' },
-      profiles: { partial: { provider: 'mock' } },
+      profiles: { partial: { model: 'fixed' } },
     };
-    expect(() => validateRuntimeProviderSection(section)).toThrow(/provider.*model|model.*provider/i);
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/provider/i);
   });
 
   it('fails fast on a profile referenced by a named assignment default', () => {
@@ -224,5 +224,38 @@ describe('flattenProfiles', () => {
       model: 'gpt',
       options: { reasoning_effort: 'low' },
     });
+  });
+});
+
+describe('runtime profile model omission', () => {
+  it.each([
+    'codex', 'claude', 'claude-sdk', 'claude-headless', 'claude-terminal',
+    'copilot', 'cursor', 'kiro', 'pi', 'deepseek-harness', 'mock',
+  ] as const)('accepts a referenced %s profile without a model', (provider) => {
+    expect(() => validateRuntimeProviderSection({
+      defaults: { profile: 'selected' },
+      profiles: { selected: { provider } },
+    })).not.toThrow();
+  });
+
+  it('rejects an OpenCode profile without a model and explains the required format', () => {
+    expect(() => validateRuntimeProviderSection({
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'opencode', model: 'vendor/fixed' },
+        selected: { provider: 'opencode' },
+      },
+      targets: { steps: { review: { profile: 'selected' } } },
+    })).toThrow(/provider 'opencode' requires model in 'provider\/model' format/i);
+  });
+
+  it('accepts an OpenCode child that inherits its parent model', () => {
+    expect(() => validateRuntimeProviderSection({
+      defaults: { profile: 'child' },
+      profiles: {
+        parent: { provider: 'opencode', model: 'vendor/inherited' },
+        child: { extends: 'parent' },
+      },
+    })).not.toThrow();
   });
 });

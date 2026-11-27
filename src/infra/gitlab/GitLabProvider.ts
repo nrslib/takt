@@ -7,11 +7,33 @@
  */
 
 import { checkGlabCli } from './utils.js';
+import { fetchMrDetails, fetchMrStatus, listOpenMrNumbers, fetchMrListItem, fetchMrSelectionData } from './pr-execution.js';
+import type { PrDetails, PrStatus, PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 import { fetchIssue, listOpenIssues, createIssue, closeIssue, commentOnIssue } from './issue.js';
 import { findExistingMr, commentOnMr, closeMr, createMergeRequest, fetchMrReviewComments, listOpenMrs, mergeMr } from './pr.js';
-import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
+import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, PrSelectionData, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitLabProvider implements GitProvider {
+  fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal): Promise<PrDetails> {
+    return fetchMrDetails(prNumber, cwd, signal);
+  }
+
+  fetchPrStatus(prNumber: number, cwd?: string, options?: PrStatusFetchOptions): Promise<PrStatus> {
+    return fetchMrStatus(prNumber, cwd ?? process.cwd(), options);
+  }
+
+  listOpenPrNumbers(cwd: string): number[] {
+    return listOpenMrNumbers(cwd);
+  }
+
+  fetchPrListItem(prNumber: number, cwd: string): PrListItem | undefined {
+    return fetchMrListItem(prNumber, cwd);
+  }
+
+  fetchPrSelectionData(prNumber: number, cwd: string): PrSelectionData {
+    return fetchMrSelectionData(prNumber, cwd);
+  }
+
   checkCliStatus(cwd?: string): CliStatus {
     return checkGlabCli(cwd ?? process.cwd());
   }
@@ -60,7 +82,10 @@ export class GitLabProvider implements GitProvider {
     return closeMr(prNumber, cwd ?? process.cwd());
   }
 
-  mergePr(prNumber: number, cwd?: string): MergeResult {
+  mergePr(prNumber: number, cwd?: string, method?: import('../../core/models/config-types.js').MergeMethod, expectedHeadSha?: string): MergeResult {
+    if (method !== undefined || expectedHeadSha !== undefined) {
+      return { success: false, error: 'Selecting a merge method or head constraint is not supported by the GitLab provider' };
+    }
     return mergeMr(prNumber, cwd ?? process.cwd());
   }
 }

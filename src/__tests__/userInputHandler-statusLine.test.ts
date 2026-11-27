@@ -182,6 +182,8 @@ describe('user input and StatusLine', () => {
         if (event === 'line') lineHandler = (line: unknown) => callback(line);
         if (event === 'close') closeHandler = () => callback();
       },
+      pause: vi.fn(),
+      resume: vi.fn(),
     }));
 
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });

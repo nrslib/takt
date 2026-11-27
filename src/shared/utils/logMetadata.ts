@@ -37,8 +37,8 @@ export function truncateLogText(value: string, maxLength: number): string {
   return value.slice(0, maxLength - TRUNCATED_LOG_TEXT_MARKER.length) + TRUNCATED_LOG_TEXT_MARKER;
 }
 
-export function normalizeLogMetadata(value: string): string {
-  return truncateLogText(sanitizeSensitiveText(value), MAX_LOG_METADATA_TEXT_LENGTH);
+export function normalizeLogMetadata(value: string, executionSecrets?: readonly string[]): string {
+  return truncateLogText(sanitizeSensitiveText(value, executionSecrets), MAX_LOG_METADATA_TEXT_LENGTH);
 }
 
 export function normalizeLogValue(key: string, value: unknown): unknown {
@@ -46,4 +46,12 @@ export function normalizeLogValue(key: string, value: unknown): unknown {
     return REDACTED_LOG_VALUE;
   }
   return typeof value === 'string' ? normalizeLogMetadata(value) : value;
+}
+
+/** Mask secrets but preserve complete provider evidence; fixed length limits can hide Phase 2 tool results. */
+export function normalizeProviderEventValue(key: string, value: unknown, executionSecrets?: readonly string[]): unknown {
+  if (isSensitiveLogKey(key)) {
+    return REDACTED_LOG_VALUE;
+  }
+  return typeof value === 'string' ? sanitizeSensitiveText(value, executionSecrets) : value;
 }

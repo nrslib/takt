@@ -8,6 +8,8 @@ import type {
 
 export interface ClaudeHeadlessCallOptions {
   cwd: string;
+  callerManagedSession?: true;
+  callerManagedMcp?: true;
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -26,6 +28,8 @@ export interface ClaudeHeadlessCallOptions {
   permissionMode?: PermissionMode;
   bypassPermissions?: boolean;
   sandbox?: ClaudeSandboxSettings;
+  /** Resolved permissions.deny rules passed to Claude through --settings */
+  denyRules?: string[];
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   claudeCliPath?: string;

@@ -1,4 +1,5 @@
 name: ai-antipattern-review-1st
+description: Check for implementation problems typical of AI-generated code and report findings that require fixes.
 tags:
   - review
 edit: false

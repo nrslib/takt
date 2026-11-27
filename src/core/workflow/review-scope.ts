@@ -5,41 +5,52 @@
  *
  * 次の和集合である。レビューが走る時点でタスクの変更が既にブランチへ
  * コミット済みの構成では HEAD との差分が空になり、コミット済み範囲を
- * 含めないとレビュアーから変更が見えない。これは PR / ブランチレビュー、
+ * 含めないとレビュアーから変更が見えない。これはブランチレビュー、
  * エージェント自身がコミットするワークフロー、ベンチのチェックポイント
  * コミット、worktree クローンの自動コミット後の再レビューで発生する。
  * - base コミット..HEAD のコミット済み変更
- * - HEAD と working tree の差分（削除を含む）
+ * - index の staged 差分と working tree の unstaged 差分（削除を含む）
  * - untracked ファイル（ignored を除く）
+ * - tracked submodule のパス（子の dirty 判定を安全に行えないため保守的に含める）
  *
  * この作業ツリー計算はレビュー対象の一貫した範囲を決めるために共有する。
  *
- * ## PR diff range の合成（指示注入側だけの拡張）
+ * ## PR スコープ（指示注入側だけの拡張）
  *
- * prContext を持つ実行では、上の作業ツリー計算に PR の diff range
- * `base...head` を **加えた和集合** をレビュアーへ提示する。`--pr` は
+ * prContext を持つ実行では、PR の diff range `base...head` と未コミット変更・
+ * 未追跡ファイルの和集合を提示する。推定 base からのコミット済み変更を足すと、
+ * 同期で取り込んだ base 側の変更まで含まれるため、PR の明示 base を使う。
+ * diff ref がなければ現在の HEAD、指定があれば PR の head ブランチ上では現在の HEAD、
+ * それ以外では headDiffRef を使う。`--pr` は
  * 「PR のレビューコメントを取り込んで修正する」フローであり、同じ実行の中で
  * 作業ツリーが変更される。かつ headDiffRef はコミット済みしか映さず
  * auto-commit はワークフロー完了後なので、PR diff range だけでは
  * 修正→再レビューのループでレビュアーが修正前の姿を渡される。
  *
- * この合成はレビュアー指示への注入だけの拡張である。snapshot.ts は
+ * この計算はレビュアー指示への注入だけの拡張である。snapshot.ts は
  * cwd の作業ツリーを記録するため prContext を受け取らず、ローカルに
- * materialize されていない PR 側のパスは含めない。したがって不変条件は
- * 「作業ツリー計算が両者で同一」であって「最終集合が同一」ではない。
+ * materialize されていない PR 側のパスは含めない。
  */
 
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import type { Language } from '../models/types.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { escapeTemplateChars } from 'faceted-prompting';
-import { toCloneBaseRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
+import { parseGitNulPaths as parseNulPaths } from '../../shared/utils/gitNulPaths.js';
+import { escapeTemplateChars } from '#faceted-prompting';
+import {
+  toCloneBaseRef,
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 import { resolveMergeBase } from '../../infra/task/branchBaseCandidateResolver.js';
 import { resolveBranchEntryPointFromReflog } from '../../infra/task/branchEntryPointResolver.js';
 import { detectDefaultBranch } from '../../infra/task/branchList.js';
 import { getCurrentBranch } from '../../infra/task/git.js';
+import { buildReviewGitEnvironment } from '../../infra/task/review-git-environment.js';
 import type { PullRequestContext } from './pr-context.js';
+import { excludeProgressNotesPaths } from './progress-notes.js';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -73,7 +84,7 @@ export type ReviewScopeSource =
     readonly prNumber: number;
     /** ローカルに materialize された PR の diff range。未 materialize なら undefined。 */
     readonly diffRange?: ReviewScopeDiffRange;
-    /** cwd の作業ツリー計算が paths へ寄与したか（この実行のローカル変更の有無）。 */
+    /** 未コミット変更・未追跡ファイルが paths へ寄与したか。 */
     readonly includesWorkingTree: boolean;
     readonly baseRange: ReviewScopeBaseRange;
   };
@@ -89,9 +100,11 @@ export type TaskReviewScope =
 
 export interface TaskReviewScopeInput {
   readonly cwd: string;
+  /** Only this run's progress notes are excluded, not other reports or runs. */
+  readonly reportDir?: string;
   /** 境界で一度だけ解決した base。 */
   readonly baseRange: ReviewScopeBaseRange;
-  /** PR 由来の実行のみ設定される。作業ツリー計算に PR の diff range を加える。 */
+  /** PR 由来の実行のみ設定される。PR の累積差分と未コミット変更・未追跡を対象とする。 */
   readonly prContext?: PullRequestContext;
   /**
    * 同一瞬間に読んだ untracked を共有するための注入口。snapshot.ts は
@@ -100,10 +113,11 @@ export interface TaskReviewScopeInput {
   readonly untracked?: readonly string[];
 }
 
-function runGit(cwd: string, args: string[]): Buffer {
+function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv): Buffer {
   return execFileSync('git', args, {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env,
     maxBuffer: GIT_MAX_BUFFER,
   });
 }
@@ -112,9 +126,9 @@ function runGit(cwd: string, args: string[]): Buffer {
  * git の終了コードを返す。spawn 失敗（git 未インストール等）は述語へ潰さず送出する。
  * 「コマンドを実行できなかった」と「git が false を返した」は別の事実である。
  */
-function gitExitStatus(cwd: string, args: string[]): number {
+function gitExitStatus(cwd: string, args: string[], env: NodeJS.ProcessEnv): number {
   try {
-    runGit(cwd, args);
+    runGit(cwd, args, env);
     return 0;
   } catch (cause) {
     const status = (cause as { status?: unknown }).status;
@@ -128,13 +142,32 @@ function gitExitStatus(cwd: string, args: string[]): number {
 function isExistingDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
-  } catch {
-    return false;
+  } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw cause;
   }
 }
 
-function refExists(cwd: string, ref: string): boolean {
-  const status = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', ref]);
+function isGitRepository(cwd: string, env: NodeJS.ProcessEnv): boolean {
+  try {
+    runGit(cwd, ['rev-parse', '--git-dir'], env);
+    return true;
+  } catch (cause) {
+    const error = cause as { status?: unknown; stderr?: Buffer | string };
+    const diagnostic = error.stderr?.toString().trim();
+    // Git uses exit 128 for both discovery failure and operational errors.
+    // Only its C-locale discovery diagnostics mean that review may run without Git.
+    if (error.status === 128 && (diagnostic === 'fatal: not a git repository (or any of the parent directories): .git'
+      || /^fatal: not a git repository \(or any parent up to mount point [^\n]+\)\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.$/.test(diagnostic ?? ''))) {
+      return false;
+    }
+    throw cause;
+  }
+}
+
+function refExists(cwd: string, ref: string, env: NodeJS.ProcessEnv): boolean {
+  const status = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', ref], env);
   if (status === 0) {
     return true;
   }
@@ -142,38 +175,6 @@ function refExists(cwd: string, ref: string): boolean {
     return false;
   }
   throw new Error(`git rev-parse --verify ${ref} failed with exit status ${status}`);
-}
-
-/**
- * NUL 区切りパスの解析。
- * snapshot.ts の parseNulEntries とは別実装で、非 UTF-8 パスや壊れた出力に対して
- * 投げる例外型が経路ごとに異なる（あちらは ReviewScopeSnapshotError）。証拠検証側は
- * inventory 用にパスを Buffer のまま扱う必要があるため統合していない。
- */
-function parseNulPaths(output: Buffer, command: string): string[] {
-  if (output.length === 0) {
-    return [];
-  }
-  if (output[output.length - 1] !== 0) {
-    throw new Error(`${command}: NUL-terminated output is missing its final delimiter`);
-  }
-
-  const paths: string[] = [];
-  let start = 0;
-  while (start < output.length) {
-    const end = output.indexOf(0, start);
-    if (end === start) {
-      throw new Error(`${command}: NUL-terminated output contains an empty path`);
-    }
-    const raw = output.subarray(start, end);
-    const decoded = raw.toString('utf8');
-    if (!Buffer.from(decoded, 'utf8').equals(raw)) {
-      throw new Error(`${command}: repository path is not reversibly UTF-8 encoded`);
-    }
-    paths.push(decoded);
-    start = end + 1;
-  }
-  return paths;
 }
 
 function sortedUnique(paths: readonly string[]): string[] {
@@ -187,8 +188,8 @@ type AncestryCheck = 'ancestor' | 'not_ancestor' | 'undetermined';
  * base の絞り込みは最適化であり、ここで実行を止める価値はない。
  * base 解決全体の fail-fast（ref 検証・HEAD 検証）はそのまま維持している。
  */
-function checkAncestry(cwd: string, ancestor: string, descendant: string): AncestryCheck {
-  const status = gitExitStatus(cwd, ['merge-base', '--is-ancestor', ancestor, descendant]);
+function checkAncestry(cwd: string, ancestor: string, descendant: string, env: NodeJS.ProcessEnv): AncestryCheck {
+  const status = gitExitStatus(cwd, ['merge-base', '--is-ancestor', ancestor, descendant], env);
   if (status === 0) {
     return 'ancestor';
   }
@@ -202,8 +203,8 @@ function checkAncestry(cwd: string, ancestor: string, descendant: string): Ances
  * 祖先関係が無い場合と判定不能な場合は、HEAD との共通祖先であることが
  * 保証されている merge-base を採る。
  */
-function pickNarrowerBase(cwd: string, reflogBase: string, mergeBase: string): string {
-  return checkAncestry(cwd, mergeBase, reflogBase) === 'ancestor' ? reflogBase : mergeBase;
+function pickNarrowerBase(cwd: string, reflogBase: string, mergeBase: string, env: NodeJS.ProcessEnv): string {
+  return checkAncestry(cwd, mergeBase, reflogBase, env) === 'ancestor' ? reflogBase : mergeBase;
 }
 
 /**
@@ -217,22 +218,24 @@ function resolveBaseRefCandidate(
   cwd: string,
   branch: string,
   defaultBranch: string,
+  env: NodeJS.ProcessEnv,
 ): string | undefined {
   const candidates = [toPullRequestBaseRef(branch), toCloneBaseRef(branch), defaultBranch];
-  return candidates.find((ref) => refExists(cwd, ref));
+  return candidates.find((ref) => refExists(cwd, ref, env));
 }
 
 function resolveMergeBaseCommit(
   cwd: string,
   branch: string,
   defaultBranch: string,
+  env: NodeJS.ProcessEnv,
 ): string | undefined {
-  const baseRef = resolveBaseRefCandidate(cwd, branch, defaultBranch);
+  const baseRef = resolveBaseRefCandidate(cwd, branch, defaultBranch, env);
   if (baseRef === undefined) {
     return undefined;
   }
   try {
-    const commit = resolveMergeBase(cwd, baseRef, branch);
+    const commit = resolveMergeBase(cwd, baseRef, branch, env);
     return commit.length === 0 ? undefined : commit;
   } catch (cause) {
     // 共通祖先が無い（履歴が独立している）と merge-base は非ゼロ終了する。
@@ -255,10 +258,11 @@ export function resolveReviewScopeBaseRange(cwd: string): ReviewScopeBaseRange {
   if (!isExistingDirectory(cwd)) {
     return { kind: 'not_a_git_repository' };
   }
-  if (gitExitStatus(cwd, ['rev-parse', '--git-dir']) !== 0) {
+  const env = buildReviewGitEnvironment(cwd);
+  if (!isGitRepository(cwd, env)) {
     return { kind: 'not_a_git_repository' };
   }
-  const headStatus = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const headStatus = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], env);
   if (headStatus === MISSING_REF_EXIT_STATUS) {
     return { kind: 'no_commits' };
   }
@@ -266,20 +270,20 @@ export function resolveReviewScopeBaseRange(cwd: string): ReviewScopeBaseRange {
     throw new Error(`git rev-parse --verify HEAD failed with exit status ${headStatus}`);
   }
 
-  const branch = getCurrentBranch(cwd);
+  const branch = getCurrentBranch(cwd, env);
   if (branch === DETACHED_HEAD_BRANCH) {
     return { kind: 'unresolved', reason: 'HEAD is detached' };
   }
 
-  const defaultBranch = detectDefaultBranch(cwd);
+  const defaultBranch = detectDefaultBranch(cwd, env);
   if (branch === defaultBranch) {
     return { kind: 'base_branch_head' };
   }
 
-  const mergeBase = resolveMergeBaseCommit(cwd, branch, defaultBranch);
-  const reflogBase = resolveBranchEntryPointFromReflog(cwd, branch)?.baseCommit;
+  const mergeBase = resolveMergeBaseCommit(cwd, branch, defaultBranch, env);
+  const reflogBase = resolveBranchEntryPointFromReflog(cwd, branch, env)?.baseCommit;
   if (mergeBase !== undefined && reflogBase !== undefined) {
-    return { kind: 'branch_base', baseCommit: pickNarrowerBase(cwd, reflogBase, mergeBase) };
+    return { kind: 'branch_base', baseCommit: pickNarrowerBase(cwd, reflogBase, mergeBase, env) };
   }
   if (mergeBase !== undefined) {
     return { kind: 'branch_base', baseCommit: mergeBase };
@@ -293,51 +297,95 @@ export function resolveReviewScopeBaseRange(cwd: string): ReviewScopeBaseRange {
   };
 }
 
-function readUntrackedPaths(cwd: string): string[] {
+function readUntrackedPaths(cwd: string, env: NodeJS.ProcessEnv): string[] {
   return parseNulPaths(
-    runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+    runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z'], env),
     'git ls-files --others',
   );
+}
+
+function readTrackedSubmodulePaths(cwd: string, env: NodeJS.ProcessEnv): string[] {
+  const entries = parseNulPaths(runGit(cwd, ['ls-files', '--stage', '-z'], env), 'git ls-files --stage');
+  return entries.flatMap((entry) => {
+    if (!entry.startsWith('160000 ')) return [];
+    const separator = entry.indexOf('\t');
+    if (separator === -1 || separator === entry.length - 1) {
+      throw new Error('git ls-files --stage: gitlink entry is missing its path');
+    }
+    return [entry.slice(separator + 1)];
+  });
+}
+
+function collectUncommittedPaths(
+  cwd: string,
+  untracked: readonly string[],
+  env: NodeJS.ProcessEnv,
+): string[] {
+  // --cached also works before the first commit, comparing with the empty tree.
+  const staged = parseNulPaths(
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--cached', '--name-only', '-z', '--'], env),
+    'git diff --cached --name-only',
+  );
+  const unstaged = parseNulPaths(
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--name-only', '-z', '--'], env),
+    'git diff --name-only',
+  );
+  // Dirty checks can run child clean filters that the parent's safe environment does not disable.
+  const submodules = readTrackedSubmodulePaths(cwd, env);
+  return sortedUnique([...staged, ...unstaged, ...untracked, ...submodules]);
 }
 
 function collectWorkingTreePaths(
   cwd: string,
   baseRange: ReviewScopeBaseRange,
   untracked: readonly string[],
+  env: NodeJS.ProcessEnv,
 ): string[] {
-  if (baseRange.kind === 'no_commits') {
-    return sortedUnique(untracked);
-  }
-
-  const workingTree = parseNulPaths(
-    runGit(cwd, ['diff', '--name-only', '-z', 'HEAD', '--']),
-    'git diff --name-only HEAD',
-  );
+  const workingTree = collectUncommittedPaths(cwd, untracked, env);
   const committed = baseRange.kind === 'branch_base'
     ? parseNulPaths(
-      runGit(cwd, ['diff', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--']),
+      runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--'], env),
       'git diff --name-only <base> HEAD',
     )
     : [];
 
-  return sortedUnique([...committed, ...workingTree, ...untracked]);
+  return sortedUnique([...committed, ...workingTree]);
+}
+
+function resolvePullRequestBaseBranchRef(
+  cwd: string,
+  branch: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const candidates = [toRemoteTrackingBranchRef(branch), toLocalBranchRef(branch)];
+  return candidates.find((ref) => refExists(cwd, ref, env));
 }
 
 function materializedDiffRange(
   cwd: string,
   prContext: PullRequestContext,
+  env: NodeJS.ProcessEnv,
 ): ReviewScopeDiffRange | undefined {
-  const { baseDiffRef, headDiffRef } = prContext;
-  if (baseDiffRef === undefined || headDiffRef === undefined) {
+  // --skip-git では detached HEAD や別名ブランチにコミットした修正も対象にする。
+  const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBaseBranchRef(cwd, prContext.baseBranch, env);
+  const effectiveHeadDiffRef = getCurrentBranch(cwd, env) === prContext.headBranch
+    ? 'HEAD' : prContext.headDiffRef ?? 'HEAD';
+  if (baseDiffRef === undefined) {
     return undefined;
   }
-  return refExists(cwd, baseDiffRef) && refExists(cwd, headDiffRef)
-    ? { baseDiffRef, headDiffRef }
-    : undefined;
+  // PR context can originate in another checkout; its refs need not exist here.
+  // Do not substitute a different range when the recorded range is unavailable.
+  if (!refExists(cwd, `${baseDiffRef}^{commit}`, env) || !refExists(cwd, `${effectiveHeadDiffRef}^{commit}`, env)) {
+    return undefined;
+  }
+  return {
+    baseDiffRef,
+    headDiffRef: effectiveHeadDiffRef,
+  };
 }
 
 /**
- * PR の diff range と、この実行のローカル変更（作業ツリー計算）の和集合。
+ * PR の累積差分と、未コミット変更・未追跡ファイルの和集合。
  * `--pr` は修正を伴うフローなので、同じ実行で作られた変更も対象に含める。
  */
 function collectPullRequestScope(
@@ -345,18 +393,22 @@ function collectPullRequestScope(
   prContext: PullRequestContext,
   baseRange: ReviewScopeBaseRange,
   workingTreePaths: readonly string[],
+  env: NodeJS.ProcessEnv,
 ): TaskReviewScope {
-  const diffRange = materializedDiffRange(cwd, prContext);
+  const diffRange = materializedDiffRange(cwd, prContext, env);
   const pullRequestPaths = diffRange === undefined
     ? []
     : parseNulPaths(
       runGit(cwd, [
         'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--ignore-submodules=dirty',
         '--name-only',
         '-z',
         `${diffRange.baseDiffRef}...${diffRange.headDiffRef}`,
         '--',
-      ]),
+      ], env),
       'git diff --name-only <base>...<head>',
     );
 
@@ -378,11 +430,17 @@ export function collectTaskReviewScope(input: TaskReviewScopeInput): TaskReviewS
   if (input.baseRange.kind === 'not_a_git_repository') {
     return { kind: 'not_a_git_repository' };
   }
-  const untracked = input.untracked ?? readUntrackedPaths(input.cwd);
-  const workingTreePaths = collectWorkingTreePaths(input.cwd, input.baseRange, untracked);
+  const env = buildReviewGitEnvironment(input.cwd);
+  const repositoryRoot = runGit(input.cwd, ['rev-parse', '--show-toplevel'], env).toString('utf8').replace(/\n$/, '');
+  const excludeOutputs = (paths: readonly string[]): string[] => input.reportDir === undefined
+    ? [...paths] : excludeProgressNotesPaths(paths, repositoryRoot, input.reportDir);
+  const untracked = excludeOutputs(input.untracked ?? readUntrackedPaths(repositoryRoot, env));
   if (input.prContext !== undefined) {
-    return collectPullRequestScope(input.cwd, input.prContext, input.baseRange, workingTreePaths);
+    const workingTreePaths = excludeOutputs(collectUncommittedPaths(repositoryRoot, untracked, env));
+    const scope = collectPullRequestScope(repositoryRoot, input.prContext, input.baseRange, workingTreePaths, env);
+    return scope.kind === 'collected' ? { ...scope, paths: excludeOutputs(scope.paths) } : scope;
   }
+  const workingTreePaths = excludeOutputs(collectWorkingTreePaths(repositoryRoot, input.baseRange, untracked, env));
   return {
     kind: 'collected',
     paths: workingTreePaths,
@@ -410,6 +468,7 @@ function isStableBaseRange(baseRange: ReviewScopeBaseRange): boolean {
 export function createTaskReviewScopeResolver(deps: {
   readonly getCwd: () => string;
   readonly getPrContext: () => PullRequestContext | undefined;
+  readonly getReportDir?: () => string;
 }): () => TaskReviewScope {
   const stableBaseRangeByCwd = new Map<string, ReviewScopeBaseRange>();
   return () => {
@@ -423,6 +482,7 @@ export function createTaskReviewScopeResolver(deps: {
     return collectTaskReviewScope({
       cwd,
       baseRange,
+      reportDir: deps.getReportDir?.(),
       ...(prContext === undefined ? {} : { prContext }),
     });
   };
@@ -472,16 +532,10 @@ function buildSourceVars(source: ReviewScopeSource): ReviewScopeTemplateVars {
     return buildBaseRangeVars(source.baseRange);
   }
   const prNumber = String(source.prNumber);
-  // base 内訳は PR 経路でも必ず出す。ローカル分は作業ツリー計算そのものなので、
-  // base が unresolved ならコミット済み変更が抜けている事実を非 PR 経路と同じく
-  // 開示しなければならない。
-  const baseRangeVars = buildBaseRangeVars(source.baseRange);
   if (source.diffRange === undefined) {
-    // 算出範囲の文言自体が「ローカル変更のみ」と述べるので内訳行は重複になる。
-    return { ...baseRangeVars, isPullRequestWithoutDiffRange: true, prNumber };
+    return { isPullRequestWithoutDiffRange: true, prNumber };
   }
   return {
-    ...baseRangeVars,
     isPullRequest: true,
     prNumber,
     diffRange: escapeTemplateChars(

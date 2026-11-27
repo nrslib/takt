@@ -12,6 +12,7 @@ export const PROVIDER_TYPES = [
   'kiro',
   'pi',
   'deepseek-harness',
+  'devin',
   'mock',
 ] as const;
 
@@ -51,6 +52,7 @@ export interface StreamToolUseEventData {
 
 export interface StreamToolResultEventData {
   id?: string;
+  completedToolIds?: readonly string[];
   content: string;
   isError: boolean;
 }
@@ -90,8 +92,14 @@ export interface StreamThinkingEventData {
   thinking: string;
 }
 
+export interface StreamContextCompactedEventData {
+  sessionId?: string;
+}
+
 export interface StreamResultEventData {
   result: string;
+  /** Provider-confirmed visible assistant text from an incomplete turn, never diagnostics. */
+  partialOutput?: string;
   sessionId: string;
   success: boolean;
   error?: string;
@@ -119,7 +127,13 @@ export interface StreamRateLimitEventData {
   isUsingOverage?: boolean;
 }
 
-export type StreamEvent =
+export interface StreamCallContext {
+  callId: string;
+  operationId?: string;
+  generation?: number;
+}
+
+export type StreamEvent = (
   | { type: 'init'; data: StreamInitEventData }
   | { type: 'tool_use'; data: StreamToolUseEventData }
   | { type: 'tool_result'; data: StreamToolResultEventData }
@@ -128,10 +142,12 @@ export type StreamEvent =
   | { type: 'permission_summary'; data: StreamPermissionSummaryEventData }
   | { type: 'text'; data: StreamTextEventData }
   | { type: 'thinking'; data: StreamThinkingEventData }
+  | { type: 'context_compacted'; data: StreamContextCompactedEventData }
   | { type: 'result'; data: StreamResultEventData }
   | { type: 'assistant_error'; data: StreamAssistantErrorEventData }
   | { type: 'rate_limit'; data: StreamRateLimitEventData }
-  | { type: 'error'; data: StreamErrorEventData };
+  | { type: 'error'; data: StreamErrorEventData }
+) & { toolActivity?: StreamCallContext };
 
 export type StreamCallback = (event: StreamEvent) => void;
 

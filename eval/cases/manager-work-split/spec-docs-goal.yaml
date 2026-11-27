@@ -1,0 +1,32 @@
+ja:
+  lang: ja
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  projectConfig:
+    assistant:
+      formal_spec: true
+  user: |-
+    次の文書作成のゴールについて合意しました。
+    現在の利用者向けガイドを調査し、検索機能とエクスポート機能の説明がどこにあるかを一覧にまとめ、利用者が各説明へたどれる案内文書を作成します。
+    対象は調査と案内文書の作成だけです。アプリのコード、設定、インフラ、テストの変更は範囲外です。ガイドに書かれた既存機能の説明を正確に引き継ぎます。
+    各機能の説明への参照、調査した資料の一覧、説明が見つからなかった項目が文書にそろえば完了です。人が決める必要のあることはもうありません。この内容でゴールの登録案を作ってください。
+  readResults: []
+en:
+  lang: en
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  projectConfig:
+    assistant:
+      formal_spec: true
+  user: |-
+    We have agreed on the following documentation goal.
+    Investigate the current user guides, list where the search and export features are explained, and create a navigation document that helps users reach those explanations.
+    The scope is investigation and writing the navigation document only. Changes to application code, configuration, infrastructure, and tests are out of scope. Accurately preserve the existing feature descriptions in the guides.
+    The goal is complete when the document includes references to each feature explanation, a list of sources examined, and any items for which no explanation was found. There are no remaining decisions for me to make. Prepare the goal registration proposal from this agreement.
+  readResults: []

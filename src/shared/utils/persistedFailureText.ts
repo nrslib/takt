@@ -1,7 +1,7 @@
 /**
  * Byte cap for any failure-derived text that gets persisted to disk and then
  * replayed into terminal output, retry prompts, or retry notes: TaskFailure.error
- * (tasks.yaml) and SessionState.errorMessage (session-state.json).
+ * (tasks.yaml).
  *
  * Without a cap, an oversized upstream error (e.g. a provider dumping raw
  * stdout) is written once and then re-expands into every downstream sink on

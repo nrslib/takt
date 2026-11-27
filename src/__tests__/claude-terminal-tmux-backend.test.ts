@@ -101,6 +101,7 @@ describe('TmuxTerminalBackend', () => {
         session.name,
         '-c',
         '/tmp/worktree',
+        '/usr/bin/env', '-u', 'TAKT_SLACK_APP_TOKEN', '-u', 'TAKT_SLACK_BOT_TOKEN',
         'claude',
         '--model',
         'opus',
@@ -150,6 +151,7 @@ describe('TmuxTerminalBackend', () => {
         'TAKT_OBSERVABILITY={"enabled":true}',
         '-e',
         'OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.test',
+        '/usr/bin/env', '-u', 'TAKT_SLACK_APP_TOKEN', '-u', 'TAKT_SLACK_BOT_TOKEN',
         'claude',
       ]);
       expect(newSessionArgs).not.toContain('TAKT_OBSERVABILITY={"enabled":false}');
@@ -168,6 +170,43 @@ describe('TmuxTerminalBackend', () => {
         process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
       }
     }
+  });
+
+  it.each(['missing', 'other-id', 'history', 'generic', 'normal-exit'] as const)('checks only the complete failed startup diagnostic before sending input (%s)', async (kind) => {
+    const backend = new TmuxTerminalBackend();
+    const session = await backend.start({ cwd: '/tmp/project', backend: 'tmux', resumeSessionId: 'saved-session',
+      command: { executable: 'claude', args: ['--resume', 'saved-session'] } });
+    const launch = mockExecFile.mock.calls[0]![1] as string[];
+    expect(launch.slice(-3)).toEqual(['claude', '--resume', 'saved-session']);
+    const diagnostic = kind === 'other-id' ? 'No conversation found with session ID: another-session'
+      : kind === 'history' ? 'Assistant history\nNo conversation found with session ID: saved-session'
+        : kind === 'generic' ? 'Authentication failed' : 'No conversation found with session ID: saved-session';
+    mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      callback(null, { stdout: args[0] === 'display-message' ? (kind === 'normal-exit' ? '1:0' : '1:1') : diagnostic, stderr: '' });
+    });
+    const attempt = backend.pasteText(session, 'continue');
+    if (kind === 'missing') await expect(attempt).rejects.toMatchObject({ failureCategory: 'session_continuation_unsupported' });
+    else await expect(attempt).rejects.not.toHaveProperty('failureCategory', 'session_continuation_unsupported');
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockExecFile.mock.calls.some((call) => call[1][0] === 'send-keys')).toBe(false);
+    await backend.stop(session);
+  });
+
+  it('does not treat the diagnostic in a running resumed pane as a rejection, or inspect it after input', async () => {
+    const backend = new TmuxTerminalBackend();
+    const session = await backend.start({ cwd: '/tmp/project', backend: 'tmux', resumeSessionId: 'saved-session',
+      command: { executable: 'claude', args: ['--resume', 'saved-session'] } });
+    let captures = 0;
+    mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      callback(null, { stdout: args[0] === 'display-message' ? '0:' : args[0] === 'capture-pane'
+        ? (++captures % 3 === 0 ? 'prompt pasted' : 'No conversation found with session ID: saved-session\n❯') : '', stderr: '' });
+    });
+    await backend.pasteText(session, 'first');
+    const checks = mockExecFile.mock.calls.filter((call) => call[1][0] === 'display-message').length;
+    await backend.pasteText(session, 'second');
+    expect(mockExecFile.mock.calls.filter((call) => call[1][0] === 'display-message')).toHaveLength(checks);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    await backend.stop(session);
   });
 
   it('Given prompt text, When pasteText is called, Then tmux waits for prompt and submits pasted text', async () => {

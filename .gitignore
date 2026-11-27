@@ -4,6 +4,8 @@ node_modules/
 
 # Build output
 dist/
+!vendor/faceted-prompting/dist/
+!vendor/faceted-prompting/dist/**
 *.tgz
 /result
 /result-*
@@ -48,4 +50,6 @@ eval/prompts/
 eval/fixtures/**/.takt/
 eval/.work/
 eval/.results/
+eval/**/.manager-filter-*.yaml
 .tmp/
+eval/scenarios/phase-awareness/.phase-awareness-*.json

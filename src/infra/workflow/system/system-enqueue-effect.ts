@@ -122,6 +122,7 @@ async function createIssueBackedTask(
     cwd: options.projectCwd,
     task: payload.task,
     workflow: payload.workflow,
+    deduplicateActiveTargets: true,
     ...(labels !== undefined ? { labels } : {}),
     ...(payload.issue.title !== undefined ? { title: payload.issue.title } : {}),
     gitProvider,
@@ -180,6 +181,7 @@ export async function enqueueTaskEffect(
       }
       const created = await saveEnqueuedTaskFile(options.projectCwd, payload.task, {
         workflow: payload.workflow,
+        deduplicateActiveTargets: true,
         ...(payload.issue_number !== undefined ? { issue: payload.issue_number } : {}),
         ...(payload.worktree?.enabled === true ? { worktree: true } : {}),
         ...(baseBranch ? { baseBranch } : {}),
@@ -202,12 +204,14 @@ export async function enqueueTaskEffect(
     const prBaseBranch = baseBranch ?? resolveBaseBranch(options.projectCwd, requestedBaseBranch).branch;
     const created = await saveEnqueuedTaskFile(options.projectCwd, payload.task, {
       workflow: payload.workflow,
+      deduplicateActiveTargets: true,
       worktree: true,
       branch: pr.headRefName,
       baseBranch: prBaseBranch,
       autoPr: false,
       shouldPublishBranchToOrigin: true,
       prNumber: payload.pr,
+      cacciaExecutionSource: 'from_pr',
     });
     return { success: true, failed: false, ...created, prNumber: payload.pr };
   } catch (error) {

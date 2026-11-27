@@ -5,6 +5,7 @@ max_steps: 5
 initial_step: melchior
 steps:
   - name: melchior
+    description: 科学者・技術者の観点から審議事項を分析し、賛成・反対・条件付き賛成を判定する
     tags:
       - review
     persona: melchior
@@ -37,6 +38,7 @@ steps:
       - condition: 判定を完了した
         next: balthasar
   - name: balthasar
+    description: 人への影響と持続可能性から審議事項を分析し、賛成・反対・条件付き賛成を独立して判定する
     tags:
       - review
     persona: balthasar
@@ -73,6 +75,7 @@ steps:
       - condition: 判定を完了した
         next: casper
   - name: casper
+    description: 実務と現実の観点から審議事項を判定し、3者の多数決で最終結論を決定する
     tags:
       - review
     persona: casper

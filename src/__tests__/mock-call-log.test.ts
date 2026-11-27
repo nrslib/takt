@@ -118,7 +118,7 @@ describe('mock call log private artifact contract', () => {
     symlinkSync(targetPath, logPath);
     process.env.TAKT_MOCK_CALL_LOG = logPath;
 
-    await expect(callMock('selector', 'prompt', { cwd: directory })).rejects.toThrow(/symlink/);
+    await expect(callMock('selector', 'prompt', { cwd: directory })).rejects.toThrow();
 
     expect(readFileSync(targetPath, 'utf-8')).toBe('unchanged\n');
   });

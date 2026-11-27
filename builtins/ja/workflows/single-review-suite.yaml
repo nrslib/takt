@@ -1,0 +1,101 @@
+name: single-review-suite
+description: 1体の読み取り専用レビュアーが変更内容に応じた知識を選び、レビュー結果を返す。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: peer-review-scope
+      position: before_instruction
+    - ref: existing-finding-lookup
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
+    architecture_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: architecture-review
+    security_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: security-review
+    testing_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: testing-review
+    coding_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: coding-review
+    ai_antipattern_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: ai-antipattern-review
+    frontend_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: frontend-review
+    cqrs_es_review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: cqrs-es-review
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  security-review-facets:
+    uses: security-review-facets
+initial_step: review
+steps:
+  - name: review
+    description: 変更に合う知識でコードをレビューし、修正すべき問題があるかを報告する
+    capabilities: readonly
+    tags: [review]
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - architecture
+      - contract-change
+      - review
+      - coding
+      - testing
+      - ai-antipattern
+      - $param: review_policy_additions
+    knowledge:
+      - architecture
+      - $param: review_knowledge_additions
+    dynamic_facets:
+      pool: coding-facets
+    instruction:
+      $param: coding_review_instruction
+    pass_previous_response: false
+    structured_output:
+      schema_ref: simple-review-result
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: when(structured.review.result == "APPROVE")
+        next: COMPLETE
+      - condition: when(structured.review.result == "REJECT")
+        return: needs_fix

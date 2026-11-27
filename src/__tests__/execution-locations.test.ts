@@ -68,7 +68,6 @@ describe('execution locations', () => {
       canonicalDirectory: project,
       locationId: first.locationId,
       stateId: first.stateId,
-      fingerprint: { dev: expect.any(Number), ino: expect.any(Number) },
     });
   });
 

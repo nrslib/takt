@@ -1,10 +1,10 @@
 # React Knowledge
 
-In React, parents pass values through props, components keep changing values in state, and rendering creates the screen. Put screen communication and navigation in handlers or hooks rather than inside display components. React can provide the GUI Mediator role through standard mechanisms such as screen handlers, custom Hooks, Context, and reducers, which decide processing and the next state from an operation and the current state.
+In React, parents pass values through props, components keep changing values in state, and rendering creates the screen. Put screen communication and navigation in handlers or hooks rather than inside display components. Screen (page on the Web) and region components are GUI Mediators: they own state and use handlers to accept or reject operations and decide when processing starts and what the next state is. Implement this role with screen components, screen-specific Hooks, and useState/useReducer. Using an existing store such as adopted Redux is not introducing a custom layer.
 
 ## Props and state
 
-Props are inputs passed by a parent; state is a value a component changes through interaction. Do not keep the same fact in two `useState` calls. Keep it where its scope and lifetime fit. When several parts use the same target identifier or input, keep one value in the parent or screen that coordinates them and pass props and operation notifications. Keep an in-progress input value or open/closed state in the part that uses it. Keep a value that should survive several screens in a Provider or external store whose scope and lifetime fit.
+Props are inputs passed by a parent; state is a value a component changes through interaction. Do not keep the same fact in two `useState` calls. Keep it where its scope and lifetime fit. When several parts use the same target identifier or input, keep one value in the parent or screen that coordinates them and pass props and operation notifications. Keep an in-progress input value or open/closed state in the part that uses it. Use Providers and external stores according to scope and lifetime. This includes a screen creating values and operations and distributing them to several parts within that screen via a Provider. Keep screen-local editing state, such as form state, in the screen by default. The adopted data-fetching library can manage server-data fetching state and caches regardless of the number of screens using them.
 
 ## Prop changes and state lifetime
 
@@ -20,7 +20,7 @@ Do not store a list, count, all-selected result, label, or other value calculabl
 
 ## Mediator, reducers, and operations
 
-A screen handler or custom Hook acts as the Mediator: it receives an operation notification, checks the current state and target, accepts or rejects the operation, and decides the processing needed for an accepted operation, the rejection result, the next state, and the displayed values. Form, button, keyboard, and other entries for the same operation go through the same Mediator decision. Do not use a control's `disabled` display as the only decision; also check state and target where processing starts.
+Screen and region components act as Mediators. Their handlers receive operation notifications, check the current state and target, accept or reject the operation, and decide when to start processing for an accepted operation, the rejection result, the next state, and the displayed values. When logic is extracted into a custom Hook, keep it as a screen-specific implementation split that directly handles the screen's types, APIs, and state and keeps its decisions together. A Hook that only delegates to another custom state owner is not this implementation split, even if connected through useSyncExternalStore. Form, button, keyboard, and other entries for the same operation go through the same Mediator decision. Do not use a control's `disabled` display as the only decision; also check state and target where processing starts.
 
 A reducer is a pure function that returns the next state from the current state and an event. A handler starts communication outside the reducer and dispatches its start, success, and failure results. The reducer does not perform communication, timers, or notifications. Rejection, invalid input, insufficient permission, and conflicts become display results through this state flow.
 

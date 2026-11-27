@@ -10,8 +10,11 @@ import {
   type OpenCodeCompactSessionOptions,
 } from '../opencode/index.js';
 import { keepsOpenCodeAllowedToolWithoutEdit, toOpenCodeMcpToolName } from '../opencode/allowedTools.js';
+import { resumeCompactedSession } from './compaction-recovery.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
-import { openCodeRuntimeSelection } from '../opencode/runtime.js';
+import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from '../opencode/runtime.js';
+import { parseProviderModel } from '../../shared/utils/providerModel.js';
+import { readOpenCodeModelContextWindow } from '../opencode/model-context-window.js';
 import { toV2ToolName } from '../opencode/v2-contract.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
@@ -62,29 +65,40 @@ function shouldDisableSkills(options: ProviderCallOptions | undefined): boolean 
 }
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
-  if (options.readonlyFileReadPaths !== undefined) {
-    throw new Error('Provider "opencode" cannot restrict file reads to the specified verification artifacts');
-  }
   const model = options.allowDefaultModel && options.model === undefined
     ? undefined
     : requireOpenCodeModel(options.model);
 
-  const openCodeAllowedTools = options.allowedTools;
-  const allowedMcpTools = options.preparedMcp?.taskStateMcpTools
+  const strictTools = options.mcpOnlySideEffects ?? options.strictToolAllowlist;
+  const openCodeAllowedTools = strictTools === undefined ? options.allowedTools : strictTools.filter((tool) => {
+    if (toOpenCodeMcpToolName(tool) !== undefined) return false;
+    if (tool !== 'Read') throw new Error(`OpenCode strict tool allowlist does not support: ${tool}`);
+    return true;
+  });
+  const conversationMcp = options.preparedMcp?.conversationMcpPermissions;
+  const allowedMcpTools = (strictTools ?? conversationMcp?.tools)
     ?.map(toOpenCodeMcpToolName)
     .filter((tool): tool is string => tool !== undefined);
+  const allowedMcpServers = strictTools === undefined ? conversationMcp?.serverNames : undefined;
   if (options.imageAttachments && options.imageAttachments.length > 0) {
     log.info('OpenCode provider does not support imageAttachments; ignoring');
   }
 
   return {
     cwd: options.cwd,
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     ...(model === undefined ? {} : { model }),
+    ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow }),
     ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     allowedTools: openCodeAllowedTools,
+    ...(strictTools === undefined ? {} : { strictToolAllowlist: strictTools }),
     ...(allowedMcpTools === undefined ? {} : { allowedMcpTools }),
+    ...(allowedMcpServers === undefined ? {} : { allowedMcpServers }),
     permissionMode: options.permissionMode,
     internalAgentIsolation: options.internalAgentIsolation,
     allowReadonlyFileRead: options.allowReadonlyFileRead,
@@ -114,6 +128,9 @@ function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions)
   return {
     cwd: options.cwd,
     sessionId: options.sessionId,
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),
     ...(model === undefined ? {} : { model }),
     ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     abortSignal: options.abortSignal,
@@ -159,10 +176,27 @@ function requireIsolatedStructuredOutput(
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
+  readonly supportsMcpOnlySideEffects = true;
+  readonly supportsStrictToolAllowlist = true;
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
+
+  getContextWindowLimits(options: ProviderCallOptions) {
+    return readOpenCodeModelContextWindow(options);
+  }
+
+  async preflight(options: ProviderCallOptions): Promise<void> {
+    const resolved = toOpenCodeOptions(options);
+    if (resolved.model !== undefined) parseProviderModel(resolved.model, 'OpenCode model');
+    if (resolved.strictToolAllowlist !== undefined && (
+      resolved.permissionMode !== 'readonly' || options.bypassPermissions === true
+    )) {
+      throw new Error('OpenCode strict tool execution requires readonly permissions');
+    }
+    await resolveOpenCodeRuntime(options.abortSignal);
+  }
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean, callOptions?: ProviderCallOptions): string | null {
     if (allowedTools === undefined) {
@@ -185,19 +219,10 @@ export class OpenCodeProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    if (systemPrompt) {
-      return {
-        call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-          return callOpenCodeCustom(name, prompt, systemPrompt, toOpenCodeOptions(options));
-        },
-      };
-    }
-
-    return {
-      call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        return callOpenCode(name, prompt, toOpenCodeOptions(options));
-      },
-    };
+    const call = async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => systemPrompt
+      ? callOpenCodeCustom(name, prompt, systemPrompt, toOpenCodeOptions(options))
+      : callOpenCode(name, prompt, toOpenCodeOptions(options));
+    return { call, recoverFromCompaction: resumeCompactedSession(name, call) };
   }
 
   setupIsolatedStructured(config: AgentSetup): ProviderAgent {

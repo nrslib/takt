@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": { "type": "string", "enum": ["defect", "external", "insufficient_evidence"] },
+    "summary": { "type": "string", "minLength": 1 }
+  },
+  "required": ["verdict", "summary"],
+  "additionalProperties": false
+}

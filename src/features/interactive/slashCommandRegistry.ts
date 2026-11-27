@@ -29,13 +29,15 @@ const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/verify': 'interactive.commands.verify',
 } as const;
 
+export interface SlashCommandDefinition<Command extends string = string> {
+  readonly command: Command;
+  readonly labelKey: string;
+}
+
 /**
  * Registry of all slash commands.
  */
-const SLASH_COMMAND_REGISTRY: readonly {
-  readonly command: SlashCommand;
-  readonly labelKey: string;
-}[] = (Object.values(SlashCommand)).map(
+const SLASH_COMMAND_REGISTRY: readonly SlashCommandDefinition<SlashCommand>[] = (Object.values(SlashCommand)).map(
   (command) => ({ command, labelKey: SLASH_COMMAND_LABEL_KEYS[command] }),
 );
 
@@ -85,17 +87,21 @@ export function resolveFormalSpecCommandAvailability(
 /**
  * Filter slash commands by prefix match and availability conditions.
  */
-export const filterSlashCommands = (
+export function filterSlashCommands(prefix: string, availability?: CommandAvailability): readonly SlashCommandDefinition<SlashCommand>[];
+export function filterSlashCommands(
+  prefix: string,
+  availability: CommandAvailability | undefined,
+  definitions: readonly SlashCommandDefinition[] | undefined,
+): readonly SlashCommandDefinition[];
+export function filterSlashCommands(
   prefix: string,
   availability?: CommandAvailability,
-): readonly {
-  readonly command: SlashCommand;
-  readonly labelKey: string;
-}[] => {
+  definitions: readonly SlashCommandDefinition[] = SLASH_COMMAND_REGISTRY,
+): readonly SlashCommandDefinition[] {
   const lower = prefix.toLowerCase();
-  const matches = SLASH_COMMAND_REGISTRY.filter((entry) => {
+  const matches = definitions.filter((entry) => {
     if (!entry.command.startsWith(lower)) return false;
-    if (availability?.enabledCommands && !availability.enabledCommands.includes(entry.command)) return false;
+    if (availability?.enabledCommands && !availability.enabledCommands.some((command) => command === entry.command)) return false;
     if (entry.command === SlashCommand.Tell && availability !== undefined && availability.enableTellCommand !== true) {
       return false;
     }
@@ -107,7 +113,7 @@ export const filterSlashCommands = (
     }
     if (entry.command === SlashCommand.Setup && availability?.enableSetupCommand !== true) return false;
     if (entry.command === SlashCommand.Open && availability?.enableOpenCommand !== true) return false;
-    if (INTERACTIVE_SETTING_COMMANDS.has(entry.command) && availability?.enableSettingsCommands !== true) return false;
+    if ([...INTERACTIVE_SETTING_COMMANDS].some((command) => command === entry.command) && availability?.enableSettingsCommands !== true) return false;
     if (entry.command === SlashCommand.Verify && availability?.formalSpec !== true) return false;
     if (!availability) return true;
     if (
@@ -127,4 +133,4 @@ export const filterSlashCommands = (
   );
   const exact = labeledMatches.find((entry) => entry.command === lower);
   return exact === undefined ? labeledMatches : [exact];
-};
+}

@@ -4,11 +4,17 @@ import { TaskRunner } from './runner.js';
 import { TaskExecutionConfigSchema, type TaskFileData, resolveTaskWorkflowValue } from './schema.js';
 import { summarizeTaskName } from './summarize.js';
 import { firstLine } from './naming.js';
+import { loadWorkflowByIdentifier } from '../config/index.js';
+import { checkWorkflowProviders } from '../config/runtime-provider/execution-preparation.js';
+import { validateTaskRuntimeAssignmentForSave, withTaskSaveRuntimeAssignment } from '../config/runtime-provider/invocation.js';
+import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import {
   cleanupTaskSpecDirectory,
   IssueEnqueueCancelledError,
   prepareTaskSpecDirectory,
   type PrepareEnqueuedTaskSpec,
+  type PreparedEnqueuedTaskSpec,
+  type EnqueuedTaskPublicationScope,
   type SaveEnqueuedTaskFileOptions,
 } from './enqueueService.js';
 
@@ -17,10 +23,14 @@ const log = createLogger('task-enqueue');
 function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<TaskFileData, 'task'> {
   const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
   return TaskExecutionConfigSchema.parse({
+    ...(options?.goalId !== undefined && { goal_id: options.goalId }),
+    ...(options?.goalPurpose !== undefined && { goal_purpose: options.goalPurpose }),
+    ...(options?.goalWorkKey !== undefined && { goal_work_key: options.goalWorkKey }),
     ...(options?.worktree !== undefined && { worktree: options.worktree }),
     ...(options?.branch && { branch: options.branch }),
     ...(options?.baseBranch && { base_branch: options.baseBranch }),
     ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
+    ...(options?.runtimeAssignment !== undefined && { runtime_assignment: options.runtimeAssignment }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
     ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
@@ -35,6 +45,9 @@ function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<T
     ...(options?.contextPrNumber !== undefined && {
       context_pr_number: options.contextPrNumber,
     }),
+    ...(options?.cacciaExecutionSource !== undefined && {
+      caccia_execution_source: options.cacciaExecutionSource,
+    }),
   });
 }
 
@@ -44,30 +57,43 @@ export async function saveEnqueuedTaskFile(
   options?: SaveEnqueuedTaskFileOptions,
   prepareTaskSpec: PrepareEnqueuedTaskSpec = prepareTaskSpecDirectory,
   abortSignal?: AbortSignal,
+  publicationScope?: EnqueuedTaskPublicationScope,
 ): Promise<{ taskName: string; tasksFile: string }> {
   throwIfTaskSaveAborted(abortSignal);
   const runner = new TaskRunner(cwd);
   const config = buildValidatedTaskConfig(options);
-  const slug = await summarizeTaskName(taskContent, { cwd });
+  const identifier = config.workflow ?? DEFAULT_WORKFLOW_NAME;
+  const workflow = loadWorkflowByIdentifier(identifier, cwd);
+  if (workflow === null) throw new Error(`Workflow not found: ${identifier}`);
+  validateTaskRuntimeAssignmentForSave(cwd, config.runtime_assignment);
+  const slug = await withTaskSaveRuntimeAssignment(config.runtime_assignment, async () => {
+    await checkWorkflowProviders(cwd, cwd, workflow, {}, undefined, abortSignal);
+    return summarizeTaskName(taskContent, { cwd });
+  });
   throwIfTaskSaveAborted(abortSignal);
   const summary = firstLine(taskContent);
-  const preparedSpec = prepareTaskSpec(cwd, taskContent);
-  let created;
-  try {
-    throwIfTaskSaveAborted(abortSignal);
-    created = runner.addTask(taskContent, {
-      ...config,
-      task_dir: preparedSpec.taskDirRelative,
-      slug,
-      summary,
-    });
-  } catch (error) {
-    cleanupTaskSpecDirectory(preparedSpec.taskDir);
-    throw error;
-  }
-  const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
-  log.info('Task created', { taskName: created.name, tasksFile, config });
-  return { taskName: created.name, tasksFile };
+  const publish = (preparedSpec: PreparedEnqueuedTaskSpec) => {
+    let created;
+    try {
+      throwIfTaskSaveAborted(abortSignal);
+      created = runner.addTask(taskContent, {
+        ...config,
+        task_dir: preparedSpec.taskDirRelative,
+        slug,
+        summary,
+        deduplicateActiveTargets: options?.deduplicateActiveTargets,
+      });
+    } catch (error) {
+      if (publicationScope === undefined) cleanupTaskSpecDirectory(preparedSpec.taskDir);
+      throw error;
+    }
+    const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
+    log.info('Task created', { taskName: created.name, tasksFile, config });
+    return { taskName: created.name, tasksFile };
+  };
+  return publicationScope === undefined
+    ? publish(prepareTaskSpec(cwd, taskContent))
+    : publicationScope(publish);
 }
 
 function throwIfTaskSaveAborted(abortSignal: AbortSignal | undefined): void {

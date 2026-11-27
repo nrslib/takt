@@ -41,23 +41,31 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/tty.js')>()),
+  resolveTtyPolicy: () => ({ useTty: true, forceTouchTty: false }),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
   selectOption: vi.fn(),
   selectOptionWithDefault: vi.fn(),
+  confirmWithCancel: vi.fn().mockResolvedValue({ kind: 'value', value: true }),
 }));
 
 vi.mock('../shared/prompt/confirm.js', () => ({
@@ -65,6 +73,7 @@ vi.mock('../shared/prompt/confirm.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { selectOptionWithDefault, selectOption } from '../shared/prompt/index.js';
 import { confirm } from '../shared/prompt/confirm.js';
 import { PROVIDER_TYPES } from '../shared/types/provider.js';
@@ -75,6 +84,7 @@ const mockSelectOption = vi.mocked(selectOption);
 const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
+let projectConfigDir: string;
 
 // ── Stdin helpers (same pattern as interactive.test.ts) ──
 
@@ -115,13 +125,21 @@ import type { FirstStepInfo } from '../infra/config/loaders/workflowResolver.js'
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.TMPDIR = TEST_TMPDIR;
-  mockSelectOptionWithDefault.mockResolvedValue('assistant');
+  projectConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-interactive-mode-config-'));
+  vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
+  mockSelectOptionWithDefault.mockImplementation(async (prompt, options) => {
+    if (options.some((option) => option.value === 'save_task')) {
+      return mockSelectOption(prompt, options);
+    }
+    return 'assistant' as typeof options[number]['value'];
+  });
   mockSelectOption.mockResolvedValue('execute');
 });
 
 afterEach(() => {
   restoreStdin();
   mockSelectOption.mockReset();
+  fs.rmSync(projectConfigDir, { recursive: true, force: true });
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {
@@ -316,13 +334,11 @@ describe('personaMode', () => {
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
   });
 
-  it('should return to the action selector after a cancelled persona save', async () => {
+  it('should return to the conversation after a cancelled persona save', async () => {
     setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupMockProvider(['Task summary.']);
-    mockSelectOption
-      .mockResolvedValueOnce('save_task')
-      .mockResolvedValueOnce('continue');
-    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+    mockSelectOption.mockResolvedValueOnce('save_task');
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
     const personaModeWithDispatch = personaMode as unknown as (
       cwd: string,
       firstStep: FirstStepInfo,
@@ -342,7 +358,7 @@ describe('personaMode', () => {
     );
 
     expect(result.action).toBe('cancel');
-    expect(mockSelectOption).toHaveBeenCalledTimes(2);
+    expect(mockSelectOption).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       action: 'save_task',
       task: 'Task summary.',

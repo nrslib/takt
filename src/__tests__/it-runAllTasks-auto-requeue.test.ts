@@ -205,11 +205,12 @@ function loadTaskRunArtifacts(
   identities: PromptTraceIdentity[],
 ): TaskRunArtifacts[] {
   return loadTasks(projectDir).map((task) => {
-    const taskContent = task.content;
+    const taskDir = task.task_dir;
     const runSlug = task.run_slug;
-    if (typeof taskContent !== 'string' || typeof runSlug !== 'string') {
-      throw new Error('completed task must retain content and run_slug');
+    if (typeof taskDir !== 'string' || typeof runSlug !== 'string') {
+      throw new Error('completed task must retain task_dir and run_slug');
     }
+    const taskContent = readFileSync(join(projectDir, taskDir, 'order.md'), 'utf-8');
     const identity = identities.find((candidate) => candidate.task === taskContent);
     if (identity === undefined) {
       throw new Error(`missing prompt isolation identity for ${taskContent}`);
@@ -252,7 +253,12 @@ function expectPromptTraceIsolation(
   const tasks = loadTasks(projectDir);
   expect(tasks).toHaveLength(2);
   expect(tasks.map((task) => task.status)).toEqual(['completed', 'completed']);
-  expect(tasks.map((task) => task.content).sort()).toEqual(
+  expect(tasks.map((task) => {
+    if (typeof task.task_dir !== 'string') {
+      throw new Error('completed task must retain task_dir');
+    }
+    return readFileSync(join(projectDir, task.task_dir, 'order.md'), 'utf-8');
+  }).sort()).toEqual(
     identities.map((identity) => identity.task).sort(),
   );
 

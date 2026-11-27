@@ -2,6 +2,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import type { AgentWorkflowStep, NormalAgentWorkflowStep, PartDefinition, PartResult, WorkflowStep, AgentResponse, WorkflowResumePointEntry } from '../../models/types.js';
 import type { RuntimeStepResolution } from '../types.js';
+import type { TaskReviewScope } from '../review-scope.js';
 import { buildSessionKey } from '../session-key.js';
 import { buildAbortSignal } from './abort-signal.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
@@ -22,6 +23,7 @@ import {
   OperationRecoveryError,
 } from '../operations/operation-recovery-error.js';
 import type { CompanionStepRuntime } from '../companion/step-runtime.js';
+import type { Phase1ExecutionLog } from '../phase1-execution-log.js';
 
 export interface TeamLeaderPartObservability {
   readonly enabled: boolean;
@@ -39,11 +41,14 @@ export interface TeamLeaderPartExecutionOptions {
   readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
   readonly deadlineSignal?: AbortSignal;
   readonly providerInfo: StepProviderInfo;
+  readonly phase1ExecutionLog?: Phase1ExecutionLog;
   readonly createCompanionRuntime?: (
     partStep: NormalAgentWorkflowStep,
     abortSignal: AbortSignal,
   ) => Promise<CompanionStepRuntime | undefined>;
   readonly completeCompanionReview?: (input: {
+    readonly phase1Instruction: string;
+    readonly phase1RecoveryInstruction: string;
     readonly partStep: NormalAgentWorkflowStep;
     readonly initialResponse: AgentResponse;
     readonly agentOptions: RunAgentOptions;
@@ -76,7 +81,11 @@ export async function runTeamLeaderPart(
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   parallelLogger: ParallelLogger | undefined,
   observability: TeamLeaderPartObservability,
-  buildInstruction: (partStep: WorkflowStep) => string,
+  buildInstruction: (partStep: WorkflowStep) => {
+    readonly phase1Instruction: string;
+    readonly instructionWithoutLiveIntervention: string;
+    readonly reviewScope: TaskReviewScope;
+  },
   runtime?: RuntimeStepResolution,
   executionAbortSignal?: AbortSignal,
   executionOptions?: TeamLeaderPartExecutionOptions,
@@ -123,6 +132,13 @@ export async function runTeamLeaderPart(
     signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
     dispose = legacyDeadline?.dispose ?? (() => {});
   }
+  const executionLog = executionOptions?.phase1ExecutionLog;
+  let cancellationRecorded = false;
+  const recordCancellation = (): void => {
+    if (cancellationRecorded) return;
+    cancellationRecorded = true;
+    executionLog?.recordResult({ status: 'cancelled', content: '' }, part.id);
+  };
   const baseRunOptions = parallelLogger
     ? {
       ...baseOptions,
@@ -144,9 +160,30 @@ export async function runTeamLeaderPart(
     const companionRuntime = await executionOptions?.createCompanionRuntime?.(partStepForExecution, signal);
     using activeCompanionRuntime = companionRuntime;
     activeCompanionRuntime?.beginReviewAttempt();
-    const teamComposedOptions = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
-    const options = activeCompanionRuntime?.composeOptions(teamComposedOptions) ?? teamComposedOptions;
-    const partInstruction = buildInstruction(partStepForExecution);
+    const { phase1Instruction: partInstruction, instructionWithoutLiveIntervention, reviewScope } = buildInstruction(partStepForExecution);
+    const partRunOptions: RunAgentOptions = {
+      ...baseRunOptions,
+      progressNotes: optionsBuilder.buildProgressNotesRequest(partStepForExecution, reviewScope),
+    };
+    const teamComposedOptions = executionOptions?.composeOptions?.(partRunOptions) ?? partRunOptions;
+    const composedOptions = activeCompanionRuntime?.composeOptions(teamComposedOptions) ?? teamComposedOptions;
+    const options: RunAgentOptions = executionLog === undefined
+      ? composedOptions
+      : {
+          ...composedOptions,
+          onPromptResolved: (prompt) => {
+            executionLog.recordInstruction('team_part', prompt, part.id);
+            composedOptions.onPromptResolved?.(prompt);
+          },
+          onStream: (event) => {
+            executionLog.recordEvent(event, part.id);
+            composedOptions.onStream?.(event);
+          },
+          onDispatch: (permissionMode) => {
+            composedOptions.onDispatch?.(permissionMode);
+            executionLog.markDispatched(part.id);
+          },
+        };
     const initialResponse = await runWithPhaseSpan({
       enabled: observability.enabled,
       runId: observability.runId,
@@ -165,11 +202,18 @@ export async function runTeamLeaderPart(
         if (isTeamLeaderPartCancellation(signal.reason)) {
           throw signal.reason;
         }
+        executionLog?.recordResult(result, part.id);
         return result;
       } catch (error) {
         if (isTeamLeaderPartCancellation(signal.reason)) {
+          recordCancellation();
           throw signal.reason;
         }
+        if (isTeamLeaderPartCancellation(error)) {
+          recordCancellation();
+          throw error;
+        }
+        executionLog?.recordFailure(error, part.id);
         throw error;
       }
     }, (result) => ({
@@ -186,6 +230,8 @@ export async function runTeamLeaderPart(
       && activeCompanionRuntime !== undefined
       && executionOptions?.completeCompanionReview !== undefined
       ? await executionOptions.completeCompanionReview({
+          phase1Instruction: partInstruction,
+          phase1RecoveryInstruction: instructionWithoutLiveIntervention,
           partStep,
           initialResponse,
           agentOptions: options,
@@ -215,9 +261,11 @@ export async function runTeamLeaderPart(
       throw error;
     }
     if (isTeamLeaderPartCancellation(error)) {
+      recordCancellation();
       throw error;
     }
     if (isTeamLeaderPartCancellation(signal.reason)) {
+      recordCancellation();
       throw signal.reason;
     }
     return {

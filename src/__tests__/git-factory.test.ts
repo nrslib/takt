@@ -12,28 +12,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockDetectVcsProvider, mockResolveConfigValue, MockGitHubProvider, MockGitLabProvider } = vi.hoisted(() => ({
   mockDetectVcsProvider: vi.fn(),
   mockResolveConfigValue: vi.fn(),
-  MockGitHubProvider: vi.fn().mockImplementation(() => ({
-    _type: 'github',
-    checkCliStatus: vi.fn(),
-    fetchIssue: vi.fn(),
-    createIssue: vi.fn(),
-    fetchPrReviewComments: vi.fn(),
-    findExistingPr: vi.fn(),
-    createPullRequest: vi.fn(),
-    commentOnPr: vi.fn(),
-    commentOnIssue: vi.fn(),
-  })),
-  MockGitLabProvider: vi.fn().mockImplementation(() => ({
-    _type: 'gitlab',
-    checkCliStatus: vi.fn(),
-    fetchIssue: vi.fn(),
-    createIssue: vi.fn(),
-    fetchPrReviewComments: vi.fn(),
-    findExistingPr: vi.fn(),
-    createPullRequest: vi.fn(),
-    commentOnPr: vi.fn(),
-    commentOnIssue: vi.fn(),
-  })),
+  MockGitHubProvider: vi.fn().mockImplementation(function () {
+    return {
+      _type: 'github',
+      checkCliStatus: vi.fn(),
+      fetchIssue: vi.fn(),
+      createIssue: vi.fn(),
+      fetchPrReviewComments: vi.fn(),
+      findExistingPr: vi.fn(),
+      createPullRequest: vi.fn(),
+      commentOnPr: vi.fn(),
+      commentOnIssue: vi.fn(),
+    };
+  }),
+  MockGitLabProvider: vi.fn().mockImplementation(function () {
+    return {
+      _type: 'gitlab',
+      checkCliStatus: vi.fn(),
+      fetchIssue: vi.fn(),
+      createIssue: vi.fn(),
+      fetchPrReviewComments: vi.fn(),
+      findExistingPr: vi.fn(),
+      createPullRequest: vi.fn(),
+      commentOnPr: vi.fn(),
+      commentOnIssue: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../infra/git/detect.js', () => ({

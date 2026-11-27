@@ -41,6 +41,7 @@ function getAllowedPromptBases(cwd: string): string[] {
     getRepertoireDir(),
     getGlobalPersonasDir(),
     getBuiltinPersonasDir(lang),
+    getBuiltinPersonasDir(lang === 'en' ? 'ja' : 'en'),
     getGlobalFacetDir('personas'),
   ];
 }

@@ -47,6 +47,7 @@ describe('projectConfig', () => {
       rmSync(testDir, { recursive: true, force: true });
     }
     restoreTaktEnv(taktEnvSnapshot);
+    vi.restoreAllMocks();
   });
 
   describe('assistant init files', () => {
@@ -1233,6 +1234,23 @@ unexpected_overrides:
       );
 
       expect(() => loadProjectConfig(testDir)).toThrow(/unrecognized/i);
+    });
+
+    it('should name a misspelled claude permissions key instead of dropping it', () => {
+      writeFileSync(
+        join(testDir, '.takt', 'config.yaml'),
+        [
+          'provider_options:',
+          '  claude:',
+          '    permissions:',
+          '      deny:',
+          '        - "Read(./.env)"',
+          '      import_user_read_denyy: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/import_user_read_denyy/u);
     });
 
     it('should throw when pipeline value has invalid type', () => {

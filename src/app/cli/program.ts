@@ -9,6 +9,7 @@ import { Command, InvalidArgumentError, Option } from 'commander';
 import { packageVersion } from '../../shared/package-info.js';
 import { PROVIDER_TYPES, type ProviderType } from '../../shared/types/provider.js';
 import { runUpdateCheck } from './updateCheck.js';
+import { UPDATE_NOTIFIER_DISABLED_ARG } from '../../shared/utils/updateNotifierProcess.js';
 
 const cliVersion = packageVersion;
 
@@ -59,6 +60,7 @@ program
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
+  .option(UPDATE_NOTIFIER_DISABLED_ARG, 'Disable update notifications')
   .option('-c, --continue', 'Continue from the last assistant session')
   // Declared in this order so the default stays undefined: neither flag means
   // "TUI when a terminal is attached", which routing decides.
@@ -75,11 +77,11 @@ program
  * Run pre-action hook: common initialization for all commands.
  * Exported for use in slash-command fallback logic.
  */
-export async function runPreActionHook(): Promise<void> {
+export async function runPreActionHook(suppressVerboseConsole = false): Promise<void> {
   const { assertConfigDirsDoNotCollide, initializeCliExecutionContext } = await import('./initialization.js');
   assertConfigDirsDoNotCollide(process.cwd());
   await scheduleUpdateCheck();
-  await initializeCliExecutionContext(program, cliVersion);
+  await initializeCliExecutionContext(program, cliVersion, suppressVerboseConsole);
 }
 
 export async function scheduleUpdateCheck(): Promise<void> {
@@ -88,5 +90,28 @@ export async function scheduleUpdateCheck(): Promise<void> {
   await runUpdateCheck(cliVersion);
 }
 
+program.hook('preSubcommand', async (_command, subcommand) => {
+  if (!['manager', 'director'].includes(subcommand.name())) return;
+  const [{ resolveConfigValue }, { getLabel }] = await Promise.all([
+    import('../../infra/config/index.js'),
+    import('../../shared/i18n/index.js'),
+  ]);
+  subcommand.configureHelp({
+    commandDescription: () => {
+      const lang = resolveConfigValue(process.cwd(), 'language');
+      const name = subcommand.name();
+      return [
+        getLabel(`${name}.description`, lang),
+        '',
+        getLabel(`${name}.experimentalNotice`, lang),
+        getLabel(`${name}.costNotice`, lang),
+      ].join('\n');
+    },
+  });
+});
+
 // Common initialization for all commands
-program.hook('preAction', runPreActionHook);
+program.hook('preAction', async (_command, actionCommand) => {
+  if (['daemon', 'worker'].includes(actionCommand.name()) || ['daemon', 'worker'].includes(actionCommand.parent?.name() ?? '')) return;
+  await runPreActionHook(['manager', 'director'].includes(actionCommand.name()));
+});

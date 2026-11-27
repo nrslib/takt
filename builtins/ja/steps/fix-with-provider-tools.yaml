@@ -5,6 +5,7 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+description: 最新のレビュー指摘を確認して修正し、結果と解消できない問題を報告する
 tags:
   - coding
 edit: true

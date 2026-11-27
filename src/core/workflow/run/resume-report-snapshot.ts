@@ -6,14 +6,14 @@
  * producer 実行後の resume で consumer の参照が必ず壊れる（v3-r4 の resume
  * 境界バグ）。ここでは旧 run の workflow 成果物全体を新 run の reports/
  * として原子的に継承する。writer の lock・履歴を保持する
- * `.takt-report-internal/` は継承しない。
+ * `.takt-report-internal/` は実行記録と固定版だけを継承し、lockや旧writer履歴は除外する。
  *
  * 重要なポイント:
  * - workflow成果物の選択コピーはしない。静的解析では workflow_call / loop
  *   judge / 動的 facet の参照を把握しきれないため、内部名前空間を除く全体を
  *   コピーする。
  * - 祖先探索・fallback はしない。常に source_run_slug の直接の親のみ。
- * - symlink・run 外 path・非通常ファイルは拒否。target reports/ が既に非空なら
+ * - 配下の symlink・非通常ファイルは記録して除外し、run 外 path は拒否。target reports/ が既に非空なら
  *   fail-fast。失敗時は一時成果物を除去し、半端な reports/ を公開しない。
  * - 公開 workflow 成果物のファイル一覧と hash の SSOT は manifest
  *   （resume-artifacts.json）。meta.json からは manifest への参照のみ。
@@ -32,7 +32,7 @@ import {
   type Stats,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import {
   assertPrivateDirectoryReadSnapshot,
   capturePrivateDirectoryReadSnapshot,
@@ -44,7 +44,9 @@ import {
   type PrivateDirectoryReadSnapshot,
 } from '../../../shared/utils/private-file.js';
 import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
-import { isResumeReportConsumerKey } from './resume-report-consumer.js';
+import { classifyResumeReportConsumerKey } from './resume-report-consumer.js';
+
+const log = createLogger('resume-report-snapshot');
 
 // reports/ 直下の予約名（単一情報源は core/models/reserved-report-names.ts）。
 // 継承 manifest はスナップショットの一部として reports 内に置かれ、次回 resume
@@ -55,6 +57,8 @@ export { RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.j
 import {
   classifyReportRelativePath,
   RESUME_ARTIFACTS_FILE_NAME,
+  REPORT_INTERNAL_NAMESPACE,
+  REPORT_EXECUTIONS_DIRECTORY,
 } from '../../models/reserved-report-names.js';
 
 export interface ResumeReportSnapshotFileEntry {
@@ -75,12 +79,18 @@ export interface ResumeReportSnapshotConsumerEntry {
   readonly references: readonly ResumeReportSnapshotReferenceEntry[];
 }
 
+interface ResumeReportSnapshotSkippedEntry {
+  readonly path: string;
+  readonly reason: 'symlink' | 'non_regular';
+}
+
 export interface ResumeReportSnapshotManifest {
   readonly version: 1 | 2;
   readonly sourceRunSlug: string;
   readonly targetRunSlug: string;
   readonly createdAt: string;
   readonly files: readonly ResumeReportSnapshotFileEntry[];
+  readonly skippedEntries?: readonly ResumeReportSnapshotSkippedEntry[];
   readonly resumeReportConsumers?: readonly ResumeReportSnapshotConsumerEntry[];
 }
 
@@ -108,9 +118,11 @@ const MANIFEST_V2_KEYS = new Set([
   'targetRunSlug',
   'createdAt',
   'files',
+  'skippedEntries',
   'resumeReportConsumers',
 ]);
 const MANIFEST_FILE_KEYS = new Set(['path', 'size', 'sha256']);
+const MANIFEST_SKIPPED_ENTRY_KEYS = new Set(['path', 'reason']);
 const MANIFEST_CONSUMER_KEYS = new Set(['consumerKey', 'reportDirectories', 'references']);
 const MANIFEST_REFERENCE_KEYS = new Set(['reference', 'path']);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -155,11 +167,14 @@ function parseResumeReportConsumers(
     throw new Error('Resume report snapshot: manifest resumeReportConsumers must be an array');
   }
   const seenConsumers = new Set<string>();
-  return value.map((entry, consumerIndex): ResumeReportSnapshotConsumerEntry => {
+  return value.flatMap((entry, consumerIndex): ResumeReportSnapshotConsumerEntry[] => {
     if (!isRecord(entry) || !hasOnlyKeys(entry, MANIFEST_CONSUMER_KEYS)) {
       throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}] has an invalid shape`);
     }
-    if (typeof entry.consumerKey !== 'string' || !isResumeReportConsumerKey(entry.consumerKey)) {
+    const keyKind = typeof entry.consumerKey === 'string'
+      ? classifyResumeReportConsumerKey(entry.consumerKey)
+      : 'invalid';
+    if (keyKind === 'invalid' || typeof entry.consumerKey !== 'string') {
       throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].consumerKey is invalid`);
     }
     if (seenConsumers.has(entry.consumerKey)) {
@@ -198,11 +213,15 @@ function parseResumeReportConsumers(
       return { reference: referenceEntry.reference, path: referenceEntry.path };
     });
     seenConsumers.add(entry.consumerKey);
-    return {
+    if (keyKind === 'legacy') {
+      log.warn('Ignoring inherited report consumer without call instances', { consumerKey: entry.consumerKey });
+      return [];
+    }
+    return [{
       consumerKey: entry.consumerKey,
       reportDirectories: [...new Set(entry.reportDirectories)],
       references,
-    };
+    }];
   });
 }
 
@@ -257,14 +276,42 @@ function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string
       ? []
       : parseResumeReportConsumers(value.resumeReportConsumers, seenPaths)
     : undefined;
+  const skippedEntries = value.skippedEntries === undefined
+    ? undefined
+    : parseSkippedEntries(value.skippedEntries, seenPaths);
   return {
     version: value.version,
     sourceRunSlug: value.sourceRunSlug,
     targetRunSlug,
     createdAt: value.createdAt,
     files,
+    ...(skippedEntries === undefined ? {} : { skippedEntries }),
     ...(resumeReportConsumers === undefined ? {} : { resumeReportConsumers }),
   };
+}
+
+function parseSkippedEntries(
+  value: unknown,
+  filePaths: ReadonlySet<string>,
+): readonly ResumeReportSnapshotSkippedEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Resume report snapshot: manifest skippedEntries must be an array');
+  }
+  const seenPaths = new Set<string>();
+  return value.map((entry, index): ResumeReportSnapshotSkippedEntry => {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, MANIFEST_SKIPPED_ENTRY_KEYS)) {
+      throw new Error(`Resume report snapshot: manifest skippedEntries[${index}] has an invalid shape`);
+    }
+    if (typeof entry.path !== 'string' || !isValidManifestPath(entry.path)
+      || seenPaths.has(entry.path) || filePaths.has(entry.path)) {
+      throw new Error(`Resume report snapshot: manifest skippedEntries[${index}].path is invalid`);
+    }
+    if (entry.reason !== 'symlink' && entry.reason !== 'non_regular') {
+      throw new Error(`Resume report snapshot: manifest skippedEntries[${index}].reason is invalid`);
+    }
+    seenPaths.add(entry.path);
+    return { path: entry.path, reason: entry.reason };
+  });
 }
 
 function toPosixRelative(relativePath: string): string {
@@ -320,14 +367,21 @@ function createDirectoryChain(trustedRootAbs: string, targetDirAbs: string, labe
 
 interface CopyResult {
   readonly files: ResumeReportSnapshotFileEntry[];
+  readonly skippedEntries: ResumeReportSnapshotSkippedEntry[];
 }
 
 const PRIVATE_FILE_MODE = 0o600;
 type ResumeSnapshotEntryKind =
   | 'public'
+  | 'execution'
   | 'excluded';
 
 function classifyResumeSnapshotEntry(relativePath: string): ResumeSnapshotEntryKind {
+  const internal = REPORT_EXECUTIONS_DIRECTORY;
+  if (relativePath === REPORT_INTERNAL_NAMESPACE || relativePath === internal
+    || relativePath === `${internal}/index.json`
+    || relativePath === `${internal}/versions`
+    || new RegExp(`^${internal.replaceAll('.', '\\.')}/versions/[a-f0-9-]+(?:/[^/]+)?$`).test(relativePath)) return 'execution';
   const classification = classifyReportRelativePath(relativePath);
   if (classification.kind === 'public') {
     return 'public';
@@ -351,7 +405,7 @@ function inspectSnapshotSource<T>(operation: () => T): T {
 
 /**
  * source reports/ を stagingDir へ再帰コピーしつつ manifest エントリを作る。
- * symlink・非通常ファイル（fifo 等）は拒否して即座に throw する。
+ * symlink・非通常ファイル（fifo 等）は追跡せず、除外一覧へ記録する。
  */
 function copyReportsTree(
   sourceRootSnapshot: PrivateDirectoryReadSnapshot,
@@ -359,6 +413,7 @@ function copyReportsTree(
   relativeDir: string,
 ): CopyResult {
   const files: ResumeReportSnapshotFileEntry[] = [];
+  const skippedEntries: ResumeReportSnapshotSkippedEntry[] = [];
   const sourceRootAbs = sourceRootSnapshot.path;
   const sourceDirAbs = relativeDir === '' ? sourceRootAbs : join(sourceRootAbs, relativeDir);
   const directorySnapshot = relativeDir === ''
@@ -377,19 +432,24 @@ function copyReportsTree(
     const entryAbs = resolve(sourceRootAbs, entryRel);
     assertInside(sourceRootAbs, entryAbs, `source entry "${entryPosix}"`);
     const stat = inspectSnapshotSource(() => lstatSync(entryAbs));
+    if (entryKind === 'execution' && (!stat.isDirectory() && (!stat.isFile()
+      || !(entryPosix === `${REPORT_EXECUTIONS_DIRECTORY}/index.json`
+        || entryPosix.startsWith(`${REPORT_EXECUTIONS_DIRECTORY}/versions/`) && entryPosix.split('/').length === 5)))) {
+      continue;
+    }
     if (stat.isSymbolicLink()) {
-      throw new ResumeReportSnapshotSourceError(
-        `Resume report snapshot: refusing to copy symlink "${entryPosix}" from source run reports`,
-      );
+      skippedEntries.push({ path: entryPosix, reason: 'symlink' });
+      continue;
     }
     if (stat.isDirectory()) {
-      files.push(...copyReportsTree(sourceRootSnapshot, stagingRootAbs, entryRel).files);
+      const copied = copyReportsTree(sourceRootSnapshot, stagingRootAbs, entryRel);
+      files.push(...copied.files);
+      skippedEntries.push(...copied.skippedEntries);
       continue;
     }
     if (!stat.isFile()) {
-      throw new ResumeReportSnapshotSourceError(
-        `Resume report snapshot: refusing to copy non-regular file "${entryPosix}" from source run reports`,
-      );
+      skippedEntries.push({ path: entryPosix, reason: 'non_regular' });
+      continue;
     }
     const content = inspectSnapshotSource(() => readRegularFileNoFollow(entryAbs, stat));
     const stagingAbs = resolve(stagingRootAbs, entryRel);
@@ -398,15 +458,13 @@ function copyReportsTree(
     ensurePrivateDirectory(stagingDirectory);
     const inheritedMode = stat.mode & PRIVATE_FILE_MODE;
     writePrivateFileWithMode(stagingAbs, content, inheritedMode);
-    if (entryKind === 'public') {
-      files.push({
-        path: entryPosix,
-        size: content.length,
-        sha256: createHash('sha256').update(content).digest('hex'),
-      });
-    }
+    if (entryKind === 'public') files.push({
+      path: entryPosix,
+      size: content.length,
+      sha256: createHash('sha256').update(content).digest('hex'),
+    });
   }
-  return { files };
+  return { files, skippedEntries };
 }
 
 function isEmptyDir(dirAbs: string): boolean {
@@ -499,19 +557,22 @@ export function inheritResumeReportSnapshot(
   // source の reports/ パス自体が symlink の場合、外部ディレクトリを丸ごと
   // コピーしてしまう（boundary requirement）。中身の走査前にパス自体を lstat で拒否する。
   const sourceReportsStat = inspectSnapshotSource(() => lstatOrUndefined(sourcePaths.reportsAbs));
-  if (sourceReportsStat?.isSymbolicLink()) {
+  if (sourceReportsStat === undefined) {
+    throw new ResumeReportSnapshotSourceError(
+      `Resume report snapshot: source run "${sourceRunSlug}" reports directory does not exist at ${sourcePaths.reportsAbs}`,
+    );
+  }
+  if (sourceReportsStat.isSymbolicLink()) {
     throw new ResumeReportSnapshotSourceError(
       `Resume report snapshot: source run "${sourceRunSlug}" reports path is a symlink; refusing to copy it`,
     );
   }
-  if (sourceReportsStat !== undefined && !sourceReportsStat.isDirectory()) {
+  if (!sourceReportsStat.isDirectory()) {
     throw new ResumeReportSnapshotSourceError(
       `Resume report snapshot: source run "${sourceRunSlug}" reports path is not a directory`,
     );
   }
-  const sourceReportsSnapshot = sourceReportsStat === undefined
-    ? undefined
-    : inspectSnapshotSource(() => capturePrivateDirectoryReadSnapshot(sourcePaths.reportsAbs));
+  const sourceReportsSnapshot = inspectSnapshotSource(() => capturePrivateDirectoryReadSnapshot(sourcePaths.reportsAbs));
 
   createDirectoryChain(trustedRoot, targetPaths.runRootAbs, 'target run path');
   assertDirectoryChain(trustedRoot, targetPaths.runRootAbs, 'target run path');
@@ -526,9 +587,7 @@ export function inheritResumeReportSnapshot(
   let completed = false;
   try {
     ensurePrivateDirectory(stagingRootAbs);
-    const { files } = sourceReportsSnapshot !== undefined
-      ? copyReportsTree(sourceReportsSnapshot, stagingRootAbs, '')
-      : { files: [] as ResumeReportSnapshotFileEntry[] };
+    const { files, skippedEntries } = copyReportsTree(sourceReportsSnapshot, stagingRootAbs, '');
 
     const createdAt = new Date().toISOString();
     assertManifestMetadata(sourceRunSlug, targetRunSlug, createdAt);
@@ -539,6 +598,7 @@ export function inheritResumeReportSnapshot(
       targetRunSlug,
       createdAt,
       files: [...files].sort((a, b) => a.path.localeCompare(b.path)),
+      skippedEntries: [...skippedEntries].sort((a, b) => a.path.localeCompare(b.path)),
       resumeReportConsumers: (options.resumeReportConsumers ?? []).map((consumer) => ({
         ...consumer,
         references: consumer.references.filter((reference) => copiedFilePaths.has(reference.path)),

@@ -36,7 +36,7 @@ import {
   validateScopeOwner,
   validateScopeRepo,
   validateScopeFacetName,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 import {
   resolveFacetPath,
   resolvePersona,

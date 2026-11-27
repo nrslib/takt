@@ -10,11 +10,11 @@ import {
   isScopeRef,
   parseScopeRef,
   resolveScopeRef,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 import {
   assertAllowedPersonaPath,
 } from './workflowPersonaPathPolicy.js';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import {
   buildCandidateDirsWithPackage,
   buildFacetsRoots,
@@ -41,7 +41,7 @@ export {
   resolveSectionMap,
   extractPersonaDisplayName,
   isScopeRef,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 
 export type { FacetResolutionContext } from './workflowPackageScope.js';
 
@@ -849,14 +849,9 @@ export function resolveRefList(
   facetType?: FacetType,
   context?: FacetResolutionContext,
 ): string[] | undefined {
-  if (refs == null) return undefined;
-  const list = Array.isArray(refs) ? refs : [refs];
-  const contents: string[] = [];
-  for (const ref of list) {
-    const content = resolveRefToContent(ref, resolvedMap, workflowDir, facetType, context);
-    if (content) contents.push(content);
-  }
-  return contents.length > 0 ? contents : undefined;
+  const contents = resolveRefListWithSource(refs, resolvedMap, workflowDir, facetType, context)
+    ?.map(({ content }) => content).filter(Boolean);
+  return contents && contents.length > 0 ? contents : undefined;
 }
 
 export function resolveRefListWithSource(
@@ -869,9 +864,15 @@ export function resolveRefListWithSource(
   if (refs == null) return undefined;
   const list = Array.isArray(refs) ? refs : [refs];
   const contents: ResolvedFacetContent[] = [];
+  const seen = new Set<string>();
   for (const ref of list) {
     const resolved = resolveRefToContentWithSource(ref, resolvedMap, workflowDir, facetType, context);
-    if (resolved) contents.push(resolved);
+    if (!resolved) continue;
+    if (facetType === 'policies' || facetType === 'knowledge') {
+      if (seen.has(resolved.content)) continue;
+      seen.add(resolved.content);
+    }
+    contents.push(resolved);
   }
   return contents.length > 0 ? contents : undefined;
 }

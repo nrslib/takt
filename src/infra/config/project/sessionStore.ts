@@ -4,34 +4,15 @@
  * Manages persona sessions and input history persistence.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveProviderAlias } from '../../../shared/types/provider.js';
+import { CODEX_SESSION_CONTRACT } from '../../../shared/codex-session-contract.js';
+import { writeFileAtomic } from '../../../shared/utils/atomic-file.js';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
 
-/**
- * Write file atomically using temp file + rename.
- * This prevents corruption when multiple processes write simultaneously.
- */
-export function writeFileAtomic(filePath: string, content: string, mode = 0o644): void {
-  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tempPath, content, { encoding: 'utf-8', mode, flag: 'wx' });
-    chmodSync(tempPath, mode);
-    renameSync(tempPath, filePath);
-  } catch (error) {
-    try {
-      if (existsSync(tempPath)) {
-        unlinkSync(tempPath);
-      }
-    } catch {
-      // Ignore cleanup errors
-    }
-    throw error;
-  }
-}
+export { writeFileAtomic };
 
 function sessionFileMode(storageDirectory?: string): number {
   return storageDirectory === undefined ? 0o644 : 0o600;
@@ -118,6 +99,9 @@ function readSessionData(sessionPath: string, currentProvider?: string): Record<
     if (currentProvider && data.provider !== resolveProviderAlias(currentProvider)) {
       return {};
     }
+    if (resolveProviderAlias(currentProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT) {
+      return {};
+    }
     return data.personaSessions || {};
   } catch {
     return {};
@@ -151,7 +135,8 @@ function updateSessionData(
       const data = JSON.parse(content) as PersonaSessionData;
       existingProvider = data.provider;
       // If provider changed, discard old sessions
-      if (provider && existingProvider && existingProvider !== provider) {
+      if ((provider && existingProvider && existingProvider !== provider)
+        || ((provider ?? existingProvider) === 'codex' && data.codexSessionContract !== CODEX_SESSION_CONTRACT)) {
         sessions = {};
       } else {
         sessions = data.personaSessions || {};
@@ -177,6 +162,7 @@ function updateSessionData(
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
     provider: provider ?? existingProvider,
+    ...((provider ?? existingProvider) === 'codex' ? { codexSessionContract: CODEX_SESSION_CONTRACT } : {}),
   };
   writeFileAtomic(sessionPath, JSON.stringify(data, null, 2), fileMode);
 }
@@ -231,6 +217,7 @@ export function savePersonaSessions(
     personaSessions: sessions,
     updatedAt: new Date().toISOString(),
     provider: resolveProviderAlias(provider),
+    ...(resolveProviderAlias(provider) === 'codex' ? { codexSessionContract: CODEX_SESSION_CONTRACT } : {}),
   };
   writeFileAtomic(path, JSON.stringify(data, null, 2), sessionFileMode(storageDirectory));
 }

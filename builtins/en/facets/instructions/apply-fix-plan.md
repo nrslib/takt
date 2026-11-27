@@ -5,6 +5,8 @@ Success means completing every fix unit and every completion obligation derived 
 **Fix plan:**
 {report:fix-plan.md}
 
+Use this plan and the current decision to determine current repair targets. Read the supplied history lists to compare assumptions missing from earlier repairs; do not add targets from previous versions.
+
 **Important:**
 - Before editing, reconcile the plan's root cause, responsibility and source of truth, impact paths, methods, evidence, and completion criteria with the current code, Report Directory, and active constraints
 - When the plan contains a concrete cause investigation, execute its fixed conditions, single varied condition, observation target, and method before production repair, and confirm that the result matches the plan's premises. If it does not, do not repair; report the evidence that the fix plan requires revision
@@ -12,6 +14,8 @@ Success means completing every fix unit and every completion obligation derived 
 - Preserve public APIs, parameters, return values, events, commands, configuration, paths, and persisted formats outside the requested change scope. For a replacement, close current-consumer migration, obsolete-path removal, and each explicitly required support target as separate completion obligations
 - If the plan conflicts under the same requirements and design assumptions, do not edit; provide evidence and report "Fix plan requires revision"
 - If task-level requirements or design must change, do not edit; provide evidence and report "Task-level replanning required"
+
+Check the plan’s method comparison and selection reasons. Record the method actually applied, treatment of the shared cause, and current evidence in the repair report. Relate verification approaches from the old plan superseded by the latest instructions to the acceptance criteria retained.
 
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/repair-path-check}}

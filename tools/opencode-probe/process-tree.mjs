@@ -12,6 +12,8 @@ export const PROCESS_TREE_CLEANUP_GRACE_MS = process.platform === 'win32'
   : 5_000;
 const PROCESS_EXIT_POLL_MS = 10;
 const WINDOWS_PROCESS_EXIT_POLL_MS = 100;
+const WINDOWS_PROCESS_FIELDS = 'ProcessId,ParentProcessId,CreationDate';
+const WINDOWS_PROCESS_PROJECTION = "ProcessId,ParentProcessId,@{Name='CreationDate';Expression={$_.CreationDate.ToUniversalTime().ToString('o')}}";
 
 export function startProcessTreeCleanup(pid) {
   return terminateProcessTree(pid);
@@ -97,43 +99,40 @@ async function terminateWindowsProcessTreeInternal(pid, executeFile) {
   const snapshot = await listWindowsProcesses(executeFile, deadline);
   if (snapshot.status === 'deadline') {
     recordFailure(failures, 'WMI process snapshot deadline exceeded');
-    const taskkill = await taskkillBestEffort([pid], executeFile, deadline, true);
-    recordCommandFailure(failures, 'taskkill root', taskkill);
     throw createWindowsProcessTreeError(pid, [], true, failures);
   }
   if (snapshot.status === 'unavailable') {
     recordFailure(failures, formatUnavailable('WMI process snapshot', snapshot.error));
-    const taskkill = await taskkillBestEffort([pid], executeFile, deadline, true);
-    recordCommandFailure(failures, 'taskkill root', taskkill);
     throw createWindowsProcessTreeError(pid, [], false, failures);
   }
 
-  const processTree = collectWindowsProcessTree(pid, snapshot.processes);
-  const rootTaskkill = await taskkillBestEffort([pid], executeFile, deadline, true);
-  recordCommandFailure(failures, 'taskkill root', rootTaskkill);
+  const { processes: processTree, unsafeEdges } = collectWindowsProcessTree(pid, snapshot.processes);
+  if (processTree.length === 0) return;
+
+  const root = processTree.find((processInfo) => processInfo.pid === pid);
+  if (root !== undefined) {
+    const identity = await matchingWindowsProcesses([root], executeFile, deadline);
+    if (identity.status !== 'available') {
+      recordFailure(failures, identity.status === 'deadline'
+        ? 'WMI root identity query deadline exceeded'
+        : formatUnavailable('WMI root identity query', identity.error));
+    } else if (identity.processes.length > 0) {
+      const taskkill = await taskkillBestEffort([pid], executeFile, deadline, !unsafeEdges);
+      recordCommandFailure(failures, 'taskkill root', taskkill);
+    }
+  }
 
   const descendants = processTree.filter((processInfo) => processInfo.pid !== pid).reverse();
   if (descendants.length > 0) {
-    const identities = await queryWindowsProcesses(
-      executeFile,
-      `Get-CimInstance Win32_Process -Filter "${descendants.map(({ pid: processId }) => `ProcessId = ${processId}`).join(' OR ')}" | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress`,
-      deadline,
-    );
+    const identities = await matchingWindowsProcesses(descendants, executeFile, deadline);
     if (identities.status !== 'available') {
       recordFailure(failures, identities.status === 'deadline'
         ? 'WMI descendant identity query deadline exceeded'
         : formatUnavailable('WMI descendant identity query', identities.error));
-    } else {
-      // One snapshot checks every descendant. Starting PowerShell once per PID
-      // used up the cleanup deadline before larger process trees were stopped.
-      const remainingDescendants = descendants.filter((descendant) => identities.processes.some(
-        (current) => current.pid === descendant.pid && current.creationDate === descendant.creationDate,
-      ));
-      if (remainingDescendants.length > 0) {
-        const processIds = remainingDescendants.map(({ pid: processId }) => processId);
-        const taskkill = await taskkillBestEffort(processIds, executeFile, deadline, false);
-        recordCommandFailure(failures, `taskkill descendants ${processIds.join(', ')}`, taskkill);
-      }
+    } else if (identities.processes.length > 0) {
+      const descendantIds = identities.processes.map(({ pid: processId }) => processId);
+      const taskkill = await taskkillBestEffort(descendantIds, executeFile, deadline, !unsafeEdges);
+      recordCommandFailure(failures, `taskkill descendants ${descendantIds.join(', ')}`, taskkill);
     }
   }
 
@@ -170,22 +169,17 @@ async function reportCleanupFailure(error) {
   throw error;
 }
 
-async function taskkillBestEffort(processIds, executeFile, deadline, forceAfterDeadline) {
+async function taskkillBestEffort(processIds, executeFile, deadline, includeTree) {
   return executeWindowsCommand(
     executeFile,
     'taskkill',
-    [...processIds.flatMap((pid) => ['/PID', String(pid)]), '/T', '/F'],
+    [...processIds.flatMap((pid) => ['/PID', String(pid)]), ...(includeTree ? ['/T'] : []), '/F'],
     deadline,
-    forceAfterDeadline,
   );
 }
 
 async function listWindowsProcesses(executeFile, deadline) {
-  return queryWindowsProcesses(
-    executeFile,
-    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress',
-    deadline,
-  );
+  return queryWindowsProcesses(executeFile, windowsProcessQuery([]), deadline);
 }
 
 async function waitForWindowsProcessTreeExit(processTree, executeFile, deadline) {
@@ -195,7 +189,7 @@ async function waitForWindowsProcessTreeExit(processTree, executeFile, deadline)
   while (true) {
     const currentProcesses = await queryWindowsProcesses(
       executeFile,
-      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress',
+      windowsProcessQuery(processTree.map(({ pid }) => pid)),
       deadline,
     );
     if (currentProcesses.status === 'deadline') {
@@ -223,6 +217,25 @@ async function waitForWindowsProcessTreeExit(processTree, executeFile, deadline)
   }
 }
 
+function windowsProcessQuery(processIds) {
+  const filter = processIds.length > 0
+    ? ` WHERE ${processIds.map((pid) => `ProcessId = ${pid}`).join(' OR ')}`
+    : '';
+  return `Get-CimInstance -Query "SELECT ${WINDOWS_PROCESS_FIELDS} FROM Win32_Process${filter}" -ErrorAction Stop | Select-Object ${WINDOWS_PROCESS_PROJECTION} | ConvertTo-Json -Compress`;
+}
+
+async function matchingWindowsProcesses(originals, executeFile, deadline) {
+  const current = await queryWindowsProcesses(
+    executeFile,
+    windowsProcessQuery(originals.map(({ pid }) => pid)),
+    deadline,
+  );
+  if (current.status !== 'available') return current;
+  return { status: 'available', processes: originals.filter((original) => current.processes.some(
+    (processInfo) => processInfo.pid === original.pid && processInfo.creationDate === original.creationDate,
+  )) };
+}
+
 async function queryWindowsProcesses(executeFile, command, deadline) {
   const result = await executeWindowsCommand(
     executeFile,
@@ -234,7 +247,6 @@ async function queryWindowsProcesses(executeFile, command, deadline) {
       command,
     ],
     deadline,
-    false,
   );
   if (result.status === 'deadline') {
     return { status: 'deadline' };
@@ -249,14 +261,12 @@ async function queryWindowsProcesses(executeFile, command, deadline) {
   }
 }
 
-async function executeWindowsCommand(executeFile, file, args, deadline, forceAfterDeadline) {
+async function executeWindowsCommand(executeFile, file, args, deadline) {
   const remaining = deadline - Date.now();
-  if (remaining <= 0 && !forceAfterDeadline) {
+  if (remaining <= 0) {
     return { status: 'deadline' };
   }
-  const timeout = remaining > 0
-    ? Math.min(WINDOWS_COMMAND_TIMEOUT_MS, remaining)
-    : WINDOWS_COMMAND_TIMEOUT_MS;
+  const timeout = Math.min(WINDOWS_COMMAND_TIMEOUT_MS, remaining);
   let timeoutId;
   const command = Promise.resolve()
     .then(() => executeFile(file, args, { timeout }))
@@ -330,32 +340,55 @@ function parseWindowsProcesses(result) {
   }
   const parsed = JSON.parse(stdout);
   const processes = Array.isArray(parsed) ? parsed : [parsed];
-  return processes.flatMap((processInfo) => {
+  const seenPids = new Set();
+  return processes.map((processInfo) => {
     const pid = Number(processInfo?.ProcessId);
     const parentProcessId = Number(processInfo?.ParentProcessId);
     const creationDate = processInfo?.CreationDate;
-    if (!Number.isInteger(pid) || !Number.isInteger(parentProcessId) || typeof creationDate !== 'string') {
-      return [];
+    if (!Number.isInteger(pid) || !Number.isInteger(parentProcessId)
+      || typeof creationDate !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$/.test(creationDate)
+      || !Number.isFinite(Date.parse(creationDate))) {
+      throw new Error('Invalid WMI process identity');
     }
-    return [{ pid, parentProcessId, creationDate }];
+    if (seenPids.has(pid)) {
+      throw new Error(`Duplicate WMI process ID ${pid}`);
+    }
+    seenPids.add(pid);
+    return { pid, parentProcessId, creationDate };
   });
 }
 
 function collectWindowsProcessTree(rootPid, processes) {
+  const processesByPid = new Map();
   const childrenByParent = new Map();
   for (const processInfo of processes) {
+    processesByPid.set(processInfo.pid, processInfo);
     const children = childrenByParent.get(processInfo.parentProcessId) ?? [];
     children.push(processInfo);
     childrenByParent.set(processInfo.parentProcessId, children);
   }
-  const processTree = processes.filter((processInfo) => processInfo.pid === rootPid);
+  const root = processesByPid.get(rootPid);
+  const processTree = root === undefined ? [] : [root];
+  const visited = new Set([rootPid]);
+  let unsafeEdges = false;
   const pending = [...(childrenByParent.get(rootPid) ?? [])];
   while (pending.length > 0) {
     const processInfo = pending.pop();
+    if (visited.has(processInfo.pid)) {
+      unsafeEdges = true;
+      continue;
+    }
+    const parent = processesByPid.get(processInfo.parentProcessId);
+    if (parent !== undefined && processInfo.creationDate <= parent.creationDate) {
+      unsafeEdges = true;
+      continue;
+    }
+    visited.add(processInfo.pid);
     processTree.push(processInfo);
-    pending.push(...(childrenByParent.get(processInfo.pid) ?? []));
+    for (const child of childrenByParent.get(processInfo.pid) ?? []) pending.push(child);
   }
-  return processTree;
+  return { processes: processTree, unsafeEdges };
 }
 
 function signalProcessGroup(pid, signal) {

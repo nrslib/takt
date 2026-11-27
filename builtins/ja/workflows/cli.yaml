@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: CLI の計画・テスト作成・実装を進め、レビューと修正で要件充足を確認する
     kind: workflow_call
     call: development-core
     args:

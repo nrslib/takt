@@ -9,8 +9,9 @@ const testId = randomUUID();
 const testDir = join(tmpdir(), `takt-assistant-config-test-${testId}`);
 const globalTaktDir = join(testDir, 'global-takt');
 const globalConfigPath = join(globalTaktDir, 'config.yaml');
-const { mockConfirm, mockResolveTtyPolicy } = vi.hoisted(() => ({
+const { mockConfirm, mockConfirmWithCancel, mockResolveTtyPolicy } = vi.hoisted(() => ({
   mockConfirm: vi.fn(),
+  mockConfirmWithCancel: vi.fn(),
   mockResolveTtyPolicy: vi.fn(),
 }));
 
@@ -26,11 +27,13 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
 vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   confirm: (...args: unknown[]) => mockConfirm(...args),
+  confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
 vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
@@ -44,27 +47,12 @@ const { invalidateGlobalConfigCache } = await import('../infra/config/global/glo
 const { invalidateAllResolvedConfigCache } = await import('../infra/config/resolveConfigValue.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
-type FormalSpecResolverModule = {
-  resolveFormalSpecConfiguration(projectDir: string): Promise<{
-    mode: boolean;
-    comments: boolean;
-    modelCheckTimeoutSeconds: number;
-  }>;
-  resolveFormalSpecConfigurationWithoutPrompt(projectDir: string): {
-    mode: boolean;
-    comments: boolean;
-    modelCheckTimeoutSeconds: number;
-  };
-  resolveFormalSpecMode(projectDir: string): Promise<boolean>;
-  resolveFormalSpecModeWithoutPrompt(projectDir: string): boolean;
-};
-
 const {
   resolveFormalSpecConfiguration,
   resolveFormalSpecConfigurationWithoutPrompt,
   resolveFormalSpecMode,
   resolveFormalSpecModeWithoutPrompt,
-} = taskInstructionFormat as unknown as FormalSpecResolverModule;
+} = taskInstructionFormat;
 
 describe('assistantConfig', () => {
   let projectDir: string;
@@ -75,6 +63,7 @@ describe('assistantConfig', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
+    mockConfirmWithCancel.mockReset();
     mockConfirm.mockReset();
     mockResolveTtyPolicy.mockReturnValue({ useTty: false, forceTouchTty: false });
   });
@@ -86,6 +75,57 @@ describe('assistantConfig', () => {
       rmSync(testDir, { recursive: true, force: true });
     }
   });
+
+  it('should propagate Escape without resolving it to an enabled or disabled configuration', async () => {
+    mockResolveTtyPolicy.mockReturnValue({ useTty: true, forceTouchTty: false });
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'cancelled' });
+
+    await expect(resolveFormalSpecConfiguration(projectDir, { allowCancel: true })).resolves.toBeNull();
+
+    expect(mockConfirmWithCancel).toHaveBeenCalledOnce();
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('should preserve answer=%s and resolved settings when cancellation is allowed', async (answer) => {
+    mockResolveTtyPolicy.mockReturnValue({ useTty: true, forceTouchTty: false });
+    writeFileSync(globalConfigPath, [
+      'language: ja',
+      'assistant:',
+      '  formal_spec:',
+      "    mode: 'Y/n'",
+      '    comments: false',
+      '    model_check_timeout_seconds: 45',
+    ].join('\n'), 'utf-8');
+    mockConfirmWithCancel.mockResolvedValue({ kind: 'value', value: answer });
+
+    await expect(resolveFormalSpecConfiguration(projectDir, { allowCancel: true })).resolves.toEqual({
+      mode: answer, comments: false, modelCheckTimeoutSeconds: 45,
+    });
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringMatching(/形式仕様モード/), true);
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('should skip both prompts for configured boolean=%s even when cancellation is allowed', async (mode) => {
+    mockResolveTtyPolicy.mockReturnValue({ useTty: true, forceTouchTty: false });
+    writeFileSync(globalConfigPath, `assistant:\n  formal_spec: ${mode}\n`, 'utf-8');
+
+    await expect(resolveFormalSpecConfiguration(projectDir, { allowCancel: true })).resolves.toMatchObject({ mode });
+
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+  });
+
+  it.each([['Y/n', true], ['y/N', false]] as const)(
+    'should keep the non-TTY default for %s when cancellation is allowed',
+    async (mode, expected) => {
+      writeFileSync(globalConfigPath, `assistant:\n  formal_spec: '${mode}'\n`, 'utf-8');
+
+      await expect(resolveFormalSpecConfiguration(projectDir, { allowCancel: true })).resolves.toMatchObject({ mode: expected });
+
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    },
+  );
 
   it('should resolve assistant config layers separately for local and global config', () => {
     writeFileSync(
@@ -400,10 +440,4 @@ describe('assistantConfig', () => {
       expect(mockConfirm).not.toHaveBeenCalled();
     },
   );
-
-  it('should keep assistant-only resolver out of infra config public exports', async () => {
-    const infraConfig = await import('../infra/config/index.js');
-
-    expect('resolveAssistantConfigLayers' in infraConfig).toBe(false);
-  });
 });

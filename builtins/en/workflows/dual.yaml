@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: Develop the frontend and backend, then verify requirement fulfillment through tests, reviews, and fixes.
     kind: workflow_call
     call: development-core
     args:

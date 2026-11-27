@@ -1,4 +1,5 @@
-import type { UserConfig } from 'vitest/config';
+import type { TestUserConfig } from 'vitest/config';
+import { createRequire } from 'node:module';
 import {
   heavyParallelIntegrationTestFiles,
   lightIntegrationTestFiles,
@@ -7,6 +8,11 @@ import {
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
+import { isolateUserDirectoriesForTestRun } from './scripts/test-user-isolation.mjs';
+
+// Runs in the parent Vitest process before any worker exists, so threads,
+// forks, and their child processes all inherit the temporary user directories.
+isolateUserDirectoriesForTestRun();
 
 export const srcTestInclude = [
   'src/__tests__/**/*.test.ts',
@@ -48,13 +54,21 @@ export const itSerialTestGlobs = [
   ...itSerialWorkflowLoaderTestGlobs,
 ];
 
+export const unitTestExcludes = [...itTestGlobs, ...itSerialTestGlobs];
+
 // Some workflow tests spawn processes and perform fsync-heavy persistence.
 // Keep one sufficiently large ceiling for every platform and runner.
 const testTimeout = 120_000;
 
+const require = createRequire(import.meta.url);
+const { installNotificationSilence } = require('./scripts/test-notification-silence.cjs') as typeof import('./scripts/test-notification-silence.cjs');
+installNotificationSilence();
+
 export const commonSrcTestConfig = {
   env: {
-    TAKT_CONFIG_DIR: '',
+    // The isolated directory, not '': an empty value made getGlobalConfigDir()
+    // fall back to homedir()/.takt at module load and in beforeAll/afterAll.
+    TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR!,
     TAKT_NOTIFY_WEBHOOK: '',
   },
   // Local runs execute an adaptive unit-shard wave plus fork workers and
@@ -69,7 +83,7 @@ export const commonSrcTestConfig = {
   environment: 'node',
   globals: false,
   reporters: ['dot'],
-  setupFiles: ['src/__tests__/test-setup.ts'],
+  setupFiles: ['scripts/test-notification-silence.cjs', 'src/__tests__/test-setup.ts'],
   testTimeout,
   teardownTimeout: 5000,
   coverage: {
@@ -78,22 +92,17 @@ export const commonSrcTestConfig = {
     include: ['src/**/*.ts'],
     exclude: ['src/__tests__/**', 'src/**/*.d.ts'],
   },
-} satisfies UserConfig['test'];
+} satisfies TestUserConfig;
 
 export const parallelSrcRunnerConfig = {
   pool: 'forks',
   fileParallelism: true,
-  minWorkers: 1,
   maxWorkers: '50%',
-} satisfies UserConfig['test'];
+} satisfies TestUserConfig;
 
 export const serialSrcRunnerConfig = {
   testTimeout: 120_000,
   passWithNoTests: true,
   pool: 'threads',
-  poolOptions: {
-    threads: {
-      singleThread: true,
-    },
-  },
-} satisfies UserConfig['test'];
+  maxWorkers: 1,
+} satisfies TestUserConfig;

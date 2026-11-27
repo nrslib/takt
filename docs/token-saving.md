@@ -2,11 +2,11 @@
 
 [日本語](./token-saving.ja.md)
 
-Use token-saving changes after measuring a baseline. Lower token counts are useful only when they also reduce total retries, loop count, wall time, or provider cost.
+Measure current usage first. Compare retries, loop count, elapsed time, and cost alongside token counts.
 
 ## Measure First
 
-Enable phase-level usage events:
+Enable usage events for each phase:
 
 ```yaml
 observability:
@@ -14,30 +14,30 @@ observability:
   usage_events_phase: true
 ```
 
-Build TAKT and analyze one or more runs:
+Build TAKT and analyze the run records:
 
 ```bash
 npm run build
 npm run analyze:usage -- .takt/runs/<run>
 ```
 
-Compare by `step`, `phase`, `provider`, and `model`. Focus on repeated review loops, large `phase1_execute` prompts, and missing usage records before changing workflows.
+Compare by `step`, `phase`, `provider`, and `model`. Check repeated reviews, large `phase1_execute` prompts, and missing usage records before changing workflows.
 
 ## Reduce Workflow Cost
 
-- Choose lighter builtin workflows such as `*-mini` when a task does not need the full planning/review loop.
-- Use [`provider_routing`](./configuration.md) to send cheaper or faster providers and models to low-risk steps.
-- Route expensive models only to steps that need them, such as final review or difficult implementation steps.
-- Split oversized tasks before running TAKT so each workflow has a smaller planning and review context.
-- Shorten output contracts when a report does not need detailed prose.
+- Choose lighter builtin workflows such as `*-mini` for tasks that need fewer planning or review steps.
+- Choose providers and models per step with runtime `provider.targets` or legacy [`provider_routing`](./configuration.md).
+- Use costly models for steps that need them, such as difficult implementation or final review.
+- Split large tasks before running TAKT to focus planning and review context.
+- Keep output contracts brief when reports need little detail.
 
 ## Keep Context Focused
 
 - Keep personas, policies, knowledge, and instructions narrow to the step that uses them.
-- Avoid shared-context bloat: do not attach broad knowledge files to every step if only one step needs them.
-- Prefer task-specific facts over long copied background sections.
+- Pass a long knowledge file only to the step that needs it.
+- Prefer task-specific facts to long background material.
 - Remove stale workflow-local facets when they are no longer referenced.
 
 ## Evaluate External Compression Proxies
 
-External compression proxies should be evaluated only after baseline usage is known. Compare TAKT usage events before and after the proxy, and compare provider-side or proxy-side stats when available. A proxy is a loss if it lowers raw tokens but increases retries, review rejections, or total cost.
+Compare TAKT usage events before and after introducing an external compression proxy. Check provider or proxy statistics when available. Evaluate changes in retries, rejected reviews, and total cost alongside token counts.

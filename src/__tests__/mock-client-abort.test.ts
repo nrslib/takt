@@ -19,6 +19,7 @@ import { ScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/sce
 
 afterEach(() => {
   resetScenario();
+  vi.useRealTimers();
 });
 
 // ---------------------------------------------------------------------------
@@ -108,43 +109,39 @@ describe('callMock: abortSignal propagation during mock delay', () => {
   });
 
   it('should return blocked when AbortSignal fires during delayMs', async () => {
-    // Given: scenario with a long delay (5s) and no persona restriction
+    vi.useFakeTimers();
     setMockScenario([{ status: 'done', content: 'Done', delayMs: 5000 }]);
 
     const controller = new AbortController();
-    // Abort after 20ms — well before the 5000ms delay
-    setTimeout(() => controller.abort(), 20);
-
-    const start = Date.now();
-    const result = await callMock('agents/test-coder', 'task text', {
+    const response = callMock('agents/test-coder', 'task text', {
       cwd: '/tmp/project',
       abortSignal: controller.signal,
     });
-    const elapsed = Date.now() - start;
+
+    await vi.advanceTimersByTimeAsync(20);
+    controller.abort();
+    const result = await response;
 
     expect(result.status).toBe('blocked');
     expect(result.content).toContain('[MOCK:ABORTED]');
-    // Should resolve in well under 1s despite the 5s delay
-    expect(elapsed).toBeLessThan(1000);
   });
 
   it('should return blocked immediately when AbortSignal is already aborted before call', async () => {
     // Given: scenario with long delay, signal pre-aborted
+    vi.useFakeTimers();
     setMockScenario([{ status: 'done', content: 'Done', delayMs: 5000 }]);
 
     const controller = new AbortController();
     controller.abort(); // Already aborted
 
-    const start = Date.now();
-    const result = await callMock('agents/test-coder', 'task text', {
+    const response = callMock('agents/test-coder', 'task text', {
       cwd: '/tmp/project',
       abortSignal: controller.signal,
     });
-    const elapsed = Date.now() - start;
+    expect(vi.getTimerCount()).toBe(0);
+    const result = await response;
 
     expect(result.status).toBe('blocked');
-    // Immediate rejection — should return in < 100ms
-    expect(elapsed).toBeLessThan(100);
   });
 
   it('should complete normally when AbortSignal is not aborted', async () => {
@@ -188,26 +185,6 @@ describe('callMock: abortSignal propagation during mock delay', () => {
     expect(result.content).toBe('Fallback used');
   });
 
-  it('should return blocked for path-style persona + no-persona fallback + abort (combined fix verification)', async () => {
-    // Given: scenario without persona and with long delay (simulates the sigint-ai-wait fixture after fix)
-    setMockScenario([{ status: 'done', content: 'Done', delayMs: 5000 }]);
-
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 20);
-
-    const start = Date.now();
-    const result = await callMock('agents/test-coder', 'task text', {
-      cwd: '/tmp/project',
-      abortSignal: controller.signal,
-    });
-    const elapsed = Date.now() - start;
-
-    // Validates both layers:
-    //   Layer 1: 'agents/test-coder' matches no-persona fallback → delayMs applied
-    //   Layer 2: abortSignal propagated → delay interrupted → blocked returned
-    expect(result.status).toBe('blocked');
-    expect(elapsed).toBeLessThan(1000);
-  });
 });
 
 // ---------------------------------------------------------------------------

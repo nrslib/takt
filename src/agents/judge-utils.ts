@@ -1,3 +1,6 @@
+import type { Language } from '../core/models/types.js';
+import type { WorkflowAssignment } from '../core/workflow/workflow-prompt-context.js';
+import { renderPhaseContext } from '../shared/prompts/phase-context.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 
 export function detectJudgeIndex(content: string): number {
@@ -13,10 +16,15 @@ export function detectJudgeIndex(content: string): number {
 export function buildJudgePrompt(
   agentOutput: string,
   aiConditions: Array<{ index: number; text: string }>,
+  language: Language,
+  assignment?: WorkflowAssignment,
 ): string {
   const conditionList = aiConditions
     .map((c) => `| ${c.index + 1} | ${c.text} |`)
     .join('\n');
 
-  return loadTemplate('perform_judge_message', 'en', { agentOutput, conditionList });
+  return loadTemplate('perform_judge_message', language, {
+    agentOutput, conditionList,
+    phaseContext: assignment === undefined ? '' : renderPhaseContext(assignment, 3, language),
+  });
 }

@@ -3,6 +3,7 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
+import type { WorkflowAssignment, WorkflowPromptContext } from '../workflow-prompt-context.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { ReportPhaseRunnerContext, StatusJudgmentPhaseContext } from '../phase-runner.js';
 import {
@@ -26,7 +27,10 @@ import {
   providerSupportsMaxTurns,
   providerSupportsPermissionControls,
   providerSupportsStructuredOutput,
+  providerSupportsAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
+import { reportPhaseEventTools } from '../report-phase-tools.js';
+import type { ProgressNotesRequest } from '../progress-notes.js';
 import type {
   ProviderActivityCallback,
   ProviderType,
@@ -95,16 +99,16 @@ export class OptionsBuilder {
     private readonly getSessionId: (persona: string) => string | undefined,
     private readonly getReportDir: () => string,
     private readonly getLanguage: () => Language | undefined,
-    private readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>,
     private readonly getWorkflowName: () => string,
-    private readonly getWorkflowDescription: () => string | undefined,
-    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
-    private readonly getTask?: () => string,
-    private readonly getReviewScope?: () => TaskReviewScope,
+    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined,
+    private readonly getTask: () => string,
+    private readonly getReviewScope: () => TaskReviewScope,
     private readonly getFailureDir?: () => string,
     private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
     private readonly recordActivity: ProviderActivityCallback = () => {},
     private readonly getReportsRootDir?: () => string,
+    private readonly getWorkflowPromptContext?: (step: WorkflowStep, assignment?: WorkflowAssignment) => WorkflowPromptContext | undefined,
+    private readonly openCodeExternalDirectories: readonly string[] = [],
   ) {}
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -472,31 +476,30 @@ export class OptionsBuilder {
       && providerInfo.provider === step.provider;
   }
 
+  buildWorkflowMeta(step: WorkflowStep, runtime?: RuntimeStepResolution): WorkflowMeta {
+    return { workflowName: this.getWorkflowName(), currentStep: step.name, context: this.getWorkflowPromptContext?.(step, runtime?.workflowAssignment) };
+  }
+
   /** Build common RunAgentOptions shared by all phases */
   buildBaseOptions(
     step: WorkflowStep,
     mergedProviderOptions?: StepProviderOptions,
     runtime?: RuntimeStepResolution,
   ): ResolvedRunAgentOptions {
-    const steps = this.getWorkflowSteps();
-    const currentIndex = steps.findIndex((currentStep) => currentStep.name === step.name);
-    const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
     const providerInfo = this.resolveStepProviderModel(step, runtime);
     const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
     const providerOptions = mergedProviderOptions
       ?? this.resolveMergedProviderOptions(step, providerInfo, runtime);
-    const workflowMeta: WorkflowMeta = {
-      workflowName: this.getWorkflowName(),
-      workflowDescription: this.getWorkflowDescription(),
-      currentStep: step.name,
-      stepsList: steps,
-      currentPosition,
-    };
+    const workflowMeta = this.buildWorkflowMeta(step, runtime);
     const baseOptions: ResolvedRunAgentOptions = {
       executionPhase: 1,
+      edit: step.edit,
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
+      ...(this.openCodeExternalDirectories.length === 0
+        ? {}
+        : { openCodeExternalDirectories: this.openCodeExternalDirectories }),
       abortSignal: this.resolveAbortSignal(),
       personaPath: step.personaPath,
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
@@ -554,6 +557,9 @@ export class OptionsBuilder {
       executionPhase: 2,
       cwd: baseOptions.cwd,
       projectCwd: baseOptions.projectCwd,
+      ...(baseOptions.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: baseOptions.openCodeExternalDirectories }),
       abortSignal: baseOptions.abortSignal,
       personaPath: baseOptions.personaPath,
       workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
@@ -711,8 +717,7 @@ export class OptionsBuilder {
         resolvedProvider,
       );
 
-    // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
-    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
+    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh';
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
@@ -734,13 +739,30 @@ export class OptionsBuilder {
     };
   }
 
-  /** Preserve explicit readonly/tool-free constraints for DeepSeek validation; other providers keep their readonly policy. */
-  private resolveReadonlyPhaseConstraints(
+  /**
+   * Every step's Phase 1 within a run takes part in progress notes and compaction recovery.
+   * `reviewScope` is the scope the Phase 1 instruction was built with, so the notes identity matches it.
+   */
+  buildProgressNotesRequest(step: WorkflowStep, reviewScope: TaskReviewScope): ProgressNotesRequest {
+    const notesStep = {
+      reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
+      task: this.getTask(),
+      stepName: step.name,
+      definition: JSON.stringify(step),
+    };
+    return step.edit === false
+      ? { ...notesStep, bindsSourceRevision: true, scope: reviewScope }
+      : { ...notesStep, bindsSourceRevision: false };
+  }
+
+  private resolveReportPhaseConstraints(
     step: WorkflowStep,
-    allowedTools: string[] | undefined,
     runtime?: RuntimeStepResolution,
   ): Pick<RunAgentOptions, 'permissionMode' | 'permissionResolution' | 'allowedTools'> {
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const allowedTools = providerSupportsAllowedTools(resolvedProvider) === true
+      ? [...reportPhaseEventTools(resolvedProvider)]
+      : undefined;
     if (resolvedProvider === 'deepseek-harness') {
       // The SDK cannot enforce report-phase tool restrictions. Keep even the
       // synthetic empty allowlist so the provider refuses before any tool runs.
@@ -748,9 +770,7 @@ export class OptionsBuilder {
     }
     const supportsPermissionControls = providerSupportsPermissionControls(resolvedProvider);
     if (supportsPermissionControls === false) {
-      // Empty tools are the synthetic report-phase default. Preserve a
-      // non-empty caller constraint so unsupported providers can reject it at
-      // their boundary instead of silently running without the constraint.
+      // Preserve constraints for validation at providers without permission controls.
       return allowedTools !== undefined && allowedTools.length > 0
         ? { allowedTools }
         : {};
@@ -763,7 +783,7 @@ export class OptionsBuilder {
   }
 
   /**
-   * Build RunAgentOptions for session-resume phases (Phase 2, Phase 3).
+   * Build RunAgentOptions for the resumed report phase (Phase 2).
    *
    * step の `structured_output` は Phase 1 の遷移判定用であって、report phase の
    * 成果物ではない。ここで outputSchema を渡すと provider が Phase 2 でもスキーマ
@@ -778,7 +798,7 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
-      ...this.resolveReadonlyPhaseConstraints(step, [], runtime),
+      ...this.resolveReportPhaseConstraints(step, runtime),
       sessionId,
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
@@ -787,13 +807,13 @@ export class OptionsBuilder {
   /** Build RunAgentOptions for Phase 2 retry with a new session */
   buildNewSessionReportOptions(
     step: WorkflowStep,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
-      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, runtime),
+      ...this.resolveReportPhaseConstraints(step, runtime),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -801,7 +821,7 @@ export class OptionsBuilder {
   buildFallbackReportOptions(
     step: WorkflowStep,
     failedPrimaryOptions: RunAgentOptions,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
   ): RunAgentOptions | undefined {
     if (this.engineOptions.reportFallbackProvider === undefined) {
       return undefined;
@@ -813,7 +833,8 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
     const options: RunAgentOptions = {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
-      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, fallbackRuntime),
+      ...this.resolveReportPhaseConstraints(step, fallbackRuntime),
+      workflowMeta: failedPrimaryOptions.workflowMeta,
       sessionId: undefined,
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
@@ -878,10 +899,12 @@ export class OptionsBuilder {
       this.getCurrentWorkflowStack() ?? [],
     );
     return {
+      workflowMeta: this.buildWorkflowMeta(step, runtime),
       cwd: this.getCwd(),
-      task: this.getTask?.(),
+      task: this.getTask(),
+      projectCwd: this.getProjectCwd(),
       userInputs: [...state.userInputs],
-      reviewScope: this.getReviewScope?.(),
+      reviewScope: this.getReviewScope(),
       reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
       ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),
       ...(resumeReportConsumerKey === undefined ? {} : { resumeReportConsumerKey }),
@@ -893,6 +916,9 @@ export class OptionsBuilder {
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
       reportContentSanitizer: this.engineOptions.reportContentSanitizer,
+      onReportPersisted: (name, content) => this.engineOptions.sharedRuntime?.reportExecutions?.capture(
+        resolveReportDirectory(this.getCwd(), this.getReportDir()), name, content,
+      ),
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.resolveAbortSignal(),

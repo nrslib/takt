@@ -9,9 +9,17 @@
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse, stringify } from 'yaml';
+import {
+  mergeCiResultPaths,
+  normalizeMergeCiResults,
+  resolveMergeCiExpectedResults,
+  validateMergeCiResultCoverage,
+} from './merge-ci-public-results.mjs';
 import {
   PROMPT_EVAL_SUITES,
   PROMPT_EVAL_TIERS,
@@ -90,15 +98,48 @@ const summary = [];
 for (const suite of selected) {
   const config = join(evalDir, suite.config);
   console.log(`\n=== suite: ${suite.name} (${suite.config}) ===`);
-  const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...options.flags], {
-    stdio: 'inherit',
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
-    },
-  });
-  summary.push({ name: suite.name, code: result.status ?? 1 });
+  let code;
+  let filteredConfigPath;
+  try {
+    const paths = mergeCiResultPaths(suite.name, repoRoot);
+    const expected = paths === undefined ? undefined
+      : resolveMergeCiExpectedResults(parse(readFileSync(config, 'utf8')), options.flags);
+    if (paths !== undefined) {
+      mkdirSync(dirname(paths.raw), { recursive: true });
+      rmSync(paths.raw, { force: true });
+    }
+    if (suite.name === 'manager-work-split') {
+      const { filterManagerWorkSplitConfig } = await import('../manager-work-split-config.mjs');
+      const original = parse(readFileSync(config, 'utf8'));
+      const filtered = filterManagerWorkSplitConfig(original, options.flags);
+      if (filtered !== original) {
+        // Keep relative prompt/provider/assertion paths anchored to the original config directory.
+        filteredConfigPath = join(dirname(config), `.manager-filter-${randomUUID()}.yaml`);
+        writeFileSync(filteredConfigPath, stringify(filtered));
+      }
+    }
+    const result = spawnSync('npx', ['promptfoo', 'eval', '-c', filteredConfigPath ?? config, '--no-progress-bar', ...options.flags], {
+      stdio: 'inherit',
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
+      },
+    });
+    code = result.status ?? 1;
+    if (paths !== undefined) {
+      const published = normalizeMergeCiResults(JSON.parse(readFileSync(paths.raw, 'utf8')), repoRoot);
+      mkdirSync(dirname(paths.published), { recursive: true });
+      writeFileSync(paths.published, `${JSON.stringify(published, null, 2)}\n`);
+      validateMergeCiResultCoverage(published, expected);
+    }
+  } catch (error) {
+    console.error(`Failed to run or publish ${suite.name}: ${error.message}`);
+    code = 1;
+  } finally {
+    if (filteredConfigPath !== undefined) rmSync(filteredConfigPath, { force: true });
+  }
+  summary.push({ name: suite.name, code });
 }
 
 console.log('\n=== eval summary ===');

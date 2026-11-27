@@ -1,10 +1,21 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalFinished } from '../../infra/goals/activity.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
-import { loadRunSessionContext } from '../interactive/runSessionReader.js';
+import { loadRunSessionPage } from '../interactive/runSessionReader.js';
+import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
+import { goalSummary, goalValuePage, selectGoalValue, type GoalPullRequestState } from './goalResponse.js';
+import { readGoalPullRequestStatus as defaultReadGoalPullRequestStatus } from '../../infra/goals/pull-request-status.js';
+import type { PrMergeStatus } from '../../infra/github/pr-status.js';
+import type { Goal } from '../../infra/goals/schema.js';
+import type { ManagerWorkflow } from '../manager/workflowSelection.js';
+import type { ManagerRuntimeAssignment } from '../manager/runtimeAssignmentSelection.js';
+import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
+export { jsonResult } from './response.js';
 import {
   issueTellableRunningTask,
   type TellableRunningTask,
@@ -22,6 +33,8 @@ import {
   saveTaskFile as defaultSaveTaskFile,
 } from '../tasks/add/index.js';
 import type {
+  GetGoalInput,
+  ListGoalsInput,
   EnqueueTaskInput,
   GetRunInput,
   ListTasksInput,
@@ -30,35 +43,106 @@ import type {
 
 type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
+type ReadGoalPullRequestStatus = typeof defaultReadGoalPullRequestStatus;
 
 export interface McpOperationDependencies {
+  managerImageSource?: { root: string; conversationId: string };
+  managerWorkflows?: readonly ManagerWorkflow[];
+  managerRuntimeAssignments?: readonly ManagerRuntimeAssignment[];
+  turnOperationId?: string;
+  readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
+  readGoalPullRequestStatus?: ReadGoalPullRequestStatus;
   allowedProjectRoot?: string;
   /** Only the interactive read-only server emits internal conversation metadata. */
   includeReferenceMarkers?: boolean;
 }
 
-function textResult(text: string, isError?: boolean): CallToolResult {
-  return {
-    ...(isError ? { isError: true } : {}),
-    content: [{ type: 'text', text }],
-  };
-}
-
-function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
-  return textResult(JSON.stringify(value), isError);
-}
-
-function errorResult(action: string, error: unknown): CallToolResult {
+export function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
+}
+
+const PULL_REQUEST_STATES: Record<PrMergeStatus['state'], GoalPullRequestState> = {
+  OPEN: 'open', MERGED: 'merged', CLOSED: 'closed',
+};
+
+type GoalPullRequestTarget = Pick<Goal, 'pullRequest' | 'branch' | 'integrationBranch'>;
+
+async function goalPullRequestState(cwd: string, target: GoalPullRequestTarget, deps: McpOperationDependencies, signal: AbortSignal | undefined): Promise<GoalPullRequestState | undefined> {
+  if (target.pullRequest === undefined) return undefined;
+  const status = await (deps.readGoalPullRequestStatus ?? defaultReadGoalPullRequestStatus)(cwd, target, signal);
+  return status?.status === 'available' ? PULL_REQUEST_STATES[status.pullRequest.state] : undefined;
+}
+
+async function goalResponse(cwd: string, goal: Goal, deps: McpOperationDependencies, signal: AbortSignal | undefined) {
+  return goalSummary(goal, await goalPullRequestState(cwd, goal, deps, signal));
+}
+
+export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies, signal?: AbortSignal): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    let totalCount = 0;
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? 50;
+    const { goals: pageEntries, errors } = await new GoalStore(input.cwd).list((goal) => {
+      if (input.state !== undefined && input.state !== 'all' && isGoalFinished(goal) !== (input.state === 'finished')) return undefined;
+      const index = totalCount++;
+      if (index < offset || index >= offset + limit) return undefined;
+      return {
+        summary: goalSummary(goal),
+        target: { pullRequest: goal.pullRequest, branch: goal.branch, integrationBranch: goal.integrationBranch },
+      };
+    });
+    const goals = await Promise.all(pageEntries.map(async (entry) => {
+      const state = await goalPullRequestState(input.cwd, entry.target, deps, signal);
+      return state === undefined || entry.target.pullRequest === undefined
+        ? entry.summary
+        : { ...entry.summary, pullRequest: { ...entry.target.pullRequest, state } };
+    }));
+    const errorOffset = input.errorOffset ?? 0;
+    const selectedErrors = errors.slice(errorOffset, errorOffset + limit)
+      .map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) }));
+    return pagedResult('goals', goals, totalCount, offset, errors.length > 0, {
+      ...(errors.length > 0 ? {
+        errors: selectedErrors,
+        errorPage: {
+          collection: 'errors',
+          totalCount: errors.length,
+          returnedCount: selectedErrors.length,
+          omittedCount: errors.length - selectedErrors.length,
+          offset: errorOffset,
+          nextOffset: errorOffset + selectedErrors.length < errors.length ? errorOffset + selectedErrors.length : null,
+          truncated: selectedErrors.length < errors.length,
+          retrieval: 'Pass errorPage.nextOffset as errorOffset to read more errors.',
+        },
+      } : {}),
+    });
+  } catch (error) {
+    return errorResult('Goal list failed', error);
+  }
+}
+
+export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies, signal?: AbortSignal): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const goal = await new GoalStore(input.cwd).get(input.goalId);
+    if (input.path !== undefined) {
+      const value = selectGoalValue(goal, input.path, input.recordId);
+      if (Array.isArray(value)) return pagedResult('items', value.slice(input.offset ?? 0, (input.offset ?? 0) + (input.limit ?? 50)), value.length, input.offset ?? 0, undefined, { goalId: goal.id, path: input.path });
+      return jsonResult({ goalId: goal.id, path: input.path, ...goalValuePage(value, input) });
+    }
+    return jsonResult({ goal: await goalResponse(input.cwd, goal, deps, signal) });
+  } catch (error) {
+    return errorResult('Goal read failed', error);
+  }
 }
 
 function findRunReadCwd(cwd: string, runSlug: string): string {
   const task = new TaskRunner(cwd)
     .listTaskStateItems()
     .find((candidate) => candidate.runSlug === runSlug);
-  if (task?.worktreePath === undefined) {
+  if (task?.remoteAssignment !== undefined || task?.worktreePath === undefined || task.mergeTask === true) {
     return cwd;
   }
   assertTaskStateWorktreeOwnership(cwd, task);
@@ -68,15 +152,25 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
 function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItems']>[number]): Record<string, unknown> {
   const summary: Record<string, unknown> = {
     name: task.name,
+    ...(task.workerName === undefined ? {} : { workerName: task.workerName }),
+    ...(task.remoteAssignment?.retryReservation ? { retryReservation: { workerName: task.remoteAssignment.workerName } } : {}),
+    ...(task.remoteAssignment?.restartReason === undefined ? {} : { restartReason: task.remoteAssignment.restartReason }),
+    ...(task.waitingReason === undefined ? {} : { waitingReason: task.waitingReason }),
+    ...(task.executionId === undefined ? {} : { executionId: task.executionId }),
+    ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,
+    ...(task.mergeTask === undefined ? {} : { mergeTask: task.mergeTask, prNumber: task.prNumber }),
+    ...(task.mergeTask !== true || task.completion === undefined ? {} : { completion: task.completion }),
+    ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
+    ...(task.runtimeAssignment === undefined ? {} : { runtimeAssignment: task.runtimeAssignment }),
   };
   if (task.runSlug !== undefined) {
     summary.runSlug = task.runSlug;
     try {
       let runCwd = cwd;
-      if (task.worktreePath !== undefined) {
+      if (task.remoteAssignment === undefined && task.worktreePath !== undefined && task.mergeTask !== true) {
         assertTaskStateWorktreeOwnership(cwd, task);
         runCwd = task.worktreePath;
       }
@@ -101,14 +195,19 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
   return summary;
 }
 
-export function listTaktTasks(
+export async function listTaktTasks(
   input: ListTasksInput,
   deps: McpOperationDependencies = {},
-): CallToolResult {
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const tasks = new TaskRunner(input.cwd).listTaskStateItems().map((task) => taskSummary(input.cwd, task));
-    return jsonResult({ tasks });
+    const tasks = new TaskRunner(input.cwd).listTaskStateItems();
+    const offset = input.offset ?? 0;
+    const page = tasks.slice(offset, offset + (input.limit ?? 50));
+    const integrations = await getTaskGoalIntegrations(input.cwd, page, signal);
+    const selected = page.map((task, index) => ({ ...taskSummary(input.cwd, task), ...integrations[index] }));
+    return pagedResult('tasks', selected, tasks.length, offset);
   } catch (error) {
     return errorResult('Task list failed', error);
   }
@@ -121,15 +220,9 @@ export function getTaktRun(
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const runCwd = findRunReadCwd(input.cwd, input.runSlug);
-    const context = loadRunSessionContext(runCwd, input.runSlug, {
-      liveInterventionProjectCwd: input.cwd,
-    });
-    const payload = JSON.stringify({ runSlug: input.runSlug, ...context });
-    return textResult(
-      deps.includeReferenceMarkers
-        ? `${payload}\n${formatTaskStateReferenceMarker(input.runSlug)}`
-        : payload,
-    );
+    const context = loadRunSessionPage(runCwd, input.runSlug, { ...input, maxBytes: input.maxBytes ?? MCP_TEXT_PAGE_BYTES, liveInterventionProjectCwd: input.cwd });
+    return jsonResult({ runSlug: input.runSlug, ...context }, undefined,
+      deps.includeReferenceMarkers ? `\n${formatTaskStateReferenceMarker(input.runSlug)}` : '');
   } catch (error) {
     return errorResult('Run read failed', error);
   }
@@ -162,19 +255,19 @@ export async function tellTaktRun(
   }
 }
 
-function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+export function isPathAllowedByMcpRoot(target: string, allowedProjectRoot: string | undefined): boolean {
   if (allowedProjectRoot === undefined) {
-    return;
+    return true;
   }
 
-  const root = fs.realpathSync(allowedProjectRoot);
-  const target = fs.realpathSync(cwd);
-  const relative = path.relative(root, target);
-  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
-    return;
-  }
+  const relative = path.relative(fs.realpathSync(allowedProjectRoot), fs.realpathSync(target));
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
 
-  throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
+export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+  if (!isPathAllowedByMcpRoot(cwd, allowedProjectRoot)) {
+    throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
+  }
 }
 
 function issueFailureResult(failure: IssueEnqueueFailure): CallToolResult {

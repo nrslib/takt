@@ -141,7 +141,7 @@ function resolveResumePoint(
   workflowConfig: WorkflowConfig,
   run: ResumableDirectRun,
 ): WorkflowResumePoint | undefined {
-  return trimResumePointStackForWorkflow({
+  const resolvedResumePoint = trimResumePointStackForWorkflow({
     workflow: workflowConfig,
     resumePoint: run.meta.resumePoint,
     validateTerminalWorkflowCall: true,
@@ -155,6 +155,10 @@ function resolveResumePoint(
       }
     },
   });
+  if (resolvedResumePoint?.stack.length !== run.meta.resumePoint?.stack.length) {
+    return undefined;
+  }
+  return run.meta.resumePoint;
 }
 
 function resolveStartStep(

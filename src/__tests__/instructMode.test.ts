@@ -42,18 +42,19 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -93,6 +94,9 @@ vi.mock('../shared/prompts/index.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
+import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { writeRunSessionLogFixture } from './helpers/run-session-log-fixture.js';
 import {
   listRecentRuns,
@@ -114,6 +118,7 @@ const mockLoadTemplate = vi.mocked(loadTemplate);
 const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
+let projectConfigDir: string;
 
 function setupMockProvider(responses: string[]): MockProviderCapture {
   const { provider, capture } = createMockProvider(responses);
@@ -129,12 +134,19 @@ function setupScenarioProvider(...scenarios: Parameters<typeof createScenarioPro
 
 beforeEach(() => {
   vi.clearAllMocks();
+  invalidateResolvedConfigCache('/project');
+  mockLoadTemplate.mockReset().mockReturnValue('Mock template content');
+  vi.mocked(loadGlobalConfig).mockReturnValue({ provider: 'mock', language: 'en', autoFetch: false });
   process.env.TMPDIR = TEST_TMPDIR;
+  projectConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-instruct-config-'));
+  vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   mockSelectOption.mockResolvedValue('execute');
 });
 
 afterEach(() => {
+  invalidateResolvedConfigCache('/project');
   restoreStdin();
+  fs.rmSync(projectConfigDir, { recursive: true, force: true });
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {
@@ -449,6 +461,27 @@ describe('runInstructMode', () => {
 });
 
 describe('runInstructMode conversation routes', () => {
+  it.each(['en', 'ja'] as const)('identifies task-list revision in the real %s prompt and returns the generated order', async (lang) => {
+    const actual = await vi.importActual<typeof import('../shared/prompts/index.js')>('../shared/prompts/index.js');
+    mockLoadTemplate.mockImplementation(actual.loadTemplate);
+    vi.mocked(loadGlobalConfig).mockReturnValue({ provider: 'mock', language: lang, autoFetch: false });
+    const note = lang === 'ja' ? '訂正、Androidも対象にしてください' : 'Correction: include Android too.';
+    const canonical = '# Original order\n\nSupport iOS only; exclude Android.';
+    setupRawStdin(toRawInputs([`/go ${note}`]));
+    const capture = setupMockProvider(['# Revised order\n\nSupport iOS and Android.']);
+
+    const result = await runTestInstructMode({ previousOrderContent: canonical });
+
+    const prompt = capture.prompts[0]!;
+    expect(prompt).toContain(canonical);
+    expect(prompt.split(note)).toHaveLength(2);
+    const heading = prompt.split('\n').filter((line) => /^#{1,6}\s/u.test(line) && (
+      lang === 'ja' ? /タスク.*(?:一覧|リスト)/u.test(line) : /task[ -]list/iu.test(line)
+    ));
+    expect(heading).toHaveLength(1);
+    expect(heading[0]).not.toMatch(/\/(?:go|retry)\b/u);
+    expect(result).toMatchObject({ action: 'execute', source: 'go', task: '# Revised order\n\nSupport iOS and Android.' });
+  });
   it('should not execute directly when a command this mode disabled is entered', async () => {
     // `/accept` is not on the mode's list, so the line is ordinary text — the
     // session reads the same list the front-end gates its commands with.
@@ -462,7 +495,7 @@ describe('runInstructMode conversation routes', () => {
     expect(result.source).toBe('go');
   });
 
-  it('should append user note to summary prompt on /go with note', async () => {
+  it('should return the generated revision on /go with a note', async () => {
     setupRawStdin(toRawInputs(['refactor auth', '/go also check security']));
     setupMockProvider(['Will do.', 'Refactor auth and check security.']);
 

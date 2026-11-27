@@ -305,6 +305,50 @@ describe('runtime.yaml internal_agents resolution', () => {
     expect(selector.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
   });
 
+  it.each([undefined, 'selected-model'])(
+    'preserves the selected selector profile model %s instead of the defaults model',
+    (model) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'base' },
+          profiles: {
+            base: { provider: 'codex', model: 'base-model' },
+            selected: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+          },
+          targets: { internal_agents: { selector: { profile: 'selected' } } },
+        },
+      });
+      invalidate();
+
+      const entry = resolveRuntimeInternalAgentProvider(projectCwd, 'selector');
+      expect(entry).toBeDefined();
+      const { providerEnvironment } = resolveRuntimeEnvironment({
+        projectCwd,
+        legacySignals: [],
+        legacy: {
+          provider: undefined, providerSource: 'default', model: undefined, modelSource: 'default',
+          personaProviders: undefined, providerRouting: undefined, autoRouting: undefined,
+          providerOptions: undefined,
+        },
+      });
+      expect(providerEnvironment.model).toBe('base-model');
+      const selectors = [
+        entry!,
+        resolveSelectorProviderForProject(projectCwd),
+        resolveSelectorProviderFromRuntimeEnvironment(providerEnvironment, projectCwd),
+      ];
+      for (const selector of selectors) {
+        expect(selector.provider).toBe('codex');
+        if (model === undefined) {
+          expect(selector.model).toBeUndefined();
+        } else {
+          expect(selector.model).toBe('selected-model');
+        }
+      }
+    },
+  );
+
   it('applies an env config_profile override to the runtime selector options', () => {
     writeGlobalRuntimeFile({
       version: 1,
@@ -379,6 +423,33 @@ describe('runtime.yaml internal_agents resolution', () => {
       model: 'sonnet',
     });
   });
+
+  it.each([undefined, 'selected-model'])(
+    'preserves the selected assistant profile model %s through session initialization',
+    (model) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'base' },
+          profiles: {
+            base: { provider: 'codex', model: 'base-model' },
+            selected: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+          },
+          targets: { internal_agents: { assistant: { profile: 'selected' } } },
+        },
+      });
+      invalidate();
+
+      const session = initializeSession(projectCwd, 'interactive');
+      expect(session).toBeDefined();
+      expect(session.providerType).toBe('codex');
+      if (model === undefined) {
+        expect(session.model).toBeUndefined();
+      } else {
+        expect(session.model).toBe('selected-model');
+      }
+    },
+  );
 
   it('returns undefined in legacy mode so taktProviders resolution stays in effect', () => {
     writeGlobalConfig([

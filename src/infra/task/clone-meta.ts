@@ -18,6 +18,20 @@ export function getCloneMetaPath(projectDir: string, branch: string, metadataDir
 }
 
 export function saveCloneMeta(projectDir: string, branch: string, clonePath: string, metadataDirectory?: string): void {
+  writeCloneMeta(projectDir, branch, clonePath, metadataDirectory, true);
+}
+
+export function saveGeneratedCloneMeta(projectDir: string, branch: string, clonePath: string, metadataDirectory?: string): boolean {
+  return writeCloneMeta(projectDir, branch, clonePath, metadataDirectory, false);
+}
+
+function writeCloneMeta(
+  projectDir: string,
+  branch: string,
+  clonePath: string,
+  metadataDirectory: string | undefined,
+  replace: boolean,
+): boolean {
   const filePath = getCloneMetaPath(projectDir, branch, metadataDirectory);
   const directory = path.dirname(filePath);
   const mode = metadataDirectory === undefined ? 0o644 : 0o600;
@@ -27,7 +41,16 @@ export function saveCloneMeta(projectDir: string, branch: string, clonePath: str
   try {
     fs.writeFileSync(temporary, JSON.stringify({ branch, clonePath }), { encoding: 'utf8', mode, flag: 'wx' });
     fs.chmodSync(temporary, mode);
-    fs.renameSync(temporary, filePath);
+    if (replace) {
+      fs.renameSync(temporary, filePath);
+    } else {
+      try {
+        fs.linkSync(temporary, filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+        throw error;
+      }
+    }
   } finally {
     try {
       fs.unlinkSync(temporary);
@@ -36,6 +59,7 @@ export function saveCloneMeta(projectDir: string, branch: string, clonePath: str
     }
   }
   log.info('Clone meta saved', { branch, clonePath });
+  return true;
 }
 
 export function removeCloneMeta(projectDir: string, branch: string, metadataDirectory?: string): void {

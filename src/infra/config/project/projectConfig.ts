@@ -31,6 +31,7 @@ import {
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
   denormalizeCacciaConfig,
+  denormalizeMergeConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -47,6 +48,8 @@ import {
   denormalizeWorkflowRuntimePreparePolicy,
   normalizeWorkflowCommandGatesPolicy,
   denormalizeWorkflowCommandGatesPolicy,
+  normalizeWorkflowSystemCommandsPolicy,
+  denormalizeWorkflowSystemCommandsPolicy,
   normalizeWorkflowArpeggioPolicy,
   denormalizeWorkflowArpeggioPolicy,
   normalizeSyncConflictResolver,
@@ -62,6 +65,7 @@ import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfig
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
+import { getProjectConfigSnapshot } from '../configSnapshot.js';
 import {
   omitDeprecatedAssistantGherkin,
   warnDeprecatedAssistantGherkin,
@@ -74,6 +78,8 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 /** Load project configuration with provenance, validating it before normalizing provider options. */
 export function loadProjectConfig(projectDir: string): ProjectConfig {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.project;
   const configPath = getProjectConfigPath(projectDir);
   const loadedTrace = loadProjectConfigTrace(
     configPath,
@@ -110,7 +116,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     telemetry,
     pipeline,
     caccia,
+    merge,
     assistant,
+    manager,
     takt_providers,
     persona_providers,
     provider_routing,
@@ -185,7 +193,10 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
     caccia,
+    merge,
     assistant: normalizeAssistantConfig(assistant),
+    manager: manager === undefined ? undefined : { permission: manager.permission, providerPermissions: manager.provider_permissions, patrolInterval: manager.patrol_interval, refreshIntervalMs: manager.refresh_interval_ms, autoRun: manager.auto_run, preserveGoalWorktree: manager.preserve_goal_worktree, workflows: manager.workflows, runtimeAssignments: manager.runtime_assignments, mainMerge: manager.main_merge, notifications: manager.notifications,
+      slack: manager.slack === undefined ? undefined : { channelId: manager.slack.channel_id, allowedUserIds: manager.slack.allowed_user_ids } },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     providerRouting: normalizedProviderRouting,
@@ -226,6 +237,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     runtime: normalizeRuntime(runtime),
     workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
     workflowCommandGates: normalizeWorkflowCommandGatesPolicy(parsedConfigResult.workflow_command_gates),
+    workflowSystemCommands: normalizeWorkflowSystemCommandsPolicy(parsedConfigResult.workflow_system_commands),
     workflowArpeggio: normalizeWorkflowArpeggioPolicy(parsedConfigResult.workflow_arpeggio),
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
     workflowMcpServers: normalizeWorkflowMcpServers(parsedConfigResult.workflow_mcp_servers),
@@ -233,6 +245,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
 }
 
 export function loadProjectConfigTraceState(projectDir: string): ConfigTrace {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.projectTrace;
   const cached = getCachedProjectConfigTrace(projectDir);
   if (cached) {
     return cached;
@@ -315,6 +329,14 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     if (Object.keys(pr).length > 0) savePayload.pipeline = pr;
   }
   delete savePayload.caccia;
+  delete savePayload.manager;
+  if (config.manager !== undefined) {
+    savePayload.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, refresh_interval_ms: config.manager.refreshIntervalMs, auto_run: config.manager.autoRun, preserve_goal_worktree: config.manager.preserveGoalWorktree, workflows: config.manager.workflows, runtime_assignments: config.manager.runtimeAssignments, main_merge: config.manager.mainMerge, notifications: config.manager.notifications,
+      slack: config.manager.slack === undefined ? undefined : { channel_id: config.manager.slack.channelId, allowed_user_ids: config.manager.slack.allowedUserIds } };
+  }
+  delete savePayload.merge;
+  const rawMerge = denormalizeMergeConfig(config.merge);
+  if (rawMerge !== undefined) savePayload.merge = rawMerge;
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
   if (rawCaccia !== undefined) {
     savePayload.caccia = rawCaccia;
@@ -357,7 +379,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowSystemCommands', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 
@@ -373,7 +395,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.runtime;
   }
-  for (const [key, raw] of [['workflow_runtime_prepare', denormalizeWorkflowRuntimePreparePolicy(config.workflowRuntimePrepare)], ['workflow_command_gates', denormalizeWorkflowCommandGatesPolicy(config.workflowCommandGates)], ['workflow_arpeggio', denormalizeWorkflowArpeggioPolicy(config.workflowArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizeWorkflowMcpServers(config.workflowMcpServers)]] as const) {
+  for (const [key, raw] of [['workflow_runtime_prepare', denormalizeWorkflowRuntimePreparePolicy(config.workflowRuntimePrepare)], ['workflow_command_gates', denormalizeWorkflowCommandGatesPolicy(config.workflowCommandGates)], ['workflow_system_commands', denormalizeWorkflowSystemCommandsPolicy(config.workflowSystemCommands)], ['workflow_arpeggio', denormalizeWorkflowArpeggioPolicy(config.workflowArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizeWorkflowMcpServers(config.workflowMcpServers)]] as const) {
     if (raw) { savePayload[key] = raw; } else { delete savePayload[key]; }
   }
 

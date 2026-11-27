@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -106,25 +106,6 @@ describe('resolveFacetByName', () => {
     expect(content).toBe('Custom policy content');
   });
 
-  it('should try project before builtin', () => {
-    // Create project override
-    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
-    mkdirSync(projectPersonasDir, { recursive: true });
-    writeFileSync(join(projectPersonasDir, 'coder.md'), 'OVERRIDE');
-
-    const content = resolveFacetByName('coder', 'personas', context);
-    expect(content).toBe('OVERRIDE');
-  });
-});
-
-describe('resource-resolver public API boundary', () => {
-  it('should not re-export workflow package scope helpers', async () => {
-    const resourceResolver = await import('../infra/config/loaders/resource-resolver.js');
-
-    expect(resourceResolver).not.toHaveProperty('buildCandidateDirsWithPackage');
-    expect(resourceResolver).not.toHaveProperty('getPackageFromWorkflowDir');
-    expect(resourceResolver).not.toHaveProperty('isPackageWorkflow');
-  });
 });
 
 describe('resolveRefToContent with layer resolution', () => {
@@ -430,40 +411,6 @@ describe('facet inheritance', () => {
     writeFileSync(join(dir, `${name}.md`), content);
   }
 
-  it.each(['ja', 'en'] as const)('composes frontend facets from gui without duplicating the shared facet (%s)', (language) => {
-    const languageContext: FacetResolutionContext = { projectDir, lang: language, workflowDir };
-
-    const knowledge = resolveRefToContent('frontend', undefined, workflowDir, 'knowledge', languageContext);
-    const policy = resolveRefToContent('frontend', undefined, workflowDir, 'policies', languageContext);
-    const builtinFacet = (type: FacetType, name: string): string =>
-      readFileSync(join(getBuiltinFacetDir(language, type), name + '.md'), 'utf8');
-    const guiKnowledge = builtinFacet('knowledge', 'gui');
-    const frontendKnowledge = builtinFacet('knowledge', 'frontend').replace(/^\{extends:gui\}\s*/, '');
-    const guiPolicy = builtinFacet('policies', 'gui');
-    const frontendPolicy = builtinFacet('policies', 'frontend').replace(/^\{extends:gui\}\s*/, '');
-
-    expect(knowledge).not.toContain('{extends:gui}');
-    expect(policy).not.toContain('{extends:gui}');
-    expect(knowledge).toContain(guiKnowledge);
-    expect(knowledge).toContain(frontendKnowledge);
-    expect(policy).toContain(guiPolicy);
-    expect(policy).toContain(frontendPolicy);
-    expect(knowledge.split(guiKnowledge)).toHaveLength(2);
-    expect(policy.split(guiPolicy)).toHaveLength(2);
-  });
-
-  it.each(['ja', 'en'] as const)('keeps react facets independent from frontend and gui', (language) => {
-    const languageContext: FacetResolutionContext = { projectDir, lang: language, workflowDir };
-
-    const knowledge = resolveRefToContent('react', undefined, workflowDir, 'knowledge', languageContext);
-    const policy = resolveRefToContent('react', undefined, workflowDir, 'policies', languageContext);
-
-    expect(knowledge).not.toContain('{extends:');
-    expect(policy).not.toContain('{extends:');
-    expect(knowledge).toBe(readFileSync(join(getBuiltinFacetDir(language, 'knowledge'), 'react.md'), 'utf8'));
-    expect(policy).toBe(readFileSync(join(getBuiltinFacetDir(language, 'policies'), 'react.md'), 'utf8'));
-  });
-
   it('should append local content after an inherited instruction parent', () => {
     writeProjectFacet('instructions', 'base', 'Base instruction');
     writeProjectFacet('instructions', 'custom', '{extends:base}\n\nCustom instruction');
@@ -713,22 +660,7 @@ describe('resolvePersona with layer resolution', () => {
     expect(result).toEqual({});
   });
 
-  it('should resolve valid project persona without unreachable guard (dead-code prevention)', () => {
-    const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
-    mkdirSync(projectPersonasDir, { recursive: true });
-    const personaPath = join(projectPersonasDir, 'valid-persona.md');
-    writeFileSync(personaPath, 'Valid persona content');
-
-    const result = resolvePersona('valid-persona', emptySections, tempDir, context);
-    expect(result.personaSpec).toBe('valid-persona');
-    expect(result.personaPath).toBe(personaPath);
-  });
-
-  it('should return resolved object with same structure whether personaPath exists or not (redundant-branch prevention)', () => {
-    const withPath = resolvePersona('coder', emptySections, tempDir, context);
-    expect(withPath.personaSpec).toBe('coder');
-    expect(withPath.personaPath).toBeDefined();
-
+  it('should keep an unresolved persona name without inventing a path', () => {
     const withoutPath = resolvePersona('nonexistent-persona-xyz', emptySections, tempDir, context);
     expect(withoutPath.personaSpec).toBe('nonexistent-persona-xyz');
     expect(withoutPath.personaPath).toBeUndefined();

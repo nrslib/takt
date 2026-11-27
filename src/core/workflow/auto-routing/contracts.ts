@@ -1,5 +1,6 @@
 import type { RoutingTier } from '../../models/config-types.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../../shared/types/provider.js';
+import type { WorkflowMeta } from '../../../agents/types.js';
 
 export type { RoutingTier };
 
@@ -74,6 +75,7 @@ export function validateRoutingReasonCodes(reasonCodes: unknown): asserts reason
 
 export interface WorkRequirementEstimator {
   estimate(input: RoutingModelInput, options?: {
+    workflowMeta?: WorkflowMeta;
     abortSignal?: AbortSignal;
     onStream?: StreamCallback;
     onActivity?: ProviderActivityCallback;

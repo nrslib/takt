@@ -66,6 +66,24 @@ export function normalizeTaskConfig(input: unknown): unknown {
   return next;
 }
 
+export function normalizePersistedTasksFile(input: unknown): unknown {
+  const file = toTaskConfigRecord(input);
+  if (!file || !Array.isArray(file.tasks)) {
+    return input;
+  }
+
+  return { ...file, tasks: file.tasks.map((task: unknown) => {
+    const record = toTaskConfigRecord(task);
+    if (!record) return task;
+    const next = { ...record };
+    delete next.merge_caccia_required;
+    delete next.merge_skip_caccia_if_no_activity;
+    delete next.merge_caccia_approved_head_sha;
+    delete next.merge_caccia_skipped_head_sha;
+    return next;
+  }) };
+}
+
 export function serializeTaskConfig(record: Record<string, unknown>): Record<string, unknown> {
   const serialized = { ...record };
   const workflow = getStringField(serialized, 'workflow');

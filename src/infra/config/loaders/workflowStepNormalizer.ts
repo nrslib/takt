@@ -1,3 +1,4 @@
+import { normalizeReportInputs } from './workflowReportInputNormalizer.js';
 import type { z } from 'zod';
 import type {
   AgentWorkflowStep,
@@ -400,6 +401,7 @@ export function normalizeStepFromRaw(
     }
     const normalizedStep: WorkflowCallStep = {
       name: step.name,
+      inputReports: normalizeReportInputs(step.input_reports),
       description: step.description,
       kind: 'workflow_call',
       call: step.call!,
@@ -420,6 +422,12 @@ export function normalizeStepFromRaw(
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       delayBeforeMs: step.delay_before_ms,
+      wait: step.wait === undefined ? undefined : {
+        until: step.wait.until,
+        intervalMs: step.wait.interval_ms ?? 15_000,
+        maxRetries: step.wait.max_retries ?? 120,
+        onTimeout: step.wait.on_timeout,
+      },
       systemInputs: step.system_inputs,
       effects: normalizeWorkflowEffects(step.effects),
       rules,
@@ -456,6 +464,7 @@ export function normalizeStepFromRaw(
     'session' | 'parallel' | 'concurrency' | 'arpeggio' | 'teamLeader' | 'dynamicFacets'
   > = {
     name: step.name,
+    inputReports: normalizeReportInputs(step.input_reports),
     description: step.description,
     sessionKey: step.session_key,
     requiresUserInput: step.requires_user_input,
@@ -545,7 +554,7 @@ export function normalizeStepFromRaw(
 
   if (step.parallel && !Array.isArray(step.parallel)) {
     const normalizeDynamicSubStep = (
-      sub: typeof step.parallel.fixed[number] | typeof step.parallel.pool[number],
+      sub: RawStep,
       branch: 'fixed' | 'pool',
       index: number,
     ): DynamicParallelFixedSubStep => {
@@ -568,9 +577,13 @@ export function normalizeStepFromRaw(
     const fixed: DynamicParallelFixedSubStep[] = step.parallel.fixed.map(
       (sub, index) => normalizeDynamicSubStep(sub, 'fixed', index),
     );
-    const pool: DynamicParallelPoolSubStep[] = step.parallel.pool.map((sub, index) => {
+    const pool: DynamicParallelPoolSubStep[] = step.parallel.pool.map(({ selection_hint, ...sub }, index) => {
       const normalized = normalizeDynamicSubStep(sub, 'pool', index);
-      return normalized as DynamicParallelPoolSubStep;
+      return {
+        ...normalized,
+        description: sub.description,
+        ...(selection_hint === undefined ? {} : { selectionHint: selection_hint }),
+      };
     });
     const parallel = {
       kind: 'dynamic' as const,

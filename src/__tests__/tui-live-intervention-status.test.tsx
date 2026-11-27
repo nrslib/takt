@@ -103,6 +103,7 @@ describe('resident conversation handoffs', () => {
         cwd,
         lang: 'en',
         conversation,
+        getProvider: () => 'mock',
         initialEntries: [],
         submitMode: 'chat',
         autoSubmit: false,
@@ -129,4 +130,5 @@ describe('resident conversation handoffs', () => {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
+
 });

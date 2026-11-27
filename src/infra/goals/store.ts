@@ -1,0 +1,191 @@
+import { randomUUID } from 'node:crypto';
+import { readdirSync, renameSync, rmSync, type Stats } from 'node:fs';
+import { opendir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import {
+  assertPrivateDirectoryReadSnapshot,
+  capturePrivateDirectoryReadSnapshot,
+  readPrivateFileState,
+  ensurePrivateDirectory,
+  writePrivateFile,
+} from '../../shared/utils/private-file.js';
+import { assertSafePath, lstatOrUndefined, inspectPrivateArtifactPath, assertAncestorIdentities, hasMatchingIdentity } from '../../shared/utils/private-path-identity.js';
+import { withFileLock } from '../fs/file-lock.js';
+import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
+import { withGoalExecutionLock } from './execution-lock.js';
+
+const GOAL_FILE_NAME = 'goal.json';
+
+class InvalidGoalFileError extends Error {}
+
+export interface GoalProjectionCacheEntry<T> { stat: Stats; value: T }
+
+function sameFileVersion(left: Stats, right: Stats): boolean {
+  return hasMatchingIdentity(left, right) && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+interface GoalListResult<T = Goal> {
+  goals: T[];
+  errors: { goalId: string; error: Error }[];
+}
+
+export class GoalStore {
+  private readonly root: string;
+
+  constructor(private readonly cwd: string) {
+    this.root = join(cwd, '.takt', 'goals');
+  }
+
+  async create(input: Goal): Promise<Goal> {
+    const goal = GoalSchema.parse(input);
+    const filePath = this.filePath(goal.id);
+    this.assertAbsent(goal.id);
+    ensurePrivateDirectory(dirname(filePath));
+    writePrivateFile(filePath, JSON.stringify(goal));
+    return goal;
+  }
+
+  assertAbsent(id: string): void {
+    const goal = this.read(id);
+    if (goal !== undefined) throw new Error(`Goal already exists: ${id}`);
+  }
+
+  async get(id: string): Promise<Goal> {
+    return this.getSync(id);
+  }
+
+  find(id: string): Goal | undefined {
+    return this.read(id);
+  }
+
+  async *iterate(): AsyncGenerator<Goal> {
+    for await (const { id, snapshot } of this.iterateIds()) {
+      const goal = this.read(id);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      if (goal !== undefined) yield goal;
+    }
+  }
+
+  async *iterateProjected<T>(cache: Map<string, GoalProjectionCacheEntry<T>>, project: (goal: Goal) => T): AsyncGenerator<T> {
+    const seen = new Set<string>();
+    for await (const { id, snapshot } of this.iterateIds()) {
+      const filePath = this.filePath(id);
+      const inspection = inspectPrivateArtifactPath(filePath, 'file');
+      const stat = inspection.expectedStat;
+      if (stat === undefined) { cache.delete(id); continue; }
+      const previous = cache.get(id);
+      let value: T;
+      if (previous !== undefined && sameFileVersion(previous.stat, stat)) value = previous.value;
+      else {
+        cache.delete(id);
+        const goal = this.read(id);
+        if (goal === undefined) throw new Error('Goal disappeared during projection');
+        value = project(goal);
+      }
+      assertAncestorIdentities(inspection.ancestorIdentities);
+      const current = lstatOrUndefined(filePath);
+      if (current === undefined || !sameFileVersion(stat, current)) throw new Error('Goal changed during projection');
+      cache.set(id, { stat: current, value });
+      seen.add(id);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      yield structuredClone(value);
+    }
+    for (const id of cache.keys()) if (!seen.has(id)) cache.delete(id);
+  }
+
+  private async *iterateIds() {
+    assertSafePath(this.root, true);
+    if (lstatOrUndefined(this.root) === undefined) return;
+    const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
+    const ids: string[] = [];
+    for await (const entry of await opendir(this.root)) ids.push(GoalIdSchema.parse(entry.name));
+    ids.sort((left, right) => left.localeCompare(right));
+    assertPrivateDirectoryReadSnapshot(snapshot);
+    for (const id of ids) {
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      yield { id, snapshot };
+      assertPrivateDirectoryReadSnapshot(snapshot);
+    }
+  }
+
+  getSync(id: string): Goal {
+    const goal = this.read(id);
+    if (goal === undefined) throw new Error(`Goal does not exist: ${id}`);
+    return goal;
+  }
+
+  async update(id: string, transform: (goal: Goal) => Goal, onSaved?: () => void): Promise<Goal> {
+    const filePath = this.filePath(id);
+    assertSafePath(filePath, false);
+    return withFileLock(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
+      const goal = GoalSchema.parse(transform(this.getSync(id)));
+      if (goal.id !== id) throw new Error('Goal update cannot change its ID');
+      writePrivateFile(filePath, JSON.stringify(goal));
+      onSaved?.();
+      return goal;
+    }));
+  }
+
+  /** Runs `beforeDelete` under the same locks as `update`; throw from it to keep the goal. */
+  async delete(id: string, beforeDelete: (goal: Goal) => void): Promise<void> {
+    const filePath = this.filePath(id);
+    assertSafePath(filePath, false);
+    const removed = join(this.cwd, '.takt', 'tmp', 'deleted-goals', randomUUID());
+    withFileLock(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
+      beforeDelete(this.getSync(id));
+      ensurePrivateDirectory(dirname(removed));
+      // 中身を消す途中で失敗しても一覧に半端なディレクトリを残さないよう、一覧の外へ一度で移してから消す。
+      renameSync(dirname(filePath), removed);
+    }));
+    try {
+      rmSync(removed, { recursive: true });
+    } catch (error) {
+      throw new Error(`Goal ${id} was deleted, but its files remain in ${removed}`, { cause: error });
+    }
+  }
+
+  async list(): Promise<GoalListResult>;
+  async list<T>(project: (goal: Goal) => T | undefined): Promise<GoalListResult<T>>;
+  async list<T>(project?: (goal: Goal) => T | undefined): Promise<GoalListResult<Goal | T>> {
+    assertSafePath(this.root, true);
+    if (lstatOrUndefined(this.root) === undefined) return { goals: [], errors: [] };
+    const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
+    const goals: (Goal | T)[] = [];
+    const errors: GoalListResult['errors'] = [];
+    for (const entry of readdirSync(this.root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const id = GoalIdSchema.parse(entry.name);
+      try {
+        const goal = this.read(id);
+        if (goal !== undefined) {
+          const projected = project === undefined ? goal : project(goal);
+          if (projected !== undefined) goals.push(projected);
+        }
+      } catch (error) {
+        if (!(error instanceof InvalidGoalFileError)) throw error;
+        errors.push({ goalId: id, error });
+      }
+    }
+    assertPrivateDirectoryReadSnapshot(snapshot);
+    return { goals, errors };
+  }
+
+  private filePath(id: string): string {
+    return join(this.root, GoalIdSchema.parse(id), GOAL_FILE_NAME);
+  }
+
+  private read(id: string): Goal | undefined {
+    const filePath = this.filePath(id);
+    assertSafePath(filePath, false);
+    if (lstatOrUndefined(dirname(filePath)) === undefined) return undefined;
+    const snapshot = readPrivateFileState(filePath);
+    if (!('content' in snapshot)) return undefined;
+    try {
+      const raw: unknown = JSON.parse(snapshot.content.toString('utf8'));
+      const goal = GoalSchema.parse(raw);
+      if (goal.id !== id) throw new Error('Saved goal ID differs from its directory');
+      return goal;
+    } catch (error) {
+      throw new InvalidGoalFileError(`Invalid goal file: ${filePath}`, { cause: error });
+    }
+  }
+}

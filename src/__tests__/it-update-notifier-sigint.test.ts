@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,7 @@ describe('update notifier with real OS SIGINT', () => {
     root = undefined;
   });
 
-  function start(scenario: string, latest: string): string {
+  function start(scenario: string, latest: string): void {
     root = mkdtempSync(join(process.cwd(), '.takt/update-notifier-it-'));
     const configDir = join(root, 'configstore');
     mkdirSync(configDir);
@@ -44,7 +44,6 @@ describe('update notifier with real OS SIGINT', () => {
     child = spawn(process.execPath, [childPath, scenario], { env, cols: 100, rows: 30 });
     child.onData((data) => { output += data; });
     child.onExit((event) => { exitCode = event.exitCode; });
-    return cache;
   }
 
   async function waitForEvent(type: string): Promise<void> {
@@ -59,23 +58,24 @@ describe('update notifier with real OS SIGINT', () => {
     ['cache', '99.0.0'],
     ['cache', version],
   ])('should wait for completion after one SIGINT: %s / %s', async (scenario, latest) => {
-    const cache = start(scenario, latest);
+    start(scenario, latest);
     await waitForEvent('ready');
-    expect(output).not.toContain('Update available');
+    const shouldNotify = scenario === 'cache' && latest !== version;
     if (scenario === 'cache' && latest !== version) {
-      expect(JSON.parse(readFileSync(cache, 'utf8')).update).toBeUndefined();
+      expect(output.match(/Update available/g)).toHaveLength(1);
+      expect(output.indexOf('Update available')).toBeLessThan(output.indexOf('"type":"ready"'));
+    } else {
+      expect(output).not.toContain('Update available');
     }
     process.kill(child!.pid, 'SIGINT');
     await waitForEvent('checkpoint');
     expect(output.match(/"type":"graceful"/g)).toHaveLength(1);
     expect(output).not.toContain('"type":"forced"');
-    expect(output).not.toContain('Update available');
     child!.write('finish\n');
     await vi.waitFor(() => expect(exitCode, output).toBe(0), { timeout: 5000 });
     expect(output).toContain('"type":"completed"');
-    if (scenario === 'cache' && latest !== version) {
+    if (shouldNotify) {
       expect(output.match(/Update available/g)).toHaveLength(1);
-      expect(output.indexOf('Update available')).toBeGreaterThan(output.indexOf('"type":"completed"'));
     } else {
       expect(output).not.toContain('Update available');
     }

@@ -14,9 +14,9 @@ workflow は AI エージェントが実行する step の並びを定義した 
 
 ## ファイルの配置
 
-- ビルトイン workflow は npm パッケージに同梱されています (`dist/resources/`)
-- `~/.takt/workflows/` — ユーザー workflow (同名のビルトインを上書きします)
-- `takt eject <workflow>` でビルトインを `~/.takt/workflows/` にコピーしてカスタマイズできます
+- ビルトイン workflow は npm パッケージの `builtins/` に同梱されています
+- ユーザー workflow は `~/.takt/workflows/` に置きます。同名のビルトインを上書きします
+- `takt eject <workflow>` でビルトインをプロジェクトの `.takt/workflows/` にコピーしてカスタマイズできます。`--global` を付けると `~/.takt/workflows/` にコピーします
 
 ## workflow カテゴリ
 
@@ -78,8 +78,6 @@ steps:
         next: next-step
       - condition: "Cannot proceed"
         next: ABORT
-    instruction: |                   # インライン指示
-      ここに {variables} を含む指示を書きます
     output_contracts:                # レポートファイル設定
       report:
         - name: 00-plan.md
@@ -93,17 +91,26 @@ steps:
         timeout_ms: 300000
 ```
 
-step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
+step に指示を直接書く場合は、上の `instruction: implement` を次の形に置き換えます。
+
+```yaml
+    instruction: |
+      ここに {variables} を含む指示を書きます
+```
+
+section map を参照する場合、step にはファイルパスではなくキー名を指定します (例: `persona: coder`)。section map 内のパスは、workflow YAML ファイルのディレクトリを基準に相対パスとして解決されます。
 
 section map は任意です。facet は bare name で直接参照できます（`personas` マップの項目がなくても `persona: coder` と書けます）。bare name は project `.takt/facets/<type>/` → global `~/.takt/facets/<type>/` → 同梱の `builtins/{lang}/facets/<type>/` の優先順で解決されます。section map が必要になるのはカスタムエイリアスや明示的なファイルパスを使いたい場合だけです。
 
-`instruction` は従来の scalar 形式に加えて空でない順序付き配列を受け付けます。各要素には facet のキー・パスまたはインライン文字列を指定でき、記述順に解決したうえで `\n\n---\n\n` で結合します。これにより要素ごとの境界を保持できます。callable workflow では`instruction` の `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照できます。`facet_ref[]` の値はその位置へ平坦化され、前後の順序は変わりません。scalar 形式の挙動は変わりません。
+`instruction` は従来の scalar 形式に加えて空でない順序付き配列を受け付けます。各要素には facet のキー・パスまたはインライン文字列を指定でき、記述順に解決したうえで `\n\n---\n\n` で区切って結合します。callable workflow では`instruction` の `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照できます。`facet_ref[]` の値はその位置へ平坦化され、前後の順序は変わりません。scalar 形式の挙動は変わりません。
+
+`policy` と `knowledge` は、`$param` 展開後、さらに `include` / `extends` を展開した後の内容が同じファセットについて、最初の指定だけを残し、出現順を保ちます。参照名やパス、ファイル・インライン定義の違いにかかわらず、展開後の内容が同じなら1回だけ組み込みます。同じ実パスを参照していても、参照元の層によって `include` / `extends` の解決結果が異なる場合は両方を保持します。`instruction` の繰り返しと、ファセット内部の `{{include:...}}` の繰り返しは保持します。
 
 ### ワークフロー横断ルール（`all_steps.rules`）
 
 すべての agent step に適用するルールは `all_steps.rules` に宣言します。各要素はルール参照文字列、または `ref` と任意の `position: before_instruction` を持つ object です。`position` を省略すると自動実行ルールの後に配置され、`before_instruction` は step の `Instructions` セクション直前に配置されます。
 
-ルールファイルは `workflows/rules/<ref>.md` です。project `.takt/workflows/rules/` → global `~/.takt/workflows/rules/` → 同梱 builtin ディレクトリの順で解決します。適用通知とルール見出しは prompt ごとに1回だけ出力されます。対象は Phase 1 の agent 指示だけで、レポート出力、ステータスルーティング、companion reviewer には適用されません。`workflow_call` 先は親のルールを先に継承し、自身の `all_steps.rules` を後ろに加算します。親子で `ref`・`position`・解決済み内容がすべて一致するルールは、親側を残して1回だけ適用します。同じ `ref` でも位置または内容が異なるルールは重複除去しません。
+ルールファイルは `workflows/rules/<ref>.md` です。project `.takt/workflows/rules/` → global `~/.takt/workflows/rules/` → 同梱 builtin ディレクトリの順で解決します。適用通知とルール見出しは prompt ごとに1回だけ出力されます。対象は Phase 1 の agent 指示だけで、レポート出力、ステータスルーティング、companion reviewer には適用されません。`workflow_call` 先は親のルールを先に継承し、自身の `all_steps.rules` を後ろに追加します。親子で `ref`・`position`・解決済み内容がすべて一致するルールは、親側を残して1回だけ適用します。同じ `ref` でも位置または内容が異なるルールは重複除去しません。
 
 ルールファイルに必須出力見出しまたは `{report:...}` 参照を含めることはできません。違反時は参照されたファイルを示して workflow の読み込みに失敗します。`all_steps` を省略した場合、既存の prompt は維持されます。将来の workflow 横断宣言は `all_steps` 配下に追加し、未知のトップレベルキーは引き続き拒否されます。
 
@@ -127,13 +134,15 @@ kind: workflow_call
 call: supervisor-final-gate
 ```
 
-`uses` を宣言する concrete workflow step は、parallel sub-step を含め、呼び出し側に空でない rule 定義を必ず持ちます。非 parallel fragment の呼び出し側は `rules` 配列を、parallel fragment の呼び出し側は次に示す rule tree を使います。fragment は root と parallel sub-step のどちらにも `rules` を定義できません。これにより、遷移先の step 名を知る workflow が routing を所有します。fragment から別 fragment を参照する中間 `uses` は、concrete workflow がその参照 chain を呼び出すまではこの必須条件の対象外です。loader は rule のコピー、継承、fallback の自動生成を行いません。
+`uses` で fragment を呼び出す workflow step には、遷移先を決める `rules` を指定します。parallel step を呼び出す場合は後述の rule tree を使います。fragment 側には `rules` を置けません。
 
-step fragment は root の `params` で必須の型付き parameter を宣言し、各 `uses` caller は `with` で値を束縛できます。facet parameter は `type: facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` のいずれかの `facet_kind` を指定します。workflow の呼び出し先を表す parameter は `type: workflow_ref` とし、`facet_kind` は指定しません。dynamic facet pool 名を受け取る fragment は `facet_pool_ref` を `facet_kind` なしで指定できます。companion parameter は現在 callable workflow のみが対応し、step fragment の `params` では対応しません。fragment 自体には空でない companion の固定指定を置けます。fragment では default と optional parameter は利用できません。
+step fragment は root の `params` に必須パラメータを宣言し、呼び出し側の `with` で値を渡します。ファセット参照には `facet_ref` または `facet_ref[]` と `facet_kind`（`policy`、`knowledge`、`instruction`、`persona`、`report_format`）を指定します。workflow の呼び出し先には `workflow_ref`、動的ファセットの pool 名には `facet_pool_ref` を使います。step fragment のパラメータには既定値や省略可能な値を指定できません。companion のパラメータは callable workflow で使います。
 
-`{ $param: name }` は宣言と対応する step fragment の `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、`workflow_call.call`、`dynamic_facets.pool`、または callable workflow の通常 agent step／Team Leader step の `companion` に配置します。`companion_ref[]` は固定 companion 名の配列へ展開されます。空配列の場合は `companion` フィールド自体を省略し、残存する未引用の `companion.*` state 参照を拒否します。したがって、空の raw `companion` や不正な companion 依存 route を許可せずに、generic wrapper の companion なし挙動を維持できます。指定した companion 名は通常の companion 定義解決でロード時に検証され、未知の参照は fail-fast します。`facet_ref` / `facet_ref[]` parameter は `policy` / `knowledge` の配列要素として固定参照と混在でき、配列値は順序を保ってその位置へ展開されます。空の `facet_ref[]` は要素を追加しません。`facet_pool_ref` は policy や knowledge facet ではなく、呼び出される callable workflow のトップレベル `facet_pools` map にある pool 名の scalar です。callable workflow parameter は `workflow_call.args` の直接の値として渡せます。step fragment の `with` で渡せるのは上記の fragment parameter 型です。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
+宣言したパラメータは `{ $param: name }` で参照します。step fragment では `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、`workflow_call.call`、`dynamic_facets.pool` に置けます。callable workflow では通常の agent step と Team Leader step の `companion` にも置けます。`facet_ref[]` は固定のファセット参照と同じ配列に並べられ、指定順に展開されます。`facet_pool_ref` には呼び出し先 workflow の `facet_pools` に定義した名前を渡します。
 
-fragment が parallel step に解決される場合、呼び出し側は通常の配列ではなく strict な rule tree を指定します。`self` に parallel parent の空でない rule 配列を、`parallel` に明示的かつ一意な全 final child 名と各 child の空でない rule 配列を定義します。workflow の parallel step は nested にできないため、child rule tree は無効です。全 child を過不足なく1回ずつ列挙する必要があり、不明な child は指定できません。loader は fragment の展開後に rule tree を適用し、schema 検証前に各 step の通常の `rules` 配列へ変換します。
+fragment から別の fragment を呼ぶ場合は、外側のパラメータを `with: { child_param: { $param: outer_param } }` のように明示的に渡します。必要な値の不足、型の不一致、未知の参照は読み込み時にエラーになります。callable workflow の `companion_ref[]` に空配列を渡すと、その companion 指定は省略されます。
+
+parallel step の fragment を呼ぶ場合は、`self` に親の `rules`、`parallel` にすべての子 step の名前とそれぞれの `rules` を指定します。子 step は過不足なく一度ずつ列挙してください。
 
 例えば callable workflow はstep 定義を複製せず、fragment が使う実装 pool を child-local に差し替えられます。
 
@@ -182,11 +191,15 @@ steps:
           - condition: needs_fix
 ```
 
-呼び出し側のフィールドが fragment を上書きします。object は deep merge、`parallel` などの配列は呼び出し側の配列全体で置換します。ただし、呼び出し側の rule tree は resolver 専用の routing overlay であり、fragment が所有する parallel 構造を置換しません。名前は呼び出し側の `name`、fragment の `name`、`uses` の末尾名の順に決まります。YAML key の記述順は runtime の動作に影響しませんが、例では可読性のため `name`、`uses`、その他の field、`rules` の順に記述します。fragment から別 fragment を参照できますが、循環参照は設定エラーです。bare name は project、global、選択言語の builtin `steps/` を順に検索し、package workflow では package-local `steps/` が最優先です。各候補層では `.yaml` を `.yml` より先に最初の一致として採用し、nested bare 参照は親 fragment の解決元以降の候補層を検索します。workflow 全体で nested 展開は64段、参照は512個までで、各 fragment は1 MiB以下の読み取り可能な通常ファイルでなければなりません。不明な参照、不正な scoped 参照、object 以外のfragment、読み取り不能なファイル、循環参照、上限超過、絶対 path、traversal、ネストしたpath、symlink の `steps/` root、`steps/` root 外を指す symlink、解決後の `system` step は設定エラーになります。project trust の workflow はproject 外の fragment から `workflow_call` または `allow_git_commit: true` を受け取れません。fragment 由来の `allow_git_commit` は呼び出し側で明示的に `false` を指定して上書きできます。
+呼び出し側のフィールドが fragment を上書きします。object は deep merge、`parallel` などの配列は呼び出し側の配列全体で置換します。ただし、呼び出し側の rule tree は参照解決時にルーティングだけを上書きするもので、fragment に定義された parallel 構造は置換しません。名前は呼び出し側の `name`、fragment の `name`、`uses` の末尾名の順に決まります。YAML key の記述順は runtime の動作に影響しませんが、例では可読性のため `name`、`uses`、その他の field、`rules` の順に記述します。
+
+fragment から別 fragment を参照できますが、循環参照は設定エラーです。bare name は project、global、選択言語の builtin `steps/` を順に検索し、package workflow では package-local `steps/` が最優先です。各候補層では `.yaml` を `.yml` より先に最初の一致として採用し、nested bare 参照は親 fragment の解決元以降の候補層を検索します。
+
+workflow 全体で nested 展開は64段、参照は512個までで、各 fragment は1 MiB以下の読み取り可能な通常ファイルでなければなりません。不明な参照、不正な scoped 参照、object 以外のfragment、読み取り不能なファイル、循環参照、上限超過、絶対 path、traversal、ネストしたpath、symlink の `steps/` root、`steps/` root 外を指す symlink、解決後の `system` step は設定エラーになります。project trust の workflow はproject 外の fragment から `workflow_call` または `allow_git_commit: true` を受け取れません。fragment 由来の `allow_git_commit` は呼び出し側で明示的に `false` を指定して上書きできます。
 
 `persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
-`session_key` は通常の agent step と parallel sub-step で指定できます。system step、workflow-call step、loop-monitor judge、parallel parent step では再開可能な agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` と解決済み provider を JSON 配列で表し、例: `["shared-coder","claude-sdk"]` です。別名 `claude` も同じ SDK キーを使います。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
+`session_key` は通常の agent step と parallel sub-step で指定できます。system step、workflow-call step、loop-monitor judge、parallel parent step は再開可能な agent session を持たないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` と解決済み provider を JSON 配列で表します。例えば `["shared-coder","claude-sdk"]` です。別名 `claude` も同じ SDK キーを使います。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、非公開 output log path が同じ agent step の差し戻し入力に含まれます。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、agent feedback には挿入されません。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
@@ -202,6 +215,7 @@ steps:
 | `{user_inputs}` | workflow 中に追加で得たユーザー入力（テンプレートに無ければ自動注入） |
 | `{report_dir}` | レポートディレクトリのパス (例: `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | [レポート参照の探索](#レポート参照の探索)に従って本文を埋め込む |
+| `{report_history:filename}` | 宣言した `history: {previous: N}` の固定パスを古い順に示す一覧。過去本文は展開しない |
 | `{review_scope}` | TAKT が算出した、このタスクの変更ファイル一覧 |
 
 `{review_scope}` は実行の由来によって対象が変わります。
@@ -209,7 +223,7 @@ steps:
 - 作業ツリー計算（常に行われます）: base コミット以降のコミット済み変更、未コミット変更、未追跡ファイル（ignored を除く）の和集合。タスクの変更が既にブランチへコミット済みで working tree 差分が空になる構成でも一覧に出ます
 - PR 由来の実行（`takt --pr N` 等で PR context を持つ実行）: 上の作業ツリー計算に PR の diff range `base...head` を**加えた**和集合になります。`--pr` は PR のレビューコメントを取り込んで修正するフローで、同じ実行の中で作業ツリーが変わるため、両方を対象にします。diff range がローカルに用意されていない場合はその旨を述べ、ローカル変更だけを一覧にします
 
-作業ディレクトリが Git リポジトリでない場合や変更が検出されない場合も、その事実を述べる文言に解決されます（空文字にはなりません）。ファイル数が 200 件を超える場合は残件数を明示して打ち切ります。組み込みの汎用レビュアーは共通 workflow rule `findings-handling` 経由でこの変数を自動的に受け取ります。
+作業ディレクトリが Git リポジトリでない場合や変更が検出されない場合は、空文字にせず、その旨を示す文を返します。ファイル数が 200 件を超える場合は残件数を明示して打ち切ります。組み込みの汎用レビュアーは共通 workflow rule `findings-handling` 経由でこの変数を自動的に受け取ります。
 
 base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` → 検出した default branch の順で最初に存在する ref との merge-base、およびブランチ reflog の分岐点から、より新しい方を採ります。既存ブランチをそのまま clone した resume 実行のように、どの base ref も残らず reflog も分岐点を持たない環境では base を特定できず、コミット済み変更が一覧から外れます。その場合はその旨が文言に明示されます。
 
@@ -217,11 +231,13 @@ base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` 
 
 ### レポート参照の探索
 
-`{report:filename}` は現在のワークフローの名前空間、resume snapshot にある consumer と参照名の exact mapping（利用可能な場合）、直近の親、さらに上位の祖先、run の reports ルートの順に探索します。最初に見つかった scope の本文を使います。同名レポートが複数ある場合は参照元に近い scope が優先されます（shadowing）。兄弟や子孫のワークフローの名前空間は探索しません。
+step の `input_reports` で選択したレポートは `{report:filename}` に宣言した生成元の完了済み本文を展開します。それ以外の参照は現在のワークフローの名前空間、resume snapshot にある consumer と参照名の exact mapping（利用可能な場合）、直近の親、さらに上位の祖先、run の reports ルートの順に探索します。それ以外の参照では最初に見つかった scope の本文を使い、同名レポートが複数ある場合は参照元に近い scope を優先します。兄弟や子孫のワークフローの名前空間は探索しません。
 
 親・祖先と run ルートのレポートは読み取り専用です。書き込み先は常に現在のワークフロー自身の `reportDir` です。親への参照を解決しても書き込み先は変わりません。どこにもレポートがない場合は明示的な欠落文へ置換します。不正なパス、予約名、symlink、欠落以外の I/O エラーはエラーのまま扱います。
 
-`takt workflow doctor` は callable の instruction も検証し、自身の先行 producer と各呼び出し開始前に利用可能な祖先のレポートを調べます。既知の呼び出し文脈を別々に検証し、未生産の参照を消費する step 名、参照名、呼び出し経路付きで報告します。未特定の呼び出し元や resume snapshot にレポートがあるとは仮定しません。
+Phase 1 の instruction で参照したレポート本文は、その step の Phase 2 によるレポート作成にも渡されます。Phase 1 で欠落していた参照は欠落文のまま引き継がれ、Phase 2 で読み直して置き換えられることはありません。
+
+`takt workflow doctor` は callable の instruction も検証し、先行 step が生成するレポートと、各呼び出し開始前に利用可能な祖先のレポートを調べます。既知の呼び出し文脈を別々に検証し、まだ生成されていないレポートを参照する step 名、参照名、呼び出し経路を報告します。未特定の呼び出し元や resume snapshot にレポートがあるとは仮定しません。
 
 ## ルール
 
@@ -253,8 +269,8 @@ rule は YAML 記述順で評価され、最初に成立した rule を採用し
 
 ### 特殊な `next` 値
 
-- `COMPLETE` — workflow を成功で終了
-- `ABORT` — workflow を失敗で終了
+- `COMPLETE`: workflow を成功で終了
+- `ABORT`: workflow を失敗で終了
 
 ### ルールフィールド: `appendix`
 
@@ -312,6 +328,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `all("X")`: すべてのサブ step が条件 X にマッチしたら true
 - `any("X")`: いずれかのサブ step が条件 X にマッチしたら true
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
+- サブ step には、その step が何をするかを説明する `description` を任意で指定できます。
 - 並列サブ step は `promotion` をサポートしません
 - 親 step には任意の `concurrency: <N>`（最小 1）を指定でき、同時実行するサブ step 数を制限できます。未指定時は全サブ step が同時に開始します
 
@@ -331,6 +348,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
         - name: frontend
           persona: frontend-reviewer
           description: Review frontend and UI changes
+          selection_hint: Select when changes affect user-facing behavior or presentation
           instruction: Review frontend
           rules: [{ condition: approved }]
         - name: backend
@@ -345,7 +363,8 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
         next: COMPLETE
 ```
 
-- `pool` は 1 件以上必要で、各候補には空でない `description` が必要です。
+- `pool` は 1 件以上必要で、各候補には、その候補の役目を説明する空でない `description` が必要です。
+- 役目だけでは選び方が決まらない候補には、選ぶ基準を `selection_hint` に書けます。`selection_hint` は `pool` の候補だけに指定できる任意項目で、指定する場合は空でない文字列が必要です。selector は `description` と `selection_hint` の両方を見て選びます。`selection_hint` がない既存の YAML も、今までどおり `description` だけで選びます。ほかの step やサブ step に `selection_hint` を書くとロード時にエラーになります。
 - `fixed` または `pool` の項目で `uses` を宣言する場合、`rules` はその呼び出し箇所に定義します。参照先 fragment には定義できません。
 - `fixed` は必ず実行されます。selector は展開後の `pool` step 名だけを選べ、実行順は YAML の定義順です。
 - `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。
@@ -353,7 +372,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
 - 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
 - ロード時には`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合も reviewer 起動前に失敗します。削除された dynamic selection fields を含む resume point はサポートしません。
-- selector にはタスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と説明、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
+- selector にはタスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と `description`（役目）および `selection_hint`（指定されていれば選ぶ基準）、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
 - 変更パス一覧には `HEAD` に対する staged・unstaged・削除・未追跡のファイル名が含まれ、`.takt/runs/` 配下は除外します。レポート参照は既存の report-reference ルールで解決されたパスとして渡し、本文の読み取りは selector が必要に応じて行います。
 - run 中に commit された変更は `HEAD` との差分ではなくなるため、後続 selector のパス一覧に残ることを保証しません。前段レポートはレポート参照を通じて引き続き利用できます。非 Git directory や Git command の取得失敗は、Git 境界の規則に従って空の変更パス一覧または失敗になります。
 - 保存する参加者 manifest のキーには workflow invocation path、workflow-call instance path、parallel step を含めます。report 継承と aggregate 評価はこの manifest を使用するため、`replace` により外れた reviewer の古い report や finding は現在 round に混入しません。
@@ -449,7 +468,7 @@ steps:
 
 選択した knowledge / policy は子の固定 facet に追加されます。空選択なら固定 facet は変わりません。対象の facet selector をすべて完了してから parallel の子を起動します。未知の pool 参照、candidate ID、`max_selected` 超過が1件でもあれば、その子と同じ parallel 親配下の sibling を起動せず workflow を停止します。中断のない同一 run ではparallel 親の frame と occurrence によって子ごとの選択を分離します。プロセスの resume は空の run-local 選択状態から始まり、participant selector と子の facet selector を再実行します。
 
-callable workflow をネストする場合、pool の選択責任は所有者であるトップレベル workflow に置きます。共有 workflow が任意の `workflow_ref` を受け取る場合、すべての呼び出し先へ pool 引数を追加してはいけません。未宣言の callable 引数は拒否されるためです。代わりに、トップレベル workflow が専用 adapter を選び、その adapter が実際に消費する suite を呼ぶときだけ `facet_pool_ref` を束縛します。消費側 suite が受理する外部 pool を宣言するため、無関係な callable 契約を広げず、未知参照はその境界のロード時に拒否されます。
+callable workflow をネストする場合、pool を選ぶのは、その pool を定義するトップレベル workflow です。共有 workflow が任意の `workflow_ref` を受け取る場合、すべての呼び出し先へ pool 引数を追加してはいけません。未宣言の callable 引数は拒否されるためです。トップレベル workflow が専用 adapter を選び、その adapter が pool を使う suite を呼ぶときだけ `facet_pool_ref` に値を渡します。利用する suite に受け付ける外部 pool を宣言するので、無関係な callable の引数定義を増やさずに済み、未知の参照はその呼び出し先の読み込み時に拒否されます。
 
 #### external pool
 
@@ -513,7 +532,7 @@ candidates:
 
 bare name は各層で `<name>.yaml` を `<name>.yml` より優先して最初の一致を採用します。`@owner/repo/name` で repertoire package を明示できます。絶対 path、directory traversal、nested path、root 外 symlink、非通常ファイル、読み取り不能、size 上限超過を拒否します。provenance と依存 resource は `doctor`、`preview`、`eject`、`repertoire install` / `remove` で追跡できるように保持します。
 
-#### candidate 契約
+#### candidate の定義
 
 pool 内の全候補は同じ形を持ちます。
 
@@ -533,9 +552,9 @@ pool 内の全候補は同じ形を持ちます。
 - 候補は単一 facet または小さな facet bundle を表せます。
 - selector は複数候補を選択できます。
 - 空選択は「追加 facet 不要」として正常です。
-- 同一 pool 内の全候補は任意に組み合わせ可能とするのが pool author の契約です。`requires`、`conflicts_with`、排他 group は MVP では導入しません。
+- pool の作者は、同じ pool 内の全候補を任意に組み合わせられるように定義する必要があります。`requires`、`conflicts_with`、排他 group は MVP では導入しません。
 
-#### selector 契約
+#### selector の動作
 
 `dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。selector は読み取り専用で実行され、ファイルの変更・書き込みはできません。ツール許可リストを尊重する provider では `Read`・`Glob`・`Grep` のみが許可されます。解決済み runtime profile を fresh session で使い、TAKT が所有する structured output contract を返します。
 
@@ -562,7 +581,7 @@ effective knowledge = fixed knowledge + selected dynamic knowledge
 ```
 
 - 固定 facet を先に、dynamic facet を後に配置します。
-- dynamic 側は selector 返却順ではなく pool の候補定義順で合成します。
+- dynamic facet は pool の候補定義順で合成し、selector の返却順は使いません。
 - 候補内では facet 記述順を維持します。
 - 同じ解決済み facet resource を複数回参照した場合は重複除去し、固定側を優先します。内容が偶然一致する別 resource は同一 facet としては扱いません。
 - security、privacy boundary、認可、必須品質条件など、AI 判断で外してはいけない facet は固定側に置きます。
@@ -646,16 +665,16 @@ steps:
           instruction: select-reviewers
 ```
 
-selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance の責務は facet または participant の ID の選択方法を説明することだけです。証拠参照、read-only structured 実行とツール、structured output contract、候補検証、selection mode、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
+selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance には facet または participant の ID の選択方法だけを記述します。証拠参照、read-only structured 実行とツール、structured output contract、候補検証、selection mode、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
 
 selector guidance は workflow 既存の persona と instruction resource を参照します。未知の selector key、空の selector、`instruction` のない selector、解決できない persona/instruction 参照は schema または workflow 検証時に設定 path 付きで失敗します。raw `$param` 参照は callable の引数展開後だけ有効で、callable でない workflow の未展開参照は拒否されます。
 
 #### package、eject、authoring tool
 
 - repertoire package で `facet-pools/` を install/remove でき、package-local / scoped pool は step fragment と同じ探索順で解決します。
-- `takt workflow eject` は参照している外部 pool とその pool が所有する facet 依存を、既存 eject 契約の衝突処理と既存ユーザーファイル優先に従ってコピーします。
+- `takt eject <workflow>` は参照している外部 pool と、その pool が依存する facet をコピーします。既存の eject と同じ衝突処理を行い、既存のユーザーファイルを優先します。
 - `takt workflow doctor` は pool、candidate、facet 参照を検証します。
-- `takt workflow preview` は dynamic pool 名、候補 ID、参照 facet、source を表示します。
+- `takt workflow inspect <workflow>` は dynamic pool 名、候補 ID、参照 facet、source を表示します。
 - builtin の ja/en pool を提供する場合、候補 ID 集合を一致させます。
 
 
@@ -742,7 +761,7 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 `workflow_call` step では provider、model、provider options、routing の override は指定できません。子 workflow は親で解決済みの runtime コンテキストを継承します。provider target、profile、options、routing は `runtime.yaml` で設定してください。
 
-`max_steps` はルート workflow が所有し、すべての子孫で共有する予算です。`workflow_call` は制御ノードなので予算を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。call lifecycle は invocation 番号と完全な call stack を伴って session log と trace から引き続き確認できます。
+`max_steps` はルート workflow で定義し、すべての子孫で共有する実行回数の上限です。`workflow_call` は制御ノードなので実行回数を消費せず、自身の provider / model も選択しません。ルート workflow と子孫 workflow の実行可能な step が iteration を消費します。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。呼び出しの経過は、invocation 番号と完全な call stack を含む session log と trace から引き続き確認できます。
 
 `workflow_call` step にはfacet 参照ではない実行コンテキストを scalar の `vars` として指定することもできます。文字列、有限数、真偽値が nested workflow call の子孫まで継承され、下位の呼び出しが同じ key を宣言した場合はその値で上書きされます。agent の instruction facet では `{var:name}` で参照します。値がない場合は `unspecified` になるため、instruction 側で安全な fallback を明示できます。
 
@@ -761,7 +780,7 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 system step は TAKT エンジン自身が実行する step で、agent は起動しません。`kind: system`（または短縮形の `mode: system`。両方の宣言は設定エラー）で宣言します。system step には `persona`、`instruction`、`provider`、`structured_output`、`output_contracts`、`quality_gates` などの agent 用フィールドを宣言できません。完全なスキーマは `src/core/models/workflow-system-schemas.ts` を参照してください。builtin の `auto-improvement-loop` workflow（`builtins/ja/workflows/auto-improvement-loop.yaml`）が参考実装で、system step と planner agent step だけで PR 対応・Issue 駆動計画・新規改善計画の間をルーティングします。
 
-`system_inputs` はエンジンが提供するコンテキストを読み取り、各エントリを `as` で名前に束縛します。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。binding 名は step 内で一意でなければなりません。束縛した値は `context.<step>.<binding>...` として `when()` rule を駆動し、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
+`system_inputs` では、エンジンが提供するコンテキストを読むか固定コマンドを実行し、各エントリに `as` で名前を付けます。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure`、`command` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。`command` の実行には許可設定が必要です。詳細は[固定コマンドの input](#固定コマンドの-input)を参照してください。名前（binding 名）は step 内で一意でなければなりません。値は `context.<step>.<binding>...` として `when()` rule の条件で評価でき、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
 
 ```yaml
   - name: route_context
@@ -781,7 +800,58 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
         next: plan_from_existing_pr
 ```
 
-`effects` はエンジン側のアクションを実行します: `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
+#### 固定コマンドの input
+
+`type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。projectの明示値はglobalより優先され、projectで未指定の場合はglobalの値を使います。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
+
+別cloneでも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "承認結果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` は必須で、1～2147483647 の整数です。既定値や無期限指定はありません。`output: json` は省略できます。`cwd` は指定できず、タスクの実行ディレクトリ（worktree ならクローン）で起動します。pipeline と対話モードで同じ動作をします。command は effects には指定できません。
+
+結果には `exit_code`（終了コードを取得できない場合は `null`）、`timed_out`、`stdout`、`stderr` が入ります。`json` は `output: json` を指定し、タイムアウトせず終了コード 0 で JSON を解析できた場合だけ入ります。非ゼロ終了とタイムアウトは rules へ渡す結果です。stdout と stderr の合計が 65536 バイトを超えた場合、起動できない場合、成功時の JSON が不正な場合はステップが失敗し、effects と rules は実行されません。
+
+現在の command binding は条件評価時に `context.approval...` とも書けます。既存のステップ名付き scope が同名ならそちらを優先します。保存する値と後続 instruction の参照は `context.check.approval...` の形式です。
+
+TAKT は command のテンプレート展開や引数の追加をしません。直前の応答本文は `TAKT_PREVIOUS_RESPONSE_FILE`、同じ応答に構造化出力があれば `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE` で非公開ファイルのパスを渡します。本文がなければ空ファイルを渡し、構造化出力がなければその環境変数は設定しません。スクリプト側でファイルを読み、値を検証してください。ファイルは run の context 配下に保存し、run の成果物として保持します。環境変数はコマンドゲートと同じ基本許可リストと、この2つのファイルパスに限定します。
+
+無通信タイムアウトは適用しません。POSIX では実行期限または中断時にプロセスグループへ SIGTERM を送り、終了しなければ100ms後に SIGKILL を送ります。Windows では `taskkill /T /F` でプロセスツリーを強制終了し、taskkill の完了を待ちます。`wait` は確認ごとにコマンドを実行し直し、各実行に `timeout_ms` を適用します。各確認は同じ直前応答を参照し、次の system step は直前の system 応答を参照します。前回の JSON は引き継ぎません。`wait.max_retries`、`on_timeout`、ステップの計数、`loop_monitors`、元の agent に戻った際のセッション継続は既存の規則に従います。
+
+`effects` はエンジン側のアクションを実行します: `commit_and_push`、`caccia`、`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
 
 ```yaml
   - name: prepare_merge
@@ -802,24 +872,31 @@ system step は agent step の `structured_output` と組み合わせて使い�
 
 ## Output Contracts（レポートファイル）
 
-step はレポートディレクトリ配下にレポートファイルを生成できます。
+step はレポートディレクトリ配下にレポートファイルを生成できます。次の3例は別々の指定方法です。
+
+`report_formats` マップの format を参照する例です。
 
 ```yaml
-# format を指定したレポート 1 件（report_formats マップを参照）
 output_contracts:
   report:
     - name: 00-plan.md
       format: plan
+```
 
-# インライン format のレポート 1 件
+format をインラインで記述する例です。
+
+```yaml
 output_contracts:
   report:
     - name: 00-plan.md
       format: |
         # Plan
         ...
+```
 
-# 複数レポート
+複数のレポートを出力する例です。
+
+```yaml
 output_contracts:
   report:
     - name: 01-scope.md
@@ -828,10 +905,54 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 では、provider の既存の読み取り専用の設定を使い、レポートの根拠に必要な箇所だけを読みます。今回の Phase 1 実行記録はマスク済み JSONL として保存され、パスとバイト数が渡されます。長い文字列は複数行に分かれているため、検索して周辺だけを参照できます。Phase 2 ではファイルの変更、テスト・ビルドの実行、新しい調査や指摘・判定・計画の追加をせず、Phase 1 の確認実績と Phase 2 で読んだ内容を区別します。最終回答は TAKT がレポートファイルに保存します。Phase 3 ではツールを使いません。
+
 各レポートエントリには `name` と `format` が必須です。任意フィールドが2つあります。
 
 - `use_judge`（デフォルト `true`）— そのレポートを Phase 3 のステータス判定に入力するかどうか。書き出すだけで判定の根拠にしないレポートには `use_judge: false` を指定します。rules の判定が必要な step では少なくとも 1 件の `use_judge` レポートを残す必要があります。
 - `order` — report format facet への参照（`format` と同じ方法で解決）で、その内容が Phase 2 のデフォルトのレポート作成指示を置き換えます。format テンプレートだけでは足りない、レポート作成手順のカスタム指示が必要なときに使います。
+
+agent step、`workflow_call`、parallel の親・子 step は同じ workflow 内の別 step が作成したレポートを入力として宣言できます。
+
+```yaml
+- name: follow-up-review
+  input_reports:
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+  persona: reviewer
+  instruction: |
+    次の計画と結果を使って修正後の内容を確認してください。
+    計画: {report:fix-plan.md}
+    結果: {report:fix-report.md}
+```
+
+`reports: all` は指定した step の完了済み実行から全レポートを選びます。選択された並列レビュアーや入れ子の呼び出しで作成された報告も対象です。ファイル名を列挙した場合は一致する公開レポートだけを選び、欠落や重複があれば失敗します。`{report:filename}` は選択した本文をその位置に展開します。入力側や祖先に同名のレポートがあっても宣言した生成元の本文を使います。`reports: all` が同名の報告を複数選ぶ場合、その名前の `{report:filename}` は曖昧として失敗します。構文で参照しなかった選択済みの報告は agent の Phase 1 指示の末尾へ追加します。選択名は宣言した生成元をまたいで一意でなければなりません。`reports: all` と任意の未実行生成元も含め、placeholder がなくても doctor とランタイムは曖昧な宣言を拒否します。`workflow_call` は入れ子の呼び出し先まで同じ入力を渡します。parallel の親にある宣言は子にも適用されますが、子自身の宣言があればそちらを使います。報告がない場合や呼び出しが未完了の場合、近隣のディレクトリから探さずに失敗します。実行前の経路から入力側へ進む場合に限り `optional_if_unrun: true` を指定してください。入力元の実行前も出力契約にある報告名は予約され、同名の無関係なローカル・祖先の報告にはフォールバックしません。入力元が開始した後は報告が必須です。
+
+`fallback_from_step` は `from_step` が未実行の場合だけ、同じ報告契約を持つ別の step の完了版を選びます。主生成元が開始した後の未完了や欠落は失敗として扱います。`previous_only: true` と自己 step の `from_step` を組み合わせると、今回の実行前に完了した最新のレポートを選びます。前回版がなければ未供給と表示します。`previous_only` には報告名を列挙し、`fallback_from_step` と `optional_if_unrun` は併用しません。
+
+複数の生成元は空でない配列で宣言できます。既存の単一オブジェクト形も使用できます。`optional_if_unrun` と `history` は要素ごとに適用します。
+
+```yaml
+input_reports:
+  - from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+    history: {previous: 2}
+  - from_step: adjudicate
+    reports: [review-resolution.md]
+    optional_if_unrun: true
+```
+
+`{report:filename}` は現在のレポートを UTF-16 のコード単位で8,000文字まで展開します。超過時は先頭の本文と省略表示に加え、展開したバージョンを固定した正確なパスを渡します。続きはそのパスから読んでください。完了済み実行の固定版パスと実行識別は本文の長さにかかわらず渡します。自動追加する現在のレポートにも同じコード定数を適用し、YAML では設定できません。
+
+`history: {previous: N}` は、同じ生成元・実行系列から、現在のレポートに対応する実行を除いて完了済みの過去の実行を最大 N 回選びます。N は非負の安全な整数で、0なら過去の実行を選びません。`{report_history:filename}` は本文を含まない一覧を古い順に展開します。各行には実行の識別情報、順序、完了状態、生成元、固定したバージョンのパスを示します。同じ実行の計画と報告には共通の識別情報を使います。
+
+実行記録のない旧runでも完了した公開レポートの本文は渡します。その場合は元の完了実行の固定版と実行IDを未供給と表示します。長文のために作るパスは今回の入力用snapshotと表示し、元の実行で固定した版とは区別します。
+
+選択した全行を渡し、別の件数上限は設けません。履歴不足・未完了・報告欠落を明示し、別の実行や古いバージョンでは補いません。並列・入れ子・再開でも実行の識別情報とバージョンを保持します。実行記録のない旧 run の履歴は取得不能とし、日時から推定しません。参照されなかった宣言済み履歴も自動追加します。
+
+履歴を指定した入力には現在版の実行記録も付けます。開始・完了順序は同じ実行系列で共有する番号です。呼び出し単位の実行識別に加え、個々の報告を作った生成元の開始・完了順序を示すため、修正完了後に検証が始まったかを比較できます。取得できない順序は取得不能と表示します。
+
+`loop_monitors[].judge.input_reports` は同じ形と履歴指定を受け付けます。各 `from_step` は監視対象の `cycle` 内に限定し、範囲外なら doctor とランタイムが拒否します。宣言がある judge には `Report Directory`、現在のレポートの本文、履歴を同じ展開規則で渡します。宣言がない judge の入力は維持します。
 
 ## Step レベルのプロバイダープロモーション
 
@@ -854,17 +975,18 @@ promotion は並列サブ step ではサポートされません。
 
 | オプション | デフォルト | 説明 |
 |--------|---------|------|
-| `description` | - | 自由記述の step 説明。dynamic parallel の `pool` 項目では選択用の説明として使われ、必須になる |
+| `description` | - | その step が何をするかを書く自由記述の説明。通常の step、`workflow_call`、静的な `parallel` のサブ step では任意。dynamic parallel の `pool` の候補では必須で、候補の役目として selector に渡す |
+| `selection_hint` | - | dynamic parallel の `pool` の候補だけに指定できる任意項目。役目だけでは選び方が決まらない候補に、選ぶ基準を書く。selector は `description` と `selection_hint` の両方を見る。ほかの step やサブ step に書くとロード時にエラーになる |
 | `persona` | - | persona キー（section map、または bare 名で project → user → builtin の順に解決）またはファイルパス |
 | `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
 | `session_key` | - | 通常の agent step と parallel sub-step の明示セッションキー。実行時キーには解決済み provider が付く。空文字・空白のみは無効 |
-| `session` | `continue` | 通常の agent step と parallel sub-step のセッション扱い。`continue` は保存済み persona session を resume し、`refresh` は resume せず開始し、`compact` は resume 後に Phase 1 前だけ provider へ圧縮を依頼する。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時は Phase 1 を実行せず、保存済み session を破棄する |
+| `session` | `continue` | 通常の agent step と parallel sub-step のセッション扱い。`continue` は worktree のクローンでも同一 run 内の同じ persona・provider・model の保存済み session を resume する。別クローンやプロジェクト直下の session は使わない。retry・requeue・instruct などで既存クローンの新しい試行を始める場合は各 persona を新規で開始し、その試行の後続 step では新しい session を継続する。provider fallback では保存済み session を resume しない。`refresh` は resume せず開始し、`compact` は resume 後に Phase 1 前だけ provider へ圧縮を依頼する。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時は Phase 1 を実行せず、保存済み session を破棄する |
 | `requires_user_input` | `false` | 通常の agent step がユーザー入力待ち可能であることを示す。system step、workflow-call step、parallel parent step では指定不可。`requires_user_input: true` の step は agent 実行前から interactive mode と user input handler が必須で、未設定の場合はその agent を実行せず workflow を abort する。実際の入力待ちは一致した rule 側の `requires_user_input: true` でのみ発生する |
 | `tags` | - | config の `provider_routing.tags` に一致させる順序付き routing tag |
 | `policy` | - | policy キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
-| `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
-| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
+| `instruction` | - | instruction キー・インライン文字列、またはそれらを並べた空でない配列。facet 参照は section map、または bare 名で project → user → builtin の順に解決 |
+| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`)。TAKT が Codex の権限を管理する場合、明示した `false` は Phase 1 の書き込みを禁止し、通信可否は `network_access` で別に制御する |
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step または Team Leader step で実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `completion_retry` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
@@ -875,15 +997,25 @@ promotion は並列サブ step ではサポートされません。
 | `output_contracts` | - | レポートファイル設定（name, format） |
 | `quality_gates` | - | agent step 完了 gate。文字列は AI 向け指示、`type: command` は step 完了後に実行し、失敗時は同じ agent step に差し戻す |
 
-`completion_retry` は object だけを受け付ける明示的な opt-in です。省略すると無効です。object には元の reviewer instruction の scope や権限を変えずに不足を閉じる方法を伝える instruction facet `retry_instruction` が必須です。`min_retry` は `4` 以下の任意の非負整数、`max_retry` は任意の非負整数の再試行回数です。`max_retry` を省略した場合の既定値は内部天井の `4`（`min_retry` は `0`）です。この場合、`min_retry` を満たした後は completion judge が `complete: true` を返すと早期に停止し、不完全な結果が続く間はその天井まで再走査します。`max_retry` を明示した場合はその値が優先され、`4` を超える非負整数も指定できます。`true`、`false`、文字列、空 object、`mode` などの未対応 field は拒否されます。成功した各 reviewer response は fresh な completion judge が実際の元 reviewer instruction、task、scope、evidence、report と照合し、judge の解決済み runtime profile で実行します。reviewer retry は同じ reviewer session を継続します。judge が利用不能な場合は `min_retry` に関係なく即座に episode を停止し、reviewer retry の失敗は retry budget が残っている間だけ再試行します。終端失敗時は最新の有効 reviewer response を保持して Phase 2 専用の advisory 診断を出力します。不完全判定のまま再試行上限に達した場合は`max_retry_reached` 診断に残りの `missingObligations` を保持します。
+`completion_retry` には object を指定して有効にします。省略すると無効です。object には instruction facet `retry_instruction` が必須で、元の reviewer instruction の scope や権限を変えずにレビューの不足を補う方法を記述します。
+
+`min_retry` は `4` 以下の任意の非負整数、`max_retry` は任意の非負整数で、再試行回数を指定します。`max_retry` を省略した場合の既定値は内部の上限である `4`（`min_retry` は `0`）です。この場合、`min_retry` を満たした後は completion judge が `complete: true` を返すと早期に停止し、不完全な結果が続く間はその上限まで再走査します。`max_retry` を明示した場合はその値が優先され、`4` を超える非負整数も指定できます。`true`、`false`、文字列、空 object、`mode` などの未対応 field は拒否されます。
+
+成功した各 reviewer response は、新しいセッションの completion judge が実際の元 reviewer instruction、task、scope、evidence、report と照合します。judge は解決済みの runtime profile で実行し、reviewer の再試行では同じ reviewer session を継続します。judge が利用不能な場合は `min_retry` に関係なくこの確認処理を直ちに停止し、reviewer の再試行が失敗した場合は、再試行回数が残っている間だけやり直します。
+
+最終的に失敗した場合は最新の有効な reviewer response を保持し、参考情報として Phase 2 専用の診断を出力します。不完全判定のまま再試行上限に達した場合は、`max_retry_reached` 診断に残りの `missingObligations` を保持します。
 
 `review_completion` は deprecated alias として引き続き受理されます。`completion_retry` と同時には指定できません。
 
-workflow YAML では provider と model を指定できません。runtime profile と routing は `runtime.yaml` から解決され、CLI/env override も引き続き利用できます。削除されたフィールドを workflow に書くと、ロード境界で `runtime.yaml` への移行先を示す設定エラーになります。
+workflow YAML では provider と model を指定できません。runtime profile と routing は `runtime.yaml` から解決され、CLI と環境変数による上書きも引き続き利用できます。削除されたフィールドを workflow に書くと、読み込み時に `runtime.yaml` への移行先を示す設定エラーになります。
 
-実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
+実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からファイル編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`(` より前の canonical tool 名で判定します。`Edit`、`Write`、`Apply_Patch`、`Patch` は除去しますが、`Bash` と `Bash(...)` は残します。OpenCode も `edit`、`write` などの編集系 tool を除去し、`bash` は残します。Pi の `edit: false` と `readonly` mode の既定ツールには `bash` が含まれ、`edit` と `write` は含まれません。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
+
+TAKT が Codex の権限を管理する場合、明示した `edit: false` は解決済みの permission mode にかかわらず Phase 1 の書き込みを禁止します。`network_access: true` なら通信を許可する読み取り専用の権限プロファイルを渡し、それ以外は `read-only` sandbox を使います。`permission_control: codex` では `edit: false` でも書き込み可否と通信可否を Codex 側の設定に委ねます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は権限の委譲時も TAKT が管理します。`readonly_permission_base` の指定が無いときは `read-only` sandbox を使い、指定があるときは継承元を読み取り専用・通信なしにした権限プロファイルを使います。共通の権限解決とほかの provider の動作は変わりません。詳細は [Codex の permission control](./configuration.ja.md#codex-の-permission-control-permission_control) を参照してください。
+
+TAKT が権限を管理する Codex 呼び出しは、書き込み可能な step と新規・再開セッションにも `--ignore-rules` を渡します。利用者・プロジェクトの execpolicy `.rules` によるサンドボックスの制限回避を防ぐためです。権限を Codex に委譲した呼び出しはルールを維持しますが、Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は常にルールを無効にして書き込みと通信を禁止します。Phase 2 とこれらの内部呼び出しで選択した `config_profile` は `--ignore-rules` と併せて適用されます。`readonly_permission_base` を指定した場合は、さらに `--sandbox` を渡しません。
 
 ## Workflow レベルの設定
 
@@ -891,7 +1023,7 @@ workflow のトップレベルフィールドは実行全体の挙動を制御�
 
 ### `max_steps`
 
-run 全体の iteration 予算です。正の整数か、無限ループとして動かす workflow（builtin の `auto-improvement-loop` など）向けの `infinite` を指定します。予算はルート workflow が所有し、そこから呼ばれるすべての workflow で共有されます。callable なサブワークフローは独自の `max_steps` を宣言できません。
+run 全体で実行できる回数を制限します。正の整数か、無限ループとして動かす workflow（builtin の `auto-improvement-loop` など）向けの `infinite` を指定します。ルート workflow で定義し、そこから呼ばれるすべての workflow で共有します。callable なサブワークフローは独自の `max_steps` を宣言できません。
 
 ```yaml
 max_steps: infinite
@@ -909,7 +1041,7 @@ schemas:
 
 ### provider routing と自動 routing
 
-`auto_routing`、provider/model の既定値、provider options、routing は workflow YAML のフィールドではありません。provider/model/options と routing は既存の `config.yaml` legacy mode と CLI/env override を維持したまま `runtime.yaml` が所有します。`rate_limit_fallback` は legacy の `config.yaml` 設定として残り、workflow YAML のフィールドではありません。workflow YAML で provider に関係する能力を指定する唯一の面は `capabilities` です。
+`auto_routing`、provider/model の既定値、provider options、routing は `runtime.yaml` で設定します。既存の `config.yaml` legacy mode と CLI・環境変数による上書きも引き続き利用できます。`rate_limit_fallback` は legacy の `config.yaml` 設定として残ります。これらは workflow YAML には書けません。workflow YAML で provider に関係する能力を指定するには `capabilities` だけを使います。
 
 ### 削除された workflow 実行設定
 
@@ -917,9 +1049,9 @@ schemas:
 
 ### `capabilities`
 
-`capabilities` はstep の能力（ツール許可リスト・network access・sandbox・skills）を与える provider-options プリセットを1つ以上名前で参照します。`provider_options` の参照専用形で、値はプリセット名（または名前のリスト）のみで、inline の options block は書けません。受理されるのは能力 leaf（`allowed_tools` / `network_access` / `sandbox` / `skills`）だけで、品質系・マシン固有系の leaf（`effort`、`base_url`、`guards` など）を含むプリセットはロード時に fail fast します。それらは `runtime.yaml` に置きます。
+`capabilities` には、step の能力（ツール許可リスト・network access・sandbox・skills）を指定する provider-options プリセットを1つ以上、名前で指定します。`provider_options` の参照専用形で、値にはプリセット名か名前のリストだけを使えます。inline の options block は書けません。受理されるのは能力を指定する項目（`allowed_tools` / `network_access` / `sandbox` / `skills`）だけです。品質やマシン固有の項目（`effort`、`base_url`、`guards` など）を含むプリセットは読み込み時にエラーになるため、これらの設定は `runtime.yaml` に置きます。
 
-このキーは workflow トップレベル（全 step の既定）、step、parallel サブステップの3箇所に書けます。step 自身の `capabilities` は workflow 既定とマージせず置換します。リストは左から右へマージされ、同じ leaf を宣言している場合は後の名前が勝ちます。
+このキーは workflow トップレベル（全 step の既定）、step、parallel サブステップの3箇所に書けます。step 自身の `capabilities` は workflow 既定を丸ごと置き換えます。リストは左から右へマージされ、同じ項目を宣言している場合は後のプリセットが優先されます。
 
 ```yaml
 capabilities: readonly
@@ -930,6 +1062,17 @@ steps:
 ```
 
 プリセットの解決は `provider_options.extends` と同一です（project → global → builtins、repertoire package スコープ対応）。同梱プリセットは `readonly`（読み取り・検索・シェル・Web 検索 + network access）、`edit`（`readonly` + ファイルの作成・編集）、`enable-skills`（Codex の repo/user skills）です。未解決の名前は fail fast します。`system` / `workflow_call` step は `capabilities` を拒否します。
+
+
+### `repository_identity`
+
+`repository_identity: true` は、clone で動くタスク（`worktree: true`）で `gh` と `glab` にプロジェクトのリポジトリを伝えます。clone には読める `origin` リモートがないためです。TAKT はこの workflow のエージェントのステップ、コマンドの品質ゲート、system の `command` 入力に `GH_REPO` または `GITLAB_REPO` を渡します。リモートや認証情報は追加しません。
+
+```yaml
+repository_identity: true
+```
+
+既定は無効なので、リポジトリを操作しない workflow には何も渡しません。判断は workflow ごとです。呼ばれた workflow は、呼び出し側の宣言を受け継がず、自身の宣言も失いません。プロジェクトルートで動くタスクには渡さず、利用者が自分で設定した変数は上書きしません。変数やホストの規則、GitHub / GitLab の検出は [clone でのリポジトリの指定](configuration.ja.md#clone-でのリポジトリの指定) にあります。
 
 
 ### `workflow_config.runtime`
@@ -995,7 +1138,7 @@ subworkflow:
       default: peer-review-suite-base
 ```
 
-builtin callable workflow ではcall tree 全体の予算を root workflow が所有するため `max_steps` を省略します。同じ実装に直接実行の入口も必要な場合は standalone の root wrapper に `max_steps` を指定し、callable child は `workflow_call` から呼び出す設計にします。
+builtin callable workflow では、call tree 全体で実行できる回数を root workflow で定めるため `max_steps` を省略します。同じ実装を直接実行できるようにもしたい場合は、standalone の root wrapper に `max_steps` を指定し、callable child は `workflow_call` から呼び出します。
 
 callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。`facet_pool_ref` parameter も `facet_kind` を指定せず、callable child のトップレベル `facet_pools` map にある pool 名の scalar を表します。`dynamic_facets.pool: { $param: implementation_pool }` の形で使用できます。`companion_ref[]` parameter も `facet_kind` を指定せず、`companion: { $param: implementation_companions }` の形で通常の agent step または Team Leader step の固定 companion 配列を表します。空配列は `companion` を省略し、残存する未引用の `companion.*` state 参照を拒否します。literal な空 companion は許可しません。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。`facet_pool_ref` の必須引数未設定、配列などの型不一致、child-local でない pool、未展開 `$param` は実行前に fail-fast し、暗黙の pool fallback はありません。`companion_ref[]` の配列以外の引数、未宣言参照、未知の companion 定義も実行前に fail-fast します。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
 
@@ -1098,24 +1241,7 @@ steps:
 
 ## Companion レビュアー
 
-通常の agent step または Team Leader step に `companion` を指定すると、ステートレスかつ read-only のレビュアーが動きます。名前配列は固定レビュアーの短縮形です。object 形式では固定レビュアー、runtime 開始時に1回だけ選抜する pool、任意の moderator を組み合わせられます。同時実行は最大3名です。
-
-companion reviewer は既定で無効です。workflow に宣言した reviewer を実行するには
-`runtime.yaml` で `companion.enabled: true` を設定します。
-
-発火方式は `runtime.yaml` の `companion.review_mode` で選択します。既定値は
-`completion` で、実装エージェントの成功応答が完了した時点（workflow が次へ進む前）に
-レビューし、応答中の quiet、forced、commit 発火は行いません。採用した指摘は既存の
-follow-up prompt で配達されます。`live` を指定すると、従来の quiet、forced、commit、
-queue、completion drain の動作を維持します。この設定は global または project 単位で、
-step や Companion 定義単位の上書きはできません。
-
-レビューで指摘を採用した後の修正方式は、`runtime.yaml` の
-`companion.fix_policy` で選択します。既定値の `single` は advisory な修正 follow-up を
-最大1回だけ実行し、その follow-up を再レビューしません。`loop` を明示すると、現在の累積
-diff に対する完了処理で新たに採用される指摘がなくなるまでレビューと修正を繰り返す従来
-動作になります。既にレビュー済みの digest は重複レビューしません。`review_mode` と同様に
-global または project 単位の設定であり、step や Companion 定義単位では上書きできません。
+agent step または Team Leader step に `companion` を指定すると、読み取り専用のレビュアーを追加できます。名前の配列で固定レビュアーを指定するほか、object 形式では固定レビュアー、候補 pool、moderator を組み合わせられます。同時に実行するレビュアーは最大3名です。利用するには `runtime.yaml` で `companion.enabled: true` を設定します。
 
 ```yaml
 - name: implement
@@ -1129,51 +1255,121 @@ global または project 単位の設定であり、step や Companion 定義単
       next: final-review
 ```
 
-workflow の遷移ルールから `companion.*` state は参照できません。Companion の指摘と失敗は advisory な診断情報であり、主 workflow の遷移は通常の semantic condition と Phase 3 の判定だけで決まります。
+レビューの時期は `companion.review_mode` で設定します。既定の `completion` は実装エージェントの応答が完了した後、workflow が次へ進む前にレビューします。`live` は実行中の変更や commit を検知し、静穏時間・強制発火・完了時にもレビューします。設定先は global または project の `runtime.yaml` です。
 
-Team Leader step では、各 part が独立した Companion runtime を持ち、設定された fix policy
-に従います。part 応答後にその時点の累積 diff をレビューし、採用 finding を同じ part
-session へ渡し、part-level policy が settle してから `PartResult` を公開します。他の part
-は並行実行を継続します。全 part が完了し、Team Leader が追加作業なしと判断した後は、
-aggregated response の確定前に別の Team 完了レビューを行います。
+修正の進め方は `companion.fix_policy` で設定します。既定の `single` では採用された指摘を実装エージェントへ渡し、修正の機会を最大1回設けます。修正後の再レビューは行いません。`loop` では新たに採用される指摘がなくなるまでレビューと修正を繰り返します。`loop` にラウンド上限はありません。実装エージェントは指摘の妥当性を判断し、対応しない場合は理由を説明できます。`review_mode` と `fix_policy` は step ごとには設定できません。
 
-`single` では、採用された Team finding を advisory な typed evidence として追加 part 計画へ
-1回だけ渡し、修正 batch を最大1回実行します。各 correction part は通常の part 実行経路を
-使いますが、part-level Companion review は作成・実行せず、batch が settle した後に親 Team
-の完了レビューは再実行しません。`loop` を明示した場合は、correction part の
-完了後に親 Team の完了レビューを再実行し、上限なしでレビューと修正を繰り返します。現在の
-累積 diff に対する完了処理で新たに採用される Team finding がなくなれば終了します。既に
-レビュー済みの digest は重複レビューしません。part 専用 worktree、patch、changed-path
-所有権、Companion 専用 scheduler は作成しません。
+Team Leader step では各 part の応答後にレビューし、part の作業を終えた後に Team 全体もレビューします。`single` で Team 全体の指摘が採用された場合は修正作業を最大1回行います。`loop` では Team 全体のレビューと修正を、新たに採用される指摘がなくなるまで繰り返します。
 
-定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
+Companion の指摘と失敗は参考情報として扱われます。workflow の遷移は通常の条件と Phase 3 の判定で決まり、ルールから `companion.*` state は参照できません。moderator を指定した場合は、各レビューで提出された指摘の採否を判定します。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` に記録されます。修正 follow-up が通常のプロバイダエラーで失敗した場合は、最後に成功した実装エージェントの応答で step を続けます。利用者が中断した場合は実行を停止します。
 
-`live` mode では TAKT は変更系 tool event を観測し、静穏時間、強制発火時間、commit 発火に応じて現在の累積差分をレビューします。`completion` mode では実装エージェントの応答完了時点まで待ちます。各レビューラウンドでは指摘一覧を新しく生成し、任意の moderator がラウンド内 index によって提出済みの全指摘を `accept` または `reject` します。指摘をラウンド間で引き継ぐことはありません。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ1行1件の NDJSON として追記します。この mailbox は監査ログ兼参考ビューであり、実装エージェントは任意のタイミングで読めます。engine は mailbox へ書き込みますが、配達や完了の判定では読み取り、解釈、保護を行いません。
-
-完了時には新規 trigger を停止し、実行中および queue 済みのレビューラウンドを drain して
-から現在の diff digest を読み、未レビューの digest だけを完了レビューします。既定の
-`single` では、採用された指摘がなければそのまま step を終了します。指摘があれば advisory
-な参考情報として1回だけ修正 follow-up へ埋め込みます。実装エージェントは各指摘の重要性を
-独立に判断し、軽微・不要な指摘は理由を説明したうえで未対応にできます。TAKT はその
-follow-up を再レビューせず、2回目の修正ターンも実行しません。
-
-`loop` を明示した場合は、採用された指摘を follow-up prompt へ配達し、修正後に完了処理を
-繰り返します。現在の累積 diff に対する完了処理で新たに採用される指摘がなくなれば step を
-終了します。現在の digest が既にレビュー済みなら重複レビューを省略します。このループに
-ラウンド上限はありません。workflow または step の AbortSignal でも中断できます。どちらの
-policy でも、follow-up が `error`、
-`rate_limited`、`blocked` を返すか例外を送出した場合、その follow-up を Companion 処理内で
-再試行せず、最後に成功した実装エージェント応答と session ID で step を続行します。
-Companion の診断値には `completionSettled: false`、実際に試行した `followUpRounds`、
-サニタイズ済みの失敗理由を記録します。AbortSignal による中断は従来どおり伝播し、Companion
-呼び出しは provider に対する既定回数の retry 後に fail-soft とします。
+Companion 定義は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順に探します。定義には `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、正の整数の `interval_ms` を指定できます。`interval_ms` の上限は `2,147,483,647` です。
 
 ## ベストプラクティス
 
-1. **イテレーション数を妥当に保つ** — 開発系 workflow では 10〜30 程度が一般的
-2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする
-3. **わかりやすい step 名を使う** — ログが読みやすくなる
-4. **workflow は段階的にテストする** — 単純な構成から始めて複雑化する
-5. **`/eject` でカスタマイズする** — ゼロから書くよりビルトイン workflow をコピーして編集する方が確実
+1. イテレーション数を妥当に設定します。開発系 workflow では 10〜30 程度が一般的です。
+2. レビュー step では `edit: false` を指定し、レビュアーによるコード変更を禁止します。Codex への権限委譲時は Codex 側でも書き込みを禁止します。
+3. ログを読みやすくするため、わかりやすい step 名を使います。
+4. workflow は単純な構成から始め、複雑にしながら段階的にテストします。
+5. `takt eject <workflow>` でビルトイン workflow をコピーし、編集してカスタマイズします。
 
 CLIプロンプトの一時ファイル方式は`runtime.yaml`のprofile options（またはlegacy設定）で指定します。設定キーは`cursor.use_prompt_temp_file`、`kiro.use_prompt_temp_file`、`copilot.use_prompt_temp_file`、`claude.use_prompt_temp_file`で、既定では無効です。Claudeでは`claude-headless`だけが使用し、Kiroはstdin送信を維持します。workflowの`capabilities`には指定しません。詳しくは[設定ガイド](./configuration.ja.md)を参照してください。
+
+## PR 状態取得と system step の待機
+
+修正・マージ実行では、待機対象を push 後の head SHA と照合し、マージにもクローンの最新 head SHA を `--match-head-commit` で渡します。CI 確認後に PR の head が変わった場合も別の commit をマージしません。このオプションの仕様は [GitHub CLI の公式マニュアル](https://cli.github.com/manual/gh_pr_merge)を参照してください。
+
+`pr_status` input に `source: current_pr` を指定すると、対象 PR の `number`、`headSha`、`ci.finished`、`ci.passed`、`mergeable`、`mergeStateStatus`、`reviewDecision`、`merged` を取得できます。CI の check と status がすべて決着するまで `ci.finished` は `false` です。CheckRun の SUCCESS・NEUTRAL・SKIPPED と StatusContext の SUCCESS を成功として扱います。チェックがまだない場合も待機します。
+
+PR 状態の取得は1回あたり15秒で期限切れになります。`wait` 中に期限切れになった試行は `max_retries` に数えられ、次の取得を待ちます。CLI が失敗した場合や不正な応答を返した場合はエラーになります。
+
+```yaml
+- name: wait_ci
+  mode: system
+  system_inputs:
+    - type: pr_status
+      source: current_pr
+      as: status
+  wait:
+    until: 'when(context.wait_ci.status.ci.finished == true)'
+    interval_ms: 15000
+    max_retries: 120
+    on_timeout: comment_timeout
+  rules:
+    - condition: when(true)
+      next: evaluate
+```
+
+`wait` は system step に指定します。`until` は `when(...)` 条件、`on_timeout` は期限切れ後の遷移先です。初回はすぐに状態を取得し、その後は既定で15秒ごとに最大120回再取得します。待機間隔の合計は30分で、状態取得にかかる時間が別に加わります。`interval_ms` は `2,147,483,647` 以下の正の整数、`max_retries` は0以上の整数で指定します。条件が成立すると effect を1回実行し、再取得の上限に達すると `on_timeout` へ進みます。CI 以外の system input にも使えます。
+
+`commit_and_push` effect は `pr` を受け取り、対象 PR のクローンで修正を commit して head remote に push します。変更がなければ commit は作りません。失敗時は `success: false` と `error` を返します。`sync_with_root` と `resolve_conflicts_with_ai` も同じクローンで実行します。
+
+fork の脅威検査は merge コマンドが本体 workflow の前に実行します。番号指定と自動起動でも検査し、同一リポジトリの PR では省略します。機械的検出、AI の疑わしい判定、差分上限超過や未判定は理由を PR にコメントして本体を開始しません。Git の取得・push と provider のツールは通常の設定を使用します。
+
+`merge-review` は `review` と Caccia 効果を実行し、CI の結果と評価を PR にコメントします。`merge-review-fix` は同期し、AIで競合を解消した場合は初回・再同期とも `review-fix` を実行します。競合のない同期ではフルレビューを呼ばず、共通の push、Caccia 効果、CI とレビュー状態の確認、マージへ進みます。レビューが失敗した場合は理由をコメントして停止します。CI失敗では後述の回復処理へ進みます。
+
+`takt merge` の既定である `merge-review-fix-simple` は、PR とベースブランチを同期します。競合のない同期ではフルレビューを呼ばずpushへ進み、AIで競合を解消した場合は初回・再同期とも `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。レビュー経路では要件の最終確認まで行い、その後は共通経路で変更を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗ではマージせず、結果を PR にコメントします。CI失敗では後述の回復処理へ進みます。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
+
+`merge-prepare` と `merge-review-fix-simple` の同期後レビューはPRの累積差分全体とベースブランチの追加変更を確認します。修正するのは衝突解消の誤りと、両側の変更の組み合わせで生じた不具合だけです。非競合ファイルの不具合も対象に含みます。同期と無関係な既存問題は理由を記録して持ち越し、修正計画・修正・最終確認での差し戻しにはつなげません。競合のない同期でのレビュー省略と通常開発のレビュー・裁定基準は維持します。
+
+### CI成功済みPRのレビュー
+
+`merge-review-ci` は明示指定時だけ動くworkflowです。先頭のsystem stepで既存 `pr_status` を読み、`ci.finished` と `ci.passed` が両方真の場合だけ `workflow_call` で既存 `merge-review` を呼びます。成功の定義は既存処理と同じで、`SUCCESS`・`NEUTRAL`・`SKIPPED` を含みます。未完了・失敗・チェック未作成なら、レビュー・Caccia・評価コメントを実行せず `COMPLETE` になります。事前判定では待機・再試行せず、新しい設定項目やCLIオプションも追加しません。
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+コード変更・commit・push・マージを行わずレビューとコメントだけを実行するには、既存の `.takt/config.yaml` に次を設定します。
+
+```yaml
+caccia:
+  enabled: false
+```
+
+事前判定の後は、既存 `merge-review` がレビュー・Caccia・その後のCI確認・評価と `TAKT evaluation: approved={true|false}. {reason}` 形式のコメントを担当し、子の `COMPLETE` または `ABORT` をそのまま返します。workflow開始前のfork選択と脅威検査は変わりません。バッチでは包含指定がないforkを除外し、番号指定では選定条件を省略しても脅威検査を実行します。拒否時の既存停止コメントも維持します。`merge-review`・`merge-review-fix`・`merge-review-fix-simple` の直接実行時の動作と既定値は保持します。
+
+### CI回復の入力と効果
+
+`merge-review-fix` と `merge-review-fix-simple` はCI待ち後に `CONFLICTING` を検出すると、ベースブランチを取り込み直して必要な競合解消を行います。初回・再同期とも、競合のない同期ではフルレビューを呼ばず、push → Caccia → 新しいHEADのCI待ち → マージ判定へ進みます。AIで競合を解消した場合は、毎回レビュー・修正を経てからpushします。`BEHIND` だけなら取り込み直さず、レビューなどの既存条件を確認してマージを試みます。取り込み直しは `max(2, 実行時並列数 - 1)` 回までです。並列数2・3では2回、4では3回となり、初回の同期は数えません。CLIの `--concurrency` を含む実行時並列数をタスクへ保存し、Requeue・Retryでも使います。上限に達しても競合が続く場合は理由をPRへコメントしてABORTで終了し、マージしません。CI修正・再実行の使用済み回数は取り込み直し後も保持します。
+
+再実行直前に現在のPR HEADを取得し、証拠のHEADと異なる場合は再実行を拒否します。受付後にHEADが変わった場合も待機を抜け、元HEADの失敗チェックとログを保持して不一致理由をコメントしてからABORTします。`pr_status`のsystem inputは`rerunHeadChanged`と`rerunHeadChangeReason`を常に返します。通常のpollingでは`false`と空文字列になります。run・repository・attemptの検証は引き続き適用されます。
+
+`comment_pr`には任意の`body_format: plain_text`を指定できます。補間済みの本文全体をコードブロックで囲み、区切りのバッククォートは本文中の最長の連続列より長くします。CI回復の停止・push失敗コメントでこの形式を使い、チェック名・job名・調査要点・エラーを文字として表示します。未指定の場合は従来どおりMarkdown本文を渡します。
+
+回復用の`pr_ci_failure`は`source: current_pr`とHEADの完全なstate参照`head_sha`を受け取ります。`number`、`headSha`、`complete`、run・attempt・jobとログ本文を含む失敗`checks`、取得不能理由`unavailable`、`fixRounds`、`rerunCount`、コメント用の文字列`details`を返します。commit statusや外部サービスのcheckなど、Actionsのログがない失敗は`external`に並べます。これらは失敗のまま扱いますが、ほかのcheckの証拠を不完全にはしません。`complete`が`false`になるのは、あるはずの証拠が`unavailable`に入った場合と、判断できるActionsのcheckが1つもない場合です。`rerun_ci` effectは`pr`と失敗証拠の完全参照`failure`を受け取り、証拠が揃っていて調査が外部要因と判断した場合だけ失敗runを重複なく1回再実行します。結果の`rerun`にはPR・HEAD・再実行前のattemptを保持します。その完全参照を`pr_status.rerun_from`へ渡すと新attemptを待機します。再実行stepの実行前はこの任意参照が通常のpollingを保持します。回数は同じworkflow実行が所有します。
+
+### Caccia システム効果
+
+GitHub では開始時の head を照合してから、`coderabbitai` が開始した未解決スレッドを確認します。対象スレッドがなければレビューを待たず、`skipReason: no_review_threads` の `skipped` を返します。マージ用 workflow は `wait_ci` へ進み、返された head の CI 完了を待ちます。対象スレッドがある場合は既存の指摘対応を実行します。単独の `takt caccia` と PR 公開後の自動 Caccia は初回レビューを待ちます。
+
+この効果は `takt merge` または `enqueue_task mode: from_pr` のタスクが持つ、対象 PR と一致した隔離クローンの実行文脈を必要とします。`pr` は正の整数または完全なテンプレート参照です。通常文字列に埋め込んだ参照は受理しません。既存の `caccia.enabled`、`wait_timeout_ms`、`max_iterations`、`workflow` を読みます。無効・未設定なら CodeRabbit のレビューを待たずにスキップします。単独の `takt caccia <PR>` は `enabled` に関係なく利用できます。
+
+GitHub での実行前には PR head と開始時のクローン HEAD を照合します。不一致なら2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。PR の識別情報変更、認証失敗など他の取得例外、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも同じ照合を行うため、無効・未設定でも GitHub head の反映を待つことがあります。この固定の反映待ちは `wait_timeout_ms` によるレビュー待機とは別です。非 GitHub のスキップ照合と実行終了後の head 検証には、この待機を追加しません。
+
+```yaml
+  - name: caccia
+    mode: system
+    effects:
+      - type: caccia
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.caccia.caccia.success == false)
+        next: error_comment
+      - condition: when(effect.caccia.caccia.outcome == "limit")
+        next: limit_comment
+      - condition: when(true)
+        next: wait_ci
+```
+
+正常結果は `success: true`、`failed: false` と `outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason`、`reason` を含みます。該当しない理由は `null` です。条件では `effect.<step>.caccia.*`、テンプレートでは `{effect:<step>.caccia.<field>}` から参照します。`skipReason` は `config_disabled`、`github_unavailable`、`no_review_threads`、`initial_review_unavailable`、`review_rate_limited`、`review_skipped` です。失敗は `success: false`、`failed: true`、`error` を返し、head は保証しません。正常結果のフィールドを読む前に失敗を判定してください。
+
+修正の push 後は SHA を照合して同じクローンを fast-forward します。CI 待ちは PR status の head と `effect.caccia.caccia.headSha` を照合し、マージは現在のクローン HEAD を expected SHA として使います。過去の push 効果の結果は履歴として保持します。
+
+GitLab でも MR の詳細と CI 状態を取得し、`github_unavailable` の `skipped` 後に返された head の CI を待ちます。マージ方式の指定と head 一致制約は未対応なので、これらを渡す `merge_pr` は失敗します。
+
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `sync → commit_and_push → caccia → wait_ci → merge_pr` の順です。AIで競合を解消した場合は、初回・再同期とも `commit_and_push` の前にレビュー・修正を行います。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。Git の push 自体は Caccia を起動しません。`caccia.enabled: true` の場合、worktree タスクの `auto_pr` と Pipeline の `--auto-pr` は PR 作成・更新成功後に Caccia を実行します。PR 公開失敗、PR がない場合、goal 管理タスク、GitHub 以外では後処理の Caccia を実行しません。実行した workflow（実際に呼び出された子 workflow を含む）に明示の `caccia` system 効果がある場合も後処理を抑止します。`merge.auto_start: true` では、選択されたマージ用 workflow（呼び出し先を含む）に同じ効果があれば後処理の Caccia を抑止し、マージ用 workflow が実行を担当します。効果がなければ Caccia の完了後にマージ用 workflow を起動します。step 名や指示文の文字列は効果として扱いません。
+
+`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。CIが初回から成功した場合は回復処理を行わず、CI待機のtimeoutは未解決としてABORTし、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。

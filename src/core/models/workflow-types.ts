@@ -49,7 +49,9 @@ export type {
   CodexReasoningEffort,
   ClaudeEffort,
   CopilotEffort,
+  KiroEffort,
   ClaudeSandboxSettings,
+  ClaudePermissionsOptions,
   ProviderGuardOptions,
   CodexProviderOptions,
   CodexPermissionControl,
@@ -201,6 +203,8 @@ export interface WorkflowResumePoint {
   elapsed_ms: number;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
+  missing_report_generations?: Record<string, string[]>;
+  report_input_recoveries?: Record<string, WorkflowResumePointEntry[]>;
 }
 
 export interface WorkflowStepParticipationRecord {
@@ -210,6 +214,16 @@ export interface WorkflowStepParticipationRecord {
 export interface WorkflowCallInvocationRecord {
   call_instance: number;
   report_namespace_segment: string;
+  completed?: true;
+}
+
+export interface WorkflowReportInput {
+  fromStep: string;
+  fallbackFromStep?: string;
+  reports: readonly string[] | 'all';
+  optionalIfUnrun?: true;
+  previousOnly?: true;
+  history?: { previous: number };
 }
 
 export interface DynamicParallelSelectionSnapshot {
@@ -258,6 +272,8 @@ export interface SelectorGuidance {
 
 export const MAX_COMPLETION_RETRY = 4;
 
+export const MAX_SYSTEM_WAIT_INTERVAL_MS = 2_147_483_647;
+
 export interface CompletionRetryConfig {
   readonly minRetry: number;
   readonly maxRetry: number;
@@ -281,6 +297,7 @@ export interface WorkflowPromotionEntry {
 
 interface WorkflowStepBase {
   name: string;
+  inputReports?: WorkflowReportInput | readonly WorkflowReportInput[];
   description?: string;
   personaDisplayName: string;
   providerRoutingPersonaKey?: string;
@@ -299,6 +316,10 @@ interface WorkflowStepBase {
    * schema has no such field.
    */
   engineSynthesized?: true;
+  /** Definition owner and runtime role of a step that has no tree row of its own. */
+  internalPromptContext?:
+    | { readonly kind: 'team_part'; readonly ownerStepName: string; readonly partName: string }
+    | { readonly kind: 'loop_monitor'; readonly ownerStepName: string };
   /** Engine-owned provider identity. Workflow YAML cannot set these fields. */
   provider?: ProviderType;
   providerSpecified?: boolean;
@@ -368,6 +389,7 @@ export type DynamicParallelFixedSubStep = NormalAgentWorkflowStep;
 
 export interface DynamicParallelPoolSubStep extends NormalAgentWorkflowStep {
   readonly description: string;
+  readonly selectionHint?: string;
 }
 
 export interface DynamicParallelSubSteps {
@@ -424,6 +446,12 @@ export type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeade
 
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
+  wait?: {
+    until: string;
+    intervalMs: number;
+    maxRetries: number;
+    onTimeout: string;
+  };
   mode?: never;
   call?: never;
   vars?: never;
@@ -538,6 +566,7 @@ export interface LoopMonitorRule {
 }
 
 export interface LoopMonitorJudge {
+  inputReports?: WorkflowStep['inputReports'];
   persona?: string;
   personaPath?: string;
   personaRef?: string;
@@ -567,6 +596,11 @@ export interface WorkflowConfig {
   allStepsRules?: readonly WorkflowWideRule[];
   steps: WorkflowStep[];
   initialStep: string;
+  /**
+   * `repository_identity: true`: name the project's repository for `gh` / `glab` in a task that
+   * runs in a clone. Off by default; each workflow decides for itself, called ones included.
+   */
+  repositoryIdentity?: boolean;
   maxSteps: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];

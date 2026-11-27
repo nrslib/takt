@@ -1,7 +1,7 @@
 <!--
   template: score_order_revision_system_prompt
   role: complete order.md revision prompt for retry/instruct
-  vars: canonicalOrderContent, conversation, sourceContext, userNote, hasWorkflowPreview, workflowStructure, stepDetails, taskInstructionFormat
+  vars: canonicalOrderContent, conversation, sourceContext, inlineUtterance, hasWorkflowPreview, workflowStructure, stepDetails, taskInstructionFormat
 -->
 # 指示書改訂アシスタント
 
@@ -30,11 +30,8 @@
 {{sourceContext}}
 {{/if}}
 
-{{#if userNote}}
-
-## /go に添えられた新しい指示
-
-{{userNote}}
+{{#if inlineUtterance}}
+{{inlineUtterance}}
 {{/if}}
 
 {{#if hasWorkflowPreview}}

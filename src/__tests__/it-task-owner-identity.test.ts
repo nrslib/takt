@@ -11,8 +11,20 @@ import { TaskRecordSchema, type TaskRecord } from '../infra/task/schema.js';
 import { toTaskListItem, toTaskState } from '../infra/task/mapper.js';
 import { serializeTaskListItemForJson } from '../infra/task/listSerializer.js';
 
+const inspector = vi.hoisted(() => ({ unavailable: false }));
+vi.mock('node:child_process', async (original) => {
+  const actual = await original<typeof import('node:child_process')>();
+  return { ...actual, execFileSync: (...args: Parameters<typeof actual.execFileSync>) => {
+    if (inspector.unavailable && (args[0] === 'ps' || args[1]?.some((arg) => arg.startsWith('(Get-Process -Id ')))) {
+      throw new Error('inspector unavailable');
+    }
+    return Reflect.apply(actual.execFileSync, undefined, args);
+  } };
+});
+
 const directories: string[] = [];
 afterEach(() => {
+  inspector.unavailable = false;
   vi.unstubAllEnvs();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -77,7 +89,7 @@ describe('ordinary task owner identity persistence and recovery', () => {
       const { directory, runner, file } = setup();
       const task = { ...readTask(file), owner_pid: pid, owner_start_time: 'Thu Jan  1 00:00:00 1970' };
       writeFileSync(file, stringify({ tasks: [task] }));
-      vi.stubEnv('PATH', directory);
+      inspector.unavailable = true;
       expect(getTaskProcessIdentity(pid)).toBeUndefined();
       expect(loadTaskHistory(directory, 'en')).toEqual([]);
       expect(runner.failInterruptedRunningTasks()).toBe(0);

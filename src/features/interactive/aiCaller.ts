@@ -1,3 +1,4 @@
+import { resolveToolActivityDisplayMode } from '../../shared/ui/ToolActivityDisplay.js';
 /**
  * AI call with automatic retry on stale/invalid session.
  *
@@ -9,6 +10,7 @@ import {
   updatePersonaSession,
 } from '../../infra/config/index.js';
 import { isQuietMode } from '../../shared/context.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -17,13 +19,14 @@ import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import { createMcpAdapter, type PreparedProviderMcp, type ResolvedMcpServers } from '../../infra/providers/mcp/index.js';
-import { resolveTrustedTaskStateMcpAllowedTools } from '../../infra/providers/mcp/task-state.js';
+import { resolveTrustedTaskStateMcpAllowedTools, resolveTrustedTaskStateMcpToolNames } from '../../infra/providers/mcp/task-state.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { InternalAgentIsolation, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import type { McpServerConfig, PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import { parseTaskStateReferenceMarker } from '../../shared/task-state-reference.js';
 import {
   providerSupportsAllowedTools,
@@ -31,6 +34,8 @@ import {
 } from '../../infra/providers/provider-capabilities.js';
 
 const log = createLogger('ai-caller');
+import { checkManagedProviders, type ConfirmManagedProvider } from '../../infra/managed-providers/preflight.js';
+import { terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
 
 /** Result from a single AI call */
 export interface CallAIResult {
@@ -62,6 +67,8 @@ export interface SessionContext {
 }
 
 interface CallAIWithRetryOptions {
+  onSessionResumeFailure?: () => void;
+  confirmManagedProvider?: ConfirmManagedProvider;
   imageAttachments?: ImageAttachmentReference[];
   /** Receives what a terminal caller would have printed alongside the answer. */
   onNotice?: (message: string) => void;
@@ -184,6 +191,27 @@ function resolveConversationMcpServers(
   };
 }
 
+function resolveConversationMcpPermissions(ctx: SessionContext): {
+  /** Claude-style allowedTools: built-in tools one by one, user servers as `mcp__<name>`. */
+  tools: readonly string[];
+  builtinTools: readonly string[];
+  userServerNames: readonly string[];
+  builtinToolNames: readonly string[];
+} | undefined {
+  const builtinTools = resolveTrustedTaskStateMcpAllowedTools(ctx.taskStateMcpServers);
+  const builtinToolNames = resolveTrustedTaskStateMcpToolNames(ctx.taskStateMcpServers);
+  if (builtinTools === undefined || builtinToolNames === undefined
+    || ctx.mcpServers === undefined || ctx.taskStateMcpServers === undefined
+    || ctx.mcpServers.takt !== ctx.taskStateMcpServers.takt) return undefined;
+  const userServerNames = Object.keys(ctx.mcpServers).filter((name) => name !== 'takt');
+  return {
+    tools: [...builtinTools, ...userServerNames.map((name) => `mcp__${name}`)],
+    builtinTools,
+    userServerNames,
+    builtinToolNames,
+  };
+}
+
 async function prepareConversationMcp(
   ctx: SessionContext,
   cwd: string,
@@ -193,19 +221,24 @@ async function prepareConversationMcp(
 ): Promise<{ readonly servers: ResolvedMcpServers; readonly prepared: PreparedProviderMcp } | undefined> {
   const adapter = createMcpAdapter(ctx.providerType);
   adapter.validate(servers);
+  const permissions = resolveConversationMcpPermissions(ctx);
   const prepared = await adapter.prepare(servers, {
     cwd,
     abortSignal,
     ...(permissionMode === undefined ? {} : { permissionMode }),
+    ...(permissions === undefined ? {} : {
+      approvedServerNames: permissions.userServerNames,
+      toolApprovalAllowlist: { takt: permissions.builtinToolNames },
+    }),
     ...(ctx.taskStateMcpServers === servers.servers
       ? { taskStateMcpServers: ctx.taskStateMcpServers }
       : {}),
   });
-  const taskStateMcpTools = ctx.taskStateMcpServers === servers.servers
-    ? resolveTrustedTaskStateMcpAllowedTools(ctx.taskStateMcpServers)
-    : undefined;
-  if (taskStateMcpTools !== undefined) {
-    prepared.taskStateMcpTools = taskStateMcpTools;
+  if (permissions !== undefined) {
+    prepared.conversationMcpPermissions = {
+      serverNames: permissions.userServerNames,
+      tools: permissions.builtinTools,
+    };
   }
   return { servers, prepared };
 }
@@ -247,8 +280,9 @@ export async function callAIWithRetry(
   error?: string;
 }> {
   const outputMode = options.outputMode ?? 'terminal';
+  const toolDisplayMode = resolveToolActivityDisplayMode(outputMode, process.stdout.isTTY !== true);
   const display = outputMode === 'terminal'
-    ? new StreamDisplay('assistant', isQuietMode())
+    ? new StreamDisplay('assistant', isQuietMode(), undefined, toolDisplayMode)
     : undefined;
   const resolveStreamHandler = (activeDisplay: StreamDisplay | undefined): StreamCallback | undefined =>
     activeDisplay === undefined ? options.onStream : activeDisplay.createHandler();
@@ -296,15 +330,21 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
-    if (options.readonlyFileReadPaths !== undefined
-      && (ctx.providerType === 'pi' || ctx.providerType === 'opencode')) {
-      throw new Error(`Provider "${ctx.providerType}" cannot restrict file reads to the specified verification artifacts`);
+    await checkManagedProviders([ctx.providerType], options.confirmManagedProvider ?? terminalProviderConfirmation(), options.abortSignal);
+    if (
+      options.allowReadonlyFileRead === true
+      && (ctx.providerType === 'opencode' || ctx.providerType === 'pi')
+    ) {
+      throw new Error(
+        `Provider "${ctx.providerType}" does not support read-only access limited to verification artifacts`,
+      );
     }
-    const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
+
+    const resolvedSystemPrompt = withProgressNotesGuidance(buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,
       ctx.provider.getRuntimeInstructions(),
-    );
+    ), ctx.lang);
     const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
     const hasImageAttachments = options.imageAttachments !== undefined && options.imageAttachments.length > 0;
     const nativeImageAttachments = ctx.provider.supportsNativeImageInput
@@ -313,18 +353,16 @@ export async function callAIWithRetry(
     const promptForProvider = ctx.provider.supportsNativeImageInput
       ? prompt
       : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
-    const taskStateMcpTools = options.internalAgentIsolation === 'strict-readonly'
+    const conversationAllowedTools = options.internalAgentIsolation === 'strict-readonly'
       ? undefined
-      : ctx.mcpServers === ctx.taskStateMcpServers
-        ? resolveTrustedTaskStateMcpAllowedTools(ctx.taskStateMcpServers)
-        : undefined;
+      : resolveConversationMcpPermissions(ctx)?.tools;
     const allowedToolsForProvider = ctx.providerType === 'deepseek-harness'
       ? allowedTools
       : providerSupportsAllowedTools(ctx.providerType) === false
         ? undefined
-        : taskStateMcpTools === undefined
+        : conversationAllowedTools === undefined
           ? allowedTools
-          : [...new Set([...(allowedTools ?? []), ...taskStateMcpTools])];
+          : [...new Set([...(allowedTools ?? []), ...conversationAllowedTools])];
     // Per-call permissionMode is used for operations with a dedicated constraint; a session-level
     // mode is resolved user configuration and must still reach the provider for explicit-constraint errors.
     const permissionModeForProvider = ctx.providerType !== 'deepseek-harness'
@@ -376,17 +414,17 @@ export async function callAIWithRetry(
       providerAgent: ReturnType<SessionContext['provider']['setup']>,
       activeSessionId: string | undefined,
       activeDisplay: StreamDisplay | undefined,
-    ): Promise<{ response: Awaited<ReturnType<typeof providerAgent.call>>; referenceRunSlug?: string }> => {
+    ): Promise<{ response: Awaited<ReturnType<typeof providerAgent.call>>; usedTools: boolean; referenceRunSlug?: string }> => {
       // Some provider clients dispose the prepared MCP material when their call
       // ends. Prepare per attempt so a stale-session retry gets a live config.
       const referenceTracker = createRunReferenceTracker();
       const stream = resolveStreamHandler(activeDisplay);
-      const trackedStream: StreamCallback | undefined = stream === undefined
-        ? undefined
-        : (event) => {
-          referenceTracker.observe(event);
-          stream(event);
-        };
+      let usedTools = false;
+      const trackedStream: StreamCallback = (event) => {
+        if (event.type === 'tool_use' || event.type === 'tool_output' || event.type === 'tool_result') usedTools = true;
+        if (stream !== undefined) referenceTracker.observe(event);
+        stream?.(event);
+      };
       const resolvedMcpServers = options.internalAgentIsolation === 'strict-readonly'
         ? undefined
         : resolveConversationMcpServers(ctx.mcpServers);
@@ -416,10 +454,11 @@ export async function callAIWithRetry(
         }
         const response = await providerAgent.call(
           promptForProvider,
-          providerCallOptions(activeSessionId, trackedStream, conversationMcp),
+          providerCallOptions(activeSessionId, withToolActivityCall(trackedStream), conversationMcp),
         );
         return {
           response,
+          usedTools,
           ...(response.status !== 'blocked' && response.status !== 'error'
             && referenceTracker.getReferenceRunSlug() !== undefined
             ? { referenceRunSlug: referenceTracker.getReferenceRunSlug() }
@@ -434,22 +473,39 @@ export async function callAIWithRetry(
     const firstAttempt = await callProvider(agent, sessionId, display);
     const response = firstAttempt.response;
     display?.flush();
-    const success = response.status !== 'blocked' && response.status !== 'error';
+    const emptyResponse = response.status === 'done'
+      && response.structuredOutput === undefined
+      && response.content.trim().length === 0
+      && firstAttempt.usedTools;
+    const success = response.status !== 'blocked' && response.status !== 'error' && !emptyResponse;
+    const rejectedSession = !success && sessionId !== undefined
+      && ctx.providerType !== 'deepseek-harness'
+      && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
+    const canRetrySession = Boolean(sessionId);
+    if (rejectedSession) {
+      options.onSessionResumeFailure?.();
+      sessionId = undefined;
+      if (shouldPersistSession()) {
+        updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
+      }
+    }
 
     if (!abortController.signal.aborted
       && !forceExitRequested
       && !success
-      && sessionId
+      && !emptyResponse
+      && canRetrySession
       // DeepSeek has no stale-session recovery. Retrying an unsupported
       // constraint without an ID cannot make that same constraint supported.
       && ctx.providerType !== 'deepseek-harness'
-      && response.failureCategory !== AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+      && (response.failureCategory !== AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+        || (rejectedSession && !firstAttempt.usedTools))
       && ctx.effort === undefined
       && ctx.disableSessionRetry !== true) {
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
       const retryDisplay = outputMode === 'terminal'
-        ? new StreamDisplay('assistant', isQuietMode())
+        ? new StreamDisplay('assistant', isQuietMode(), undefined, toolDisplayMode)
         : undefined;
       const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
       const retryAttempt = await callProvider(retryAgent, undefined, retryDisplay);
@@ -484,11 +540,12 @@ export async function callAIWithRetry(
       && ctx.providerType === 'deepseek-harness'
       && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
     if (startFreshNextTurn) {
+      options.onSessionResumeFailure?.();
       sessionId = undefined;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
       }
-    } else if (response.sessionId) {
+    } else if (!rejectedSession && response.sessionId) {
       sessionId = response.sessionId;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
@@ -496,11 +553,13 @@ export async function callAIWithRetry(
     }
     return {
       result: {
-        content: success ? response.content : (response.error ?? response.content)
-          + (startFreshNextTurn
+        content: success
+          ? response.content
+          : (response.error ?? (emptyResponse ? 'The AI returned an empty response' : response.content))
+            + (startFreshNextTurn
             ? '\nThe next turn will start a new SDK session without the previous history; SDK history restoration is not supported yet.'
             : ''),
-        sessionId: startFreshNextTurn ? undefined : response.sessionId,
+        sessionId: startFreshNextTurn || rejectedSession ? undefined : response.sessionId,
         success,
         ...(success && firstAttempt.referenceRunSlug === undefined
           ? {}

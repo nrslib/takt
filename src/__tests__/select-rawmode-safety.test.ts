@@ -13,6 +13,7 @@ describe('select raw mode safety', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     restoreStdin();
     if (originalNoTty === undefined) {
       delete process.env.TAKT_NO_TTY;

@@ -4,6 +4,7 @@ max_steps: 30
 initial_step: develop
 steps:
   - name: develop
+    description: 画面とバックエンドの計画・テスト・実装とレビュー指摘の修正を行い、要件充足を確認する
     kind: workflow_call
     call: simple-core
     args:

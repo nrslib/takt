@@ -12,6 +12,7 @@ const {
   )),
 }));
 
+
 vi.mock('../features/tasks/execute/runAllTasks.js', () => {
   throw importError;
 });
@@ -45,6 +46,7 @@ describe('CLI dynamic import error boundary', () => {
   afterEach(() => {
     process.argv = [...originalArgv];
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('rejects the removed deepseek-harness install command through the CLI entrypoint', async () => {

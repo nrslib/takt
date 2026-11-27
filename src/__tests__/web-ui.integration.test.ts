@@ -1,11 +1,12 @@
 import { appendFile, lstat, mkdtemp, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
-import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { runCentralTask } from '../features/web-ui/central-worker.js';
 import {
@@ -36,6 +37,7 @@ import {
 } from '../features/web-ui/chat.js';
 import {
   CentralTaskActionError,
+  enrichTaskActionConversationContext,
   executeCentralTaskAction,
 } from '../features/web-ui/task-actions.js';
 import { resolveStatePaths, type StatePaths } from '../core/execution/locations.js';
@@ -47,6 +49,7 @@ import type {
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { buildRunPathsFromRunsDirectory } from '../core/workflow/run/run-paths.js';
+import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import {
   prepareWorkflowExecutionBundle,
@@ -56,6 +59,11 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { createSharedClone } from '../infra/task/index.js';
 import { buildExecutionTrace } from '../../web-ui/public/execution-model.js';
+
+// ESM の組み込み名前空間を直接変更せずに、filesystem 操作をテストで差し替える。
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+}));
 
 const servers: Server[] = [];
 const temporaryDirectories = new Set<string>();
@@ -157,7 +165,6 @@ async function createGitProjectFixture() {
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   return { globalConfigDirectory, projectDirectory, project, repository };
 }
@@ -256,6 +263,43 @@ async function writeRun(
 }
 
 describe('Web UI run artifacts', () => {
+  it('returns an empty collection for an unchanged empty runs directory', async () => {
+    const statePaths = await createArtifactState();
+    await mkdir(statePaths.runsDirectory, { recursive: true });
+
+    await expect(readRunCollection(statePaths)).resolves.toEqual({ runs: [], warnings: [] });
+  });
+
+  it('returns an empty collection when the runs directory is initially missing', async () => {
+    const statePaths = await createArtifactState();
+    await mkdir(statePaths.stateDirectory, { recursive: true });
+    await expect(lstat(statePaths.runsDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(readRunCollection(statePaths)).resolves.toEqual({ runs: [], warnings: [] });
+  });
+
+  it('propagates ENOENT when the runs directory disappears after path resolution', async () => {
+    const statePaths = await createArtifactState();
+    await mkdir(statePaths.runsDirectory, { recursive: true });
+    const originalRealpath = fsPromises.realpath;
+    const pathResolution = vi.spyOn(fsPromises, 'realpath').mockImplementation(async (path, options) => {
+      const resolvedPath = await originalRealpath(path, options);
+      if (path === statePaths.runsDirectory) {
+        await rm(statePaths.runsDirectory, { recursive: true });
+      }
+      return resolvedPath;
+    });
+    try {
+      await expect(readRunCollection(statePaths)).rejects.toMatchObject({
+        code: 'ENOENT',
+        syscall: 'lstat',
+        path: statePaths.runsDirectory,
+      });
+    } finally {
+      pathResolution.mockRestore();
+    }
+  });
+
   it('lists runs newest first and ignores directories without meta', async () => {
     const statePaths = await createArtifactState();
     await writeRun(statePaths, 'older', { startTime: '2026-08-23T00:00:00.000Z' });
@@ -2064,14 +2108,10 @@ describe('Web UI run artifacts', () => {
     await expect(readRunCollection(statePaths)).rejects.toThrow(/symbolic link|runs directory/i);
   });
 
-  it('rejects an ordinary runs-root replacement with the expected inode', async () => {
+  it('reads an ordinary runs-root replacement made before the read starts', async () => {
     const statePaths = await createArtifactState();
     await mkdir(statePaths.runsDirectory, { recursive: true });
     const original = await lstat(statePaths.runsDirectory);
-    const pinned = {
-      ...statePaths,
-      runsRootFingerprint: { dev: original.dev, ino: original.ino },
-    };
     // Create the replacement while the original is still present. This makes
     // the differing inode deterministic on filesystems that eagerly reuse
     // deleted directory inodes.
@@ -2082,7 +2122,28 @@ describe('Web UI run artifacts', () => {
     const replacement = await lstat(statePaths.runsDirectory);
     expect(replacement.ino).not.toBe(original.ino);
 
-    await expect(readRunCollection(pinned)).rejects.toThrow(/fingerprint|identity/i);
+    await writeRun(statePaths, 'after-replacement');
+    expect((await readRunCollection(statePaths)).runs.map((run) => run.slug)).toEqual(['after-replacement']);
+  });
+
+  it('rejects a runs-root replacement during the same collection read', async () => {
+    const statePaths = await createArtifactState();
+    await writeRun(statePaths, 'before-replacement');
+    expect((await readRunCollection(statePaths)).runs.map((run) => run.slug)).toEqual(['before-replacement']);
+    const original = await lstat(statePaths.runsDirectory);
+    const displacedPath = join(statePaths.stateDirectory, 'displaced-runs');
+    const enumeration = vi.spyOn(fsPromises, 'readdir').mockImplementationOnce(async () => {
+      await rename(statePaths.runsDirectory, displacedPath);
+      await mkdir(statePaths.runsDirectory);
+      return [];
+    });
+    try {
+      await expect(readRunCollection(statePaths)).rejects.toThrow('Runs directory identity changed during read');
+      expect(enumeration).toHaveBeenCalledOnce();
+      expect((await lstat(statePaths.runsDirectory)).ino).not.toBe(original.ino);
+    } finally {
+      enumeration.mockRestore();
+    }
   });
 
   it('rejects a symlinked report root before reading outside the run', async () => {
@@ -2107,7 +2168,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const slug = 'occurrence-api';
     const runRoot = await writeRun(repository.paths, slug);
@@ -2230,7 +2290,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const execution = await repository.enqueueAndClaim({
       task: 'keep running across UI restart',
@@ -2433,7 +2492,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const centralTask = await central.enqueueAndClaim({
       task: 'Task for 20260824-example',
@@ -2566,7 +2624,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const reserved = await repository.enqueueAndClaim({
       task: 'action task',
@@ -2774,7 +2831,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const acquired = await central.enqueueAndClaim({ task: 'watch', workflow: 'default', worktree: false });
     await central.setStartingPid({
@@ -3127,7 +3183,127 @@ describe('Web UI HTTP boundary', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it.each([false, true])('preserves a valid parent through Web Retry execution and rejects an invalid root (%s)', async (invalidRoot) => {
+  it('keeps the task-saved retry checkpoint when run detail metadata has no resume point', async () => {
+    const worktree = join(await createTemporaryDirectory('takt-web-ui-task-saved-retry-'), 'clone');
+    const fixture = await createCompletedGitTask({
+      status: 'failed',
+      worktree,
+      workflow: join(worktree, '.takt', 'workflows', 'retry.yaml'),
+    });
+    await mkdir(join(fixture.clonePath, '.takt', 'workflows'), { recursive: true });
+    await writeFile(join(fixture.clonePath, '.takt', 'workflows', 'retry.yaml'), stringifyYaml({
+      name: 'retry',
+      initial_step: 'plan',
+      steps: [{ name: 'plan', persona: 'planner', instruction: 'Plan' }],
+    }));
+    const workflow = loadWorkflowByIdentifier(fixture.task.workflow, fixture.projectDirectory, {
+      lookupCwd: fixture.clonePath,
+    });
+    if (workflow === null) throw new Error('Expected the retry workflow');
+    const agentStep = workflow.steps.find((step) => step.kind === undefined || step.kind === 'agent');
+    if (agentStep === undefined) throw new Error('Expected an agent retry step');
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: workflow.name,
+        workflow_ref: getWorkflowReference(workflow),
+        step: agentStep.name,
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 10,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    await writeRun(fixture.repository.paths, fixture.task.runId!, { status: 'failed' });
+    const task = {
+      ...fixture.task,
+      executionRequest: {
+        resumeMode: 'retry' as const,
+        sourceRunSlug: fixture.task.runId,
+        resumePoint,
+      },
+    };
+
+    const context = await enrichTaskActionConversationContext(
+      task,
+      'retry',
+      fixture.projectDirectory,
+      fixture.repository,
+    );
+
+    expect(context.runContext).toBeDefined();
+    expect(context.retrySourceResumePoint).toEqual(resumePoint);
+    expect(context.retryStartOptions?.options.some((option) => option.id === 'resume-checkpoint')).toBe(true);
+    expect(context.retryStartSelections).toContainEqual({
+      id: 'resume-checkpoint',
+      selection: { kind: 'resume', resumePoint },
+    });
+  });
+
+  it('carries restart evidence into a second Web retry without presenting the old source as Resume', async () => {
+    const worktree = join(await createTemporaryDirectory('takt-web-ui-second-retry-'), 'clone');
+    const fixture = await createCompletedGitTask({
+      status: 'failed',
+      worktree,
+      workflow: join(worktree, '.takt', 'workflows', 'retry.yaml'),
+    });
+    await mkdir(join(fixture.clonePath, '.takt', 'workflows'), { recursive: true });
+    await writeFile(join(fixture.clonePath, '.takt', 'workflows', 'retry.yaml'), stringifyYaml({
+      name: 'retry',
+      initial_step: 'plan',
+      steps: [{ name: 'plan', persona: 'planner', instruction: 'Plan' }],
+    }));
+    const workflow = loadWorkflowByIdentifier(fixture.task.workflow, fixture.projectDirectory, {
+      lookupCwd: fixture.clonePath,
+    });
+    if (workflow === null) throw new Error('Expected the retry workflow');
+    const sourceResumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: workflow.name,
+        workflow_ref: getWorkflowReference(workflow),
+        step: 'plan',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 10,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    await writeRun(fixture.repository.paths, fixture.task.runId!, { status: 'failed' });
+    const task = {
+      ...fixture.task,
+      executionRequest: {
+        resumeMode: 'retry' as const,
+        sourceRunSlug: fixture.task.runId,
+        restartPoint: {
+          stack: [{
+            workflow: workflow.name,
+            workflow_ref: getWorkflowReference(workflow),
+            step: 'plan',
+            kind: 'agent' as const,
+          }],
+        },
+        sourceResumePoint,
+      },
+    };
+
+    const context = await enrichTaskActionConversationContext(
+      task,
+      'retry',
+      fixture.projectDirectory,
+      fixture.repository,
+    );
+
+    expect(context.retrySourceResumePoint).toEqual(sourceResumePoint);
+    expect(context.retryStartOptions?.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
+    expect(context.retryStartSelections?.some((option) => option.selection.kind === 'restart')).toBe(true);
+  });
+
+  it.each([false, true])('restarts instead of truncating an invalid saved child through Web Retry and rejects an invalid root (%s)', async (invalidRoot) => {
     const worktree = join(await createTemporaryDirectory('takt-web-ui-parent-resume-'), 'clone');
     const fixture = await createCompletedGitTask({ status: 'failed', worktree,
       workflow: join(worktree, '.takt', 'workflows', 'default.yaml') });
@@ -3187,7 +3363,8 @@ describe('Web UI HTTP boundary', () => {
         { status: 'done', content: 'Complete the original task using the updated child workflow' },
       ]);
       await chat.send(sessionId, 'Prepare the retry');
-      const draft = await chat.send(sessionId, '/go', undefined, 'resume-checkpoint');
+      const selectedId = invalidRoot ? 'resume-checkpoint' : 'restart:0.0';
+      const draft = await chat.send(sessionId, '/go', undefined, selectedId);
       if (draft.kind !== 'task_instruction') throw new Error('Expected the confirmation draft');
       if (invalidRoot) {
         expect(context.retryStartOptions?.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
@@ -3198,11 +3375,28 @@ describe('Web UI HTTP boundary', () => {
         expect(await fixture.repository.claimNextPending()).toBeUndefined();
         return;
       }
-      const expectedPoint = { ...point, stack: point.stack.slice(0, 1) };
-      expect(context.retryStartOptions?.defaultId).toBe('resume-checkpoint');
-      expect(context.retryStartSelections?.find((option) => option.id === 'resume-checkpoint')?.selection)
-        .toEqual({ kind: 'resume', resumePoint: expectedPoint });
-      const claim = chat.claimTaskAction!(sessionId, 'resume-checkpoint');
+      expect(context.retryStartOptions?.defaultId).toBe(selectedId);
+      expect(context.retryStartOptions?.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
+      const selected = context.retryStartSelections?.find((option) => option.id === selectedId);
+      expect(selected?.selection).toEqual({
+        kind: 'restart',
+        restartPoint: {
+          stack: [{
+            workflow: point.stack[0]!.workflow,
+            workflow_ref: point.stack[0]!.workflow_ref,
+            step: point.stack[0]!.step,
+            kind: point.stack[0]!.kind,
+            call_instance: 1,
+          }, {
+            workflow: 'child',
+            workflow_ref: expect.any(String),
+            step: 'child-new',
+            kind: 'agent',
+          }],
+        },
+      });
+      if (selected?.selection.kind !== 'restart') throw new Error('Expected a restart selection');
+      const claim = chat.claimTaskAction!(sessionId, selectedId);
       await executeCentralTaskAction({
         globalConfigDirectory: fixture.globalConfigDirectory, projectDirectory: fixture.projectDirectory,
         projectId: fixture.project.id, repository: fixture.repository, task: failed,
@@ -3212,8 +3406,8 @@ describe('Web UI HTTP boundary', () => {
       chat.commitTaskAction!(sessionId, claim.reservationToken);
       const pending = await fixture.repository.readTask(failed.taskId);
       expect(pending?.status).toBe('pending');
-      expect(pending?.executionRequest?.resumePoint).toEqual(expectedPoint);
-      expect(pending?.executionRequest?.restartPoint).toBeUndefined();
+      expect(pending?.executionRequest?.resumePoint).toBeUndefined();
+      expect(pending?.executionRequest?.restartPoint).toEqual(selected.selection.restartPoint);
       const resumed = await fixture.repository.claimNextPending();
       if (resumed === undefined) throw new Error('Expected the queued retry execution');
       const callLog = join(fixture.globalConfigDirectory, 'resumed-calls.ndjson');

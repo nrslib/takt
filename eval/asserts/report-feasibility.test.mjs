@@ -69,14 +69,14 @@ test('grader-only reference has the concrete authorization, excluded prerequisit
   }
 });
 
-test('actual AgentRunner captures fresh tool-free P2 with all three data obligations, without target rubric', () => {
+test('actual AgentRunner captures fresh read-only P2 with all three data obligations, without target rubric', () => {
   const directory = mkdtempSync('/private/tmp/feasibility-capture-');
   const workspace = join(directory, 'project');
   try {
     prepareFeasibilityWorkspace(workspace);
     const captured = captureV3({ revisionRoot: process.cwd(), workspace, sample: cases.cases[0], language: 'en',
       configDirectory: join(directory, 'config'), directory: join(directory, 'captured') });
-    assert.deepEqual(captured.phase2Options, { allowedTools: [], sessionIdPresent: false });
+    assert.deepEqual(captured.phase2Options, { executionPhase: 2, permissionMode: 'readonly', sessionIdPresent: false });
     assert.equal(captured.phase2Prompt, captured.phaseParts[1].systemPrompt + '\n\n' + captured.phaseParts[1].userInstruction);
     for (const id of ['LOCAL-01', 'ENDPOINT-02', 'TIMESTAMP-03']) assert.ok(captured.phase2Prompt.includes(id));
     for (const rubric of Object.values(cases.cases[0].rubrics)) assert.ok(!captured.phase2Prompt.includes(rubric));

@@ -21,7 +21,7 @@ const MAX_LOCAL_UNIT_SHARDS = 8;
 // Keep headroom for the npm parent, the OS, and test setup on low-core machines.
 const LOCAL_PARALLELISM_HEADROOM = 2;
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
-const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". The main pull-request CI workflow and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
+const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull-request CI runs the full Heavy IT gate. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
 const PARALLEL_TEST_SCRIPTS = new Set([
   'test:unit:parallel',
   'test:it:light',
@@ -96,7 +96,7 @@ export function selectNpmTestRuns(args, unitShardCount) {
     const resolvedUnitShardCount = unitShardCount
       ?? resolveLocalUnitShardCount(availableParallelism());
     return createUnitShardRuns(resolvedUnitShardCount).map((shard) => ({
-      npmArgs: ['run', 'test:unit:parallel', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
+      npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
     }));
   }
 
@@ -125,7 +125,7 @@ function createUnitShardRuns(unitShardCount) {
 
 function buildDefaultRuns(shared) {
   const separator = shared.length > 0 ? ['--', ...shared] : [];
-  return [{ npmArgs: ['run', 'test:unit:parallel', ...separator] }];
+  return [{ npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', ...separator] }];
 }
 
 function hasExplicitTargets(targets) {
@@ -180,7 +180,10 @@ function buildTargetedRun(script, shared, targets) {
   if (targets.length === 0) {
     return undefined;
   }
-  return { npmArgs: ['run', script, '--', ...shared, ...targets] };
+  const scriptArgs = ['test:unit:parallel', 'test:it:heavy:parallel'].includes(script)
+    ? ['run', script, '--ignore-scripts']
+    : ['run', script];
+  return { npmArgs: [...scriptArgs, '--', ...shared, ...targets] };
 }
 
 function isRequiredValueOption(arg) {

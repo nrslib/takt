@@ -20,7 +20,11 @@ interface PackResult {
   readonly filename?: string;
 }
 
-const deepSeekHarnessAssetNames = ['runtime-state-lock.mjs', 'runtime-supervisor.mjs'] as const;
+const deepSeekHarnessAssetNames = [
+  'runtime-state-lock.mjs',
+  'runtime-supervisor.mjs',
+  'runtime-diagnostic-observer.mjs',
+] as const;
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const buildTimeoutMs = 60_000;
@@ -38,6 +42,7 @@ const isolatedProjectEntries = [
   'tools/opencode-probe',
   'tsconfig.json',
   'tsconfig.opencode-probe.json',
+  'vendor',
 ] as const;
 
 function runNpm(
@@ -130,6 +135,7 @@ describe('build output cleanup', () => {
       encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
     }).split('\n');
     expect(archiveEntries).not.toContain(`package/${staleArtifact}`);
+    expect(archiveEntries.some((entry) => /^package\/managed\/[^/]+\/node_modules\//u.test(entry))).toBe(false);
     // Verify actual archive contents without extracting unrelated bundled peers.
     const requiredAssets = [
       'package/dist/index.js',

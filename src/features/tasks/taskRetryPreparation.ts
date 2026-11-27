@@ -9,13 +9,15 @@ import type {
   WorkflowRestartPoint,
   WorkflowResumePoint,
 } from '../../core/models/index.js';
-import { readRunMetaBySlug, type RunMeta } from '../../core/workflow/run/run-meta.js';
-import { workflowEntryMatchesWorkflow } from '../../core/workflow/workflow-reference.js';
-import { warn } from '../../shared/ui/index.js';
+import type { RunMeta } from '../../core/workflow/run/run-meta.js';
+import { resumeWorkflowMatches } from '../../core/workflow/run/resume-point.js';
+import { getWorkflowResumeFrameKind } from '../../core/workflow/step-kind.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { resolveTaskOrderContent } from './orderRevision.js';
-import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
-import { findRunForTask } from '../interactive/runSessionReader.js';
+import { assertPrMergeRetryWorktreePath } from './execute/reusedWorktree.js';
+import { resolveReusedWorktreeExecution, toReusedTaskInfo } from './execute/reusedWorktree.js';
+import { resolveTaskRetryRunSelection, type TaskRetryRunSelection } from './taskRetryRunSelection.js';
 import { resolveSelectedWorkflowOverride } from './list/requeueHelpers.js';
 import {
   buildTaskRetryStartOptions,
@@ -25,15 +27,17 @@ import {
   type SelectTaskRetryStartOptions,
 } from './list/taskRetryStartSelection.js';
 
-export interface FailedTaskRetryPreparation {
-  readonly worktreePath: string;
+export interface FailedTaskRetryPreparation extends TaskRetryRunSelection {
+  readonly worktreePath: string | undefined;
+  readonly freshStart: boolean;
+  readonly interactionCwd: string;
+  readonly runsBaseDir: string;
   readonly failure: TaskFailure;
   readonly failedStep: string | undefined;
-  readonly matchedRunSlug: string | null;
-  readonly runMeta: RunMeta | null;
   readonly previousWorkflow: string | undefined;
+  readonly previousStartStep?: string;
   readonly previousOrderContent: string;
-  readonly resumePoint: WorkflowResumePoint | undefined;
+  readonly sourceResumePoint?: WorkflowResumePoint;
 }
 
 export interface FailedTaskRetryStartContext {
@@ -42,6 +46,7 @@ export interface FailedTaskRetryStartContext {
   readonly workflowOverride: string | undefined;
   readonly options: SelectTaskRetryStartOptions;
   readonly startOptions: TaskRetryStartOptionsModel;
+  readonly sourceResumePoint: WorkflowResumePoint | undefined;
 }
 
 export interface ResolvedFailedTaskRetryStart {
@@ -49,6 +54,7 @@ export interface ResolvedFailedTaskRetryStart {
   readonly startStep: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
   readonly restartPoint: WorkflowRestartPoint | undefined;
+  readonly sourceResumePoint: WorkflowResumePoint | undefined;
 }
 
 function requireFailedTaskFailure(task: TaskListItem): TaskFailure {
@@ -61,41 +67,41 @@ function requireFailedTaskFailure(task: TaskListItem): TaskFailure {
   return task.failure;
 }
 
-function resolveWorktreePath(projectDir: string, task: TaskListItem): string {
-  if (!task.worktreePath) {
+function isFreshCloneRetryCandidate(task: TaskListItem): boolean {
+  const data = task.data;
+  return data !== undefined
+    && Boolean(data.worktree)
+    && data.merge_task !== true
+    && task.worktreePath === undefined
+    && task.runSlug === undefined
+    && task.sourceRunSlug === undefined
+    && !task.failure?.step?.trim()
+    && data.resume_point === undefined;
+}
+
+function resolveWorktreePath(projectDir: string, task: TaskListItem): string | undefined {
+  if (task.worktreePath === undefined) {
+    if (isFreshCloneRetryCandidate(task)) return undefined;
     throw new Error(`Worktree path is not set for task: ${task.name}`);
   }
-  assertReusableWorktreePath(projectDir, task.worktreePath);
-  return task.worktreePath;
-}
-
-function resolveRetryRunSlug(task: TaskListItem, worktreePath: string): string | null {
-  return task.runSlug ?? findRunForTask(worktreePath, task.content);
-}
-
-function readRetryRunMeta(worktreePath: string, runSlug: string | null): RunMeta | null {
-  if (!runSlug) {
-    return null;
+  if (task.data?.merge_task === true) {
+    assertPrMergeRetryWorktreePath(projectDir, task.worktreePath, task.data.merge_clone_prepared === true);
+    if (task.data.merge_clone_prepared === false) return task.worktreePath;
   }
-  return readRunMetaBySlug(worktreePath, runSlug, warn);
-}
-
-function resolveRetryResumePoint(
-  task: TaskListItem,
-  runMeta: RunMeta | null,
-): WorkflowResumePoint | undefined {
-  return runMeta?.resumePoint ?? task.data?.resume_point;
+  return resolveReusedWorktreeExecution(projectDir, toReusedTaskInfo(task))!.worktreePath;
 }
 
 function resolveFailureStepForRequeueNote(
   failure: TaskFailure,
   runMeta: RunMeta | null,
   resumePoint: WorkflowResumePoint | undefined,
+  latestFailedStep: string | undefined,
 ): string | undefined {
   const failureStep = failure.step?.trim();
   if (failureStep) {
     return failureStep;
   }
+  if (latestFailedStep) return latestFailedStep;
   const runFailureStep = runMeta?.failure?.step.trim();
   if (runFailureStep) {
     return runFailureStep;
@@ -117,28 +123,37 @@ export function prepareFailedTaskRetry(
   }
 
   const failure = requireFailedTaskFailure(task);
-  const worktreePath = resolveWorktreePath(projectDir, task);
+  const remote = task.remoteAssignment !== undefined;
+  const worktreePath = remote ? task.worktreePath : resolveWorktreePath(projectDir, task);
+  const freshStart = !remote && worktreePath === undefined;
+  const interactionCwd = remote || freshStart || task.data?.merge_task === true && task.data.merge_clone_prepared === false
+    ? projectDir : worktreePath;
+  const runsBaseDir = remote || freshStart || task.data?.merge_task === true ? projectDir : worktreePath!;
   const previousOrderContent = resolveTaskOrderContent(
     projectDir,
     task.taskDir,
     task.data?.task ?? task.content,
   );
-  const matchedRunSlug = resolveRetryRunSlug(task, worktreePath);
-  const runMeta = readRetryRunMeta(worktreePath, matchedRunSlug);
-  const resumePoint = resolveRetryResumePoint(task, runMeta);
+  const selection: TaskRetryRunSelection = freshStart
+    ? { matchedRunSlug: null, runMeta: null, resumePoint: undefined, skippedRuns: [] }
+    : resolveTaskRetryRunSelection(task, runsBaseDir);
+  const { runMeta, resumePoint } = selection;
   const previousWorkflow = task.data
     ? resolveTaskWorkflowValue(task.data as Record<string, unknown>)
     : undefined;
 
   return {
     worktreePath,
+    freshStart,
+    interactionCwd: interactionCwd!,
+    runsBaseDir,
     failure,
-    failedStep: resolveFailureStepForRequeueNote(failure, runMeta, resumePoint),
-    matchedRunSlug,
-    runMeta,
+    ...selection,
+    failedStep: resolveFailureStepForRequeueNote(failure, runMeta, resumePoint, selection.failedStep),
     previousWorkflow,
+    previousStartStep: task.data?.start_step,
     previousOrderContent,
-    resumePoint,
+    sourceResumePoint: task.data?.source_resume_point,
   };
 }
 
@@ -150,8 +165,10 @@ function resolvePreferredRootStep(
   const rootEntry = resumePoint?.stack[0];
   if (
     rootEntry
-    && workflowEntryMatchesWorkflow(rootEntry, workflowConfig)
-    && workflowConfig.steps.some((step) => step.name === rootEntry.step)
+    && resumeWorkflowMatches(rootEntry, workflowConfig)
+    && workflowConfig.steps.some((step) => (
+      step.name === rootEntry.step && getWorkflowResumeFrameKind(step) === rootEntry.kind
+    ))
   ) {
     return rootEntry.step;
   }
@@ -162,11 +179,12 @@ export function buildFailedTaskRetryStartContext(
   preparation: FailedTaskRetryPreparation,
   projectDir: string,
   workflowName: string,
+  allowInitialStart = false,
 ): FailedTaskRetryStartContext {
   const workflowConfig = loadWorkflowByIdentifier(
     workflowName,
     projectDir,
-    { lookupCwd: preparation.worktreePath },
+    { lookupCwd: preparation.interactionCwd },
   );
   if (!workflowConfig) {
     throw new Error(`Workflow "${sanitizeTerminalText(workflowName)}" not found.`);
@@ -176,12 +194,13 @@ export function buildFailedTaskRetryStartContext(
     workflowConfig,
     preparation.failure,
     preparation.resumePoint,
-  );
+  ) ?? (preparation.freshStart ? preparation.previousStartStep : undefined);
   const options: SelectTaskRetryStartOptions = {
     projectCwd: projectDir,
-    lookupCwd: preparation.worktreePath,
+    lookupCwd: preparation.interactionCwd,
     ...(preparation.resumePoint === undefined ? {} : { resumePoint: preparation.resumePoint }),
     ...(preferredRootStep === undefined ? {} : { preferredRootStep }),
+    ...(allowInitialStart && !preparation.freshStart && preparation.resumePoint === undefined ? { allowInitialStart: true } : {}),
   };
 
   return {
@@ -190,7 +209,26 @@ export function buildFailedTaskRetryStartContext(
     workflowOverride: resolveSelectedWorkflowOverride(preparation.previousWorkflow, workflowName),
     options,
     startOptions: buildTaskRetryStartOptions(workflowConfig, options),
+    sourceResumePoint: preparation.sourceResumePoint,
   };
+}
+
+export function describeFailedTaskRetryStart(
+  preparation: FailedTaskRetryPreparation,
+  start: ResolvedFailedTaskRetryStart,
+  lang: 'en' | 'ja',
+): string {
+  const description = getLabel('tui.assistantRetry.startSource', lang, {
+    start: start.resumePoint === undefined && start.restartPoint === undefined && start.startStep === undefined
+      ? getLabel('tui.assistantRetry.initialStart', lang) : sanitizeTerminalText(start.label),
+    source: preparation.matchedRunSlug === null
+      ? getLabel('tui.assistantRetry.noSource', lang) : sanitizeTerminalText(preparation.matchedRunSlug),
+  });
+  return [description, ...preparation.skippedRuns.map(({ runSlug, reason }) =>
+    getLabel('tui.assistantRetry.skippedRun', lang, {
+      run: sanitizeTerminalText(runSlug),
+      reason: getLabel(`tui.assistantRetry.${reason}`, lang),
+    }))].join('\n');
 }
 
 export function resolveFailedTaskRetryStart(
@@ -208,5 +246,8 @@ export function resolveFailedTaskRetryStart(
     startStep: ownership.startStep,
     resumePoint: ownership.resumePoint,
     restartPoint: ownership.restartPoint,
+    sourceResumePoint: ownership.restartPoint === undefined
+      ? undefined
+      : context.options.resumePoint ?? context.sourceResumePoint,
   };
 }

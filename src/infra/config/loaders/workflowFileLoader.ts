@@ -1,10 +1,12 @@
-import { dirname } from 'node:path';
+import { dirname, relative, sep } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { readWorkflowFile } from './workflow-file-reader.js';
 import { parse as parseYaml } from 'yaml';
 import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { isNormalOrTeamLeaderWorkflowStep } from '../../../core/models/types.js';
-import { getRepertoireDir } from '../paths.js';
+import { getRepertoireDir, isPathSafe } from '../paths.js';
+import { getResourcesDir } from '../../resources/index.js';
 import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
@@ -14,6 +16,7 @@ import { normalizeWorkflowConfig } from './workflowParser.js';
 import {
   resolveWorkflowArpeggioPolicy,
   resolveWorkflowCommandGatesPolicy,
+  resolveWorkflowSystemCommandsForProject,
   resolveWorkflowMcpServersPolicy,
   resolveWorkflowRuntimePreparePolicy,
 } from './workflowNormalizationPolicies.js';
@@ -22,6 +25,7 @@ import {
   attachWorkflowTrustInfo,
   attachWorkflowOpaqueRef,
   buildOpaqueWorkflowRef,
+  buildBuiltinWorkflowRef,
 } from './workflowSourceMetadata.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
@@ -29,6 +33,7 @@ import { buildConfiguredCompanionLookupDirs } from './companionLookupDirectories
 import { loadCompanionDefinition } from './companionDefinitionLoader.js';
 
 interface LoadWorkflowFromFileOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   trustInfo?: WorkflowTrustInfo;
   callableArgs?: Record<string, WorkflowCallArgValue>;
   callableArgPolicy?: WorkflowCallArgResolutionPolicy;
@@ -48,7 +53,8 @@ function loadWorkflowFromFileInternal(
   }
 
   const canonicalFilePath = realpathSync(filePath);
-  const raw = parseYaml(readWorkflowFile(canonicalFilePath));
+  const content = readWorkflowFile(canonicalFilePath);
+  const raw = parseYaml(content);
   const projectConfig = loadProjectConfig(projectDir);
   const globalConfig = loadGlobalConfig();
   const trustInfo = options?.trustInfo ?? resolveWorkflowTrustInfo({
@@ -101,6 +107,9 @@ function loadWorkflowFromFileInternal(
         globalConfig.workflowCommandGates,
         projectConfig.workflowCommandGates,
       ),
+      workflowSystemCommandsPolicy: options?.workflowSystemCommandsPolicy ?? resolveWorkflowSystemCommandsForProject(
+        globalConfig, projectConfig,
+      ),
       workflowPath: canonicalFilePath,
       workflowTrustInfo: trustInfo,
     },
@@ -127,7 +136,18 @@ function loadWorkflowFromFileInternal(
       }),
     ]));
   }
-  attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(canonicalFilePath, trustInfo));
+  let workflowRef: string;
+  if (trustInfo.source === 'builtin') {
+    const builtinRoot = realpathSync(getResourcesDir());
+    if (!isPathSafe(builtinRoot, canonicalFilePath)) {
+      throw new Error(`Builtin workflow file is outside the builtin resources directory: ${canonicalFilePath}`);
+    }
+    const relativePath = relative(builtinRoot, canonicalFilePath).split(sep).join('/');
+    workflowRef = buildBuiltinWorkflowRef(relativePath, content);
+  } else {
+    workflowRef = buildOpaqueWorkflowRef(canonicalFilePath, trustInfo);
+  }
+  attachWorkflowOpaqueRef(config, workflowRef);
   attachWorkflowSourcePath(config, canonicalFilePath);
   attachWorkflowTrustInfo(config, trustInfo);
   return config;

@@ -2,24 +2,40 @@
  * Tests for UI label loader utility (src/shared/i18n/index.ts)
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { getLabel, getLabelObject, _resetLabelCache } from '../shared/i18n/index.js';
+import { describe, it, expect } from 'vitest';
+import { getLabel, getLabelObject } from '../shared/i18n/index.js';
 
-beforeEach(() => {
-  _resetLabelCache();
-});
 
 describe('getLabel', () => {
-  it('returns a label by key (defaults to en)', () => {
-    const result = getLabel('interactive.ui.intro');
-    expect(result).toBeTypeOf('string');
-    expect(result.length).toBeGreaterThan(0);
+  it.each(['ja', 'en'] as const)('expands the manager, operation and result in every director result notice for %s', (lang) => {
+    const values = { managerId: `manager-${'a'.repeat(64)}`, operationId: '11111111-1111-4111-8111-111111111111', message: 'saved result' };
+    for (const key of ['director.managerReply', 'director.managerError', 'director.managerInterrupted']) {
+      const notice = getLabel(key, lang, values);
+      for (const value of Object.values(values)) expect(notice).toContain(value);
+      expect(notice).not.toMatch(/\{(?:managerId|operationId|message)\}/u);
+    }
   });
 
-  it('returns an English label when lang is "en"', () => {
-    const result = getLabel('interactive.ui.intro', 'en');
-    expect(result).toBeTypeOf('string');
-    expect(result.length).toBeGreaterThan(0);
+  it.each(['ja', 'en'] as const)('includes the operation ID in a localized director interruption notice for %s', (lang) => {
+    const operationId = '11111111-1111-4111-8111-111111111111';
+    const notice = getLabel('manager.conversation.director_interrupted', lang, { operationId });
+    expect(notice).toContain(operationId);
+    expect(notice).not.toContain('{operationId}');
+    expect(notice.length).toBeGreaterThan(operationId.length);
+  });
+
+  it.each(['en', 'ja'] as const)('resolves distinct waiting, extended-thinking and responding labels for %s', (lang) => {
+    const labels = ['thinking', 'extendedThinking', 'responding'].map((activity) => getLabel(`tui.ui.${activity}`, lang));
+    for (const label of labels) {
+      expect(label.trim().length).toBeGreaterThan(0);
+      expect(label).not.toMatch(/tui\.ui\.|undefined/);
+    }
+    expect(new Set(labels).size).toBe(3);
+  });
+
+  it('returns a label by key (defaults to en)', () => {
+    const result = getLabel('interactive.ui.intro');
+    expect(result).toBe(getLabel('interactive.ui.intro', 'en'));
   });
 
   it.each(['en', 'ja'] as const)('returns the localized /verify command label for %s', (lang) => {

@@ -23,6 +23,6 @@
   {
     "persona": "conductor",
     "status": "done",
-    "content": "[REVIEW:1]"
+    "content": "{\"step\":1,\"reason\":\"No supported proposal remains after review.\"}"
   }
 ]

@@ -1,5 +1,6 @@
 import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 import { extractClaudeProviderUsage } from '../claude/usage.js';
+import { nextAssistantAnswerText } from '../claude/answer-text.js';
 import { isRateLimitMarkerNotice } from '../rate-limit/detection.js';
 
 function toRecord(value: unknown): Record<string, unknown> | undefined {
@@ -309,6 +310,10 @@ export interface StreamJsonStdoutResult {
 
 export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResult {
   let displayText = '';
+  // Without a result event the answer is the last assistant message after the last tool call; earlier
+  // text is working text such as progress notes. Text deltas build one message until the next message event.
+  let lastMessageText = '';
+  let deltaContinuesMessage = false;
   let resultContent = '';
   let hasResult = false;
   let success = false;
@@ -322,12 +327,23 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
       continue;
     }
 
+    const root = toRecord(parsed);
+    const isMessageEvent = toRecord(root?.message) !== undefined;
+    if (isMessageEvent) {
+      deltaContinuesMessage = false;
+    }
     const streamedText = extractStreamingTextFromEvent(parsed);
     if (streamedText) {
       displayText += streamedText;
+      if (!isMessageEvent) {
+        lastMessageText = deltaContinuesMessage ? lastMessageText + streamedText : streamedText;
+        deltaContinuesMessage = true;
+      }
+    }
+    if (root?.type === 'assistant' && isMessageEvent) {
+      lastMessageText = nextAssistantAnswerText(lastMessageText, toRecord(root.message)?.content, '');
     }
 
-    const root = toRecord(parsed);
     if (!root || root.type !== 'result') {
       continue;
     }
@@ -341,7 +357,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
   }
 
   const normalizedDisplayText = displayText.trim();
-  const fallbackContent = hasResult ? resultContent : normalizedDisplayText;
+  const fallbackContent = hasResult ? resultContent : lastMessageText.trim();
   const fallbackSuccess = hasResult ? success : normalizedDisplayText.length > 0;
   return {
     content: fallbackContent,

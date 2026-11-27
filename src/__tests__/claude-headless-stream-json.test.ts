@@ -128,6 +128,41 @@ describe('claude-headless stream-json line parsing', () => {
     expect(aggregateContentFromStdout(stdout)).toBe('ab');
   });
 
+  it('uses only the last assistant message as the fallback when no result event exists', () => {
+    const stdout = [
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Checked input.ts. Remaining: answer.' }] } }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: {} }] } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'ok' }] } }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'final answer' }] } }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout)).toMatchObject({
+      content: 'final answer',
+      hasResult: false,
+      success: true,
+    });
+  });
+
+  it('has an empty fallback answer when no result event exists and the turn ends with a tool call', () => {
+    const stdout = [
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note: editing retry.ts.' }] } }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'edit-1', name: 'Edit', input: {} }] } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'edit-1', content: 'ok' }] } }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout)).toMatchObject({ content: '', hasResult: false, success: true });
+  });
+
+  it('starts a new fallback message with text deltas after an assistant message', () => {
+    const stdout = [
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note.' }] } }),
+      JSON.stringify({ type: 'text', text: 'final ' }),
+      JSON.stringify({ type: 'text', text: 'answer' }),
+    ].join('\n');
+
+    expect(aggregateContentFromStdout(stdout)).toBe('final answer');
+  });
+
   it('uses result.result once when assistant content and final result contain the same text', () => {
     const stdout = [
       JSON.stringify({

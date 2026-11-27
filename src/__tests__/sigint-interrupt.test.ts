@@ -121,6 +121,7 @@ vi.mock('../infra/claude/query-manager.js', async (importOriginal) => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
@@ -144,7 +145,6 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -161,10 +161,12 @@ vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn().mockReturnValue(vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn().mockReturnValue(vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../infra/fs/index.js', () => ({
@@ -321,8 +323,7 @@ describe('executeWorkflow: SIGINT handler integration', () => {
     // Wait for workflow to complete
     const result = await resultPromise;
 
-    // Verify interruptAllQueries was called (twice: SIGINT handler + workflow:abort handler)
-    expect(mockInterruptAllQueries).toHaveBeenCalledTimes(2);
+    expect(mockInterruptAllQueries).toHaveBeenCalledOnce();
 
     // Verify abort result
     expect(result.success).toBe(false);
@@ -502,3 +503,7 @@ describe('QueryRegistry: interruptAllQueries', () => {
     // If the catch didn't work, vitest would report an unhandled rejection
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

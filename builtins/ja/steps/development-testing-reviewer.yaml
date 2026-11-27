@@ -7,7 +7,7 @@ params:
     facet_kind: knowledge
   testing_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: testing-review
-description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
+description: 要求と実装されたテストを照合し、検証の不足やテスト設計の問題を報告する
 capabilities: readonly
 tags: [review]
 edit: false

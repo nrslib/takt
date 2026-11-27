@@ -14,7 +14,7 @@ interface FixtureEvent { event: string; sessionId?: string }
 /** Runs the smoke entrypoint with offline SDK/HTTP fixtures and fast deadlines. */
 async function runSmoke(mode: 'normal' | 'sdk-hang' | 'cleanup-hang') {
   const root = mkdtempSync(join(tmpdir(), 'takt-pi-deadline-test-'));
-  const child = spawn(process.execPath, ['--import', 'tsx', '--import', preload, script], {
+  const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--import', 'tsx', '--import', preload, script], {
     cwd: project,
     env: {
       PATH: process.env.PATH,
@@ -93,6 +93,14 @@ describe('Pi live smoke process deadlines', () => {
     for (const name of ['prompt', 'request', 'submission']) {
       expect(result.events.filter((event) => event.event === name)).toHaveLength(2);
     }
+    expect(result.events.filter((event) => event.event === 'prompt')).toEqual([
+      expect.objectContaining({
+        activeTools: [], codemodeSource: expect.objectContaining({ source: 'inline', path: '<inline:codemode>' }),
+      }),
+      expect.objectContaining({
+        activeTools: [], codemodeSource: expect.objectContaining({ source: 'inline', path: '<inline:codemode>' }),
+      }),
+    ]);
     expect(result.events.some((event) => event.event === 'signal-aborted')).toBe(false);
   }, 15_000);
 });

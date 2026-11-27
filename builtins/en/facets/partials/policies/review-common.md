@@ -10,6 +10,9 @@ This review is a defensive quality and security audit performed, on request, aga
 
 {{include:policies/evidence-based-judgment}}
 {{include:policies/finding-validity}}
+{{include:policies/applicable-inputs}}
+
+Check code before findings; never speculate.
 
 ## Principles
 
@@ -17,7 +20,6 @@ This review is a defensive quality and security audit performed, on request, aga
 |-----------|----------|
 | Fix immediately | Do not defer problems introduced by the change or causally required for the requirement or safety conditions. Include changes needed to resolve an accepted finding and blockers newly introduced or exposed by its repair in the same repair unit when necessary to meet its acceptance criteria, excluding unrelated problems and readoption of findings excluded by adjudication |
 | Eliminate ambiguity | Vague feedback like "clean this up a bit" is prohibited. Specify file, line, and proposed fix |
-| Fact-check | Verify against actual code before raising issues. Do not speculate |
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
 | State consistency | For side effects and state changes, verify real success, failure, and interruption paths for missing, duplicated, or inconsistent effects |
 | Contract impact paths | Verify new contracts across input, transformation, persistence, and consumption paths confirmed from definitions and references |
@@ -27,13 +29,15 @@ This review is a defensive quality and security audit performed, on request, aga
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
-| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
+| Defect-class re-scan | Reviewers and independent verifiers re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria before recognizing a defect as resolved. Re-scan only inputs and paths within the scope of inputs used for counterexamples. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
 | Concern handling | Judge only concerns related to the changed contract, and explain why any such concern is not a finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
 | Boy Scout | Have existing problems fixed within task scope only when the change depends on, expands, or newly exposes them |
 
-Compare caveats in the plan report (items carried forward as open questions in a regular plan). Submit only those meeting the existing evidence and scope criteria as findings, explicitly identifying them as known items. Do not raise the remaining items as findings; record them under the report contract's "Non-Finding Concerns" section (or "Unverified Scope" in testing-review) as "carried forward as plan caveats" with the evidence and the next stage responsible for them. This record does not count as an issue, does not trigger REJECT, and is not a repair target. Retain existing decisions on previously adjudicated findings unless the reopening conditions are met.
+Compare caveats in the plan report (items carried forward as open questions in a regular plan). Submit only those meeting the existing evidence and scope criteria as findings, explicitly identifying them as known items. Do not raise the remaining items as findings; record them under the report contract's "Non-Finding Concerns" section (or "Unverified Scope" in testing-review) with the classification "plan-caveat-carry-forward", the evidence, and the next stage responsible for them. This record does not count as an issue, does not trigger REJECT, and is not a repair target. Retain existing decisions on previously adjudicated findings unless the reopening conditions are met.
+
+Compare guarantees or methods declined by a supplied adjudication or human decision with its reason and applicable scope. Do not reword the same proposal as a new finding or unfinished repair. Report separately a real defect violating original acceptance criteria or new evidence changing the decision's premises, and identify any requirement decision needed. Do not infer a decision from another run when it was not supplied.
 
 ## Finding Decision Invariants
 
@@ -48,6 +52,14 @@ Compare caveats in the plan report (items carried forward as open questions in a
 
 - The existence of values in a public enum or union, or of some convenience methods, does not by itself establish a public contract for a corresponding convenience method for every value. Report missing methods only when the original requirement, existing public specification, or a real usage path requires them
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
+
+## Premises of Findings
+
+- Base a finding only on inputs, states, and environments within the scope of inputs used for counterexamples. Do not report a problem as an issue when it holds only under premises that cannot be shown to be within that scope. Record it with its basis as a concern not reported as a finding
+- Treat design decisions or policies written in a plan or implementation report (such as "do not do X" or "limit to Y") as acceptance criteria only when they follow from the original requirements, an existing contract, or an applicable policy. Do not base a finding solely on a departure from such a design decision
+- Mark an existing finding as `persists` in either of two cases: it is still unresolved under the conditions of the previous finding (target, input, premise, and expected result), or, although those conditions are resolved, a violation with the same cause, violated observable condition, and acceptance criteria remains under a different value, retrieval method, or premise that you can show is within that scope. In the second case, add that value or condition and its basis for applicability to the same `finding_id`. When the cause, violated observable condition, or acceptance criteria differ, report it as a separate finding under the finding_id rules. Do not use conditions that cannot be shown to be within that scope as a reason to continue the finding, and mark the previous finding `resolved` when its conditions are satisfied
+- Check the basis for applicability before carrying forward conditions included in a previous adjudication or acceptance criteria
+- Do not exclude applicable inputs or states because they are infrequent. Continue to report findings for inputs defined by the requirements or an existing contract, attacks using content that enters from outside a trust boundary, and failures that occurred in actual use. A security finding must also meet the security-specific decision criteria in addition to being within that scope
 
 ## Items That Cannot Be Demonstrated Due to Environmental Factors
 
@@ -154,7 +166,7 @@ Reading configuration values, logs, snapshots, or internal state as a proxy for 
 | Only external-environment E2E exists, with no reproducible verification of the main boundary | Warning or REJECT |
 | A required effect is not observed and configuration values, logs, or internal state substitute for it | REJECT |
 
-Do not close an individual finding from supplied verification evidence alone. Cross-check the current code, the original acceptance criteria, and the conditions directly observed by the evidence. Do not report the absence of a quality-gate record as an issue. Do not infer and require an unrecorded gate from other information.
+Close individual findings based on correspondence between the current code state, original acceptance criteria, and conditions directly observed by the evidence. Establish correspondence from records of the target, input, evaluation time, and expected result. Do not report the absence of a quality-gate record as an issue. Do not infer and require an unrecorded gate from other information.
 
 ## Fact-Checking
 
@@ -173,7 +185,7 @@ To prevent circular rejections, track findings by ID.
 - Resolved issues must be listed with status `resolved`
 - Issues without `finding_id` are invalid (cannot be used as rejection grounds)
 - REJECT is allowed only when there is at least one `new` or `persists` issue
-- Before treating a prior finding as resolved, verify that the fix did not introduce a different structural or contract problem
+- Reviewers and independent verifiers check that the fix did not introduce a different structural or contract problem before treating a prior finding as resolved
 
 ### Reopen Conditions (`resolved` -> open)
 
@@ -192,7 +204,7 @@ Do not mix different problems under the same ID.
 
 - A `finding_id` must refer to one and only one problem
 - Issue a new `finding_id` when the cause, violated observable condition, or acceptance criteria differ
-- Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem. Add them to the original ID as newly checked paths and evidence
+- Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem. Add them to the original ID as newly checked paths and evidence. Add only reproduction inputs within the scope of inputs used for counterexamples
 - Rewriting an existing `finding_id` to represent a different problem is prohibited
 
 ## Handling Changelog and History Files
@@ -254,4 +266,4 @@ Within the causal scope, do not tolerate a problem merely because existing code 
 
 ## Detecting Circular Arguments
 
-When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.
+When the same kind of issue keeps recurring, reflect on the review procedure: checking evidence, separating causes, and communicating acceptance conditions. Treat this reflection separately from reconsidering the repair method.

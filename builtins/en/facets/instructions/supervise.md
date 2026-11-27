@@ -2,6 +2,8 @@ Determine requirement fulfillment and resolution of preceding concerns from curr
 
 {{include:instructions/final-preservation-check}}
 
+{{include:instructions/supervise-spec-deviations}}
+
 1. Split the task requirements into the smallest independently decidable units and map them to current code
 2. Read statements in preceding reports as supporting material, and prefer current code when they conflict
 3. Map each preceding finding to its original acceptance criteria and determine whether it is resolved

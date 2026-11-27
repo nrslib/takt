@@ -3,6 +3,7 @@ import { createWorkRequirementEstimator } from '../agents/auto-routing-usecase.j
 import { runAgent } from '../agents/runner.js';
 import type { RoutingModelInput } from '../core/workflow/auto-routing/contracts.js';
 import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 
 const { assertStrictStructuredOutputSchema } = vi.hoisted(() => ({
   assertStrictStructuredOutputSchema: vi.fn(),
@@ -43,6 +44,33 @@ describe('createWorkRequirementEstimator', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('passes a runtime router profile with an omitted model to the structured agent', async () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'unrelated-model' },
+        router: { provider: 'codex' },
+      },
+      auto_routing: {
+        router_profile: 'router',
+        pools: { review: { candidates: [{ profile: 'base', tier: 'low' }], fallback_profile: 'base' } },
+      },
+    });
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router', status: 'done',
+      content: JSON.stringify({ required_tier: 'low', reason_codes: ['focused-change'], confidence: null }),
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const estimator = createWorkRequirementEstimator({ cwd: '/repo', ...env.autoRouting!.router });
+
+    await expect(estimator.estimate(createModelInput())).resolves.toMatchObject({ requiredTier: 'low' });
+
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    const execution = vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedExecution;
+    expect(execution?.provider).toBe('codex');
+    expect(execution?.model).toBeUndefined();
   });
 
   it('Given the estimator output schema is invalid, When constructing the estimator, Then it fails before calling a provider', () => {

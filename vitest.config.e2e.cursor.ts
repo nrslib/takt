@@ -6,6 +6,7 @@ export default defineConfig({
     ...e2eBaseTestConfig,
     include: [
       'e2e/specs/add-and-run.e2e.ts',
+      'e2e/specs/goal-specification-file.e2e.ts',
       'e2e/specs/worktree.e2e.ts',
     ],
   },

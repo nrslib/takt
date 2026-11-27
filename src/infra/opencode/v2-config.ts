@@ -1,6 +1,8 @@
 import type { ConfigEntry } from '@opencode/client';
 import type { Config as V1Config } from '@opencode-ai/sdk/v2/types';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { buildOpenCodeV2ExternalDirectoryRules } from './external-directories.js';
+import { parseProviderModel } from '../../shared/utils/providerModel.js';
 
 type V2Config = Extract<ConfigEntry, { type: 'document' }>['info'];
 
@@ -10,7 +12,21 @@ export function buildV2ServerConfig(
   plugin: string,
   mcp: Record<string, unknown> | undefined,
   skillsEnabled = false,
+  externalDirectoryAllowlist?: readonly string[],
+  contextWindow?: number,
 ): V2Config {
+  const contextModel = model !== undefined && contextWindow !== undefined
+    ? parseProviderModel(model, 'OpenCode model')
+    : undefined;
+  const providers: NonNullable<V2Config['providers']> = {
+    ...(apiKey === undefined ? {} : { opencode: { settings: { apiKey } } }),
+  };
+  if (contextModel !== undefined) {
+    providers[contextModel.providerID] = {
+      ...providers[contextModel.providerID],
+      models: { [contextModel.modelID]: { limit: { context: contextWindow } } },
+    };
+  }
   const servers: NonNullable<NonNullable<V2Config['mcp']>['servers']> = {};
   for (const [name, config] of Object.entries((mcp ?? {}) as NonNullable<V1Config['mcp']>)) {
     if (!('type' in config)) throw new Error('OpenCode v2 MCP server must declare a transport');
@@ -35,9 +51,9 @@ export function buildV2ServerConfig(
   return {
     ...(model === undefined ? {} : { model }),
     plugins: [plugin],
-    permissions: [{ action: 'external_directory', resource: '*', effect: 'deny' }],
+    permissions: buildOpenCodeV2ExternalDirectoryRules(externalDirectoryAllowlist),
     agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt'), 'takt-read': agent('opencode_read_agent_prompt') },
-    ...(apiKey === undefined ? {} : { providers: { opencode: { settings: { apiKey } } } }),
+    ...(Object.keys(providers).length === 0 ? {} : { providers }),
     ...(mcp === undefined ? {} : { mcp: { servers } }),
   };
 }

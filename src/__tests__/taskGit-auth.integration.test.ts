@@ -72,6 +72,10 @@ describe('Git publication authentication', () => {
     ['Username', ''],
     ['Password', 'fixture-user@'],
   ])('fails without prompting for %s or invoking inherited askpass programs', (prompt, userInfo) => {
+    if (prompt === 'Password') {
+      // libcurl may strip URL userinfo before Git requests the missing password.
+      git(['config', 'credential.username', 'fixture-user']);
+    }
     git(['remote', 'add', 'origin', `http://${userInfo}127.0.0.1:${port}/repo.git`]);
     const commitBefore = git(['rev-parse', 'HEAD']);
 

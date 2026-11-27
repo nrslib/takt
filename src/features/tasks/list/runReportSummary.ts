@@ -35,6 +35,20 @@ const REPORT_SECTION_NAMES = {
     'Finding Dispositions',
     'Decision for Each Finding',
   ],
+  reviewDecisionInheritedProblems: [
+    '引き継いだ問題の状態',
+    'Inherited Problem Status',
+  ],
+  reviewDecisionHistory: [
+    '判定の要約',
+    'Decision Summary',
+    '修正する問題',
+    'Problems to Repair',
+    '修正の経過',
+    'Repair History',
+    '固定版の参照先',
+    'Fixed-Version References',
+  ],
   supervisorSummaryRequirements: [
     '要件充足',
     'Requirement Fulfillment',
@@ -55,9 +69,15 @@ const REPORT_SECTION_NAMES = {
     '判定不能の理由',
     '判定不能',
     '未解決の前提',
+    '外部確認待ち',
+    '外部確認待ち（BLOCKED の場合）',
+    '環境上確認不能',
     'Reason the Decision Cannot Be Made (when BLOCKED)',
     'Reason the Decision Cannot Be Made',
     'Unresolved Premises',
+    'Awaiting External Confirmation',
+    'Awaiting External Confirmation (when BLOCKED)',
+    'Cannot Verify in This Environment',
   ],
 } as const;
 
@@ -78,7 +98,11 @@ const REPORT_SECTIONS: Record<ReportContract, ReportSections> = {
   'review-decision': {
     requirements: REPORT_SECTION_NAMES.reviewDecisionRequirements,
     findings: REPORT_SECTION_NAMES.reviewDecisionFindings,
-    reviewHistory: REPORT_SECTION_NAMES.reviewHistory,
+    reviewHistory: [
+      ...REPORT_SECTION_NAMES.reviewHistory,
+      ...REPORT_SECTION_NAMES.reviewDecisionHistory,
+      ...REPORT_SECTION_NAMES.reviewDecisionInheritedProblems,
+    ],
     unverified: REPORT_SECTION_NAMES.unverified,
   },
   'supervisor-summary': {
@@ -90,7 +114,7 @@ const REPORT_SECTIONS: Record<ReportContract, ReportSections> = {
 };
 
 const FULFILLED_STATUS = /^(?:充足|fulfilled|satisfied)$/i;
-const UNRESOLVED_STATUS = /(?:未解決|未解消|未確認|未対応|修正する|同じ問題へ統合|環境上確認不能|unresolved|open|actionable|unverified|repair|merge into same problem|cannot verify in this environment)/i;
+const UNRESOLVED_STATUS = /(?:未解決|未解消|未確認|未対応|修正する|今回の修正対象にする|同じ問題へ統合|環境上確認不能|外部確認待ち|unresolved|open|actionable|unverified|repair|merge into same problem|cannot verify in this environment|awaiting external confirmation)/i;
 
 interface FenceMarker {
   readonly character: '`' | '~';
@@ -251,11 +275,12 @@ function unresolvedFindingCount(lines: readonly string[]): number {
 }
 
 function meaningfulLines(lines: readonly string[]): string[] {
+  const tableSeparator = /^\|?\s*:?-{2,}(?:\s*\|\s*:?-{2,})+\s*\|?$/;
   return lines
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .filter((line) => !/^\|?\s*:?-{2,}(?:\s*\|\s*:?-{2,})+\s*\|?$/.test(line))
-    .filter((line) => !/^\|.*(?:要件|Requirement|status|状態).*(?:\|.*){1,}$/i.test(line));
+    .filter((line, index, nonEmptyLines) => !tableSeparator.test(line)
+      && !(line.startsWith('|') && tableSeparator.test(nonEmptyLines[index + 1] ?? '')));
 }
 
 function isNoItemsStatement(line: string): boolean {
@@ -278,6 +303,16 @@ function isParseableReport(report: RunReportForSummary, contract: ReportContract
   const requirements = sectionContent(report.content, sections.requirements);
   const findings = sectionContent(report.content, sections.findings);
   const unverified = sectionContent(report.content, sections.unverified);
+
+  if (contract === 'review-decision') {
+    const inheritedProblems = sectionContent(report.content, REPORT_SECTION_NAMES.reviewDecisionInheritedProblems);
+    if (
+      hasTableWithColumns(inheritedProblems, /問題ID|problem id/i, /現在の状態|current status/i)
+      || hasTableWithColumns(findings, /finding/i, /裁定|disposition|今回の扱い|treatment/i)
+    ) {
+      return true;
+    }
+  }
 
   if (contract === 'review-decision' || contract === 'supervisor-validation') {
     return hasTableWithColumns(
@@ -319,7 +354,11 @@ function getContract(report: RunReportForSummary): ReportContract | undefined {
   }
 
   const headings = getHeadings(report.content);
-  if (REPORT_SECTION_NAMES.reviewDecisionRequirements.some((name) => headings.has(name))) {
+  if ([
+    ...REPORT_SECTION_NAMES.reviewDecisionRequirements,
+    ...REPORT_SECTION_NAMES.reviewDecisionInheritedProblems,
+    ...REPORT_SECTION_NAMES.reviewDecisionFindings,
+  ].some((name) => headings.has(name))) {
     return 'review-decision';
   }
   if (REPORT_SECTION_NAMES.supervisorValidationRequirements.some((name) => headings.has(name))) {
@@ -378,11 +417,16 @@ export function summarizeRunReports(
   const findingLines = sectionContent(report.content, sections.findings);
   const reviewHistory = sectionContent(report.content, sections.reviewHistory);
   const unverifiedGates = sectionContent(report.content, sections.unverified);
+  const resultHeadings = [...getHeadings(report.content)]
+    .filter((heading) => /^(?:結果|Result):\s*\S/i.test(heading));
 
   return {
     fulfilledRequirements: fulfilledRequirements(requirements),
     unresolvedFindingCount: unresolvedFindingCount(findingLines),
-    reviewHistory: meaningfulLines(reviewHistory),
+    reviewHistory: [
+      ...resultHeadings,
+      ...meaningfulLines(reviewHistory),
+    ],
     unverifiedGates: meaningfulLines(unverifiedGates)
       .filter((line) => !isNoItemsStatement(line)),
   };

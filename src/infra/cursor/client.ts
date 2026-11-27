@@ -97,6 +97,7 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
 
 function buildEnv(options: CursorCallOptions): NodeJS.ProcessEnv {
   const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
+  Object.assign(env, options.preparedMcp?.env);
   if (options.cursorApiKey) {
     env.CURSOR_API_KEY = options.cursorApiKey;
   }
@@ -550,8 +551,9 @@ function parseCursorOutput(
 
   const pendingTools = new Map<string, CursorToolCall>();
   const events: StreamEvent[] = [];
-  const assistantContent: string[] = [];
-  let content: string | undefined;
+  let assistantContent: string[] = [];
+  let sawAssistantMessage = false;
+  let terminalResult: string | undefined;
   let sessionId: string | undefined;
   for (const line of lines) {
     const parsed = parseCursorStreamEvent(line, pendingTools);
@@ -559,19 +561,32 @@ function parseCursorOutput(
     if (parsed.event !== undefined) {
       events.push(parsed.event);
     }
+    // Text before a tool call is working text (progress notes, commentary); the answer follows the last call.
+    if (parsed.event?.type === 'tool_use') {
+      assistantContent = [];
+    }
     if (parsed.content !== undefined) {
+      sawAssistantMessage = true;
       assistantContent.push(parsed.content);
+      events.push({ type: 'text', data: { text: parsed.content } });
     }
     if (parsed.terminalResult !== undefined) {
-      content = parsed.terminalResult;
+      terminalResult = parsed.terminalResult;
     }
   }
 
-  content = content ?? assistantContent.join('');
-  if (!content) {
+  // cursor-agent's terminal `result` joins every assistant message of the turn, including the working
+  // text before tool calls, so it is the answer only when the output carries no assistant messages.
+  const content = (sawAssistantMessage ? assistantContent.join('') : terminalResult) ?? '';
+  // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+  // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+  if (!content && events.length === 0) {
     return {
       error: `Failed to extract assistant content from cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}`,
     };
+  }
+  if (!sawAssistantMessage && content) {
+    events.push({ type: 'text', data: { text: content } });
   }
 
   return { content, sessionId, events };
@@ -658,7 +673,6 @@ export class CursorClient {
           const sessionId = parsed.sessionId ?? options.sessionId;
           if (options.onStream) {
             emitStructuredEvents(options.onStream, parsed.events);
-            options.onStream({ type: 'text', data: { text: parsed.content } });
             options.onStream({
               type: 'result',
               data: {
@@ -704,14 +718,11 @@ export class CursorClient {
     } finally {
       try {
         await promptCleanup?.();
-      } finally {
-        try {
-          await options.preparedMcp?.dispose?.();
-        } catch (error) {
-          log.error('Failed to clean up Cursor MCP config', {
-            error: getErrorMessage(error),
-          });
-        }
+        if (!options.callerManagedMcp) await options.preparedMcp?.dispose?.();
+      } catch (error) {
+        log.error('Failed to clean up Cursor MCP config', {
+          error: getErrorMessage(error),
+        });
       }
     }
   }

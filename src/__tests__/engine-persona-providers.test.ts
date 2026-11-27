@@ -12,7 +12,10 @@
  *   3. CLI/global model
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -50,9 +53,16 @@ import {
 } from './engine-test-helpers.js';
 
 describe('WorkflowEngine persona_providers override', () => {
+  let projectDir: string;
+
   beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-engine-persona-providers-'));
     vi.resetAllMocks();
     applyDefaultMocks();
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
   });
 
   it('should use persona_providers.provider when step has no provider and persona matches', async () => {
@@ -72,8 +82,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       personaProviders: { coder: { provider: 'codex' } },
     });
@@ -102,8 +112,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       personaProviders: { coder: { provider: 'codex' } },
     });
@@ -133,8 +143,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'mock',
       personaProviders: { coder: { provider: 'codex' } },
     });
@@ -163,8 +173,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
     });
 
@@ -200,8 +210,8 @@ describe('WorkflowEngine persona_providers override', () => {
       { index: 0, method: 'phase3_tag' },
     ]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       personaProviders: { coder: { provider: 'codex' } },
     });
@@ -234,8 +244,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       model: 'global-model',
       personaProviders: { coder: { provider: 'codex', model: 'o3-mini' } },
@@ -265,8 +275,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       model: 'global-model',
       personaProviders: { coder: { provider: 'codex' } },
@@ -297,8 +307,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       model: 'global-model',
       personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
@@ -328,8 +338,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       model: 'global-model',
       personaProviders: { coder: { provider: 'codex', model: 'o3-mini' } },
@@ -362,8 +372,8 @@ describe('WorkflowEngine persona_providers override', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'test task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'test task', {
+      projectCwd: projectDir,
       provider: 'claude',
       model: 'sonnet',
     });

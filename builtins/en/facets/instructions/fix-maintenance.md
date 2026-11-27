@@ -15,7 +15,9 @@ Use reports in the Report Directory and fix reviewer findings within the causall
 
 Use the latest review reports in the Report Directory as primary evidence.
 
-- Past iteration reports are saved as `{filename}.{timestamp}` in the same directory (e.g., `architect-review.md.20260304T123456Z`). For each report, run Glob with a `{report-name}.*` pattern, read up to 2 files in descending timestamp order, and understand persistence or recurrence trends before starting fixes.
+{{include:instructions/review-report-history}}
+
+Compare history to understand persistence or recurrence before starting repairs. Select current repair targets from current review reports; do not add targets from older versions.
 
 **Completion criteria (all must be satisfied):**
 - Every reported problem that requires a change has been resolved

@@ -33,6 +33,10 @@ export interface CreateLoopAnalysisSchedulerOptions {
   publication?: LoopAnalysisPublicationCoordinator;
 }
 
+export function isLoopAnalysisAllowed(goalId: string | undefined): boolean {
+  return goalId === undefined;
+}
+
 export function createLoopAnalysisScheduler(
   options: CreateLoopAnalysisSchedulerOptions,
 ): LoopAnalysisScheduler | undefined {

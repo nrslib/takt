@@ -1,8 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { V2Event } from '@opencode/client';
 import { createV2Transport } from '../infra/opencode/v2-transport.js';
 import { v2EventTranslator } from '../infra/opencode/v2-events.js';
 import { buildV2ServerConfig } from '../infra/opencode/v2-config.js';
+import { createStreamTrackingState, handlePartUpdated, type OpenCodeMessagePartUpdatedEvent } from '../infra/opencode/OpenCodeStreamHandler.js';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
+import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 
 const { api } = vi.hoisted(() => ({ api: {
   session: { create: vi.fn(), get: vi.fn(), update: vi.fn(), switchAgent: vi.fn(), switchModel: vi.fn(), prompt: vi.fn(), interrupt: vi.fn(), wait: vi.fn(), compact: vi.fn() },
@@ -16,6 +23,28 @@ const prompt = {
   model: { providerID: 'probe', modelID: 'probe' }, parts: [{ type: 'text' as const, text: 'review' }],
   tools: { read: true, write: false, bash: false, task: false },
 };
+const temporaryDirectories: string[] = [];
+
+function createExternalContextDirectory() {
+  const root = mkdtempSync(join(tmpdir(), 'takt-opencode-v2-context-'));
+  temporaryDirectories.push(root);
+  const realRunDirectory = join(root, 'real-run');
+  const linkedRunDirectory = join(root, 'run-link');
+  const realContextDirectory = join(realRunDirectory, 'context');
+  mkdirSync(realContextDirectory, { recursive: true });
+  symlinkSync(realRunDirectory, linkedRunDirectory, 'dir');
+  return {
+    contextDirectory: join(linkedRunDirectory, 'context'),
+    canonicalContextDirectory: realpathSync(realContextDirectory),
+  };
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories.length = 0;
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -28,7 +57,7 @@ beforeEach(() => {
 describe('OpenCode v2 transport', () => {
   it('uses the selected agent model before the session or global default', async () => {
     api.agent.list.mockResolvedValue({ data: [{ id: 'takt', name: 'takt', model: { providerID: 'probe', id: 'agent-model', variant: 'high' } }] });
-    const transport = createV2Transport('http://localhost', 'password');
+    const transport = await createV2Transport('http://localhost', 'password');
 
     await expect(transport.resolveModel?.({ directory: '/work', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'agent-model', variant: 'high',
@@ -42,7 +71,7 @@ describe('OpenCode v2 transport', () => {
     api.session.get.mockResolvedValue({
       id: 's1', location: { directory: '/work' }, model: { providerID: 'probe', id: 'session-model', variant: 'high' },
     });
-    const transport = createV2Transport('http://localhost', 'password');
+    const transport = await createV2Transport('http://localhost', 'password');
 
     await expect(transport.resolveModel?.({ directory: '/work', sessionID: 's1', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'session-model', variant: 'high',
@@ -51,7 +80,7 @@ describe('OpenCode v2 transport', () => {
   });
 
   it('uses the model.default data object for a new session', async () => {
-    const transport = createV2Transport('http://localhost', 'password');
+    const transport = await createV2Transport('http://localhost', 'password');
 
     await expect(transport.resolveModel?.({ directory: '/work', agent: 'takt' })).resolves.toEqual({
       providerID: 'probe', modelID: 'runtime-default',
@@ -61,13 +90,13 @@ describe('OpenCode v2 transport', () => {
 
   it('fails when the v2 runtime reports no default model', async () => {
     api.model.default.mockResolvedValue({ location: { directory: '/work' }, data: null });
-    await expect(createV2Transport('http://localhost', 'password').resolveModel?.({
+    await expect((await createV2Transport('http://localhost', 'password')).resolveModel?.({
       directory: '/work',
     })).rejects.toThrow('no default model');
   });
 
   it('updates system and permissions for each phase on the same session', async () => {
-    const transport = createV2Transport('http://localhost', 'password');
+    const transport = await createV2Transport('http://localhost', 'password');
     await transport.session.promptAsync(prompt);
     expect(api.session.update).toHaveBeenLastCalledWith({ sessionID: 's1',
       permissions: [{ action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: '*', effect: 'allow' }, { action: 'external_directory', resource: '*', effect: 'deny' }],
@@ -82,8 +111,26 @@ describe('OpenCode v2 transport', () => {
     expect(transport.nativeStructuredOutput).toBe(false);
   });
 
+  it('allows the TAKT context directory while keeping other external paths denied', async () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectory();
+    const transport = await createV2Transport('http://localhost', 'password');
+    await transport.session.promptAsync({
+      ...prompt,
+      externalDirectoryAllowlist: [contextDirectory],
+    });
+
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{
+      action: string; resource: string; effect: string;
+    }>;
+    expect(permissions.slice(-3)).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
   it('switches to the neutral read agent while carrying interpretation instructions and read-only tools', async () => {
-    await createV2Transport('http://localhost', '').session.promptAsync({
+    await (await createV2Transport('http://localhost', '')).session.promptAsync({
       ...prompt, agent: 'takt-read', system: 'Interpret verification results.',
     });
     expect(api.session.switchAgent).toHaveBeenCalledWith({ sessionID: 's1', agent: 'takt-read' }, undefined);
@@ -102,7 +149,7 @@ describe('OpenCode v2 transport', () => {
   });
 
   it('keeps native Skill permissions unchanged when the Skill tool is enabled', async () => {
-    const transport = createV2Transport('http://localhost', 'password');
+    const transport = await createV2Transport('http://localhost', 'password');
     await transport.session.promptAsync({ ...prompt, tools: { read: true, skill: true, write: false } });
     const rules = api.session.update.mock.calls[0]![0].permissions as Array<{ action: string; resource: string; effect: string }>;
     expect(rules.filter((rule) => rule.action === 'skill' || rule.action === '*')).toEqual([]);
@@ -113,21 +160,31 @@ describe('OpenCode v2 transport', () => {
 
   it('refuses prompts when the session policy plugin failed to activate', async () => {
     api.plugin.list.mockResolvedValue({ data: [{ id: 'takt.session', state: { status: 'failed' } }] });
-    await expect(createV2Transport('http://localhost', '').session.promptAsync(prompt)).rejects.toThrow('refusing');
+    await expect((await createV2Transport('http://localhost', '')).session.promptAsync(prompt)).rejects.toThrow('refusing');
     expect(api.session.prompt).not.toHaveBeenCalled();
     expect(api.session.update).not.toHaveBeenCalled();
   });
 
   it('waits for cold plugin activation before sending the prompt', async () => {
     api.plugin.list.mockResolvedValueOnce({ data: [] });
-    await createV2Transport('http://localhost', '').session.promptAsync(prompt);
+    await (await createV2Transport('http://localhost', '')).session.promptAsync(prompt);
     expect(api.plugin.list).toHaveBeenCalledTimes(2);
     expect(api.session.prompt).toHaveBeenCalledOnce();
   });
 
+  it('adds a narrow external context rule to the v2 server configuration', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectory();
+    const config = buildV2ServerConfig(undefined, undefined, '/plugin', {}, false, [contextDirectory]);
+    expect(config.permissions).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
   it('waits for MCP catalog registration before exposing an allowed tool', async () => {
     api.rpc.call.mockResolvedValueOnce({ output: [] }).mockResolvedValue({ output: [{ id: 'probe_echo', namespace: 'probe' }] });
-    await createV2Transport('http://localhost', '').session.promptAsync({ ...prompt, tools: { probe_echo: true } });
+    await (await createV2Transport('http://localhost', '')).session.promptAsync({ ...prompt, tools: { probe_echo: true } });
     expect(api.rpc.call).toHaveBeenCalledTimes(2);
     expect(api.session.update).toHaveBeenCalledWith(expect.objectContaining({ metadata: {
       preserved: 1, takt: { system: 'review persona', tools: { probe_echo: true } },
@@ -137,15 +194,49 @@ describe('OpenCode v2 transport', () => {
   it('exposes configured MCP tools only when discovery is explicitly enabled', async () => {
     api.rpc.call.mockResolvedValue({ output: [{ id: 'probe_echo', namespace: 'probe' }, { id: 'probe_other_tool', namespace: 'probe_other' }] });
     api.mcp.list.mockResolvedValue({ data: [{ name: 'probe', status: { status: 'connected' } }] });
-    await createV2Transport('http://localhost', '', ['probe']).session.promptAsync({ ...prompt, allowConfiguredMcpTools: true });
+    await (await createV2Transport('http://localhost', '', ['probe'])).session.promptAsync({ ...prompt, allowConfiguredMcpTools: true });
     expect(api.session.update).toHaveBeenCalledWith(expect.objectContaining({ metadata: {
       preserved: 1, takt: { system: 'review persona', tools: { read: true, write: false, shell: false, subagent: false, probe_echo: true } },
     } }), undefined);
   });
 
+  it.each([
+    { server: 'backlog__main', similar: 'backlog' },
+    { server: 'queue_', similar: 'queue' },
+  ])('waits for the registered tools of the approved server $server and enables only its namespace', async ({ server, similar }) => {
+    const approved = [{ id: `${server}_get_issue`, namespace: server }, { id: `${server}_add_issue`, namespace: server }];
+    const similarTool = { id: `${similar}_get_issue`, namespace: similar };
+    api.rpc.call.mockResolvedValueOnce({ output: [similarTool] }).mockResolvedValue({ output: [similarTool, ...approved] });
+    await (await createV2Transport('http://localhost', '')).session.promptAsync({ ...prompt, allowedMcpServers: [server] });
+    expect(api.rpc.call).toHaveBeenCalledTimes(2);
+    const update = api.session.update.mock.calls[0]![0] as { permissions: Array<{ action: string; effect: string }>; metadata: { takt: { tools: Record<string, boolean> } } };
+    expect(update.metadata.takt.tools).toMatchObject({ [approved[0]!.id]: true, [approved[1]!.id]: true });
+    expect(update.metadata.takt.tools[similarTool.id]).toBeUndefined();
+    const allowed = update.permissions.filter((rule) => rule.effect === 'allow').map((rule) => rule.action);
+    expect(allowed).toEqual(expect.arrayContaining(approved.map((tool) => tool.id)));
+    expect(allowed).not.toContain(similarTool.id);
+    expect(api.session.prompt).toHaveBeenCalledOnce();
+  });
+
+  it('keeps waiting while an approved server has not registered any tool', async () => {
+    vi.useFakeTimers();
+    try {
+      api.rpc.call.mockResolvedValue({ output: [{ id: 'backlog_get_issue', namespace: 'backlog' }] });
+      const sent = (await createV2Transport('http://localhost', '')).session.promptAsync({ ...prompt, allowedMcpServers: ['backlog__main'] });
+      const settled = sent.then(() => 'sent', (error: unknown) => String(error));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.session.prompt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(settled).resolves.toMatch(/abort|timeout/i);
+      expect(api.session.prompt).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refuses a session from a different directory', async () => {
     api.session.get.mockResolvedValue({ location: { directory: '/other' } });
-    await expect(createV2Transport('http://localhost', '').session.promptAsync(prompt)).rejects.toThrow('different directory');
+    await expect((await createV2Transport('http://localhost', '')).session.promptAsync(prompt)).rejects.toThrow('different directory');
     expect(api.session.prompt).not.toHaveBeenCalled();
   });
 
@@ -155,23 +246,59 @@ describe('OpenCode v2 transport', () => {
       yield { type: 'session.execution.succeeded', data: { sessionID: 'other' } };
       yield { type: 'session.execution.succeeded', data: { sessionID: 's1' } };
     })());
-    const { stream } = await createV2Transport('http://localhost', '').event.subscribe({ directory: '/work', sessionID: 's1' }, {});
+    const { stream } = await (await createV2Transport('http://localhost', '')).event.subscribe({ directory: '/work', sessionID: 's1' }, {});
     const events = [];
     for await (const event of stream) events.push(event);
     expect(events).toEqual([{ type: 'session.idle', properties: { sessionID: 's1' } }]);
+  });
+
+  it.each([
+    { name: 'read', tool: 'read', input: { path: '/context/specifications/gherkin.feature' } },
+    { name: 'shell', tool: 'bash', input: { command: 'cat /context/specifications/gherkin.feature' } },
+  ])('$name の実引数と ID を結果より先に provider ログへ記録する', async ({ name, tool, input }) => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-tool-input-'));
+    temporaryDirectories.push(logsDir);
+    const logger = createProviderEventLogger({ logsDir, sessionId: 's1', runId: 'run', enabled: true });
+    const data = { sessionID: 's1', assistantMessageID: 'm1', id: 'tool-1' };
+    const durable = { aggregateID: 's1', seq: 1, version: 1 } as const;
+    const source: V2Event[] = [
+      { type: 'session.tool.input.started', id: 'e1', created: 1, durable, data: { ...data, name } },
+      { type: 'session.tool.input.delta', id: 'e2', created: 2, data: { ...data, delta: JSON.stringify(input).slice(0, 12) } },
+      { type: 'session.tool.input.ended', id: 'e3', created: 3, durable: { ...durable, seq: 2 }, data: { ...data, text: JSON.stringify(input) } },
+      { type: 'session.tool.called', id: 'e4', created: 4, durable: { ...durable, seq: 3 }, data: { ...data, input, executed: false } },
+      { type: 'session.tool.progress', id: 'e5', created: 5, data: { ...data, metadata: { title: '仕様読み取り' } } },
+      { type: 'session.tool.success', id: 'e6', created: 6, durable: { ...durable, seq: 4, version: 2 },
+        data: { ...data, content: [{ type: 'text', text: '仕様本文' }], executed: false } },
+    ];
+    api.event.subscribe.mockReturnValue((async function* () {
+      yield { type: 'server.connected' };
+      yield* source;
+    })());
+    const state = createStreamTrackingState();
+    const { stream } = await (await createV2Transport('http://localhost', '')).event.subscribe({ directory: '/work', sessionID: 's1' }, {});
+    for await (const event of stream) {
+      const updated = event as OpenCodeMessagePartUpdatedEvent;
+      expect(updated.type).toBe('message.part.updated');
+      handlePartUpdated(updated.properties.part, updated.properties.delta,
+        (output) => logger.logEvent({ provider: 'opencode', providerModel: 'test', step: 'inspect' }, output), state);
+    }
+    const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(records.map((record) => record.event_type)).toEqual(['tool_use', 'tool_result']);
+    expect(records[0]?.data).toEqual({ tool, id: data.id, input: name === 'read' ? { ...input, filePath: input.path } : input });
+    expect(records[1]?.data).toEqual({ id: data.id, content: '仕様本文', isError: false });
   });
 
   it('waits for interruption before completing abort', async () => {
     const order: string[] = [];
     api.session.interrupt.mockImplementation(async () => { order.push('interrupt'); });
     api.session.wait.mockImplementation(async () => { order.push('wait'); });
-    await createV2Transport('http://localhost', '').session.abort({ sessionID: 's1', directory: '/work' }, {});
+    await (await createV2Transport('http://localhost', '')).session.abort({ sessionID: 's1', directory: '/work' }, {});
     expect(order).toEqual(['interrupt', 'wait']);
   });
 
   it('uses an opaque pagination cursor without resending the order', async () => {
     api.message.list.mockResolvedValueOnce({ data: [], cursor: { next: 'page2' } }).mockResolvedValueOnce({ data: [], cursor: { next: null } });
-    await createV2Transport('http://localhost', '').session.messages({ sessionID: 's1', directory: '/work' });
+    await (await createV2Transport('http://localhost', '')).session.messages({ sessionID: 's1', directory: '/work' });
     expect(api.message.list).toHaveBeenNthCalledWith(1, { sessionID: 's1', order: 'asc', limit: 100 }, undefined);
     expect(api.message.list).toHaveBeenNthCalledWith(2, { sessionID: 's1', cursor: 'page2', limit: 100 }, undefined);
   });
@@ -187,14 +314,14 @@ describe('OpenCode v2 transport', () => {
       { type: 'location-switched', id: 'm6', time },
       { type: 'idle', id: 'm7', time },
     ], cursor: { next: null } });
-    const result = await createV2Transport('http://localhost', '').session.messages({ sessionID: 's1', directory: '/work' });
+    const result = await (await createV2Transport('http://localhost', '')).session.messages({ sessionID: 's1', directory: '/work' });
     expect(result.data?.map((message) => [message.info.id, message.info.role])).toEqual([
       ['m3', 'user'], ['m4', 'user'], ['m5', 'assistant'],
     ]);
   });
 
   it('carries the session ID and rejection decision on permissions', async () => {
-    await createV2Transport('http://localhost', '').permission.reply({ sessionID: 's1', requestID: 'p1', reply: 'reject', directory: '/work' }, {});
+    await (await createV2Transport('http://localhost', '')).permission.reply({ sessionID: 's1', requestID: 'p1', reply: 'reject', directory: '/work' }, {});
     expect(api.permission.reply).toHaveBeenCalledWith({ sessionID: 's1', requestID: 'p1', decision: 'reject' }, {});
   });
 });
@@ -226,6 +353,20 @@ describe('OpenCode v2 events and configuration', () => {
     event('session.tool.input.started');
     event('session.tool.called', { input: { command: 'pwd' } });
     expect(event('session.tool.success', { content: [{ type: 'text', text: '/work' }], metadata: {} })).toMatchObject({ properties: { part: { state: { status: 'completed', output: '/work' } } } });
+  });
+
+  it.each([
+    { type: 'session.compaction.ended', reason: 'auto', notified: true },
+    { type: 'session.compaction.ended', reason: 'manual', notified: false },
+    { type: 'session.compaction.started', reason: 'auto', notified: false },
+    { type: 'session.compaction.failed', reason: 'auto', notified: false },
+  ] as const)('translates only completed automatic compaction ($type, $reason)', ({ type, reason, notified }) => {
+    const translated = v2EventTranslator()({ id: 'event-1', created: 0, durable: { aggregateID: 'session-1', seq: 1, version: 1 },
+      type, data: { sessionID: 'session-1', reason, text: 'summary', error: { type: 'error', message: 'failed summary' } },
+    } as V2Event);
+    expect(translated).toEqual(notified
+      ? { type: 'session.compacted', properties: { sessionID: 'session-1', reason: 'auto' } }
+      : undefined);
   });
 
   it('preserves all MCP OAuth options including the callback port and redirect URI without enabling codemode', () => {

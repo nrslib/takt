@@ -25,11 +25,19 @@ export interface ProviderGuardOptions {
   callTimeoutMs?: number;
 }
 
+export type ContextWindowSetting = 'auto' | number | {
+  initial: number;
+  auto_expand?: boolean;
+};
+
 export interface CodexProviderOptions {
+  /** Resolved runtime profile setting; not part of provider_options YAML. */
+  contextWindow?: ContextWindowSetting;
   baseUrl?: string;
   networkAccess?: boolean;
   permissionControl?: CodexPermissionControl;
   configProfile?: string;
+  readonlyPermissionBase?: string;
   reasoningEffort?: CodexReasoningEffort;
   fastMode?: boolean;
   guards?: ProviderGuardOptions;
@@ -41,12 +49,17 @@ export interface CodexProviderOptions {
 
 export type CodexPermissionControl = 'takt' | 'codex';
 
-export function assertCodexConfigProfilePermissionControl(
+export function assertCodexPermissionControlOptions(
   options: CodexProviderOptions | undefined,
 ): void {
   if (options?.configProfile !== undefined && options.permissionControl !== 'codex') {
     throw new Error(
       'Configuration error: provider_options.codex.config_profile requires permission_control: codex.',
+    );
+  }
+  if (options?.readonlyPermissionBase !== undefined && options.permissionControl !== 'codex') {
+    throw new Error(
+      'Configuration error: provider_options.codex.readonly_permission_base requires permission_control: codex.',
     );
   }
 }
@@ -78,6 +91,8 @@ export interface OpenCodeGuardOptions {
 }
 
 export interface OpenCodeProviderOptions {
+  /** Resolved runtime profile setting; not part of provider_options YAML. */
+  contextWindow?: ContextWindowSetting;
   networkAccess?: boolean;
   skills?: { enabled?: boolean };
   variant?: string;
@@ -90,6 +105,7 @@ export type RuntimePreparePreset = (typeof RUNTIME_PREPARE_PRESETS)[number];
 export type CodexReasoningEffort = string;
 export type ClaudeEffort = string;
 export type CopilotEffort = string;
+export type KiroEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
 
 export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {
@@ -107,6 +123,13 @@ export interface ClaudeSandboxSettings {
   excludedCommands?: string[];
 }
 
+export interface ClaudePermissionsOptions {
+  /** Claude に渡す permissions.deny の規則。 */
+  deny?: string[];
+  /** true のとき、~/.claude/settings.json の permissions.deny から Read( で始まる規則を取り込む。 */
+  importUserReadDeny?: boolean;
+}
+
 export interface ClaudeSkillOptions {
   enabled?: boolean;
 }
@@ -118,6 +141,7 @@ export interface ClaudeProviderOptions {
   effort?: ClaudeEffort;
   skills?: ClaudeSkillOptions;
   sandbox?: ClaudeSandboxSettings;
+  permissions?: ClaudePermissionsOptions;
   guards?: ProviderGuardOptions;
 }
 
@@ -139,6 +163,7 @@ export interface CopilotProviderOptions {
 export interface KiroProviderOptions {
   usePromptTempFile?: boolean;
   agent?: string;
+  effort?: KiroEffort;
   guards?: ProviderGuardOptions;
 }
 
@@ -147,8 +172,29 @@ export interface CursorProviderOptions {
   guards?: ProviderGuardOptions;
 }
 
+export interface DevinProviderOptions {
+  guards?: ProviderGuardOptions;
+}
+
 /** Configuration for the DeepSeek Harness TypeScript SDK. */
 export type DeepSeekReasoningEffort = 'off' | 'low' | 'high' | 'max';
+
+export interface DeepSeekHarnessGitPluginOption {
+  id: string;
+  source: string;
+  ref?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface DeepSeekHarnessNpmPluginOption {
+  source: string;
+  id?: string;
+  config?: Record<string, unknown>;
+}
+
+export type DeepSeekHarnessPluginOption = string
+  | DeepSeekHarnessGitPluginOption
+  | DeepSeekHarnessNpmPluginOption;
 
 export interface DeepSeekHarnessProviderOptions {
   baseUrl?: string;
@@ -156,6 +202,7 @@ export interface DeepSeekHarnessProviderOptions {
   requestTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   reasoningEffort?: DeepSeekReasoningEffort;
+  plugins?: DeepSeekHarnessPluginOption[];
 }
 
 /**
@@ -192,6 +239,7 @@ export interface StepProviderOptions {
   kiro?: KiroProviderOptions;
   pi?: PiProviderOptions;
   deepseekHarness?: DeepSeekHarnessProviderOptions;
+  devin?: DevinProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';

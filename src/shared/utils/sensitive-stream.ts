@@ -1,82 +1,188 @@
 import {
-  REDACTED_VALUE,
-  SENSITIVE_TEXT_BOUNDARY_WINDOW,
-  hasPotentialSensitiveTextSuffix,
-  sanitizeSensitiveText,
+  collectEmbeddedSensitiveValues, maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges, REDACTED_VALUE,
+  type SensitiveRange,
 } from './sensitive-text.js';
-import { collectSensitiveStringValues } from './sensitive-value.js';
+import { createBoundedSensitiveValues, type BoundedSensitiveValues } from './sensitive-value.js';
+import { sliceUtf8 } from './utf8.js';
 
-const MAX_PENDING_SENSITIVE_TEXT_LENGTH = 10_000;
+const PEM_BEGIN = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/u;
+const SENSITIVE_PREVIEW_BYTES = 8 * 1024;
+const MAX_PENDING_SENSITIVE_LINE_LENGTH = 10_000;
+
+function maskingRanges(text: string, values: BoundedSensitiveValues): SensitiveRange[] {
+  const found = new Set<string>();
+  collectEmbeddedSensitiveValues(text, found);
+  values.collect({ token: [...found] });
+  return sensitiveTextRanges(text, values.values);
+}
 
 export interface SensitiveTextStreamRedactor {
-  write(text: string, source: unknown): string;
-  flush(source: unknown): string;
+  /** 渡された秘密値と、出力の中で見つかった秘密値。 */
+  readonly sensitiveValues: BoundedSensitiveValues;
+  write(text: string, source: unknown, substringValues?: readonly string[]): string;
+  flush(source: unknown, substringValues?: readonly string[]): string;
+  /** まだ確定していない末尾を、マスクして返す。 */
+  preview(source: unknown): string;
+}
+
+export interface SensitiveTextCommit {
+  readonly text: string;
+  readonly ranges: readonly SensitiveRange[];
+}
+
+function pendingSensitiveValueRanges(text: string): SensitiveRange[] {
+  // ストリーム用にキーや区切りの検出規則を複製しない。'@' は、まだ '@' が届いていない URL の認証情報を保留するため。
+  return ['', '"', "'", '\\"', '@'].flatMap((quote) =>
+    sensitiveTextRanges(text + 'x' + quote, new Set())
+      .filter((range) => range.end > text.length)
+      .map((range) => ({ start: range.start, end: text.length })));
+}
+
+function knownValuePrefixSuffixRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
+  const ranges: SensitiveRange[] = [];
+  for (const value of values) {
+    const length = longestValuePrefixAtEnd(text, value);
+    if (length > 0) ranges.push({ start: text.length - length, end: text.length });
+  }
+  return ranges;
+}
+
+// text の末尾と一致する、value の真の接頭辞のうち最も長いものの長さ。
+// 接頭辞を長い順に endsWith で試すと、長い値（パスワード全体など）で値の長さの2乗になるので、
+// KMP の失敗関数で value の先頭と text の末尾を1回ずつ読む。
+function longestValuePrefixAtEnd(text: string, value: string): number {
+  const limit = Math.min(value.length - 1, text.length);
+  if (limit <= 0) return 0;
+  const failure = new Int32Array(limit);
+  for (let i = 1, k = 0; i < limit; i++) {
+    while (k > 0 && value[i] !== value[k]) k = failure[k - 1]!;
+    if (value[i] === value[k]) k++;
+    failure[i] = k;
+  }
+  let matched = 0;
+  for (let i = text.length - limit; i < text.length; i++) {
+    while (matched > 0 && text[i] !== value[matched]) matched = failure[matched - 1]!;
+    if (text[i] === value[matched]) matched++;
+  }
+  return matched;
+}
+
+/** Complete value-bearing lines and closed PEM blocks become append-only output. */
+export class SensitiveTextStreamBuffer {
+  readonly sensitiveValues = createBoundedSensitiveValues();
+  private pending = '';
+  private pemLabel: string | undefined;
+
+  write(text: string, source: unknown, substringValues: readonly string[] = []): SensitiveTextCommit {
+    this.sensitiveValues.collect(source);
+    this.pending += text;
+    let committed = '';
+    const ranges: SensitiveRange[] = [];
+    const take = (end: number): void => {
+      const unit = this.take(end, substringValues);
+      for (const range of unit.ranges) ranges.push({ start: committed.length + range.start, end: committed.length + range.end });
+      committed += unit.text;
+    };
+    while (this.pending !== '') {
+      if (this.pemLabel !== undefined) {
+        const closing = `-----END ${this.pemLabel}-----`;
+        const end = this.pending.indexOf(closing);
+        if (end < 0) break;
+        take(end + closing.length);
+        continue;
+      }
+      let newline = this.pending.indexOf('\n');
+      while (newline >= 0 && pendingSensitiveValueRanges(this.pending.slice(0, newline + 1)).length > 0) {
+        newline = this.pending.indexOf('\n', newline + 1);
+      }
+      const line = newline < 0 ? this.pending : this.pending.slice(0, newline + 1);
+      const begin = PEM_BEGIN.exec(line);
+      if (begin !== null) {
+        this.pemLabel = begin[1]!;
+        continue;
+      }
+      if (newline >= 0) { take(newline + 1); continue; }
+      // This is a deliberate best-effort boundary, not a continuing credential context.
+      if (this.pending.length > MAX_PENDING_SENSITIVE_LINE_LENGTH) take(this.pending.length);
+      break;
+    }
+    return { text: committed, ranges };
+  }
+
+  flush(source: unknown, substringValues: readonly string[] = []): SensitiveTextCommit {
+    this.sensitiveValues.collect(source);
+    return this.take(this.pending.length, substringValues);
+  }
+
+  preview(source: unknown): string {
+    if (this.pending === '') return '';
+    this.sensitiveValues.collect(source);
+    if (this.pemLabel !== undefined && this.pending.length > MAX_PENDING_SENSITIVE_LINE_LENGTH) return REDACTED_VALUE;
+    const text = this.pending;
+    // 左端で切れた秘密値も漏らさないため、保留中の文字列全体をマスクしてから切る。
+    // previewだけの発見を、確定済みの候補へ持ち越さない。
+    const values = createBoundedSensitiveValues();
+    values.collect(this.sensitiveValues);
+    const ranges = [
+      ...maskingRanges(text, values),
+      ...pendingSensitiveValueRanges(text),
+      ...knownValuePrefixSuffixRanges(text, values.values),
+    ];
+    return sliceUtf8(maskSensitiveRanges(text, ranges), 0, SENSITIVE_PREVIEW_BYTES, true).content;
+  }
+
+  private take(end: number, substringValues: readonly string[]): SensitiveTextCommit {
+    const text = this.pending.slice(0, end);
+    this.pending = this.pending.slice(end);
+    this.pemLabel = undefined;
+    return {
+      text,
+      ranges: [
+        ...maskingRanges(text, this.sensitiveValues),
+        ...substringSensitiveRanges(text, substringValues),
+        ...knownValuePrefixSuffixRanges(text, this.sensitiveValues.values),
+      ],
+    };
+  }
+}
+
+/** Preserve text/thinking ownership without moving text across provider channels. */
+export function maskSensitiveTextChunks<T extends { text: string }>(commit: SensitiveTextCommit, chunks: T[]): {
+  committed: T[]; pending: T[];
+} {
+  if (commit.text === '') return { committed: [], pending: chunks };
+  const sensitive = new Uint8Array(commit.text.length);
+  for (const range of commit.ranges) sensitive.fill(1, range.start, range.end);
+  const committed: T[] = [];
+  const pending: T[] = [];
+  let offset = 0;
+  for (const chunk of chunks) {
+    const consumed = Math.min(chunk.text.length, Math.max(0, commit.text.length - offset));
+    const ranges: SensitiveRange[] = [];
+    for (let index = 0; index < consumed;) {
+      if (sensitive[offset + index] !== 1) { index++; continue; }
+      const start = index++;
+      while (index < consumed && sensitive[offset + index] === 1) index++;
+      ranges.push({ start, end: index });
+    }
+    if (consumed > 0) {
+      const masked = maskSensitiveRanges(chunk.text.slice(0, consumed), ranges);
+      const continues = sensitive[offset] === 1 && offset > 0 && sensitive[offset - 1] === 1;
+      committed.push({ ...chunk, text: continues ? masked.slice(REDACTED_VALUE.length) : masked });
+    }
+    if (consumed < chunk.text.length) pending.push({ ...chunk, text: chunk.text.slice(consumed) });
+    offset += chunk.text.length;
+  }
+  return { committed, pending };
 }
 
 export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor {
-  const knownValues = new Set<string>();
-  let orderedValues: readonly string[] = [];
-  let pending = '';
-  let failClosed = false;
-
-  const updateKnownValues = (source: unknown): void => {
-    const collected = collectSensitiveStringValues(source);
-    failClosed ||= collected.exhausted;
-    for (const value of collected.values) {
-      knownValues.add(value);
-    }
-    orderedValues = [...knownValues].sort((a, b) => b.length - a.length);
-  };
-
-  const drain = (flush: boolean): string => {
-    if (failClosed) {
-      const hadPendingText = pending.length > 0;
-      pending = '';
-      return hadPendingText ? REDACTED_VALUE : '';
-    }
-    if (!flush && orderedValues.length === 0) {
-      if (hasPotentialSensitiveTextSuffix(pending)) {
-        return '';
-      }
-      const sanitized = sanitizeSensitiveText(pending);
-      pending = '';
-      return sanitized;
-    }
-    let output = '';
-    while (pending.length > 0) {
-      const matchedValue = orderedValues.find((value) => pending.startsWith(value));
-      if (matchedValue !== undefined) {
-        output += REDACTED_VALUE;
-        pending = pending.slice(matchedValue.length);
-        continue;
-      }
-      if (!flush && orderedValues.some((value) => value.startsWith(pending))) {
-        break;
-      }
-      if (!flush && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW) {
-        break;
-      }
-      output += pending[0];
-      pending = pending.slice(1);
-    }
-    return sanitizeSensitiveText(output);
-  };
-
+  const buffer = new SensitiveTextStreamBuffer();
+  const mask = (commit: SensitiveTextCommit): string => maskSensitiveRanges(commit.text, commit.ranges);
   return {
-    write(text: string, source: unknown): string {
-      updateKnownValues(source);
-      pending += text;
-      if (
-        pending.length > MAX_PENDING_SENSITIVE_TEXT_LENGTH
-        && (orderedValues.length > 0 || hasPotentialSensitiveTextSuffix(pending))
-      ) {
-        failClosed = true;
-      }
-      return drain(false);
-    },
-    flush(source: unknown): string {
-      updateKnownValues(source);
-      return drain(true);
-    },
+    sensitiveValues: buffer.sensitiveValues,
+    write: (text, source, substringValues) => mask(buffer.write(text, source, substringValues)),
+    flush: (source, substringValues) => mask(buffer.flush(source, substringValues)),
+    preview: (source) => buffer.preview(source),
   };
 }

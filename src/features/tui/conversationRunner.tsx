@@ -1,3 +1,4 @@
+import type { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
 /**
  * The conversation phase of a TUI run, without anything that decides what the
  * conversation is about.
@@ -11,9 +12,13 @@
 
 import { useEffect, useRef } from 'react';
 import { Text, useInput } from 'ink';
-import { takeSessionState } from '../../infra/config/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { info } from '../../shared/ui/index.js';
+import { error, info } from '../../shared/ui/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { checkManagedProviders, ManagedProviderInstallError } from '../../infra/managed-providers/preflight.js';
+import { ManagedProviderInstallRequiredError } from '../../infra/managed-providers/loader.js';
+import { managedProviderFor, type ManagedProvider } from '../../infra/managed-providers/definitions.js';
+import { terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
 import { selectRecentSession } from '../interactive/sessionSelector.js';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
@@ -29,7 +34,7 @@ import { resolveUserMessageColors } from './terminalColors.js';
 import type { InteractiveResultSource, TuiConversation, TuiHandoffId } from './tuiConversation.js';
 
 export type TuiDispatchOutcome =
-  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'cancelled'; readonly notice?: string }
   | { readonly kind: 'dispatched'; readonly notice?: string };
 
 type TuiDispatchResult = TuiDispatchOutcome | string | null;
@@ -38,6 +43,8 @@ export interface TuiConversationRunOptions {
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly conversation: TuiConversation;
+  readonly getProvider: () => string;
+  readonly interactiveSessionRecords?: InteractiveSessionRecords;
   /** Written into the transcript of the first mount only. */
   readonly initialEntries: readonly TranscriptEntry[];
   /** `summarize` turns the first input straight into an instruction. */
@@ -106,11 +113,12 @@ function DispatchView({ placeholder, dispatch, settle, fail }: DispatchViewProps
   return <Text>{placeholder}</Text>;
 }
 
+/** Runs conversation mounts and bare-terminal handoffs while retaining drafts, history and queued turns. */
 export async function runTuiConversation(
   options: TuiConversationRunOptions,
 ): Promise<InteractiveModeResult> {
-  takeSessionState(options.cwd);
   const exitedEarly = getLabel('tui.errors.exitedEarly', options.lang);
+  const checkedProviders = new Set<ManagedProvider>();
   let initialEntries: readonly TranscriptEntry[] = options.initialEntries;
   let autoSubmit = options.autoSubmit;
   let history: readonly string[] = [];
@@ -161,7 +169,7 @@ export async function runTuiConversation(
           fail={fail}
         />
       ), exitedEarly);
-    if (outcome.kind === 'cancelled') {
+    if (outcome.kind === 'cancelled' && outcome.notice === undefined) {
       return outcome;
     }
     initialEntries = outcome.notice === undefined
@@ -171,6 +179,18 @@ export async function runTuiConversation(
   };
 
   while (true) {
+    const provider = managedProviderFor(options.getProvider());
+    if (provider !== undefined && !checkedProviders.has(provider)) {
+      try {
+        await checkManagedProviders([provider], terminalProviderConfirmation());
+        checkedProviders.add(provider);
+      } catch (caught) {
+        if (!(caught instanceof ManagedProviderInstallRequiredError || caught instanceof ManagedProviderInstallError)) {
+          throw caught;
+        }
+        error(sanitizeTerminalText(caught.message));
+      }
+    }
     const settled = await mountInk<{
       readonly exit: Exclude<ConversationExit, { kind: 'failed' }>;
       readonly carried: ConversationCarryOver;
@@ -178,11 +198,15 @@ export async function runTuiConversation(
       <ConversationView
         ui={{
           thinking: getLabel('tui.ui.thinking', options.lang),
+          extendedThinking: getLabel('tui.ui.extendedThinking', options.lang),
+          responding: getLabel('tui.ui.responding', options.lang),
           hint: getLabel('tui.ui.hint', options.lang),
           placeholder: getLabel('tui.ui.placeholder', options.lang),
           queuedHint: getLabel('tui.ui.queuedHint', options.lang),
           queuedMore: getLabel('tui.ui.queuedMore', options.lang),
           interruptHint: getLabel('tui.ui.interruptHint', options.lang),
+          interruptHintCompact: getLabel('tui.ui.interruptHintCompact', options.lang),
+          interruptHintMinimal: getLabel('tui.ui.interruptHintMinimal', options.lang),
           responseInterrupted: getLabel('tui.ui.responseInterrupted', options.lang),
           instructionInterrupted: getLabel('tui.ui.instructionInterrupted', options.lang),
         }}
@@ -211,7 +235,7 @@ export async function runTuiConversation(
           settle({ exit, carried });
         }}
       />
-    ), exitedEarly, colorResolution.delayedResponseGuard);
+    ), exitedEarly, colorResolution.delayedResponseGuard, { anchorLiveFrame: true });
 
     history = settled.carried.history;
     queue = settled.carried.queue;
@@ -260,7 +284,7 @@ export async function runTuiConversation(
         break;
       }
       case 'resume_session': {
-        const selected = await selectRecentSession(options.cwd, options.lang);
+        const selected = await selectRecentSession(options.cwd, options.lang, options.getProvider(), options.interactiveSessionRecords);
         if (selected !== null) {
           const notice = await options.conversation.resumeSession(selected);
           initialEntries = notice === undefined

@@ -2,19 +2,19 @@
 
 [English](./external-integrations.md) | [日本語](./external-integrations.ja.md) | [简体中文](./external-integrations.zh-CN.md)
 
-This page is a catalog of community-built third-party integrations. For the official GitHub/GitLab integration, see [Configuration](./configuration.md) and [CI/CD](./ci-cd.md).
+This page introduces community TAKT integrations. For GitHub and GitLab setup, see the [configuration guide](./configuration.md) and [CI/CD guide](./ci-cd.md).
 
-Community-maintained examples that extend TAKT without modifying its core. They are not officially supported by TAKT, and inclusion in this list is not an endorsement — please review each project's license, dependencies, and security posture before adopting it.
+The community maintains these integrations. Check each project's license, dependencies, and security before using it.
 
 To add an integration here, open a PR with a one-line description and a link to a public repository.
 
 ## Methodology Kits
 
-Bundles that implement a software development methodology on top of TAKT — pre-built workflows, facets, and helper scripts installable in one command.
+Workflows, facets, and scripts for using a particular development method with TAKT.
 
 | Integration | Description |
 |-------------|-------------|
-| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | Spec-Driven Development (SDD) methodology for TAKT. Provides workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Leans on TAKT's phase gates, output contracts, and review loops so that a well-defined spec translates into faithful execution — phases cannot be silently skipped and deviations are routed back to `fix`. Provider-agnostic (Claude / Codex). Install via `npx create-takt-sdd`. |
+| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | An SDD kit with workflows and facets from requirements through implementation and validation. Supports Claude and Codex. Install with `npm install -g takt-sdd`. |
 
 ## Audit Trail / Receipt Signing
 
@@ -31,7 +31,7 @@ TAKT has two MCP configuration modes:
 
 The two modes must not be mixed. When an active `mcp` section in `runtime.yaml` coexists with a workflow `mcp_servers` declaration or the `workflow_mcp_servers` policy, TAKT fails fast before any agent runs and reports the workflow/step and the migration target:
 
-- workflow `mcp_servers` policy → `mcp.targets`
-- step `mcp_servers` map → `mcp.targets.steps`
+- The config `workflow_mcp_servers` is a transport permission policy; its values cannot be copied directly into runtime assignments. Remove the legacy policy during migration.
+- Move server definitions from the step's `mcp_servers` to `mcp.servers`, then manually assign their names through `mcp.targets.steps`.
 
-In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — those belong to the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env. Define them in the `mcp` section in `runtime.yaml`. See [Configuration > Runtime MCP Configuration](./configuration.md#runtime-mcp-configuration-in-runtimeyaml) for the schema, effective server resolution, provider transport compatibility, and migration details.

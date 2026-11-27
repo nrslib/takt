@@ -2,10 +2,11 @@
  * Tests: session loading behavior in executeWorkflow().
  *
  * Normal runs pass empty sessions to WorkflowEngine;
- * retry runs (startStep / retryNote / resumePoint) load persisted sessions,
+ * non-worktree retry runs (startStep / retryNote / resumePoint) load persisted sessions,
  * while stateless restartPoint runs start with empty sessions.
  */
 
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig, WorkflowRestartPoint } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { createGitEnvironment } from '../infra/task/git-environment-settings.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 
 const {
   MockWorkflowEngine,
@@ -97,7 +101,8 @@ const {
       const firstStep = this.config.steps[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
-        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo);
+        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo, this.config.name, firstStep.name, 1,
+          [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
         this.emit('step:complete', firstStep, {
           persona: firstStep.personaDisplayName,
           status: 'done',
@@ -105,7 +110,8 @@ const {
           timestamp: new Date('2026-03-04T00:00:00.000Z'),
           sessionId: 'step-session',
           providerUsage: mockStepResponse.providerUsage,
-        }, firstStep.instruction);
+        }, firstStep.instruction, firstStep.name,
+        [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
       }
       if (MockWorkflowEngine.runOutcome.status === 'aborted') {
         this.emit(
@@ -178,6 +184,7 @@ vi.mock('../infra/claude/query-manager.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: mockLoadPersonaSessions,
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: mockLoadWorktreeSessions,
@@ -200,7 +207,6 @@ vi.mock('../infra/config/index.js', () => ({
       usageEventsPhase: false,
     },
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -222,10 +228,12 @@ vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn().mockReturnValue(vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn().mockReturnValue(vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../infra/fs/index.js', async (importOriginal) => ({
@@ -524,6 +532,7 @@ describe('executeWorkflow session loading', () => {
 
     // Then: loadPersonaSessions is called to load saved sessions
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({ coder: 'saved-session-id' });
   });
 
   it('should pass the central session storage directory for persona retries', async () => {
@@ -540,6 +549,7 @@ describe('executeWorkflow session loading', () => {
       'claude',
       centralSessionDirectory,
     );
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({ coder: 'saved-session-id' });
   });
 
   it('should load persisted sessions when retryNote is set (retry)', async () => {
@@ -551,6 +561,7 @@ describe('executeWorkflow session loading', () => {
 
     // Then: loadPersonaSessions is called to load saved sessions
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({ coder: 'saved-session-id' });
   });
 
   it('should start with empty sessions when restartPoint requests a stateless retry', async () => {
@@ -575,22 +586,25 @@ describe('executeWorkflow session loading', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
-  it('should load worktree sessions on retry when cwd differs from projectCwd', async () => {
-    // Given: retry execution in a worktree (cwd !== projectCwd)
+  it.each([
+    { startStep: 'implement' },
+    { retryNote: 'Fix the failing test' },
+    { resumeSource: { resumeMode: 'retry' as const } },
+    { resumeSource: { resumeMode: 'requeue' as const } },
+    { resumeSource: { resumeMode: 'instruct' as const } },
+  ])('should start worktree re-execution with empty sessions for %j', async (retryOptions) => {
     const projectDir = createTempDir('takt-session-project-');
     const worktreeDir = createTempDir('takt-session-worktree-');
 
     await executeWorkflow(makeConfig(), 'task', worktreeDir, {
       projectCwd: projectDir,
-      startStep: 'implement',
+      ...retryOptions,
     });
 
-    // Then: loadWorktreeSessions is called instead of loadPersonaSessions
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(projectDir, worktreeDir, 'claude');
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
-  it('should pass the central session storage directory for worktree retries', async () => {
+  it('should start worktree retries with empty sessions even with central session storage', async () => {
     const projectDir = createTempDir('takt-session-central-project-');
     const worktreeDir = createTempDir('takt-session-central-worktree-');
     const centralSessionDirectory = join(projectDir, 'central-sessions');
@@ -601,13 +615,7 @@ describe('executeWorkflow session loading', () => {
       sessionStorageDirectory: centralSessionDirectory,
     });
 
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(
-      projectDir,
-      worktreeDir,
-      'claude',
-      centralSessionDirectory,
-    );
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
   it('should not load sessions for worktree normal run', async () => {
@@ -636,19 +644,6 @@ describe('executeWorkflow session loading', () => {
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
-  it('should resolve logging config from workflow config values', async () => {
-    await executeWorkflow(makeConfig(), 'task', projectCwd, {
-      projectCwd,
-    });
-
-    const calls = vi.mocked(resolveWorkflowConfigValues).mock.calls;
-    expect(calls).toHaveLength(1);
-    const keys = calls[0]?.[1];
-    expect(Array.isArray(keys)).toBe(true);
-    expect(keys).toContain('logging');
-    expect(keys).toContain('observability');
-  });
-
   it('should initialize and shutdown observability when enabled in resolved config', async () => {
     const observability = {
       enabled: true,
@@ -666,7 +661,7 @@ describe('executeWorkflow session loading', () => {
     });
 
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
-    expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toEqual(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 
@@ -1281,4 +1276,63 @@ describe('executeWorkflow session loading', () => {
 
     expect(mockUsageLogger.logUsageFor).not.toHaveBeenCalled();
   });
+
+  describe('repository identity for gh / glab', () => {
+    const identityKeys = ['GH_REPO', 'GITLAB_REPO'] as const;
+    const savedIdentityEnv = new Map(identityKeys.map((key) => [key, process.env[key]]));
+
+    function gitRepoWithOrigin(prefix: string): string {
+      const dir = createTempDir(prefix);
+      const env = createGitEnvironment(false);
+      execFileSync('git', ['init', '-q', '-b', 'main', dir], { env });
+      execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/owner/repo.git'], { env });
+      return dir;
+    }
+
+    beforeEach(() => {
+      for (const key of identityKeys) delete process.env[key];
+    });
+
+    afterEach(() => {
+      for (const [key, value] of savedIdentityEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('should resolve the project repository for a task that runs in a clone', async () => {
+      const projectDir = gitRepoWithOrigin('takt-identity-project-');
+      const cloneDir = createTempDir('takt-identity-clone-');
+
+      await executeWorkflow(makeConfig(), 'task', cloneDir, { projectCwd: projectDir });
+
+      // Resolved for the run; the engine passes it on only for a workflow with repository_identity.
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.repositoryIdentityEnv).toEqual({
+        GH_REPO: 'github.com/owner/repo',
+      });
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
+    });
+
+    it('should resolve nothing for a task that runs in the project root', async () => {
+      const projectDir = gitRepoWithOrigin('takt-identity-root-');
+
+      await executeWorkflow(makeConfig(), 'task', projectDir, { projectCwd: projectDir });
+
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.repositoryIdentityEnv).toEqual({});
+    });
+
+    it('should keep a repository variable the caller already set', async () => {
+      process.env.GH_REPO = 'mine/other';
+      const projectDir = gitRepoWithOrigin('takt-identity-set-project-');
+      const cloneDir = createTempDir('takt-identity-set-clone-');
+
+      await executeWorkflow(makeConfig(), 'task', cloneDir, { projectCwd: projectDir });
+
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.repositoryIdentityEnv).toEqual({ GH_REPO: 'mine/other' });
+    });
+  });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

@@ -107,10 +107,13 @@ function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
           path: [...path, 'rules', ruleIndex, 'next'],
         })),
       })),
-      rules: step.rules?.map((rule, ruleIndex) => ({
+      rules: [...(step.rules?.map((rule, ruleIndex) => ({
         next: rule.next,
         path: ['steps', stepIndex, 'rules', ruleIndex, 'next'],
-      })),
+      })) ?? []), ...(step.wait ? [{
+        next: step.wait.on_timeout,
+        path: ['steps', stepIndex, 'wait', 'on_timeout'],
+      }] : [])],
     })),
   };
 }

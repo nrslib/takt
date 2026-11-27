@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createLogger } from '../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 
 const log = createLogger('cli-prompt-temp-file');
 
@@ -13,6 +13,7 @@ type CliPromptTempFile = {
 
 export type CliPromptArgument = {
   promptArgument: string;
+  /** Best-effort removal that preserves the provider result. */
   cleanup?: () => Promise<void>;
 };
 
@@ -33,7 +34,7 @@ async function prepareCliPromptTempFile(
     try {
       await rm(tempDir, { recursive: true, force: true });
     } catch (err) {
-      log.debug('Failed to clean up prompt temp dir', { tempDir, err });
+      log.warn('Failed to clean up prompt temp directory', { tempDir, error: getErrorMessage(err) });
     }
   };
 

@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: plan
+description: 要求と現在のコードを調べ、設計を含む実装計画を作成する
 capabilities: readonly
 tags:
   - plan

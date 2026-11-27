@@ -5,10 +5,12 @@ max_steps: 10
 initial_step: evaluate
 steps:
   - name: evaluate
+    description: 同じ依頼を2つの独立した視点で並列にレビューし、それぞれの結果を作成する
     tags:
       - review
     parallel:
       - name: eye1
+        description: 依頼を独立にレビューし、発見・根拠・リスク・推奨対応をレポートに記録する
         tags:
           - review
         edit: false
@@ -45,6 +47,7 @@ steps:
                 - {アクション}
                 ```
       - name: eye2
+        description: 依頼を独立にレビューし、発見・根拠・リスク・推奨対応をレポートに記録する
         tags:
           - review
         edit: false
@@ -86,6 +89,7 @@ steps:
       - condition: any("done")
         next: synthesize
   - name: synthesize
+    description: 2つのレビューの一致点・相違点・固有の発見を比較し、統合した結論をレポートにする
     tags:
       - review
     edit: false

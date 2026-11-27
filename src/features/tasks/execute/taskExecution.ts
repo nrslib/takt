@@ -2,9 +2,13 @@
  * Task execution logic
  */
 
-import type { TaskRunner, TaskInfo, TaskResult } from '../../../infra/task/index.js';
+import type { TaskRunner, TaskInfo, TaskResult, WorktreeResult } from '../../../infra/task/index.js';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import type { GoalTaskResult } from '../../../infra/goals/schema.js';
 import type { GitProvider } from '../../../infra/git/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type {
   TaskExecutionOptions,
   ExecuteTaskOptions,
@@ -16,6 +20,8 @@ import type {
 import { resolveTaskExecution, resolveTaskIssue, type ResolveTaskExecutionOptions } from './resolveTask.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { postExecutionFlow } from './postExecution.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from './goalAbortMonitor.js';
+import { TaskStoppedError } from '../../../infra/task/taskStop.js';
 import {
   buildBooleanTaskResult,
   buildTaskResult,
@@ -25,6 +31,8 @@ import {
   persistTaskResult,
 } from './taskResultHandler.js';
 import { runWorkflowExecution } from './workflowExecutionApi.js';
+import { resolveTaskSpecForExecution } from './taskSpecContext.js';
+import { withTaskRuntimeAssignment } from '../../../infra/config/runtime-provider/invocation.js';
 import {
   createLoopAnalysisPublicationCoordinator,
   settleLoopAnalysisPublication,
@@ -34,6 +42,8 @@ import {
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
 export interface TaskCompletionResult {
+  completion?: GoalTaskResult;
+  runSlug?: string;
   success: boolean;
   failureReason?: string;
   prFailed?: boolean;
@@ -110,32 +120,113 @@ export async function executeTaskAndCompleteWithDetails(
   taskContext?: TaskExecutionContextOverride,
   gitProvider?: GitProvider,
 ): Promise<TaskCompletionResult> {
+  return withTaskRuntimeAssignment(task.data?.runtime_assignment, () => executeTaskAndCompleteWithDetailsInScope(
+    task, taskRunner, cwd, taskExecutor, taskExecutionOptions, parallelOptions, taskContext, gitProvider,
+  ));
+}
+
+async function executeTaskAndCompleteWithDetailsInScope(
+  task: TaskInfo,
+  taskRunner: TaskRunner,
+  cwd: string,
+  taskExecutor: (options: ExecuteTaskOptions) => Promise<WorkflowExecutionResult>,
+  taskExecutionOptions?: TaskExecutionOptions,
+  parallelOptions?: TaskExecutionParallelOptions,
+  taskContext?: TaskExecutionContextOverride,
+  gitProvider?: GitProvider,
+): Promise<TaskCompletionResult> {
+  if (task.data?.merge_task === true) {
+    const { executePersistedPrMergeTask } = await import('../../merge/index.js');
+    try {
+      const result = await executePersistedPrMergeTask(task, taskRunner, cwd, parallelOptions?.abortSignal, {
+        outputMode: parallelOptions?.outputMode,
+        taskPrefix: parallelOptions?.taskPrefix,
+        taskColorIndex: parallelOptions?.taskColorIndex,
+        taskDisplayLabel: parallelOptions?.taskDisplayLabel,
+      });
+      return { success: result.success,
+        ...(result.completion === undefined ? {} : {
+          completion: result.completion, runSlug: result.runSlug, failureReason: result.completion.failureReason,
+        }) };
+    } catch (error) {
+      const saved = taskRunner.listTaskStateItems().find((item) => item.name === task.name);
+      return { success: false, failureReason: getErrorMessage(error),
+        ...(saved?.completion === undefined ? {} : { completion: saved.completion, runSlug: saved.runSlug }) };
+    }
+  }
   const startedAt = new Date().toISOString();
   let taskForPersistence = task;
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
-  const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
+  const goalId = task.data?.goal_id;
+  const taskAbortSignal = externalAbortSignal || goalId !== undefined || task.executionId !== undefined
+    ? taskAbortController.signal : undefined;
+  let goalAbortMonitor: GoalAbortMonitor | undefined;
+  let workflowStarted = false;
   let loopAnalysisPublication: LoopAnalysisPublicationCoordinator | undefined;
+  let executionCwd: string | undefined;
+  let executionBranch: string | undefined;
+  let workflowResult: GoalTaskResult['workflowResult'] = 'error';
+  let interrupted = false;
+  let taskStopError: TaskStoppedError | undefined;
+  let runSlug: string | undefined;
+  const snapshot = (success: boolean, failureReason?: string): GoalTaskResult | undefined => {
+    if (task.data?.goal_id === undefined) {
+      return taskStopError !== undefined
+        ? { success, interrupted, workflowResult, failureReason }
+        : undefined;
+    }
+    const completion: GoalTaskResult = {
+      success,
+      interrupted, workflowResult,
+      failureReason,
+      ...(executionBranch === undefined ? {} : { branch: executionBranch }),
+    };
+    if (executionCwd !== undefined && workflowResult !== 'error') {
+      completion.branch = executionBranch;
+      try {
+        completion.branch ??= execFileSync('git', ['branch', '--show-current'], { cwd: executionCwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+        completion.sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executionCwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      } catch (error) {
+        completion.shaUnavailableReason = sanitizeSensitiveText(getErrorMessage(error));
+      }
+    } else {
+      completion.shaUnavailableReason = 'Workflow execution did not start';
+    }
+    return completion;
+  };
 
   const onExternalAbort = (): void => {
-    taskAbortController.abort();
+    taskAbortController.abort(externalAbortSignal?.reason);
   };
 
   if (externalAbortSignal) {
     if (externalAbortSignal.aborted) {
-      taskAbortController.abort();
+      onExternalAbort();
     } else {
       externalAbortSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
   }
 
   try {
+    if (task.data?.goal_id !== undefined) {
+      runSlug = `setup-${randomUUID()}`;
+      taskForPersistence = { ...taskForPersistence, runSlug };
+      taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, { runSlug });
+    }
+    if (goalId !== undefined || taskForPersistence.executionId !== undefined) {
+      if (taskForPersistence.executionId === undefined) throw new Error(`Goal task is missing executionId: ${task.name}`);
+      goalAbortMonitor = new GoalAbortMonitor(cwd, goalId, taskAbortController, {
+        taskName: task.name, executionId: taskForPersistence.executionId,
+      });
+      taskAbortSignal?.throwIfAborted();
+    }
     const emitStatusLog = parallelOptions?.outputMode !== 'silent';
     const {
       execCwd,
       workflowIdentifier,
       isWorktree,
-      taskSpec,
+      taskSpec: resolvedTaskSpec,
       reportDirName,
       branch,
       worktreePath,
@@ -145,6 +236,7 @@ export async function executeTaskAndCompleteWithDetails(
       resumePoint,
       restartPoint,
       resumeSource,
+      sourceResumePoint,
       autoPr,
       draftPr,
       managedPr,
@@ -156,33 +248,55 @@ export async function executeTaskAndCompleteWithDetails(
       prContext,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal, {
       ...buildResolveTaskExecutionOptions(parallelOptions, taskContext),
+      ...(goalId === undefined ? {} : { onCloneCreated: (clone: WorktreeResult) => {
+        taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, {
+          runSlug: runSlug!, worktreePath: clone.path, branch: clone.branch,
+        });
+      } }),
     });
+    executionCwd = execCwd;
+    executionBranch = branch;
+    goalAbortMonitor?.check();
+    if (isManagedTaskInterruption(taskAbortController.signal.reason)) throw taskAbortController.signal.reason;
 
+    runSlug = reportDirName;
+    if (task.data?.goal_id !== undefined) taskForPersistence = { ...taskForPersistence, runSlug };
     const executionTask = taskRunner.updateRunningTaskExecution(task.name, {
       runSlug: reportDirName,
       ...(worktreePath ? { worktreePath } : {}),
       ...(branch ? { branch } : {}),
     });
     taskForPersistence = executionTask;
+    let taskSpec = resolvedTaskSpec;
+    if (taskSpec === undefined && isWorktree) {
+      if (executionTask.taskDir === undefined) {
+        throw new Error(`Clone task is missing task_dir: ${task.name}`);
+      }
+      taskSpec = resolveTaskSpecForExecution(cwd, execCwd, executionTask.taskDir, reportDirName);
+    }
 
     const projectRootCwd = cwd;
     loopAnalysisPublication = autoPr && branch
       ? createLoopAnalysisPublicationCoordinator(branch)
       : undefined;
-    const taskRunResult = await taskExecutor({
+    workflowStarted = true;
+    let taskRunResult = await taskExecutor({
       task: taskSpec?.taskPrompt ?? task.content,
       ...(taskSpec === undefined ? {} : { taskSpec }),
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: projectRootCwd,
+      ...(task.data?.goal_id === undefined ? {} : { goalId: task.data.goal_id }),
       agentOverrides: taskExecutionOptions,
       startStep,
       retryNote,
       resumePoint,
       restartPoint,
       resumeSource,
+      sourceResumePoint,
       reportDirName,
       abortSignal: taskAbortSignal,
+      handleSigint: externalAbortSignal === undefined,
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
       taskDisplayLabel: parallelOptions?.taskDisplayLabel,
@@ -200,21 +314,40 @@ export async function executeTaskAndCompleteWithDetails(
         prNumber,
       }),
       ...(prContext ? { prContext } : {}),
+      cacciaExecutionSource: task.data?.caccia_execution_source,
+      cacciaPushedHead: task.data?.caccia_pushed_head,
+      ...(task.data?.caccia_execution_source === 'from_pr' ? { prMergePushRecorder: {
+        record: (headSha, _previousRemoteHeadSha, context) =>
+          taskRunner.recordCacciaPushedHead(task.name, headSha, context),
+      } } : {}),
       ...(loopAnalysisPublication === undefined
         ? {}
         : { loopAnalysisPublication }),
     });
+    goalAbortMonitor?.check();
+    if (isManagedTaskInterruption(taskAbortController.signal.reason)) {
+      if (taskAbortController.signal.reason instanceof TaskStoppedError) taskStopError = taskAbortController.signal.reason;
+      taskRunResult = { ...taskRunResult, success: false, interrupted: true, reason: taskAbortController.signal.reason.message,
+        exceeded: false, retryable: taskAbortController.signal.reason instanceof GoalPausedError };
+    }
+    interrupted = taskRunResult.interrupted === true;
+    workflowResult = taskRunResult.setupFailed === true ? 'error'
+      : taskRunResult.exceeded ? 'exceeded' : taskRunResult.success ? 'completed' : 'aborted';
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {
+      const failureReason = buildExceededFailureReason(taskRunResult.exceededInfo);
+      const completion = snapshot(false, failureReason);
       persistExceededTaskResult(taskRunner, executionTask, taskRunResult.exceededInfo, {
         worktreePath,
         branch,
+        ...(completion === undefined ? {} : { completion }),
       }, {
         emitStatusLog,
       });
       return {
         success: false,
-        failureReason: buildExceededFailureReason(taskRunResult.exceededInfo),
+        failureReason,
+        ...(completion === undefined ? {} : { completion, runSlug }),
       };
     }
 
@@ -229,9 +362,12 @@ export async function executeTaskAndCompleteWithDetails(
         ? resolveTaskIssue(issueNumber, projectRootCwd)
         : resolveTaskIssue(issueNumber, projectRootCwd, gitProvider);
       const postResult = await postExecutionFlow({
+        workflowHasCaccia: taskRunResult.workflowHasCaccia,
+        goalId: task.data?.goal_id,
         execCwd,
         projectCwd: projectRootCwd,
         task: task.name,
+        parentTaskName: task.name,
         branch,
         baseBranch,
         shouldCreatePr: autoPr,
@@ -257,6 +393,9 @@ export async function executeTaskAndCompleteWithDetails(
       }
     }
 
+    goalAbortMonitor?.check();
+    if (taskRunResult.success && isManagedTaskInterruption(taskAbortController.signal.reason)) throw taskAbortController.signal.reason;
+
     if (postExecutionTaskError !== undefined) {
       const taskResult = buildBooleanTaskResult({
         task: executionTask,
@@ -268,11 +407,14 @@ export async function executeTaskAndCompleteWithDetails(
         worktreePath,
         branch,
       });
+      const completion = snapshot(false, taskResult.response);
+      if (completion !== undefined) taskResult.completion = completion;
       persistTaskResult(taskRunner, taskResult, { emitStatusLog });
       return {
         success: false,
         failureReason: taskResult.response,
         taskResult,
+        ...(completion === undefined ? {} : { completion, runSlug }),
       };
     }
 
@@ -287,37 +429,68 @@ export async function executeTaskAndCompleteWithDetails(
     });
 
     if (prFailedError !== undefined) {
+      const completion = snapshot(false, prFailedError);
+      if (completion !== undefined) taskResult.completion = completion;
       persistPrFailedTaskResult(taskRunner, taskResult, prFailedError, { emitStatusLog });
       return {
         success: true,
         prFailed: true,
         postExecutionFailureReason: prFailedError,
         taskResult,
+        ...(completion === undefined ? {} : { completion, runSlug }),
       };
     }
 
+    const completion = snapshot(taskRunResult.success, taskRunResult.success ? undefined : taskResult.response);
+    if (completion !== undefined) taskResult.completion = completion;
     persistTaskResult(taskRunner, taskResult, { emitStatusLog });
     return {
       success: taskRunResult.success,
       ...(taskRunResult.success ? {} : { failureReason: taskResult.response }),
       taskResult,
+      ...(completion === undefined ? {} : { completion, runSlug }),
     };
   } catch (err) {
+    const error = err instanceof TaskStoppedError ? err
+      : isManagedTaskInterruption(taskAbortController.signal.reason) ? taskAbortController.signal.reason : err;
     const completedAt = new Date().toISOString();
-    const failureReason = getErrorMessage(err);
-    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, err, {
-      emitStatusLog: parallelOptions?.outputMode !== 'silent',
-    });
-    return {
-      success: false,
-      failureReason,
+    const saveFailure = (failure: unknown): TaskCompletionResult => {
+      if (failure instanceof GoalPausedError && !workflowStarted) {
+        // 準備中の識別子を再試行元の run として保存しない。
+        taskForPersistence = { ...taskForPersistence, runSlug: undefined };
+      }
+      if (failure instanceof TaskStoppedError) taskStopError = failure;
+      if (isManagedTaskInterruption(failure)) {
+        interrupted = true;
+        if (workflowStarted) workflowResult = 'aborted';
+      }
+      interrupted ||= taskAbortSignal?.aborted === true;
+      const failureReason = getErrorMessage(failure);
+      const completion = snapshot(false, failureReason);
+      persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, failure, {
+        emitStatusLog: parallelOptions?.outputMode !== 'silent',
+        ...(completion === undefined ? {} : { completion }),
+      });
+      return { success: false, failureReason,
+        ...(completion === undefined ? {} : { completion, runSlug }) };
     };
+    try {
+      return saveFailure(error);
+    } catch (terminalError) {
+      if (!(terminalError instanceof TaskStoppedError)) throw terminalError;
+      return saveFailure(terminalError);
+    }
   } finally {
+    goalAbortMonitor?.stop();
     settleLoopAnalysisPublication(loopAnalysisPublication);
     if (externalAbortSignal) {
       externalAbortSignal.removeEventListener('abort', onExternalAbort);
     }
   }
+}
+
+function isManagedTaskInterruption(error: unknown): error is GoalAbortedError | GoalPausedError | TaskStoppedError {
+  return error instanceof GoalAbortedError || error instanceof GoalPausedError || error instanceof TaskStoppedError;
 }
 
 function buildExceededFailureReason(exceeded: ExceededInfo): string {

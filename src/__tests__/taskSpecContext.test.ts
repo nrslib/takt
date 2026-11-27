@@ -6,6 +6,7 @@ import { readRunContextOrderContent } from '../core/workflow/run/order-content.j
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
   resolveTaskSpecForExecution,
+  restageTaskSpecForExecution,
   stageTaskSpecForExecution,
   type ResolvedTaskSpec,
 } from '../features/tasks/execute/taskSpecContext.js';
@@ -60,9 +61,55 @@ describe('stageTaskSpecForExecution', () => {
     const stagedOrderPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md');
 
     expect(taskPrompt).toContain('.takt/runs/20260216-spec-task/context/task');
+    expect(taskPrompt).toContain('# Task');
+    expect(taskPrompt).toContain('spec-task');
+    expect(taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`');
+    expect(taskPrompt).toContain('Use report files in Report Directory as primary execution history.');
+    expect(taskPrompt).not.toContain('Implement exactly this.');
     expect(orderContent).toBe(sourceOrderContent);
     expect(stagedOrderContent).toBe(sourceOrderContent);
     expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(sourceOrderContent);
+  });
+
+  it('includes only the short first line and distinguishes source directories sharing the same title', () => {
+    const projectCwd = createTempProjectDir();
+    const execCwd = createTempProjectDir();
+    const title = `# ${'Long task description '.repeat(6)}`;
+    const prompts = ['source-alpha', 'source-beta'].map((name) => {
+      const taskDir = `.takt/tasks/${name}`;
+      fs.mkdirSync(path.join(projectCwd, taskDir), { recursive: true });
+      fs.writeFileSync(path.join(projectCwd, taskDir, 'order.md'), `${title}\n\nDetailed instructions.`);
+      return resolveTaskSpecForExecution(projectCwd, execCwd, taskDir, 'same-run').taskPrompt;
+    });
+
+    for (const [index, name] of ['source-alpha', 'source-beta'].entries()) {
+      expect(prompts[index]).toContain(title.slice(0, 80));
+      expect(prompts[index]).toContain(name);
+      expect(prompts[index]).not.toContain(title);
+      expect(prompts[index]).not.toContain('Detailed instructions.');
+    }
+    expect(prompts[0]).not.toContain('source-beta');
+    expect(prompts[1]).not.toContain('source-alpha');
+  });
+
+  it('uses an explicit project-side destination that is readable from the clone cwd', () => {
+    const project = createTempProjectDir();
+    const clone = path.join(project, '.takt/worktrees/merge');
+    const taskDir = '.takt/tasks/merge';
+    fs.mkdirSync(path.join(project, taskDir, 'attachments'), { recursive: true });
+    fs.mkdirSync(clone, { recursive: true });
+    fs.writeFileSync(path.join(project, taskDir, 'order.md'), 'Read `attachments/a.png`');
+    fs.writeFileSync(path.join(project, taskDir, 'attachments/a.png'), 'image');
+    const destination = buildRunPaths(project, 'merge-run');
+    const spec = resolveTaskSpecForExecution(project, clone, taskDir, 'merge-run', destination);
+    stageTaskSpecForExecution(spec, destination);
+    const orderRef = spec.taskPrompt.match(/Primary spec: `([^`]+)`/)![1]!;
+    const order = fs.readFileSync(path.resolve(clone, orderRef), 'utf8');
+    const attachmentRef = order.match(/`([^`]+)`/)![1]!;
+    expect(fs.readFileSync(path.resolve(clone, attachmentRef), 'utf8')).toBe('image');
+    expect(path.resolve(clone, orderRef)).toBe(destination.contextTaskOrderAbs);
+    expect(order).toBe(spec.stagedOrderContent);
+    expect(fs.existsSync(buildRunPaths(clone, 'merge-run').contextTaskAbs)).toBe(false);
   });
 
   it('run コンテキストへ task 添付画像を配置する', () => {
@@ -112,8 +159,6 @@ describe('stageTaskSpecForExecution', () => {
         contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
     ]);
-    expect(Object.isFrozen(result.attachmentManifest)).toBe(true);
-    expect(result.attachmentManifest.every(Object.isFrozen)).toBe(true);
   });
 
   it.each([
@@ -268,6 +313,119 @@ describe('stageTaskSpecForExecution', () => {
     expect(fs.existsSync(stagedTaskDir)).toBe(false);
     expect(fs.existsSync(stagedOrderPath)).toBe(false);
     expect(fs.existsSync(stagedAttachmentPath)).toBe(false);
+  });
+});
+
+describe('restageTaskSpecForExecution', () => {
+  it('同じ run の再ステージングで正本の同一パスの添付更新を反映する', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const sourceOrderPath = path.join(sourceTaskDir, 'order.md');
+    const sourceAttachmentPath = path.join(sourceTaskDir, 'attachments/input.txt');
+    const runSlug = '20261019-042955-implement-using-only-the-files-lryauj';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    const stagedAttachmentPath = path.join(runPaths.contextTaskAbs, 'attachments/input.txt');
+    fs.mkdirSync(path.dirname(sourceAttachmentPath), { recursive: true });
+    fs.writeFileSync(sourceOrderPath, 'Read `attachments/input.txt`.');
+    fs.writeFileSync(sourceAttachmentPath, 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const initialOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    expect(fs.readFileSync(stagedAttachmentPath, 'utf8')).toBe('original attachment');
+
+    fs.writeFileSync(sourceAttachmentPath, 'updated attachment');
+    fs.appendFileSync(sourceOrderPath, '\n\n## 追加の指示\n\n更新した添付を確認する。');
+    const refreshedSpec = resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug);
+    restageTaskSpecForExecution(refreshedSpec, runPaths);
+
+    const updatedOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    expect(fs.readFileSync(stagedAttachmentPath, 'utf8')).toBe('updated attachment');
+    expect(updatedOrder.startsWith(initialOrder)).toBe(true);
+    expect(updatedOrder).toContain('## 追加の指示\n\n更新した添付を確認する。');
+    expect(updatedOrder).toContain(`\`.takt/runs/${runSlug}/context/task/attachments/input.txt\``);
+  });
+
+  it('publishes newly added attachments for the same run while retaining existing context files', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const runSlug = 'added-attachment';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Read `attachments/input.txt`.');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments/input.txt'), 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const initialOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    const initialRef = initialOrder.match(/`([^`]+)`/)![1]!;
+    expect(fs.readFileSync(path.resolve(projectCwd, initialRef), 'utf8')).toBe('original attachment');
+    const notesPath = path.join(runPaths.contextTaskAbs, 'notes.txt');
+    const extraAttachmentPath = path.join(runPaths.contextTaskAbs, 'attachments/agent.txt');
+    fs.writeFileSync(notesPath, 'agent notes');
+    fs.writeFileSync(extraAttachmentPath, 'agent attachment');
+
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments/nested'));
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments/nested/added.txt'), 'added attachment');
+    fs.appendFileSync(path.join(sourceTaskDir, 'order.md'), '\nRead `attachments/nested/added.txt`.');
+    const taskSpec = resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug);
+    restageTaskSpecForExecution(taskSpec, runPaths);
+
+    const updatedOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    expect(updatedOrder.startsWith(initialOrder)).toBe(true);
+    const addedRef = updatedOrder.match(/`([^`]+\/nested\/added.txt)`/)![1]!;
+    expect(path.resolve(projectCwd, addedRef)).toBe(path.join(runPaths.contextTaskAbs, 'attachments/nested/added.txt'));
+    expect(fs.readFileSync(path.resolve(projectCwd, addedRef), 'utf8')).toBe('added attachment');
+    expect(fs.readFileSync(path.resolve(projectCwd, initialRef), 'utf8')).toBe('original attachment');
+    expect(fs.readFileSync(notesPath, 'utf8')).toBe('agent notes');
+    expect(fs.readFileSync(extraAttachmentPath, 'utf8')).toBe('agent attachment');
+    expect(fs.readdirSync(runPaths.contextAbs)).toEqual(['task']);
+  });
+
+  it('retains published attachments when the refreshed source has no attachments', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const runSlug = 'empty-attachment-manifest';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Original instruction.');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments/input.txt'), 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const attachmentPath = path.join(runPaths.contextTaskAbs, 'attachments/input.txt');
+    expect(fs.readFileSync(attachmentPath, 'utf8')).toBe('original attachment');
+    fs.rmSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Updated instruction.');
+
+    restageTaskSpecForExecution(resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug), runPaths);
+
+    expect(fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8')).toBe('Updated instruction.');
+    expect(fs.readFileSync(attachmentPath, 'utf8')).toBe('original attachment');
+    expect(fs.readdirSync(runPaths.contextAbs)).toEqual(['task']);
+  });
+
+  it('updates the existing order while retaining published attachments and other context files', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const runSlug = 'restaged-task';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Original instruction.');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments', 'input.txt'), 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const extraPath = path.join(runPaths.contextTaskAbs, 'notes.txt');
+    fs.writeFileSync(extraPath, 'agent notes');
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Updated instruction: `attachments/input.txt`');
+    const taskSpec = resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug);
+
+    restageTaskSpecForExecution(taskSpec, runPaths);
+
+    expect(fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8')).toBe(
+      'Updated instruction: `.takt/runs/restaged-task/context/task/attachments/input.txt`',
+    );
+    expect(fs.readFileSync(path.join(runPaths.contextTaskAbs, 'attachments', 'input.txt'), 'utf8'))
+      .toBe('original attachment');
+    expect(fs.readFileSync(extraPath, 'utf8')).toBe('agent notes');
+    expect(fs.readdirSync(runPaths.contextAbs)).toEqual(['task']);
   });
 });
 

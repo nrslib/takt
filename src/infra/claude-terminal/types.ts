@@ -20,6 +20,7 @@ export interface TerminalSession {
 
 export interface TerminalStartOptions {
   cwd: string;
+  resumeSessionId?: string;
   backend: ClaudeTerminalBackendName;
   command: ClaudeTerminalCommand;
   childProcessEnv?: Readonly<Record<string, string>>;
@@ -104,6 +105,7 @@ export interface ClaudeTranscriptReader {
 
 export interface ClaudeTerminalCallOptions {
   cwd: string;
+  callerManagedMcp?: true;
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;

@@ -1,0 +1,146 @@
+description: "裁定: 技術的成立、今回の必須修正、人の不採用判断を分ける"
+prompts:
+  - label: ordinary-ja
+    raw: file://../../prompts/review-proportionality-ordinary-ja.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/ordinary
+  - label: ordinary-en
+    raw: file://../../prompts/review-proportionality-ordinary-en.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/ordinary
+  - label: reconsider-ja
+    raw: file://../../prompts/review-proportionality-reconsider-ja.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/reconsider
+  - label: reconsider-en
+    raw: file://../../prompts/review-proportionality-reconsider-en.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/reconsider
+  - label: open-normal-ja
+    raw: file://../../prompts/review-proportionality-open-normal-ja.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/open-normal
+  - label: open-normal-en
+    raw: file://../../prompts/review-proportionality-open-normal-en.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/open-normal
+  - label: explicit-current-ja
+    raw: file://../../prompts/review-proportionality-explicit-current-ja.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/explicit-current
+  - label: explicit-current-en
+    raw: file://../../prompts/review-proportionality-explicit-current-en.phase1.md
+    config:
+      working_dir: fixtures/review-proportionality/explicit-current
+providers:
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: high
+      isolate_working_dir: true
+  - id: file://../../providers/cli-plan-report.mjs
+    label: codex-luna-high
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: high
+      isolate_working_dir: true
+  - id: file://../../providers/cli-plan-report.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 2
+defaultTest:
+  vars:
+    previous_response: ""
+    output_phase: phase1
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-6-luna
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        cli_config:
+          features:
+            memories: false
+tests:
+  - description: "通常の保証追加と重大漏えいを区別する / ja"
+    prompts: [ordinary-ja]
+    vars:
+      task: "requirements.mdと宣言された最新レビューを現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-ordinary-ja
+        value: >-
+          F-SOURCE は人のmessage turnで指定されたGitパスが現在の発言に文字どおり現れないという技術的事実を認めるが、二発言の正常利用と人の明示的な不採用判断を踏まえ、regex照合を今回の必須修正や元のhuman-turn問題の修正不足にしない。F-GATE はコードにhuman message gateがあるため反証する。F-KEY は未認証の403応答にkeyが入る具体的な重大漏えいとして修正対象にする。重大な実欠陥を修正コストで免除せず、採らない保証の理由と範囲を引き継ぐ。見出しや語句の一致ではなく判断の意味を評価する。
+  - description: "Distinguish added proof from serious leakage / en"
+    prompts: [ordinary-en]
+    vars:
+      task: "Adjudicate the declared latest review against requirements.md and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-ordinary-en
+        value: >-
+          Recognize that F-SOURCE holds technically for a human message without the literal path, but do not require regex matching or treat the repaired human-turn gate as incomplete. The documented two-message flow and explicit human rejection govern. Disprove F-GATE because the human-message gate exists. Require repair of F-KEY because the unauthenticated 403 response includes the stored key. Preserve the reason and scope of the declined guarantee. Grade meaning, not headings or exact words.
+  - description: "新しい実欠陥を採り人の判断を黙って覆さない / ja"
+    prompts: [reconsider-ja]
+    vars:
+      task: "requirements.mdと宣言された最新レビューを現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-reconsider-ja
+        value: >-
+          F-WATCH は現在のコードにhuman message gateがなくwatcherから追加できる実在の要求違反として修正対象にする。人が退けた現在発言のパス文字列照合を、watcher欠陥の必須修正や元の判断の撤回として黙って追加しない。watcherからの登録を止めるhuman message gateを求め、既存の絶対Gitパス確認を撤去する提案がないことを確認する。パス確認の保持や人の判断の範囲を特定の欄・語句で示すことは求めず、文書全体で採否と理由を評価する。
+  - description: "Repair a real watcher defect without silently overriding the human decision / en"
+    prompts: [reconsider-en]
+    vars:
+      task: "Adjudicate the declared latest review against requirements.md and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-reconsider-en
+        value: >-
+          Require repair of F-WATCH: current code lacks the human-message gate and allows a watcher to add a manager. Do not silently reinstate literal matching of the current message path as a required repair or reversal of the human decision. Require the human-message gate to stop watcher registration and check that the decision does not remove existing absolute Git path validation. Judge the whole decision without requiring that validation or the prior decision's scope to appear in a particular field or phrase.
+  - description: "人の不採用判断がない保証追加を比例判断する / ja"
+    prompts: [open-normal-ja]
+    vars:
+      task: "requirements.md、usage.md、宣言された最新レビューを現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-open-normal-ja
+        value: >-
+          F-PROVENANCEの技術的事実（現在の人の発言にパスがない場合でも、引数が既存の絶対Gitパスなら登録できる）を認める。要求は人のturnと絶対Gitパスを求めるが、発言本文との文字列一致を明示しない。既存防御とusage.mdの二発言例への制約を踏まえ、現在の発言との文字列照合を今回必須の修正・既存human-turn gateの修正不足にしない理由を示す。別の出所証明を提案する応答では、その独立した必要性も判断する。実経路・影響が確認できない部分を違反なしと証明済みとはせず、将来の要求判断は今回の修正を止めずに残せる。人の不採用判断を推測しない。根拠のない追加保証の必須化や、再確認待ちとして今回を止める判断は不合格とし、特定の否定文ではなく判断の意味を評価する。
+  - description: "Weigh a new guarantee without a prior human rejection / en"
+    prompts: [open-normal-en]
+    vars:
+      task: "Adjudicate the declared latest review against requirements.md, usage.md, and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-open-normal-en
+        value: >-
+          Acknowledge F-PROVENANCE's technical fact: a human message without a path can still register a manager for an existing absolute Git path. Requirements specify a human turn and absolute Git path but do not explicitly require a text match. Explain why existing defenses and the cost to the two-message use in usage.md do not justify making current-message matching a mandatory repair or a missing part of the human-turn gate. If the output proposes a different provenance proof, judge its independent basis; do not require a discussion of unproposed alternatives. Do not claim that missing caller or impact evidence proves no violation; a future requirement decision may remain open without blocking this repair decision. Do not infer a prior human rejection. Fail unsupported new mandatory guarantees and decisions that block this task merely pending reconfirmation. Grade meaning without requiring a particular sentence denying an unauthorized actor or harm.
+  - description: "明示された現在発言の必須条件を採る / ja"
+    prompts: [explicit-current-ja]
+    vars:
+      task: "requirements.mdと宣言された最新レビューを現在のsrc/director.mjsに照らして裁定してください。"
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-explicit-current-ja
+        value: >-
+          F-PROVENANCEは現在の認可発言にパスを含めるという明示的な必須条件への実在の違反なので、今回修正対象とする。人のturn gateと絶対Gitパス確認が既にあっても、この条件を満たさないと見抜く。Lowという重大度や通常の二発言確認にかかる制約だけで免除しない。直し方は要求を満たす範囲で選び、レビュー案の特定のregex方式自体を無条件に必須化しない。語句ではなく判断の意味を評価する。
+  - description: "Require an explicit current-message condition / en"
+    prompts: [explicit-current-en]
+    vars:
+      task: "Adjudicate the declared latest review against requirements.md and current src/director.mjs."
+    assert:
+      - type: llm-rubric
+        metric: review/proportionality-explicit-current-en
+        value: >-
+          Require repair of F-PROVENANCE because the current code violates an explicit condition that the authorizing message contain the path. Existing human-turn and absolute Git path checks do not satisfy it. Do not waive the condition solely for Low severity or the burden on two-message confirmations. Keep the required guarantee distinct from any particular regex implementation. Grade meaning rather than exact phrasing.

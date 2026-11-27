@@ -328,6 +328,52 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('readonlyPermissionBase is resolved with normal provider-option precedence', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'codex.readonlyPermissionBase' ? 'env' : 'local'),
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'config-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'step-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'persona-base' } }),
+      'codex',
+    )).toEqual({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'config-base' },
+    });
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'config-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'step-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'persona-base' } }),
+      'codex',
+    )).toEqual({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'step-base' },
+    });
+    expect(mergeProviderOptions(
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'global-base' } }),
+      asProviderOptions({ codex: { readonlyPermissionBase: 'project-base' } }),
+    )).toEqual({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'project-base' } });
+  });
+
+  it('rejects readonlyPermissionBase without permission_control codex', () => {
+    expect(() => resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ codex: { permissionControl: 'takt', readonlyPermissionBase: 'takt-review-p2' } }),
+      undefined,
+      undefined,
+      'codex',
+    )).toThrow(/readonly_permission_base.*permission_control/);
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      asProviderOptions({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' } }),
+      undefined,
+      undefined,
+      'codex',
+    )).toEqual({ codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' } });
+  });
+
   it.each([true, false])(
     'keeps permissionControl=codex with networkAccess=%s across merge and effective resolution',
     (networkAccess) => {
@@ -685,6 +731,98 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('kiro.effort は step > persona > config の優先で解決される', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      { kiro: { effort: 'high' } },
+      { kiro: { effort: 'medium' } },
+    )).toEqual({
+      kiro: { effort: 'high' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      undefined,
+      { kiro: { effort: 'medium' } },
+    )).toEqual({
+      kiro: { effort: 'medium' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      undefined,
+      undefined,
+    )).toEqual({
+      kiro: { effort: 'low' },
+    });
+
+    // Given kiro effort on step, When resolve, Then source is step
+    expect(resolveProviderOptionSource(
+      'kiro.effort',
+      { kiro: { effort: 'high' } },
+      [],
+      { kiro: { effort: 'low' } },
+      undefined,
+      'project',
+    )).toBe('step');
+  });
+
+  it('kiro.effort のみ指定でも結果は undefined にならない', () => {
+    const result = resolveEffectiveProviderOptions(
+      'global',
+      undefined,
+      { kiro: { effort: 'low' } },
+      { kiro: { effort: 'high' } },
+    );
+
+    expect(result).toBeDefined();
+    expect(result?.kiro).toEqual({ effort: 'high' });
+  });
+
+  it('devin.guards.callTimeoutMs は step が config より優先され結果に出る', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    );
+
+    expect(result).toEqual({
+      devin: { guards: { callTimeoutMs: 240_000 } },
+    });
+  });
+
+  it('env origin は devin.guards.callTimeoutMs の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'devin.guards.callTimeoutMs' ? 'env' : 'local'),
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    );
+
+    expect(result).toEqual({
+      devin: { guards: { callTimeoutMs: 120_000 } },
+    });
+  });
+
+  it('mergeProviderOptions は devin.guards を leaf 単位でマージする', () => {
+    expect(mergeProviderOptions(
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    )?.devin?.guards).toEqual({ callTimeoutMs: 240_000 });
+
+    expect(mergeProviderOptions(
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      {},
+    )?.devin?.guards).toEqual({ callTimeoutMs: 120_000 });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -841,6 +979,50 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
           excludedCommands: ['./gradlew'],
         },
       },
+    });
+  });
+
+  it.each(['claude', 'claude-headless'] as const)(
+    '%s part で part_allowed_tools を渡しても claude.permissions の両 leaf を維持し claude.allowedTools だけ除去する',
+    (provider) => {
+      const result = resolveEffectiveTeamLeaderPartProviderOptions(
+        'project',
+        undefined,
+        { claude: { permissions: { importUserReadDeny: false } } },
+        {
+          claude: {
+            allowedTools: ['Read', 'Edit'],
+            permissions: { deny: ['Read(./.env)'] },
+          },
+        },
+        provider,
+        ['Read', 'Edit'],
+      );
+
+      expect(result).toEqual({
+        claude: {
+          permissions: { deny: ['Read(./.env)'], importUserReadDeny: false },
+        },
+      });
+    },
+  );
+
+  it('Claude の allowedTools を扱わない provider の part でも claude.permissions と他 provider のキーを維持する', () => {
+    const result = resolveEffectiveTeamLeaderPartProviderOptions(
+      'project',
+      undefined,
+      {
+        opencode: { networkAccess: false },
+        claude: { permissions: { deny: ['Read(./.env)'] } },
+      },
+      undefined,
+      'opencode',
+      undefined,
+    );
+
+    expect(result).toEqual({
+      opencode: { networkAccess: false },
+      claude: { permissions: { deny: ['Read(./.env)'] } },
     });
   });
 });
@@ -1095,6 +1277,22 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.codex.config_profile');
   });
 
+  it('tracks Codex readonly permission base through env, trace, internal, and present-path contracts', () => {
+    expect(PROVIDER_OPTIONS_ENV_SPECS).toContainEqual({
+      path: 'provider_options.codex.readonly_permission_base',
+      type: 'string',
+    });
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.readonly_permission_base');
+    expect(toProviderOptionsTracePath('codex.readonlyPermissionBase'))
+      .toBe('provider_options.codex.readonly_permission_base');
+    expect(getPresentProviderOptionPaths(asProviderOptions({
+      codex: { readonlyPermissionBase: 'takt-review-p2' },
+    }))).toContain('codex.readonlyPermissionBase');
+    expect(getPresentProviderOptionPaths(asProviderOptions({
+      codex: { readonlyPermissionBase: undefined },
+    }))).not.toContain('codex.readonlyPermissionBase');
+  });
+
   it('resolves Codex config profile with the same layer precedence as other leaves', () => {
     const resolved = resolveEffectiveProviderOptions(
       'project',
@@ -1130,6 +1328,25 @@ describe('providerOptionsContract', () => {
       .toMatchObject({ 'codex.configProfile': 'env' });
   });
 
+  it('reports Codex readonly permission base origin and source', () => {
+    const options = asProviderOptions({
+      codex: { permissionControl: 'codex', readonlyPermissionBase: 'takt-review-p2' },
+    });
+    const resolver = (path: string) => (path === 'codex.readonlyPermissionBase' ? 'env' : 'local');
+
+    expect(resolveProviderOptionOrigin(resolver, 'codex.readonlyPermissionBase', 'project')).toBe('env');
+    expect(resolveProviderOptionSource(
+      'codex.readonlyPermissionBase',
+      undefined,
+      [],
+      options,
+      resolver,
+      'project',
+    )).toBe('env');
+    expect(resolveProviderOptionsSources(undefined, [], options, resolver, 'project'))
+      .toMatchObject({ 'codex.readonlyPermissionBase': 'env' });
+  });
+
   it('provider_options contract paths stay aligned across env and trace definitions', () => {
     const envPaths = new Set(PROVIDER_OPTIONS_ENV_SPECS.map((spec) => spec.path));
 
@@ -1145,6 +1362,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.network_access',
       'provider_options.codex.permission_control',
       'provider_options.codex.config_profile',
+      'provider_options.codex.readonly_permission_base',
       'provider_options.codex.reasoning_effort',
       'provider_options.codex.guards.call_timeout_ms',
       'provider_options.codex.skills.repo',
@@ -1165,6 +1383,8 @@ describe('providerOptionsContract', () => {
       'provider_options.claude.skills.enabled',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
+      'provider_options.claude.permissions.deny',
+      'provider_options.claude.permissions.import_user_read_deny',
       'provider_options.claude_terminal.backend',
       'provider_options.claude_terminal.guards.call_timeout_ms',
       'provider_options.claude_terminal.timeout_ms',
@@ -1173,6 +1393,7 @@ describe('providerOptionsContract', () => {
       'provider_options.copilot.effort',
       'provider_options.copilot.guards.call_timeout_ms',
       'provider_options.kiro.agent',
+      'provider_options.kiro.effort',
       'provider_options.kiro.guards.call_timeout_ms',
       'provider_options.cursor.guards.call_timeout_ms',
       'provider_options.deepseek_harness.base_url',
@@ -1180,6 +1401,8 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.request_timeout_ms',
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.reasoning_effort',
+      'provider_options.deepseek_harness.plugins',
+      'provider_options.devin.guards.call_timeout_ms',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
       'provider_options.pi.system_prompt_mode',
@@ -1197,6 +1420,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.permission_control');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.readonly_permission_base');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
@@ -1212,11 +1436,14 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.plugins');
+    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.deepseek_harness.plugins');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
@@ -1230,6 +1457,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.base_url',
       'provider_options.claude.base_url',
       'provider_options.deepseek_harness.base_url',
+      'provider_options.deepseek_harness.plugins',
     ]);
   });
 
@@ -1278,6 +1506,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.deepseek_harness.request_timeout_ms');
     expect(toProviderOptionsTracePath('deepseekHarness.reasoningEffort'))
       .toBe('provider_options.deepseek_harness.reasoning_effort');
+    expect(toProviderOptionsTracePath('deepseekHarness.plugins'))
+      .toBe('provider_options.deepseek_harness.plugins');
     expect(toProviderOptionsTracePath('pi.extensions'))
       .toBe('provider_options.pi.extensions');
     expect(toProviderOptionsTracePath('pi.thinkingLevel'))
@@ -1352,6 +1582,12 @@ describe('providerOptionsContract', () => {
     expect(getPresentProviderOptionPaths({
       deepseekHarness: { reasoningEffort: 'max' },
     } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual(['deepseekHarness.reasoningEffort']);
+  });
+
+  it('enumerates DeepSeek plugin configuration as one tracked option', () => {
+    expect(getPresentProviderOptionPaths({ deepseekHarness: {
+      plugins: [{ id: 'trusted', source: 'https://example.test/plugin.git' }],
+    } })).toEqual(['deepseekHarness.plugins']);
   });
 
   it('enumerates kiro.agent when present', () => {

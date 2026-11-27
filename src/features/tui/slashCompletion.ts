@@ -1,6 +1,6 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { filterSlashCommands, type CommandAvailability } from '../interactive/slashCommandRegistry.js';
+import { filterSlashCommands, type CommandAvailability, type SlashCommandDefinition } from '../interactive/slashCommandRegistry.js';
 
 /**
  * What the plain conversation offers when the mode names no list of its own.
@@ -26,7 +26,7 @@ const TUI_ENABLED_COMMANDS: readonly SlashCommand[] = [
 ];
 
 export interface SlashCompletion {
-  readonly command: SlashCommand;
+  readonly command: string;
   readonly description: string;
 }
 
@@ -34,6 +34,7 @@ export function resolveSlashCompletions(
   draft: string,
   lang: 'en' | 'ja',
   availability: CommandAvailability,
+  definitions?: readonly SlashCommandDefinition[],
 ): readonly SlashCompletion[] {
   if (!draft.startsWith('/') || draft.includes(' ')) {
     return [];
@@ -42,8 +43,8 @@ export function resolveSlashCompletions(
   // list must not offer one the conversation would then refuse to run.
   return filterSlashCommands(draft, {
     ...availability,
-    enabledCommands: availability.enabledCommands ?? TUI_ENABLED_COMMANDS,
-  }).map((entry) => ({
+    ...(definitions === undefined ? { enabledCommands: availability.enabledCommands ?? TUI_ENABLED_COMMANDS } : {}),
+  }, definitions).map((entry) => ({
     command: entry.command,
     description: getLabel(entry.labelKey, lang),
   }));

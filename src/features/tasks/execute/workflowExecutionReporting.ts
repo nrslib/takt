@@ -2,10 +2,6 @@ import { readFileSync } from 'node:fs';
 import type { ProviderUsageSnapshot } from '../../../core/models/response.js';
 import type { UsageEventLogContext } from '../../../core/logging/usageEventLogger.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
-import {
-  saveSessionState,
-  type SessionState,
-} from '../../../infra/config/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { notifyError, notifySuccess } from '../../../shared/utils/index.js';
 import {
@@ -16,19 +12,14 @@ import {
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import { createOutputFns } from './outputFns.js';
-import { formatElapsedTime, truncate } from './workflowExecutionUtils.js';
+import { formatElapsedTime } from './workflowExecutionUtils.js';
 
 export interface WorkflowSessionFinalization {
   readonly sessionLog: SessionLog;
-  readonly sessionState: SessionState;
 }
 
 export function buildWorkflowSuccessSessionFinalization(input: {
   readonly sessionLog: SessionLog;
-  readonly task: string;
-  readonly workflowName: string;
-  readonly lastStepContent: string | undefined;
-  readonly lastStepName: string | undefined;
   readonly endTime: string;
 }): WorkflowSessionFinalization {
   return {
@@ -37,32 +28,11 @@ export function buildWorkflowSuccessSessionFinalization(input: {
       status: 'completed' as const,
       endTime: input.endTime,
     },
-    sessionState: {
-      status: 'success',
-      taskResult: truncate(input.lastStepContent ?? '', 1000),
-      timestamp: input.endTime,
-      workflowName: input.workflowName,
-      taskContent: truncate(input.task, 200),
-      lastStep: input.lastStepName,
-    },
   };
-}
-
-export function persistWorkflowSessionState(
-  projectCwd: string,
-  publicationId: string,
-  sessionState: SessionState,
-  sessionStorageDirectory?: string,
-): void {
-  saveSessionState(projectCwd, publicationId, sessionState, sessionStorageDirectory);
 }
 
 export function buildWorkflowAbortSessionFinalization(input: {
   readonly sessionLog: SessionLog;
-  readonly reason: string;
-  readonly task: string;
-  readonly workflowName: string;
-  readonly lastStepName: string | undefined;
   readonly endTime: string;
 }): WorkflowSessionFinalization {
   return {
@@ -70,14 +40,6 @@ export function buildWorkflowAbortSessionFinalization(input: {
       ...input.sessionLog,
       status: 'aborted' as const,
       endTime: input.endTime,
-    },
-    sessionState: {
-      status: input.reason === 'user_interrupted' ? 'user_stopped' : 'error',
-      errorMessage: input.reason,
-      timestamp: input.endTime,
-      workflowName: input.workflowName,
-      taskContent: truncate(input.task, 200),
-      lastStep: input.lastStepName,
     },
   };
 }

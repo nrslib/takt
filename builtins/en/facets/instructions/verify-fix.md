@@ -1,6 +1,14 @@
 Independently verify whether the implementation fulfills the fix plan. Do not edit source files or perform a new full review.
 
+If you find a past action that departed from the instructed way of working, check the following.
+
+- Do its results remain in current artifacts or external state?
+- Does the evidence used to establish that acceptance criteria are met come from checking current code under the specified conditions?
+
+Record the results in the report before deciding.
+
 **Reports to inspect:**
+- Review decision: {report:review-resolution.md}
 - Fix plan: {report:fix-plan.md}
 - Fix report: {report:fix-report.md}
 
@@ -10,14 +18,16 @@ Independently verify whether the implementation fulfills the fix plan. Do not ed
 
 Inspect independently needed reports, sources of truth, and direct call paths together in the same evidence pass where possible. This sets only the inspection order and is not a reason to broaden the scope. Do not serialize reads or searches that are independent of one another behind progress updates, and do not continue checking for absent optional history or tests that are unnecessary for the decision. Once the required evidence is available, return the output-contract result; do not end the response with progress updates only.
 
+Reconcile the selected and implemented methods. Record the treatment of the shared cause, required success and failure outcomes, and corresponding current evidence. Distinguish old-plan verification approaches superseded by the latest instructions from the original acceptance criteria.
+
 **Verification procedure:**
-1. Inspect the latest reviewer reports in the Report Directory to confirm the problems, invariants, acceptance criteria, and boundaries from adjacent problems covered by the plan
+1. Use the supplied review decision to confirm the problems, invariants, acceptance criteria, and boundaries from adjacent problems covered by the plan
 2. Do not use the fix report as an answer key. Follow the repair-path verification above and finalize the comparison between the authoritative-source-derived states and paths and the plan
 3. For each derived target, map the invariant to its affected path and a counterexample that breaks it, then judge completion separately for each mapped obligation. Compare behavior correction, consumer migration, obsolete-path removal, and existing-contract preservation separately with the current code and diff
-4. For every obligation, trace failure cases, boundaries, and opposite-direction counterexamples as well as success cases from the current code and recorded evidence. Do not stop at the first gap; apply the same detection pattern across every fix unit closed with the same assumption or search method
+4. For every obligation, select failure cases, boundaries, and opposite-direction counterexamples as well as success cases from the scope specified in “Scope of inputs used for counterexamples” above, and trace them through the current code and recorded evidence. Do not stop at the first gap; apply the same detection pattern across every fix unit closed with the same assumption or search method
 5. Decide static obligations from code comparison, and compare runtime behavior against the current code and the provided reports, logs, and recorded results. Identify which existing observation point would detect each broken obligation; do not rely only on a broad test-suite pass or the repair report's self-assessment. Mark any unrecorded range as unverified, but do not treat the absence alone as a reason to mark the work incomplete or require another fix
 6. Inspect only the quality gates recorded in the repair report. Do not require additional gates that are not recorded there
 7. Reconcile the plan and repair report's invariants. Then update and carry them forward according to the output contract
-8. Distinguish implementation or evidence gaps from deficiencies in the plan's assumptions, repair boundary, method, or verification capability. Separate an item as environmental follow-up only when the current code and recorded evidence establish that it is not an implementation defect
+8. Distinguish implementation or evidence gaps from deficiencies in the plan's assumptions, repair boundary, method, or verification capability. Before recording a counterexample as a gap, check the applicable item in “Scope of inputs used for counterexamples” above and the location of supporting documentation, code, or records. Separate an item as environmental follow-up only when the current code and recorded evidence establish that it is not an implementation defect
 
 Follow the output contract for the result classification and required fields. Independently compare all source-backed completion obligations and acceptance criteria, and report success when no established gap remains. Keep ranges without optional execution records explicitly unverified and separate from successful evidence. For any gap, list its basis and explain why the repair report's evidence did not detect it.

@@ -1,6 +1,6 @@
-import { UserConfig } from 'vitest/config';
+import type { TestUserConfig } from 'vitest/config';
 
-export const e2eBaseTestConfig: UserConfig['test'] = {
+export const e2eBaseTestConfig: TestUserConfig = {
   environment: 'node',
   globals: false,
   testTimeout: 240000,
@@ -8,10 +8,6 @@ export const e2eBaseTestConfig: UserConfig['test'] = {
   teardownTimeout: 30000,
   forceExit: true,
   pool: 'threads',
-  poolOptions: {
-    threads: {
-      singleThread: true,
-    },
-  },
+  maxWorkers: 1,
   reporters: ['verbose', 'json'],
 };

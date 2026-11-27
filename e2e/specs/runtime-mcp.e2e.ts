@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync, r
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env';
-import { runTakt } from '../helpers/takt-runner';
-import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
-import { cleanupResources } from '../helpers/cleanup';
+import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env.js';
+import { runTakt } from '../helpers/takt-runner.js';
+import { createLocalRepo, type LocalRepo } from '../helpers/test-repo.js';
+import { cleanupResources } from '../helpers/cleanup.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -58,8 +58,8 @@ const ECHO_SERVER_SOURCE = [
 ].join('\n');
 
 describe('E2E: runtime MCP assignment (mock, MCP-E2E)', () => {
-  let isolatedEnv: IsolatedEnv | undefined;
-  let repo: LocalRepo | undefined;
+  let isolatedEnv: IsolatedEnv;
+  let repo: LocalRepo;
   let fixtureDir: string;
 
   beforeEach(() => {
@@ -101,6 +101,62 @@ describe('E2E: runtime MCP assignment (mock, MCP-E2E)', () => {
       firstError ??= e;
     }
     if (firstError !== undefined) throw firstError;
+  });
+
+  it.each([true, false])('handles provider header references before workflow startup (defined=%s)', (defined) => {
+    const serverPath = join(fixtureDir, 'echo-server.js');
+    writeFileSync(serverPath, ECHO_SERVER_SOURCE, 'utf8');
+    mkdirSync(join(repo!.path, '.takt'), { recursive: true });
+    writeFileSync(join(repo!.path, '.takt', 'runtime.yaml'), [
+      'version: 1', 'mcp:', '  servers:',
+      '    datadog:', '      type: http', '      url: http://127.0.0.1:1/mcp',
+      '      headers:', '        Authorization: "Bearer ${env:MCP_HEADER_E2E}"',
+      '    echo:', '      command: node', `      args: [${JSON.stringify(serverPath)}]`,
+      '  defaults:', '    servers: [datadog, echo]',
+    ].join('\n'));
+    const workflowPath = join(repo!.path, 'header-workflow.yaml');
+    writeFileSync(workflowPath, [
+      'name: header-workflow', 'max_steps: 3', 'initial_step: first', 'steps:',
+      '  - name: first', '    edit: false', '    persona: agents/test-coder.md',
+      '    instruction: First task', '    rules:', '      - condition: First finished', '        next: second',
+      '  - name: second', '    edit: false', '    persona: agents/test-coder.md',
+      '    instruction: Second task', '    rules:', '      - condition: Second finished', '        next: COMPLETE',
+    ].join('\n'));
+    const scenarioPath = join(repo!.path, 'header-scenario.json');
+    writeFileSync(scenarioPath, JSON.stringify([
+      { status: 'done', content: 'First finished' }, { status: 'done', content: 'Second finished' },
+    ]));
+    const logPath = join(repo!.path, 'header-calls.ndjson');
+    const result = runTakt({
+      args: ['--provider', 'mock', '--task', 'Exercise runtime headers', '--workflow', workflowPath],
+      cwd: repo!.path, env: {
+        ...isolatedEnv!.env, MCP_HEADER_E2E: defined ? 'synthetic-header-e2e-value' : undefined,
+        TAKT_MOCK_SCENARIO: scenarioPath, TAKT_MOCK_CALL_LOG: logPath,
+      },
+    });
+    const output = result.stdout + result.stderr;
+    if (!defined) {
+      expect(result.exitCode).not.toBe(0);
+      expect(output).toContain('MCP_HEADER_E2E');
+      expect(existsSync(logPath)).toBe(false);
+      expect(output).not.toContain('excluded MCP server');
+      return;
+    }
+    expect(result.exitCode, output).toBe(0);
+    expect(output).toContain('Second finished');
+    expect(output).toContain('datadog');
+    expect(output).toContain('excluded MCP server');
+    expect(output).not.toContain('synthetic-header-e2e-value');
+    const events = readFileSync(logPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const calls = events.filter((entry) => entry.event === 'start');
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect(call.mcpServers).toEqual({ echo: { transport: 'stdio' } });
+    const toolCalls = events.filter((entry) => entry.event === 'mcp_tool_call');
+    expect(toolCalls).toHaveLength(2);
+    for (const call of toolCalls) expect(call.mcpToolCall).toEqual({
+      server: 'echo', transport: 'stdio', tool: 'echo_nonce',
+      result: 'NONCE:fixed-test-nonce', nonce: 'fixed-test-nonce',
+    });
   });
 
   it('should run a minimal workflow that calls the fixture MCP tool and emit the known nonce in the final output (mock)', () => {

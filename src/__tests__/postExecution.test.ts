@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildPrBody as buildActualPrBody, TAKT_MANAGED_PR_MARKER } from '../infra/git/format.js';
 import type { Issue } from '../infra/git/index.js';
+import { GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
 
 const {
   mockAutoCommitAndPush,
@@ -20,7 +21,8 @@ const {
   mockStripTaktManagedPrMarker,
   mockReadPrivateFileState,
   mockWritePrivateFile,
-  mockRunLinkedCacciaSafely,
+  mockRunCaccia,
+  mockRunLinkedMergeSafely,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -35,7 +37,8 @@ const {
     mockCreatePullRequestSafely: vi.fn(),
     mockReadPrivateFileState: vi.fn(),
     mockWritePrivateFile: vi.fn(),
-    mockRunLinkedCacciaSafely: vi.fn(),
+    mockRunCaccia: vi.fn(),
+    mockRunLinkedMergeSafely: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
@@ -48,8 +51,19 @@ vi.mock('../shared/utils/private-file.js', () => ({
   writePrivateFile: (...args: unknown[]) => mockWritePrivateFile(...args),
 }));
 
-vi.mock('../features/caccia/index.js', () => ({
-  runLinkedCacciaSafely: (...args: unknown[]) => mockRunLinkedCacciaSafely(...args),
+vi.mock('../features/caccia/index.js', async (original) => ({
+  ...await original<typeof import('../features/caccia/index.js')>(),
+  runCaccia: (...args: unknown[]) => mockRunCaccia(...args),
+}));
+
+vi.mock('../features/merge/index.js', async (original) => ({
+  ...await original<typeof import('../features/merge/index.js')>(),
+  runLinkedMergeSafely: (...args: unknown[]) => mockRunLinkedMergeSafely(...args),
+}));
+
+vi.mock('../infra/config/index.js', async (original) => ({
+  ...await original<typeof import('../infra/config/index.js')>(),
+  resolveConfigValue: (_cwd: string, key: string) => key === 'caccia' ? { enabled: false } : undefined,
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -109,6 +123,7 @@ const baseOptions = {
   shouldCreatePr: true,
   draftPr: false,
   workflowIdentifier: 'default',
+  workflowHasCaccia: false,
 };
 
 const mockInfo = vi.mocked(info);
@@ -124,8 +139,9 @@ function createDeferred() {
 describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRunLinkedCacciaSafely.mockReset();
-    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
+    mockRunCaccia.mockReset();
+    mockRunLinkedMergeSafely.mockReset();
+    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0') });
     mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
@@ -158,6 +174,94 @@ describe('postExecutionFlow', () => {
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, expect.any(String), undefined);
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('stops before publishing when the goal is aborted during commit (createPr=%s)', async (shouldCreatePr) => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const controller = new AbortController();
+    const reason = new GoalAbortedError(goalId);
+    const committed = createDeferred();
+    mockAutoCommitAndPush.mockImplementationOnce(async () => {
+      await committed.promise;
+      return { success: true, commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0') };
+    });
+
+    const execution = postExecutionFlow({
+      ...baseOptions, goalId, shouldCreatePr, shouldPublishBranchToOrigin: true, abortSignal: controller.signal,
+    });
+    const rejected = expect(execution).rejects.toBe(reason);
+    controller.abort(reason);
+    committed.resolve();
+    await rejected;
+
+    expect(mockAutoCommitAndPush).toHaveBeenCalledExactlyOnceWith('/clone', baseOptions.task, '/project', baseOptions.branch);
+    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
+    expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('stops before PR lookup when the goal is aborted during push (existingPr=%s)', async (existing) => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const controller = new AbortController();
+    const reason = new GoalAbortedError(goalId);
+    mockFindExistingPr.mockReturnValue(existing ? { number: 1, url: 'https://github.com/org/repo/pull/1' } : undefined);
+    mockPushBranch.mockImplementationOnce(() => controller.abort(reason));
+
+    await expect(postExecutionFlow({ ...baseOptions, goalId, abortSignal: controller.signal })).rejects.toBe(reason);
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('stops before PR mutation when the goal is aborted during lookup (existingPr=%s)', async (existing) => {
+    const goalId = '550e8400-e29b-41d4-a716-446655440000';
+    const controller = new AbortController();
+    const reason = new GoalAbortedError(goalId);
+    mockFindExistingPr.mockImplementationOnce(() => {
+      controller.abort(reason);
+      return existing ? { number: 1, url: 'https://github.com/org/repo/pull/1' } : undefined;
+    });
+
+    await expect(postExecutionFlow({ ...baseOptions, goalId, abortSignal: controller.signal })).rejects.toBe(reason);
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(mockFindExistingPr).toHaveBeenCalledExactlyOnceWith(baseOptions.branch, '/project');
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { existing: true, goalId: '550e8400-e29b-41d4-a716-446655440000' },
+    { existing: false, goalId: '550e8400-e29b-41d4-a716-446655440000' },
+    { existing: true, goalId: undefined },
+    { existing: false, goalId: undefined },
+  ])('preserves linked merge ownership after successful PR handling: %j', async ({ existing, goalId }) => {
+    const url = `https://github.com/org/repo/pull/${existing ? 42 : 1}`;
+    mockFindExistingPr.mockReturnValue(existing ? { number: 42, url } : undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url });
+    const options = { ...baseOptions, goalId };
+
+    const result = await postExecutionFlow(options);
+
+    expect(result).toEqual({ prUrl: url });
+    expect(mockRunCaccia).not.toHaveBeenCalled();
+    if (goalId !== undefined) {
+      expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
+    } else {
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }), undefined);
+    }
+  });
+
+  it('local taskの親名だけをlinked mergeへ引き継ぐ', async () => {
+    await postExecutionFlow({ ...baseOptions, parentTaskName: 'task-local' });
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project',
+      'https://github.com/org/repo/pull/1', undefined,
+      expect.objectContaining({ outputMode: 'terminal' }), 'task-local');
   });
 
   it('orderContent がある場合は buildPrBody に渡して新規PR本文を構築する', async () => {
@@ -235,11 +339,12 @@ describe('postExecutionFlow', () => {
     expect(commentBody).toBeTruthy();
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project',
       'https://github.com/org/repo/pull/42',
       undefined,
       expect.objectContaining({ outputMode: 'terminal' }),
+      undefined,
     );
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
@@ -298,13 +403,68 @@ describe('postExecutionFlow', () => {
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
-  it('commit がない場合は PR 関連処理をスキップする', async () => {
-    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: undefined });
+  it.each([undefined, 'abc123'])('公開した HEAD がない場合はコミットの有無によらず後続をスキップする (%s)', async (commitHash) => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash });
 
     await postExecutionFlow(baseOptions);
 
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockPushBranch).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('エージェントの公開済み HEAD で push と PR 処理へ進む (existingPr=%s)', async (existing) => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, publishedHead: 'a'.repeat(40) });
+    mockBuildPrBody.mockReturnValueOnce('pr-body');
+    mockFindExistingPr.mockReturnValue(existing ? { number: 42, url: 'https://github.com/org/repo/pull/42' } : undefined);
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(result.prUrl).toBe(`https://github.com/org/repo/pull/${existing ? 42 : 1}`);
+    if (existing) {
+      expect(mockCommentOnPr).toHaveBeenCalledExactlyOnceWith(42, 'pr-body', '/project');
+    } else {
+      expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+    }
+    expect(mockSuccess.mock.calls.map(([message]) => message)).toEqual([
+      existing ? 'PR updated with comment: https://github.com/org/repo/pull/42' : 'PR created: https://github.com/org/repo/pull/1',
+    ]);
+  });
+
+  it('エージェントの公開済み HEAD で PR を作らず origin push できる', async () => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, publishedHead: 'a'.repeat(40) });
+
+    expect(await postExecutionFlow({ ...baseOptions, shouldCreatePr: false, shouldPublishBranchToOrigin: true })).toEqual({});
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it('エージェントの公開済み HEAD を origin push 失敗時の表示に使う', async () => {
+    const publishedHead = 'b'.repeat(40);
+    mockAutoCommitAndPush.mockReturnValue({ success: true, publishedHead });
+    mockPushBranch.mockImplementationOnce(() => { throw new Error('push rejected'); });
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError?.split('\n').find((line) => line.startsWith('Commit:'))).toBe(`Commit: ${publishedHead}`);
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('エージェントの base 公開失敗を通常失敗として返す (createPr=%s)', async (shouldCreatePr) => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, localPushFailed: true, message: 'No changes to commit' });
+
+    const result = await postExecutionFlow({ ...baseOptions, shouldCreatePr, shouldPublishBranchToOrigin: true });
+
+    expect(result).toEqual({ taskFailed: true, taskError: 'Push to main repo failed after commit creation.' });
+    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('branch がない場合は PR 関連処理をスキップする', async () => {
@@ -364,11 +524,11 @@ describe('postExecutionFlow', () => {
     expect(mockSuccess).not.toHaveBeenCalled();
   });
 
-  it('ローカルpush失敗後も commitHash があれば（localPushFailed なし）PR 作成失敗を prFailed として返す', async () => {
+  it('公開した HEAD があれば PR 作成失敗を prFailed として返す', async () => {
     // relay push 済みのケースでは、PR 作成まで継続して失敗理由を返す。
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed locally; relay push succeeded',
     });
     mockFindExistingPr.mockReturnValue(undefined);
@@ -457,7 +617,7 @@ describe('postExecutionFlow', () => {
   it('auto_pr かつ shouldPublishBranchToOrigin では root branch を origin へ push して PR 作成へ進む', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockFindExistingPr.mockReturnValue(undefined);
@@ -476,7 +636,7 @@ describe('postExecutionFlow', () => {
   it('shouldPublishBranchToOrigin が true のとき root branch を origin へ push して完了できる', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
 
@@ -499,7 +659,7 @@ describe('postExecutionFlow', () => {
   it('shouldPublishBranchToOrigin が true でローカル push 成功時も root branch を origin へ push する', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
 
@@ -516,7 +676,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
   });
 
-  it('shouldPublishBranchToOrigin が true でコミットがない場合は origin push もしない', async () => {
+  it('shouldPublishBranchToOrigin が true で公開した HEAD がない場合は origin push もしない', async () => {
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: undefined });
 
     const options: PostExecutionOptions = {
@@ -533,7 +693,7 @@ describe('postExecutionFlow', () => {
   it('shouldPublishBranchToOrigin が true のとき origin push が失敗したら prFailed で prError に伝播する', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockPushBranch.mockImplementation(() => {
@@ -608,7 +768,7 @@ describe('postExecutionFlow', () => {
   it('shouldCreatePr が true かつ shouldPublishBranchToOrigin で origin push が失敗したら prFailed を返す', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockPushBranch.mockImplementation(() => {
@@ -639,7 +799,7 @@ describe('postExecutionFlow', () => {
 
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockPushBranch.mockImplementation(() => {
@@ -687,7 +847,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toContain('--repo is not supported with GitLab provider. Use cwd context instead.');
     expect(result.prUrl).toBeUndefined();
-    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
   });
 
   it('PRコメント失敗時に prFailed: true を返す', async () => {
@@ -699,7 +859,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toMatch(/\S/u);
     expect(result.prUrl).toBeUndefined();
-    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
   });
 
   it('outputMode が silent の場合は PR コメント失敗時も通常 UI ログを出力しない', async () => {
@@ -743,15 +903,16 @@ describe('postExecutionFlow', () => {
 
     expect(result.prFailed).toBeUndefined();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project',
       'https://github.com/org/repo/pull/1',
       undefined,
       expect.objectContaining({ outputMode: 'terminal' }),
+      undefined,
     );
   });
 
-  it('passes the task abort signal to linked Caccia after PR creation', async () => {
+  it('passes the task abort signal to linked merge after PR creation', async () => {
     const controller = new AbortController();
 
     await postExecutionFlow({
@@ -759,21 +920,22 @@ describe('postExecutionFlow', () => {
       abortSignal: controller.signal,
     });
 
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project',
       'https://github.com/org/repo/pull/1',
       controller.signal,
       expect.objectContaining({ outputMode: 'terminal' }),
+      undefined,
     );
   });
 
-  it.each(['created', 'updated'] as const)('passes the parent display to linked Caccia after a PR is %s and waits for completion', async (operation) => {
+  it.each(['created', 'updated'] as const)('passes the parent display to linked merge after a PR is %s and waits for completion', async (operation) => {
     const url = 'https://github.com/org/repo/pull/42';
     mockFindExistingPr.mockReturnValue(operation === 'updated' ? { number: 42, url } : undefined);
     mockCreatePullRequest.mockReturnValue({ success: true, url });
     const completion = createDeferred();
     const started = createDeferred();
-    mockRunLinkedCacciaSafely.mockImplementationOnce(() => {
+    mockRunLinkedMergeSafely.mockImplementationOnce(() => {
       started.resolve();
       return completion.promise;
     });
@@ -786,7 +948,8 @@ describe('postExecutionFlow', () => {
       await started.promise;
       expect(completed).toBe(false);
       expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining(url));
-      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith('/project', url, controller.signal, expect.objectContaining(display));
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith('/project', url, controller.signal, expect.objectContaining(display), undefined);
+      expect(mockRunCaccia).not.toHaveBeenCalled();
     } finally { completion.resolve(); await pending; }
     expect(await pending).toEqual({ prUrl: url });
     expect(completed).toBe(true);
@@ -805,9 +968,10 @@ describe('postExecutionFlow', () => {
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
     expect(mockSuccess).not.toHaveBeenCalled();
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project', 'https://github.com/org/repo/pull/1', undefined,
       expect.objectContaining({ outputMode: 'silent' }),
+      undefined,
     );
   });
 

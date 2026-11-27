@@ -2,6 +2,7 @@ import { executeStructuredAgent } from '../../../agents/structured-caller/transp
 import type { AgentResponse } from '../../models/types.js';
 import type { ProviderRoutingEntry } from '../../models/config-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import {
   executeCompanionStructuredAgent,
   type CompanionAgentPurpose,
@@ -29,6 +30,7 @@ export class CompanionStructuredCaller {
     readonly projectCwd: string;
     readonly failureDir: string;
     readonly language: 'en' | 'ja';
+    readonly workflowMeta?: RunAgentOptions['workflowMeta'];
     readonly abortSignal?: AbortSignal;
     readonly buildProviderCallCallbacks: CompanionProviderCallCallbacksBuilder;
     readonly recordUsage: (
@@ -97,7 +99,12 @@ export class CompanionStructuredCaller {
         const onActivity = providerCallbacks.onActivity;
         options.registerFinish(finish);
         try {
-          return await executeStructuredAgent(prompt, schema, {
+          const assignment = this.input.workflowMeta?.context?.assignment;
+          const instruction = assignment === undefined ? prompt : [
+            renderPhaseContext(assignment, 1, this.input.language),
+            prompt,
+          ].join('\n\n');
+          return await executeStructuredAgent(instruction, schema, {
             name: request.agentName,
             persona: request.agentName,
             cwd: options.cwd,
@@ -105,6 +112,8 @@ export class CompanionStructuredCaller {
             failureDir: options.failureDir,
             systemPrompt,
             language: this.input.language,
+            workflowMeta: this.input.workflowMeta,
+            executionPhase: 1,
             abortSignal: options.abortSignal,
             onStream: onStream === undefined
               ? undefined

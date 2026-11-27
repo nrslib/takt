@@ -1,0 +1,9 @@
+{
+  "name": "phase2-report-access-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test app.test.mjs",
+    "build": "node build.mjs"
+  }
+}

@@ -1,8 +1,12 @@
+import { resolveWorkflowCallTarget } from '../../infra/config/loaders/workflowCallResolver.js';
 import { error, success, warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { warnOnUnproducibleReportReferences } from './report-reference-validation.js';
-import { validateWorkflowConfig } from '../../core/workflow/engine/WorkflowValidator.js';
+import {
+  validateWorkflowConfig,
+  validateWorkflowReportInputContracts,
+} from '../../core/workflow/engine/WorkflowValidator.js';
 import {
   resolveWorkflowSelector,
   type SelectorProviderOverrides,
@@ -75,7 +79,11 @@ export function validateWorkflowRuntimeContract(
       autoRouting: env.autoRouting,
       providerRoutingTagConflictPolicy: env.tagConflictPolicy,
       ...(env.internalAgents === undefined ? {} : { internalAgentSeats: env.internalAgents }),
-      workflowCallResolver: () => null,
+      workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) => resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
+    });
+    validateWorkflowReportInputContracts(workflow, {
+      projectCwd: projectDir,
+      workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) => resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
     });
     warnOnUnproducibleReportReferences(report, workflow, target, projectDir, candidateCache);
     return {

@@ -69,6 +69,22 @@ interface WorkflowSystemBinding {
 
 export type WorkflowSystemInput =
   | (WorkflowSystemBinding & {
+    type: 'command';
+    command: string;
+    timeout_ms: number;
+    output?: 'json';
+  })
+  | (WorkflowSystemBinding & {
+    type: 'pr_status';
+    source: 'current_pr';
+    rerun_from?: WorkflowTemplateReference;
+  })
+  | (WorkflowSystemBinding & {
+    type: 'pr_ci_failure';
+    source: 'current_pr';
+    head_sha: WorkflowTemplateReference;
+  })
+  | (WorkflowSystemBinding & {
     type: 'task_context';
     source: 'current_task';
   })
@@ -143,6 +159,19 @@ export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
 
 export type WorkflowEffect =
   | {
+    type: 'rerun_ci';
+    pr: WorkflowEffectScalarReference;
+    failure: WorkflowTemplateReference;
+  }
+  | {
+    type: 'caccia';
+    pr: WorkflowEffectScalarReference;
+  }
+  | {
+    type: 'commit_and_push';
+    pr: WorkflowEffectScalarReference;
+  }
+  | {
     type: 'enqueue_task';
     mode: 'new' | 'from_pr';
     workflow: string;
@@ -157,6 +186,7 @@ export type WorkflowEffect =
     type: 'comment_pr';
     pr: WorkflowEffectScalarReference;
     body: string;
+    body_format?: 'plain_text';
   }
   | {
     type: 'sync_with_root';

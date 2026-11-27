@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 
 const builtinsRoot = join(dirname(fileURLToPath(import.meta.url)), '../builtins');
 
@@ -21,6 +21,7 @@ export default function buildRemediationEvidencePrompt({ vars }) {
   const facetsRoot = join(builtinsRoot, language, 'facets');
   const facet = path => readFacet(facetsRoot, path);
   const reports = {
+    'review-resolution.md': vars.review_decision ?? vars.task,
     'fix-plan.md': vars.fix_plan,
     'fix-report.md': vars.fix_report,
   };

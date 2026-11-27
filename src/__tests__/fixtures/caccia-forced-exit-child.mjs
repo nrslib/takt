@@ -33,7 +33,7 @@ if (
   || headSha === undefined
   || reportPath === undefined
   || timeoutMarkerPath === undefined
-  || (route !== 'worker-pool' && route !== 'standalone' && route !== 'pipeline')
+  || (route !== 'worker-pool' && route !== 'standalone' && route !== 'linked')
 ) {
   throw new Error('Caccia forced-exit child is missing fixture configuration');
 }
@@ -72,10 +72,14 @@ if (failFirstCleanup) {
 }
 
 const githubModule = pathToFileURL(join(sourceRoot, 'src/infra/github/pr.js')).href;
+const actualGithub = await import(pathToFileURL(join(sourceRoot, 'src/infra/github/pr.ts')).href);
 mock.module(githubModule, {
   namedExports: {
+    ...actualGithub,
     fetchCacciaPullRequestDetails: () => ({
       number: 42,
+      title: 'Apply review corrections',
+      body: 'Preserve the purpose of this PR.',
       headBranch: branch,
       headSha,
       headRepositoryUrl: remote,
@@ -112,23 +116,26 @@ mock.module(workflowModule, {
   },
 });
 
-const { runCaccia, runLinkedCacciaSafely } = await import(
+const { runCaccia, resolveCacciaSettings } = await import(
   pathToFileURL(join(sourceRoot, 'src/features/caccia/index.ts')).href
 );
 if (route === 'worker-pool') {
   const taskExecutionModule = pathToFileURL(join(sourceRoot, 'src/features/tasks/execute/runTaskExecution.js')).href;
+  const executeMockTask = async (_task, _taskRunner, _cwd, _taskExecutionOptions, workerContext) => {
+    workerContext.abortSignal.addEventListener('abort', () => {
+      reportGracefulStart();
+    }, { once: true });
+    await Promise.all(Array.from(
+      { length: cloneCount },
+      () => runCaccia({ entry: 'linked', projectCwd, prNumber: 42,
+        settings: resolveCacciaSettings({ enabled: true }), abortSignal: workerContext.abortSignal }),
+    ));
+    return true;
+  };
   mock.module(taskExecutionModule, {
     namedExports: {
-      executeRunTaskAndComplete: async (_task, _taskRunner, _cwd, _taskExecutionOptions, workerContext) => {
-        workerContext.abortSignal.addEventListener('abort', () => {
-          reportGracefulStart();
-        }, { once: true });
-        await Promise.all(Array.from(
-          { length: cloneCount },
-          () => runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42', workerContext.abortSignal),
-        ));
-        return true;
-      },
+      executeRunTaskAndComplete: executeMockTask,
+      executeRunTaskAndCompleteWithDetails: async (...args) => ({ success: await executeMockTask(...args) }),
     },
   });
 
@@ -171,6 +178,7 @@ if (route === 'worker-pool') {
       settings: { enabled: true, waitTimeoutMs: 1_000, maxIterations: 1, workflow: 'caccia' },
     });
   } else {
-    await runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42');
+    await runCaccia({ entry: 'linked', projectCwd, prNumber: 42,
+      settings: resolveCacciaSettings({ enabled: true }) });
   }
 }

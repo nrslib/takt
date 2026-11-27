@@ -156,6 +156,7 @@ function makeRunner(options: {
   const projectDir = options.projectDir ?? '/tmp/project';
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
       resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
@@ -165,6 +166,12 @@ function makeRunner(options: {
       prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
       prepareInstruction: vi.fn((step: WorkflowStep) => ({ text: `instruction:${step.name}`, injectedReports: [] })),
       emitStepReports: vi.fn(),
+      savePhase1ExecutionLog: vi.fn(async (_executionLog, stepName: string, stepIteration: number) => ({
+        path: `${projectDir}/.takt/runs/test/logs/phase1-execution/security-review.json`,
+        byteSize: 2,
+        stepName,
+        stepIteration,
+      })),
       persistPreviousResponseSnapshot: vi.fn(),
       completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({
         response: initialResponse,

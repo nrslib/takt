@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../core/models/index.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import { nowIso } from './naming.js';
@@ -14,6 +15,7 @@ export interface ResolvedTaskRetryMetadata {
 }
 
 export interface ExceededTaskRecordUpdates {
+  completion?: import('../goals/schema.js').GoalTaskResult;
   currentStep: string;
   newMaxSteps: number;
   currentIteration: number;
@@ -24,12 +26,12 @@ export interface ExceededTaskRecordUpdates {
 
 type TerminalTaskUpdates = Omit<
   Partial<TaskRecord>,
-  'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
+  'start_step' | 'resume_point' | 'source_resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
 type ClearedRetryTaskRecord = Omit<
   TaskRecord,
-  'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
+  'start_step' | 'resume_point' | 'source_resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
 interface RetryTaskRecordOptions {
@@ -37,19 +39,24 @@ interface RetryTaskRecordOptions {
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
+  runtimeAssignment?: string;
   taskDir?: string;
-  resumeSource: RunResumeSource;
+  resumeSource?: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
+  sourceResumePoint?: WorkflowResumePoint;
 }
 
 export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
   return {
     ...task,
     status: 'running',
+    execution_id: randomUUID(),
+    stop_request: undefined,
     started_at: nowIso(),
     owner_pid: process.pid,
     owner_start_time: getSelfTaskProcessIdentity()?.startTime ?? null,
     run_slug: undefined,
+    completion: undefined,
   };
 }
 
@@ -64,6 +71,7 @@ export function buildTerminalTaskRecord(
   return {
     ...nextTask,
     ...updates,
+    waiting_reason: undefined,
     owner_start_time: null,
     ...(nextRetryMetadata?.startStep ? { start_step: nextRetryMetadata.startStep } : {}),
     ...(nextRetryMetadata?.resumePoint ? { resume_point: nextRetryMetadata.resumePoint } : {}),
@@ -84,6 +92,7 @@ export function buildExceededTaskRecord(
     owner_pid: null,
     owner_start_time: null,
     failure: undefined,
+    ...(updates.completion === undefined ? {} : { completion: updates.completion }),
     start_step: updates.currentStep,
     exceeded_max_steps: updates.newMaxSteps,
     exceeded_current_iteration: updates.currentIteration,
@@ -115,21 +124,30 @@ export function buildRetryTaskRecord(
   return {
     ...baseTask,
     ...(options.workflow ? { workflow: options.workflow } : {}),
+    ...(options.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
     ...taskSpecSource,
     status,
+    worker_name: task.remote_assignment?.workerName,
+    remote_assignment: task.remote_assignment === undefined ? undefined : { ...task.remote_assignment,
+      retryReady: false, retryWaitUntil: undefined },
+    waiting_reason: undefined,
+    execution_id: status === 'running' ? randomUUID() : undefined,
+    stop_request: undefined,
     started_at: status === 'running' ? nowIso() : null,
     completed_at: null,
     owner_pid: status === 'running' ? process.pid : null,
     owner_start_time: status === 'running' ? getSelfTaskProcessIdentity()?.startTime ?? null : null,
     run_slug: undefined,
-    ...(options.resumeSource.sourceRunSlug
+    completion: undefined,
+    ...(options.resumeSource?.sourceRunSlug
       ? { source_run_slug: options.resumeSource.sourceRunSlug }
       : {}),
-    resume_mode: options.resumeSource.resumeMode,
+    resume_mode: options.resumeSource?.resumeMode,
     failure: undefined,
     start_step: options.startStep,
     retry_note: options.retryNote,
     resume_point: options.resumePoint,
+    source_resume_point: options.sourceResumePoint,
     ...(options.restartPoint === undefined
       ? {}
       : { [TASK_RESTART_POINT_KEY]: options.restartPoint }),
@@ -164,6 +182,7 @@ function clearRetryMetadata(task: TaskRecord): ClearedRetryTaskRecord {
   const retryMetadataKeys = new Set<string>([
     'start_step',
     'resume_point',
+    'source_resume_point',
     TASK_RESTART_POINT_KEY,
     'exceeded_current_iteration',
     'exceeded_max_steps',

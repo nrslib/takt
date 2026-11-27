@@ -12,6 +12,7 @@ import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
 import type { TaskReviewScope } from './review-scope.js';
 import type { InjectedReport, Phase1ReportInputs } from './instruction/prepared-instruction.js';
+import type { Phase1ExecutionLogReference } from './phase1-execution-log.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -29,6 +30,7 @@ export {
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
 export interface BasePhaseRunnerContext {
+  workflowMeta?: RunAgentOptions['workflowMeta'];
   /** Working directory (agent work dir, may be a clone) */
   cwd: string;
   /** Original workflow task. Phase 2 needs this even after a new-session retry. */
@@ -55,6 +57,7 @@ export interface BasePhaseRunnerContext {
   sanitizeObservabilityText?: (text: string) => string;
   /** Sanitizes report content before it crosses the report-file persistence boundary. */
   reportContentSanitizer?: (content: string) => string;
+  onReportPersisted?: (reportName: string, content: string) => void;
   /** Current workflow stack for observability span parity (phase/judge records) */
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */
@@ -104,6 +107,9 @@ export interface BasePhaseRunnerContext {
 }
 
 export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
+  lastStructuredOutput?: Record<string, unknown>;
+  /** Engine-managed reference to evidence from this execution of Phase 1. */
+  phase1ExecutionLog?: Phase1ExecutionLogReference;
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];
@@ -114,11 +120,11 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   /** Build resume options for a step */
   buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   /** Build options for report phase retry in a new session */
-  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   buildFallbackReportOptions: (
     step: WorkflowStep,
     failedPrimaryOptions: RunAgentOptions,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
   ) => RunAgentOptions | undefined;
   resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */
@@ -127,6 +133,8 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
 }
 
 export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
+  /** Original project directory used to resolve persona facets. */
+  projectCwd?: string;
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
   /** Run reports root used by the shared report resolver. */

@@ -1,3 +1,5 @@
+{{include:instructions/review-target-scope}}
+
 Start by identifying the observable contracts, boundaries, and responsible sources changed by the original requirements, plan, and cumulative diff.
 
 List the types, events, functions, configuration, and shared values in the review target. Trace each definition through its references, actual entry points, consumers, and final results in the code. Finding one problem is not a reason to leave another part of the same change unchecked. Expand the search only when ownership is unclear, a new trust boundary, shared state, or external contract is involved, or evidence disproves an assumption.

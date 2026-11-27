@@ -13,6 +13,8 @@ import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 import type { SkillPermissionHandler } from '../core/workflow/types.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 import { confirmWithCancel } from '../shared/prompt/confirm.js';
 
 const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
@@ -59,9 +61,13 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
           | ((request: { currentIteration: number; maxSteps: number; currentStep: string }) => Promise<number | null>)
           | undefined;
         if (onIterationLimit) {
+          const maxSteps = this.config.maxSteps;
+          if (typeof maxSteps !== 'number') {
+            throw new Error('Iteration-limit fixture requires a numeric maxSteps');
+          }
           await onIterationLimit({
             currentIteration: MockWorkflowEngine.iterationLimitCurrentIteration,
-            maxSteps: this.config.maxSteps,
+            maxSteps,
             currentStep: MockWorkflowEngine.iterationLimitCurrentStep,
           });
         }
@@ -80,7 +86,9 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
         };
       }
       if (firstStep) {
-        this.emit('step:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined });
+        this.emit('step:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined },
+          this.config.name, firstStep.name, 1,
+          [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -134,6 +142,7 @@ vi.mock('../infra/claude/query-manager.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
+  resolveProviderOptionsWithTrace: vi.fn(() => ({ value: undefined, source: 'default', originResolver: undefined })),
   loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
@@ -150,7 +159,6 @@ vi.mock('../infra/config/index.js', () => ({
     logging: undefined,
     observability: disabledObservability,
   }),
-  saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
 }));
@@ -174,10 +182,12 @@ vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn().mockReturnValue(vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn().mockReturnValue(vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../infra/fs/index.js', () => ({
@@ -510,3 +520,7 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     );
   });
 });
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));

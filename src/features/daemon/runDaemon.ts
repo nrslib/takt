@@ -1,0 +1,345 @@
+import { DaemonWaitCommands } from './waitCommands.js';
+import { startEpicWatcher } from './epicWatcher.js';
+import { WatchGoalReader } from './watchers/goalReader.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { DaemonBus, DaemonResources, TurnRunner } from '../../core/daemon/ports.js';
+import { registerDaemonOwner, removeDaemonOwner, type DaemonOwner } from '../../infra/daemon/owner.js';
+import { readProcessOwner, AsyncProcess } from '../../infra/daemon/process.js';
+import { AsyncCommand } from '../../infra/daemon/command.js';
+import { FileEventStore } from '../../infra/daemon/eventStore.js';
+import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
+import { DaemonNotifications } from '../../infra/daemon/notifications.js';
+import { WatchObservations } from './watchers/observations.js';
+import { FileWatchRecords } from '../../infra/daemon/watchRecords.js';
+import { FilePatrolRecords } from '../../infra/daemon/patrolRecords.js';
+import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
+import { readPrivateFile } from '../../infra/daemon/privateFile.js';
+import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
+import { installDaemonErrorLog, reportDaemonError } from '../../infra/daemon/diagnostics.js';
+import { DaemonLogger } from '../../infra/daemon/logger.js';
+import { conversationId } from '../../infra/conversations/identity.js';
+import { ManagerImageAttachments, managerImageDirectory } from '../manager/imageAttachments.js';
+import { createDaemonConversationInput } from '../manager/daemonConversationPort.js';
+import { createConversationIpcServer } from './conversationIpcServer.js';
+import { createDaemonSlackPorts, type SlackRepositoryConfig } from './slackPorts.js';
+import { DaemonDispatcher } from './dispatcher.js';
+import { createTurnProcessHost } from './turnProcessHost.js';
+import { DaemonConversations } from './conversationState.js';
+import { DaemonRouting, routeAssignment } from './routing.js';
+import { createDaemonStateRequests } from './stateRequests.js';
+import { startDaemonWatchers } from './watchers/index.js';
+import { startWatchLoop, type WatchLoop } from './watchers/loop.js';
+import { FileDaemonWatchSource } from './watchSource.js';
+import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
+import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
+import { startManagerPatrols } from './patrols.js';
+import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
+import { TaskDispatcher } from './taskDispatcher.js';
+import { BuiltinWorkerAdapter } from '../../infra/worker-pool/builtinWorkerAdapter.js';
+import { BuiltinProjectHost } from '../../infra/worker-pool/projectHost.js';
+import { readProjectRegistry } from '../../infra/config/global/projectRegistry.js';
+import { RemoteWorkerRuntime } from '../workerPool/remoteWorkerRuntime.js';
+import { createWorkerServer } from '../../infra/worker-pool/remoteTransport.js';
+
+class DaemonCleanupError extends AggregateError {}
+
+/** 所有権とシグナルは専用プロセス入口が所有し、ここでは部品の寿命を一元化する。 */
+export async function startDaemon(options: {
+  configDirectory: string;
+  owner: DaemonOwner;
+  tokens: { appToken: string; botToken: string } | undefined;
+  signal: AbortSignal;
+  runnerFactory?: (bus: DaemonBus) => TurnRunner;
+}) {
+  const directory = options.configDirectory;
+  const routing = new DaemonRouting(directory);
+  const eventStore = new FileEventStore(directory, routing);
+  const store = new ConversationStateStore(directory);
+  const notifications = new DaemonNotifications(directory);
+  let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
+  let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
+  let resolveSlack!: (value: typeof slack) => void;
+  const slackReady = new Promise<typeof slack>((resolve) => { resolveSlack = resolve; });
+  let watchers: ReturnType<typeof startDaemonWatchers> | undefined;
+  let idleCheck: WatchLoop | undefined;
+  let imageCleanup: WatchLoop | undefined;
+  let waitCommandCheck: WatchLoop | undefined;
+  let patrols: WatchLoop | undefined;
+  let taskPool: DaemonResources | undefined;
+  let taskLoop: WatchLoop | undefined;
+  let tasks: TaskDispatcher | undefined;
+  let remoteWorkers: RemoteWorkerRuntime | undefined;
+  let workerServer: Awaited<ReturnType<typeof createWorkerServer>> | undefined;
+  let epicWatcher: WatchLoop | undefined;
+  let storageRetry: ReturnType<typeof setTimeout> | undefined;
+  let stopping = false;
+  let finishStartup!: () => void;
+  const startupFinished = new Promise<void>((resolve) => { finishStartup = resolve; });
+  let markStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => { markStopped = resolve; });
+  const conversations = new DaemonConversations(store, routing, notifications, async (id, output, version, signal) => {
+    await input.deliver(id, output, version, signal);
+    if (output.kind === 'inquiry') await (await slackReady)?.delivery.deliver(id, output, version);
+    if (output.kind === 'result' && id === conversationId({ kind: 'daemon' })) {
+      const batch = [];
+      for await (const notice of notifications.iterate()) if (notice.turnOperationId === output.operationId) batch.push(notice);
+      await (await slackReady)?.notifications.deliver(batch);
+    }
+    if (output.kind === 'notice' && id === conversationId({ kind: 'daemon' }) && (version.operationId === null || output.id.startsWith('result-'))) {
+      await (await slackReady)?.notifications.deliver([{ id: output.id, message: output.message }]);
+    }
+  }, reportDaemonError, eventStore);
+  const bus: DaemonBus = { post: (message) => dispatcher.post(message), request: (turn, request, signal) => dispatcher.request(turn, request, signal) };
+  const runner = options.runnerFactory?.(bus) ?? createTurnProcessHost({ configDirectory: directory, bus, onError: reportDaemonError });
+  const waitGoals = new WatchGoalReader();
+  const maxPendingEvents = 32;
+  const waitCommands = new DaemonWaitCommands({ maxRegistrations: maxPendingEvents,
+    ingress: { accept: (event) => dispatcher.accept(event) }, goals: waitGoals, onError: reportDaemonError });
+  const closedResources = new Set<DaemonResources>();
+  const closeResource = async (resource: DaemonResources | undefined): Promise<void> => {
+    if (resource === undefined || closedResources.has(resource)) return;
+    await resource.close();
+    closedResources.add(resource);
+  };
+  const resources = { async close() {
+    await startupFinished;
+    const results = await Promise.allSettled([closeResource(imageCleanup), closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
+      closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc), closeResource(taskPool)]);
+    const delivery = await Promise.allSettled([closeResource(conversations)]);
+    const images = await Promise.allSettled([(async () => { await input.close(); await cleanupImages(); })()]);
+    const errors = [...results, ...delivery, ...images].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+    if (errors.length > 0) throw new AggregateError(errors, 'Cannot close daemon resources');
+  } };
+  const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
+    ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
+  runner: { async start(value, signal) { await conversations.started(value); runner.start(value, signal); },
+    interrupt: (turn) => runner.interrupt(turn), resultCommitted: (turn) => runner.resultCommitted(turn), close: () => closeResource(runner) },
+  resources, limits: { maxPendingEvents, maxPendingBytes: 1024 * 1024 },
+  onFailure: ({ phase, error }) => {
+    reportDaemonError(`Daemon ${phase} failed: ${getErrorMessage(error)}`);
+    if (phase === 'progress' || stopping || storageRetry !== undefined) return;
+    storageRetry = setTimeout(() => {
+      storageRetry = undefined;
+      void dispatcher.retryStorage().catch(reportDaemonError);
+    }, 1000);
+    storageRetry.unref();
+  } });
+  const images = new ManagerImageAttachments(eventStore);
+  const input = createDaemonConversationInput({ ingress: dispatcher, configDirectory: directory,
+    images, onImageCleanupError: reportDaemonError, async resolveAssignment(selected) {
+    const assignment = await routing.resolve(selected);
+    await conversations.ensure(assignment);
+    return assignment;
+  } });
+  const cleanupImages = async (): Promise<void> => {
+    for await (const record of store.iterate()) {
+      if (record.assignment.kind === 'daemon') continue;
+      const root = await managerImageDirectory(record.assignment, directory);
+      await images.cleanup(root, record.id, () => input.connectedImageOwners(record.id));
+    }
+  };
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    stopping = true; clearTimeout(storageRetry);
+    markStopped();
+    input.stopAccepting(); ipc?.stopAccepting(); slack?.stopAccepting();
+    if (closing === undefined) {
+      closing = (async () => {
+        const failures: unknown[] = [];
+        const commandsClosed = waitCommands.close();
+        const hasWaitWork = waitCommands.hasWork;
+        // wait の配送がない shutdown は、未返答の状態更新より先にターンを中断する。
+        const stopped = hasWaitWork ? undefined : dispatcher.control({ kind: 'stop' })
+          .catch((error: unknown) => { failures.push(error); });
+        try { await commandsClosed; } catch (error) { failures.push(error); }
+        if (hasWaitWork) {
+          try { await dispatcher.drain(); } catch (error) { failures.push(error); }
+        }
+        try { await (stopped ?? dispatcher.control({ kind: 'stop' })); }
+        catch (error) { failures.push(error); }
+        if (failures.length > 0) throw new DaemonCleanupError(failures,
+          'Daemon cleanup failed; undelivered wait results or child processes may remain');
+      })().catch((error: unknown) => { closing = undefined; throw error; });
+    }
+    return closing;
+  };
+  const stopDuringStartup = (): void => { void close().catch(reportDaemonError); };
+  options.signal.addEventListener('abort', stopDuringStartup, { once: true });
+  try {
+    options.signal.throwIfAborted();
+    await retireLegacyPatrols(directory);
+    await conversations.ensure({ kind: 'daemon' });
+    for (const assignment of await routing.assignments()) await conversations.ensure(assignment);
+    await restoreLegacyConversations(conversations, eventStore);
+    const restored = await eventStore.restore();
+    options.signal.throwIfAborted();
+    await dispatcher.restore(restored.lastAcceptedSequence, restored.pending);
+    await cleanupImages();
+    imageCleanup = startWatchLoop(5000, cleanupImages, reportDaemonError);
+    const global = await globalDaemonConfiguration(directory);
+    tasks = new TaskDispatcher({ workers: [new BuiltinWorkerAdapter({ name: 'builtin', kind: 'builtin',
+      concurrency: global.daemon?.builtin_worker?.concurrency })],
+      async projects() {
+        const registry = await readProjectRegistry(directory);
+        return registry.projects.filter((project) => project.available && project.managerUsed === true).map((project) => project.canonicalDirectory);
+      },
+      factory: { create: (cwd, finished) => new BuiltinProjectHost(cwd, directory, finished, global.daemon?.remote_worker !== undefined) },
+      wake: () => taskLoop?.wake(), onError: reportDaemonError,
+    });
+    const pool = tasks;
+    taskPool = { async close() {
+      const failures: unknown[] = [];
+      for (const resource of [taskLoop, workerServer, remoteWorkers, pool]) {
+        try { await resource?.close(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length > 0) throw new AggregateError(failures, 'Worker pool shutdown failed');
+    } };
+    if (global.daemon?.remote_worker !== undefined) {
+      remoteWorkers = new RemoteWorkerRuntime({ directory, dispatcher: pool, version: options.owner.version, now: Date.now,
+        credentials: global.daemon.remote_worker.credentials });
+      await remoteWorkers.restore();
+      workerServer = await createWorkerServer({ ...global.daemon.remote_worker, runtime: remoteWorkers, onError: reportDaemonError });
+    }
+    taskLoop = startWatchLoop(1_000, async () => {
+      if (remoteWorkers === undefined) await pool.dispatch();
+      else await remoteWorkers.check();
+    }, reportDaemonError);
+    const repositories: SlackRepositoryConfig[] = [];
+    for (const route of await routing.routes()) {
+      const assignment = routeAssignment(route);
+      await conversations.ensure(assignment);
+      const config = await readDaemonConfiguration(join(route.repositoryDirectory, '.takt', 'config.yaml'));
+      if (config.manager?.slack === undefined) continue;
+      repositories.push({ repositoryDirectory: route.repositoryDirectory, async resolveAssignment() {
+        const current = await routing.resolve({ kind: 'repository', repositoryDirectory: route.repositoryDirectory });
+        await conversations.ensure(current);
+        const display = await routing.display(current);
+        if (display.kind === 'daemon') throw new Error('Manager assignment required');
+        return display;
+      }, channelId: config.manager.slack.channel_id,
+        allowedUserIds: config.manager.slack.allowed_user_ids, language: config.language ?? global.language ?? 'en' });
+    }
+    ipc = await createConversationIpcServer(directory, options.owner, input);
+    epicWatcher = startEpicWatcher(conversations, dispatcher, reportDaemonError);
+    options.signal.throwIfAborted();
+    const files = new DaemonPersistedFiles(directory);
+    const records = new FileWatchRecords(directory);
+    const watchSource = new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
+      new WatchObservations(records, dispatcher, Date.now), async (owner, question) => {
+        if (question.answer === undefined) throw new Error('Pending inquiry publication has no saved answer');
+        if (owner.kind === 'workspace') {
+          const eventId = `workspace-answer-${owner.workspaceId}-${question.id}`;
+          const admission = await dispatcher.accept({ eventId, requestId: eventId, conversationId: conversationId(owner),
+            occurredAt: question.answer.answeredAt, source: 'director', event: inquiryAnswerEvent(question.id, question.answer, question.body) });
+          if (admission.kind !== 'accepted') throw new Error(`Standalone answer was not accepted: ${admission.reason}`);
+          return;
+        }
+        const repository = question.operation?.cwd ?? owner.repositoryDirectory;
+        if (!(await routing.display(owner)).repositoryDirectories.includes(repository)) throw new Error('Standalone answer repository is outside its assignment');
+        await files.saveStandaloneInquiryAnswer(repository, question.id, question.body, question.answer);
+      }, waitGoals);
+    watchers = startDaemonWatchers({ source: watchSource,
+      processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
+      async filesChanged(change) {
+        taskLoop?.wake();
+        if (change.target.kind === 'inbox') await receiveInboxChange(change, files, conversations, dispatcher);
+        else {
+          for (const assignment of await routing.assignments()) await conversations.ensure(assignment);
+          watchers?.changed();
+          patrols?.wake();
+        }
+      }, now: Date.now, onError: (_target, error) => reportDaemonError(error) });
+    patrols = startManagerPatrols({ targets: () => watchSource.patrols(), goals: (directory) => watchSource.patrolGoalIds(directory),
+      pending: (id) => dispatcher.hasPendingPatrol(id),
+      records: new FilePatrolRecords(directory), ingress: dispatcher, now: Date.now, onError: reportDaemonError });
+    slack = await createDaemonSlackPorts({ repositories, configDirectory: directory, input, tokens: options.tokens, signal: options.signal,
+      director: { language: global.language ?? 'en', slack: global.director?.slack === undefined ? undefined
+        : { channelId: global.director.slack.channel_id, allowedUserIds: global.director.slack.allowed_user_ids } } });
+    resolveSlack(slack);
+    options.signal.throwIfAborted();
+    waitCommandCheck = startWatchLoop(5000, () => waitCommands.check(), reportDaemonError);
+    const idle = (): boolean => !stopping && options.owner.resident !== true && !slack?.listening && input.attachmentCount === 0 && tasks?.activeTaskCount === 0
+      && (remoteWorkers?.connectionCount ?? 0) === 0
+      && ipc?.initializingCount === 0 && !dispatcher.hasPendingEvents && !waitCommands.hasWork;
+    // 起動元が接続する猶予は旧 daemon と同じ500msにする。
+    const idleAfter = Date.now() + 500;
+    idleCheck = startWatchLoop(500, async () => {
+      if (Date.now() < idleAfter || !idle()) return;
+      const attachmentGeneration = input.attachmentGeneration;
+      await watchers?.drain();
+      // 確認中に接続が成立すると、切断済みでも保存内容が変わっている可能性がある。
+      if (!await watchSource.hasWork(files) && idle() && input.attachmentGeneration === attachmentGeneration) void close().catch(reportDaemonError);
+    }, reportDaemonError);
+    return { dispatcher, input, conversations, watchers, stopped, close,
+      ...(workerServer === undefined ? {} : { workerPort: workerServer.port }) };
+  } catch (error) {
+    resolveSlack(undefined);
+    finishStartup();
+    try { await close(); } catch (cleanup) { throw new DaemonCleanupError([error, cleanup], 'Daemon startup and cleanup failed'); }
+    throw error;
+  } finally { finishStartup(); options.signal.removeEventListener('abort', stopDuringStartup); }
+}
+
+export async function runDaemon(resident = false): Promise<void> {
+  const directory = await resolveDaemonConfigDirectory(process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt'));
+  const io = { signal: new AbortController().signal, timeoutMs: 5000 };
+  const identity = await readProcessOwner(process.pid, io);
+  if (identity === undefined) throw new Error('Cannot identify daemon process');
+  const content = await readPrivateFile(fileURLToPath(new URL('../../../package.json', import.meta.url)), 256 * 1024);
+  if (content === undefined) throw new Error('Missing package metadata');
+  const metadata = JSON.parse(content.toString('utf8')) as { version: string };
+  const owner: DaemonOwner = { pid: process.pid, identity: { startTime: identity.startTime }, version: metadata.version,
+    cliPath: fileURLToPath(new URL('../../app/daemon/index.js', import.meta.url)), ...(resident ? { resident: true } : {}) };
+  if (!await registerDaemonOwner(directory, owner, io)) {
+    if (resident) {
+      throw new Error('A daemon is already running; resident startup was not performed. Run "takt daemon stop", then start it with "takt daemon --resident".');
+    }
+    return;
+  }
+  const appToken = process.env.TAKT_SLACK_APP_TOKEN;
+  const botToken = process.env.TAKT_SLACK_BOT_TOKEN;
+  delete process.env.TAKT_SLACK_APP_TOKEN;
+  delete process.env.TAKT_SLACK_BOT_TOKEN;
+  const controller = new AbortController();
+  const stopped = new Promise<void>((resolve) => controller.signal.addEventListener('abort', () => resolve(), { once: true }));
+  const stop = (): void => controller.abort();
+  process.on('SIGTERM', stop); process.on('SIGINT', stop);
+  const logger = new DaemonLogger(directory);
+  const restoreErrorLog = installDaemonErrorLog((message) => logger.write('error', message));
+  let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
+  let cleanupSucceeded = false;
+  const failures: unknown[] = [];
+  try {
+    daemon = await startDaemon({ configDirectory: directory, owner, tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
+    await logger.write('info', `Daemon started (${process.pid})${daemon.workerPort === undefined ? '' : `, worker port: ${daemon.workerPort}`}`);
+    await Promise.race([stopped, daemon.stopped]);
+  } catch (error) {
+    if (daemon === undefined) cleanupSucceeded = !(error instanceof DaemonCleanupError);
+    if (error !== controller.signal.reason) { reportDaemonError(error); failures.push(error); }
+  } finally {
+    stop();
+    try {
+      if (daemon !== undefined) {
+        await daemon.close();
+        cleanupSucceeded = true;
+      }
+      await logger.write('info', `Daemon stopped (${process.pid})`);
+    } catch (error) {
+      reportDaemonError(error);
+      failures.push(error);
+    } finally {
+      if (!cleanupSucceeded) reportDaemonError('Daemon cleanup incomplete; owner retained, undelivered wait results or child processes may remain');
+      restoreErrorLog();
+      try { await logger.close(); } catch (error) { failures.push(error); }
+      if (cleanupSucceeded) {
+        try { await removeDaemonOwner(directory, owner, io); } catch (error) { failures.push(error); }
+      }
+      process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, 'Daemon execution and cleanup failed');
+}

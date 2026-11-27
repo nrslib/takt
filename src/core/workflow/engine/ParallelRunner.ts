@@ -37,6 +37,7 @@ import type {
   LiveInterventionChannel,
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
 import {
   createLiveInterventionDeliveryCommitter,
   createScopedLiveInterventionChannel,
@@ -55,6 +56,8 @@ import {
 } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
+import { Phase1ExecutionLog } from '../phase1-execution-log.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import {
@@ -81,6 +84,7 @@ import {
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { formatCompletionRetryDiagnostic } from '../completion-retry.js';
+import { composeRecoveryInstruction } from '../progress-notes.js';
 import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
@@ -110,6 +114,11 @@ type ParallelSubStepResult = {
 };
 
 type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
+
+type ParallelProgressNotesRequest = {
+  readonly identityInstruction: string;
+  retryInstruction: string;
+};
 
 class LiveInterventionParallelRestart extends Error {
   constructor(
@@ -280,6 +289,8 @@ export interface ParallelRunnerDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
+  readonly beginReportExecution?: (step: WorkflowStep, parallelParentStepName: string) => string | undefined;
+  readonly finishReportExecution?: (id: string, completed: boolean) => void;
   readonly claimStepOccurrence: (
     step: WorkflowStep,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
@@ -356,6 +367,8 @@ export class ParallelRunner {
   ): Promise<StepRunResult> {
     const liveIntervention = this.deps.engineOptions.liveIntervention;
     const attemptState = captureParallelAttemptState(state);
+    // Progress notes identity and the active retry request outlive rolled-back parallel attempts.
+    const progressNotesRequests = new Map<string, ParallelProgressNotesRequest>();
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
       restoreParallelAttemptState(state, attemptState);
@@ -389,6 +402,7 @@ export class ParallelRunner {
           maxSteps,
           updatePersonaSession,
           invalidatedSessions,
+          progressNotesRequests,
           runtime,
           activeStepIteration,
           executionDeadlineContext,
@@ -438,6 +452,7 @@ export class ParallelRunner {
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     invalidatedSessions: Map<string, string>,
+    progressNotesRequests: Map<string, ParallelProgressNotesRequest>,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
     executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
@@ -487,6 +502,7 @@ export class ParallelRunner {
         requestRestart(parentOccurrence);
       }
     };
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     const selectorDeadline = isDynamicParallelSubSteps(step.parallel) && selectorProvider !== undefined
       ? executionDeadlineContext?.begin('parallel-selector', selectorProvider)
@@ -499,7 +515,6 @@ export class ParallelRunner {
         )
       : step.parallel;
     this.resolveAbortSignal()?.throwIfAborted();
-    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
       subSteps: subSteps.map(s => s.name),
@@ -548,6 +563,7 @@ export class ParallelRunner {
           concurrency: step.concurrency,
           items: agentSubSteps.map((subStep) => ({
             id: subStep.name,
+            workflowMeta: this.deps.optionsBuilder.buildWorkflowMeta(step, runtime),
             scope: createRoutingScope({
               workflow: this.deps.getWorkflowName(),
               parentStep: step.name,
@@ -683,14 +699,17 @@ export class ParallelRunner {
         if (semaphore) {
           await semaphore.acquire();
         }
+        let reportExecution: string | undefined;
+        let completed = false;
         try {
+          reportExecution = this.deps.beginReportExecution?.(subStep, step.name);
           restartIfLiveInterventionPending();
           const startedAt = Date.now();
           subStepStartedAtByName.set(subStep.name, startedAt);
           const subStepDeadline = isAgentParallelSubStep(subStep)
             ? getSubStepDeadline(subStep)
             : undefined;
-          return await runWithExecutionDeadline(
+          const result = await runWithExecutionDeadline(
             executionDeadlineContext,
             subStepDeadline,
             async () => {
@@ -701,8 +720,6 @@ export class ParallelRunner {
               );
             }
             const scopedWorkflowCallLiveIntervention = liveIntervention !== undefined
-              && liveDelivery !== undefined
-              && liveDeliveryCommitter !== undefined
               ? createScopedLiveInterventionChannel(
                   liveIntervention,
                   liveDelivery,
@@ -711,7 +728,9 @@ export class ParallelRunner {
               : undefined;
             subStepInstructionByName.set(subStep.name, '');
             return await this.runWorkflowCallSubStep(
-              subStep,
+              step.inputReports === undefined || subStep.inputReports !== undefined
+                ? subStep
+                : { ...subStep, inputReports: step.inputReports },
               state,
               runtime,
               startedAt,
@@ -740,7 +759,9 @@ export class ParallelRunner {
           }
           const { executableSubStep, subIteration } = preparedSubStep;
           const subInstruction = this.deps.stepExecutor.prepareInstruction(
-            executableSubStep,
+            step.inputReports === undefined || executableSubStep.inputReports !== undefined
+              ? executableSubStep
+              : { ...executableSubStep, inputReports: step.inputReports },
             subIteration,
             state,
             task,
@@ -750,10 +771,15 @@ export class ParallelRunner {
               reviewerOperationOrigin(subStep.name),
             ),
           );
-          const phase1Instruction = [subInstruction.text, liveDelivery?.prompt]
-            .filter((part): part is string => part !== undefined && part.length > 0)
+          const phase1Instruction = [subInstruction.text, resolveLiveInterventionPrompt(
+            liveIntervention, liveDelivery, this.deps.engineOptions.language,
+          )]
+            .filter((part) => part.length > 0)
             .join('\n\n');
           const reportInputTracker = new Phase1ReportInputTracker(subInstruction.reportInputs);
+          const phase1ExecutionLog = getReportFiles(subStep.outputContracts).length > 0
+            ? new Phase1ExecutionLog()
+            : undefined;
           subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
           const subPm = providerInfoByStep.get(subStep.name);
@@ -766,7 +792,29 @@ export class ParallelRunner {
           };
 
         // Phase 1: main execution (Write excluded if sub-step has report)
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subRuntime);
+        const subExecutionRuntime = {
+          ...subRuntime,
+          workflowAssignment: {
+            stepName: subStep.name,
+            parallelParent: step.name,
+            stepIteration: subIteration,
+            iteration: parentIteration,
+            maxSteps,
+          },
+        };
+        const baseOptions: RunAgentOptions = {
+          ...this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subExecutionRuntime),
+          progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(executableSubStep, subInstruction.reviewScope),
+        };
+        let progressNotesRequest = progressNotesRequests.get(subStep.name);
+        if (progressNotesRequest === undefined) {
+          progressNotesRequest = { identityInstruction: phase1Instruction, retryInstruction: '' };
+          progressNotesRequests.set(subStep.name, progressNotesRequest);
+        }
+        // Each restart's Phase 1 already contains the full live delivery history.
+        const phase1RecoveryInstruction = composeRecoveryInstruction(
+          phase1Instruction, progressNotesRequest.retryInstruction,
+        );
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
         const subSessionKey = buildSessionKey(executableSubStep, {
           provider: subPm.provider,
@@ -793,19 +841,35 @@ export class ParallelRunner {
               ),
             }
           : baseOptions;
-        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
+        const recordingAgentOptions: RunAgentOptions = phase1ExecutionLog === undefined
           ? agentOptions
           : {
               ...agentOptions,
+              onStream: (event) => {
+                phase1ExecutionLog.recordEvent(event);
+                agentOptions.onStream?.(event);
+              },
+              onDispatch: (permissionMode) => {
+                agentOptions.onDispatch?.(permissionMode);
+                phase1ExecutionLog.markDispatched();
+              },
+            };
+        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
+          ? recordingAgentOptions
+          : {
+              ...recordingAgentOptions,
               onDispatch: (permissionMode) => {
                 baseOptions.onDispatch?.(permissionMode);
                 liveDeliveryCommitter.onDispatch(permissionMode);
                 reportInputTracker.recordDelivery(liveDelivery);
+                phase1ExecutionLog?.markDispatched();
               },
             };
         const promptResolvedAttempts = new Set<number>();
         const phase1Result = await runPhase1WithEmptyRecovery({
-          instruction: phase1Instruction,
+          workflowMeta: agentOptions.workflowMeta,
+          language: agentOptions.language,
+          instruction: phase1RecoveryInstruction,
           initialSessionId: agentOptions.sessionId,
           execute: async (attempt) => {
             const result = await executeObservedPhase1Attempt({
@@ -819,6 +883,8 @@ export class ParallelRunner {
               workflowStack: this.deps.getCurrentWorkflowStack?.(),
               sanitizeText: this.deps.sanitizeObservabilityText,
               providerInfo: subPm,
+              onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+              onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
               execute: (attemptInstruction, sessionId, onPromptResolved) => (
                 this.executeSubStepAgent(
                   executableSubStep,
@@ -826,6 +892,11 @@ export class ParallelRunner {
                   attemptInstruction,
                   {
                     ...agentCallOptions,
+                    progressNotesInstruction: progressNotesRequest.identityInstruction,
+                    progressNotesRecoveryInstruction: composeRecoveryInstruction(
+                      phase1RecoveryInstruction,
+                      attempt.reason === 'empty_continuation' ? attemptInstruction : '',
+                    ),
                     sessionId,
                     onPromptResolved,
                   },
@@ -851,6 +922,7 @@ export class ParallelRunner {
             if (result.promptResolved) {
               promptResolvedAttempts.add(attempt.sequence);
             }
+            phase1ExecutionLog?.recordResult(result.response);
             return result.response;
           },
           discardSession: (sessionId) => {
@@ -883,6 +955,9 @@ export class ParallelRunner {
             }
           },
         });
+        if (liveDeliveryCommitter !== undefined) {
+          await liveDeliveryCommitter.settle();
+        }
         let subResponse = phase1Result.response;
         if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
@@ -946,9 +1021,18 @@ export class ParallelRunner {
           let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
           const completion = await this.deps.stepExecutor.completeReviewerResponse({
             step: executableSubStep,
-            originalInstruction: phase1Instruction,
+            originalInstruction: subInstruction.text,
+            getReviewRequirementsInstruction: () => phase1Instruction,
             initialResponse: subResponse,
             executeRetry: async (instruction, sessionId) => {
+              // Completion retry prefixes this attempt's original instruction; retain only its retry suffix across restarts.
+              const retrySuffix = instruction.slice(subInstruction.text.length);
+              progressNotesRequest.retryInstruction = composeRecoveryInstruction(
+                progressNotesRequest.retryInstruction, retrySuffix,
+              );
+              const retryRecoveryInstruction = composeRecoveryInstruction(
+                phase1Instruction, progressNotesRequest.retryInstruction,
+              );
               const observedAttempts = new Map<number, typeof phase1Result.finalAttempt>();
               const resolveObservedAttempt = (attempt: typeof phase1Result.finalAttempt) => {
                 const existing = observedAttempts.get(attempt.sequence);
@@ -958,7 +1042,9 @@ export class ParallelRunner {
                 return created;
               };
               const retry = await runPhase1WithEmptyRecovery({
-                instruction,
+                workflowMeta: agentOptions.workflowMeta,
+                language: agentOptions.language,
+                instruction: retryRecoveryInstruction,
                 initialSessionId: sessionId,
                 execute: async (attempt) => {
                   const observedAttempt = resolveObservedAttempt(attempt);
@@ -973,12 +1059,22 @@ export class ParallelRunner {
                     workflowStack: this.deps.getCurrentWorkflowStack?.(),
                     sanitizeText: this.deps.sanitizeObservabilityText,
                     providerInfo: subPm,
+                    onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+                    onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
                     execute: (attemptInstruction, attemptSessionId, onPromptResolved) => (
                       this.executeSubStepAgent(
                         executableSubStep,
                         subPm,
                         attemptInstruction,
-                        { ...agentCallOptions, sessionId: attemptSessionId, onPromptResolved },
+                        {
+                          ...agentCallOptions,
+                          progressNotesInstruction: progressNotesRequest.identityInstruction,
+                          progressNotesRecoveryInstruction: composeRecoveryInstruction(
+                            retryRecoveryInstruction, attemptInstruction,
+                          ),
+                          sessionId: attemptSessionId,
+                          onPromptResolved,
+                        },
                         false,
                       )
                     ),
@@ -994,6 +1090,7 @@ export class ParallelRunner {
                       undefined,
                     ),
                   });
+                  phase1ExecutionLog?.recordResult(observed.response);
                   return observed.response;
                 },
                 discardSession: () => undefined,
@@ -1066,7 +1163,7 @@ export class ParallelRunner {
             this.deps.onPhaseComplete,
             this.deps.onJudgeStage,
             parentIteration,
-            subRuntime,
+            subExecutionRuntime,
             (
               providerInfo: NonNullable<StepRunResult['providerInfo']>,
               success: boolean,
@@ -1085,12 +1182,25 @@ export class ParallelRunner {
           const phaseCtx = completionRetryDiagnostic === undefined
             ? basePhaseContext
             : { ...basePhaseContext, completionRetryDiagnostic };
+          const writtenReportNames: string[] = [];
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
+            let reportGenerationError: ReportPhaseGenerationError | undefined;
             try {
               const reportResult = await runReportPhase(subStep, subIteration, {
                 ...phaseCtx,
+                lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
+                phase1ExecutionLog: phase1ExecutionLog === undefined
+                  ? undefined
+                  : await this.deps.stepExecutor.savePhase1ExecutionLog(
+                    phase1ExecutionLog,
+                    subStep.name,
+                    subIteration,
+                  ),
+              }, (reportName) => {
+                writtenReportNames.push(reportName);
+                this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, true);
               });
               restartIfLiveInterventionPending();
               if (reportResult && 'blocked' in reportResult) {
@@ -1149,16 +1259,24 @@ export class ParallelRunner {
                   );
                 }
                 log.info(
-                  'Report phase failed for parallel sub-step, continuing to status judgment',
+                  'Report phase failed for parallel sub-step',
                   {
                     step: subStep.name,
                     error: getErrorMessage(reportError),
                   },
                 );
+                reportGenerationError = reportError;
               } else {
                 throw reportError;
               }
             }
+            this.deps.stepExecutor.finalizeReportGeneration(
+              subStep,
+              state,
+              phaseCtx.reportDir,
+              new Set(writtenReportNames),
+              reportGenerationError,
+            );
           }
           let match;
           let commandGates: 'required' | 'skip' = 'required';
@@ -1231,6 +1349,7 @@ export class ParallelRunner {
             stepIteration: subIteration,
             providerInfo: subPm,
           },
+          writtenReportNames,
         );
 
         return {
@@ -1242,13 +1361,18 @@ export class ParallelRunner {
         };
             },
           );
+          completed = result.response.status === 'done';
+          return result;
         } finally {
+          if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
           if (semaphore) {
             semaphore.release();
           }
         }
       }),
     );
+
+    parallelLogger?.flush();
 
     if (restartRequested || hasPendingOutsideDelivery(liveIntervention, liveDelivery)) {
       if (liveIntervention === undefined) {
@@ -1285,8 +1409,6 @@ export class ParallelRunner {
         ...(isProviderStreamParseError(result.reason)
           ? { failureCategory: result.reason.failureCategory }
           : isAgentFailureError(result.reason)
-            && (result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
-              || result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED)
             ? { failureCategory: result.reason.failureCategory }
             : {}),
       };
@@ -1553,6 +1675,7 @@ export class ParallelRunner {
         stepIteration,
         providerInfo: parentPm,
       },
+      [],
     );
     const selectedFailure = this.selectFailureByDefinitionOrder(subResults);
     return {
@@ -1794,6 +1917,8 @@ export class ParallelRunner {
     const options: ParallelLoggerOptions = {
       subStepNames,
       parentOnStream: this.deps.engineOptions.onStream,
+      toolDisplayMode: this.deps.engineOptions.toolDisplayMode,
+      quiet: this.deps.engineOptions.streamQuiet,
       progressInfo: {
         iteration,
         maxSteps,

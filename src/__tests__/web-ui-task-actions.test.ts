@@ -206,6 +206,94 @@ describe('central Web UI task action policy', () => {
     });
   });
 
+  it('persists the selected restart source checkpoint as an independent execution input', async () => {
+    const task = makeTask('failed');
+    const queuedTask: CentralTaskRecord = {
+      ...task,
+      generation: task.generation + 1,
+      status: 'pending',
+    };
+    const resetFailedTaskToPending = vi.fn(async (): Promise<CentralTaskRecord> => queuedTask);
+    const repository = {
+      readTask: vi.fn().mockResolvedValue(task),
+      resetFailedTaskToPending,
+      state: { stateId: 'state-1' },
+      globalConfigDirectory: '/global',
+    } as unknown as CentralTaskRepository;
+    const sourceResumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'plan',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 10,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const restartPoint = {
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'plan',
+        kind: 'agent' as const,
+      }],
+    };
+    const claim: WebTaskActionClaim = {
+      reservationToken: 'reservation-restart',
+      context: {
+        taskId: task.taskId,
+        action: 'retry',
+        projectId: 'project-1',
+        stateId: 'state-1',
+        projectDirectory: '/project',
+        task: task.task,
+        workflow: task.workflow,
+        workflowInitialStep: 'plan',
+        status: 'failed',
+        attempt: task.attempt,
+        runIds: task.runIds,
+        generation: task.generation,
+        runId: task.runId,
+        sourceRunId: task.runId,
+        worktreePath: task.worktreePath,
+        retrySourceResumePoint: sourceResumePoint,
+      },
+      retrySelection: { kind: 'restart', restartPoint },
+      taskActionDraft: {
+        task: 'restart with the saved evidence',
+        taskActionOptionId: 'restart:0',
+      },
+    };
+
+    await executeCentralTaskAction({
+      globalConfigDirectory: '/global',
+      projectDirectory: '/project',
+      projectId: 'project-1',
+      repository,
+      task,
+      action: 'retry',
+      input: 'restart with the saved evidence',
+      conversationId: 'conversation-1',
+      taskActionClaim: claim,
+      spawnDecision: vi.fn(),
+    });
+
+    expect(resetFailedTaskToPending).toHaveBeenCalledWith(task.taskId, {
+      task: 'restart with the saved evidence',
+      executionRequest: {
+        resumeMode: 'retry',
+        sourceRunSlug: 'run-1',
+        restartPoint,
+        sourceResumePoint,
+        retryNote: 'restart with the saved evidence',
+      },
+    });
+  });
+
   it('uses the workflow initial step only for retry ownership resolution', () => {
     const resumePoint = {
       version: 2 as const,

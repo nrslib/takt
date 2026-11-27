@@ -9,6 +9,20 @@ import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportIns
 import { makeInstructionContext, makeStep } from './test-helpers.js';
 
 describe('InstructionBuilder reference content', () => {
+  it.each(['ja', 'en'] as const)('always includes the current work result section, including an empty response (%s)', (language) => {
+    for (const lastResponse of [undefined, '', '   ']) {
+      const report = new ReportInstructionBuilder(makeStep({ outputContracts: [{ name: 'result.md', format: '' }] }), {
+        cwd: '/project', reportDir: '/reports', stepIteration: 2, language, lastResponse,
+      }).build();
+      const heading = language === 'ja' ? '## 作業結果' : '## Work Results';
+      const message = language === 'ja' ? '今回の作業フェーズの回答を取得できませんでした。' : 'The response from the current work phase could not be retrieved.';
+      expect(report).toContain(`${heading}\n\n`);
+      expect(report).toContain(message);
+      expect(report).toContain('Step Iteration: 2');
+      expect(report).not.toContain('undefined');
+    }
+  });
+
   it('keeps short reference material free of source metadata', () => {
     expect(prepareReferenceContent('短い資料', '/tmp/reference.md', 'ja')).toBe('短い資料');
   });
@@ -20,6 +34,21 @@ describe('InstructionBuilder reference content', () => {
     expect(result).toContain('あ'.repeat(2_000));
     expect(result).not.toContain('SOURCE_TAIL');
     expect(result).toContain('/tmp/reference.md');
+  });
+
+  it.each(['en', 'ja'] as const)('matches direct policy injection with a merged snapshot reference (%s)', (language) => {
+    const contents = ['FIRST-RULE\nFIRST-RULE\n' + 'a'.repeat(2_100), 'LAST-RULE'];
+    const combined = contents.join('\n\n---\n\n');
+    const step = makeStep({ policyContents: contents.map(content => ({ content, sourcePath: '/original.md' })) });
+    const context = makeInstructionContext({ language, policySourcePath: '/snapshot.md' });
+    const direct = new InstructionBuilder(step, context).build();
+    const snapshot = new InstructionBuilder(step, {
+      ...context,
+      policyContents: [{ content: combined, sourcePath: '/snapshot.md' }],
+    }).build();
+
+    expect(snapshot).toBe(direct);
+    expect(snapshot).toContain('/snapshot.md');
   });
 
   it('omits source metadata when a previous response is not truncated', () => {

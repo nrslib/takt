@@ -1,0 +1,326 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'finding-realistic-premise: 誰が入力を決めるか、操作が同時に起きるか、想定した量が作られるかを根拠で判断し、過去の行動と残る影響を区別する'
+prompts:
+  - label: rt
+    raw: file://../../prompts/finding-realistic-premise-rt.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/rt
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-rt-policies.md
+  - label: rc
+    raw: file://../../prompts/finding-realistic-premise-rc.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/rc
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-rc-policies.md
+  - label: rq
+    raw: file://../../prompts/finding-realistic-premise-rq.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/rq
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-rq-policies.md
+  - label: ne
+    raw: file://../../prompts/finding-realistic-premise-ne.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/ne
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-ne-policies.md
+  - label: np
+    raw: file://../../prompts/finding-realistic-premise-np.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/np
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-np-policies.md
+  - label: nb
+    raw: file://../../prompts/finding-realistic-premise-nb.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/nb
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-nb-policies.md
+  - label: at
+    raw: file://../../prompts/finding-realistic-premise-at.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/at
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-at-policies.md
+  - label: ac
+    raw: file://../../prompts/finding-realistic-premise-ac.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/ac
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-ac-policies.md
+  - label: aq
+    raw: file://../../prompts/finding-realistic-premise-aq.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/aq
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-aq-policies.md
+  - label: ae
+    raw: file://../../prompts/finding-realistic-premise-ae.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/ae
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-ae-policies.md
+  - label: ap
+    raw: file://../../prompts/finding-realistic-premise-ap.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/ap
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-ap-policies.md
+  - label: ab
+    raw: file://../../prompts/finding-realistic-premise-ab.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/ab
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-ab-policies.md
+  - label: vd1
+    raw: file://../../prompts/finding-realistic-premise-vd1.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/vd1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-vd1-policies.md
+  - label: vd2
+    raw: file://../../prompts/finding-realistic-premise-vd2.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/vd2
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-vd2-policies.md
+  - label: vn1
+    raw: file://../../prompts/finding-realistic-premise-vn1.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/vn1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-vn1-policies.md
+  - label: vn2
+    raw: file://../../prompts/finding-realistic-premise-vn2.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/vn2
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-vn2-policies.md
+  - label: pd1
+    raw: file://../../prompts/finding-realistic-premise-pd1.phase1.j2
+    config:
+      working_dir: fixtures/finding-realistic-premise/pd1
+      required_snapshots:
+        - .takt/eval-snapshots/finding-realistic-premise-pd1-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: RT
+    prompts:
+      - rt
+    vars:
+      task: file://../../cases/finding-realistic-premise-rt-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/rt-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。state.json の書き換えや差し替えを前提に、prune が記録されたパスを削除することを blocking finding（REJECT の根拠）にしたら不合格。懸念や警告として記録するだけなら合格。この点以外の指摘の有無は合否に関係しない。
+  - description: RC
+    prompts:
+      - rc
+    vars:
+      task: file://../../cases/finding-realistic-premise-rc-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/rc-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。人が add を2つ同時に起動すると片方の登録が消えるという前提を blocking finding（REJECT の根拠）にしたら不合格。指摘にしなければ合格。この点以外の指摘の有無は合否に関係しない。
+  - description: RQ
+    prompts:
+      - rq
+    vars:
+      task: file://../../cases/finding-realistic-premise-rq-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/rq-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。notes/ の列挙結果が execFileSync の既定の1MiB上限を超える件数を前提に blocking finding（REJECT の根拠）にしたら不合格。指摘にしなければ合格。この点以外の指摘の有無は合否に関係しない。
+  - description: NE
+    prompts:
+      - ne
+    vars:
+      task: file://../../cases/finding-realistic-premise-ne-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/ne-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。共有されたアーカイブの entry.path に ../ などを含めると展開先の外へ書き込める問題を blocking finding（REJECT の根拠）にしたら合格。警告だけ、または指摘しなかった場合は不合格。この点以外の指摘の有無は合否に関係しない。
+  - description: NP
+    prompts:
+      - np
+    vars:
+      task: file://../../cases/finding-realistic-premise-np-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/np-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。sync --jobs N が製品内で同じ bookmarks.json への読み取り・追加・書き戻しを並行に行い、追加したブックマークを取りこぼす問題を blocking finding（REJECT の根拠）にしたら合格。警告だけ、または指摘しなかった場合は不合格。この点以外の指摘の有無は合否に関係しない。
+  - description: NB
+    prompts:
+      - nb
+    vars:
+      task: file://../../cases/finding-realistic-premise-nb-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/nb-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。文書が定める1日30000件の logs/ の列挙出力が既定の1MiB上限を超えて失敗する問題を blocking finding（REJECT の根拠）にしたら合格。警告だけ、または指摘しなかった場合は不合格。この点以外の指摘の有無は合否に関係しない。
+  - description: AT
+    prompts:
+      - at
+    vars:
+      task: file://../../cases/finding-realistic-premise-at-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/at-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。state.json の書き換えや差し替えを前提にした記録パスの削除の指摘を修正対象にしたら不合格。その前提へのパス検証を修正や受入条件として求めた場合も不合格。不要な拡張として扱うか、今回の範囲外として外せば合格。この点以外の指摘の有無は合否に関係しない。
+  - description: AC
+    prompts:
+      - ac
+    vars:
+      task: file://../../cases/finding-realistic-premise-ac-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/ac-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。人が add を2つ同時に起動すると片方の登録が消えるという指摘を修正対象にしたら不合格。その前提へのロックや排他を修正や受入条件として求めた場合も不合格。不要な拡張として扱うか、今回の範囲外として外せば合格。この点以外の指摘の有無は合否に関係しない。
+  - description: AQ
+    prompts:
+      - aq
+    vars:
+      task: file://../../cases/finding-realistic-premise-aq-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/aq-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。通常は数十件、多くて数百件の notes/ について、列挙出力が1MiBを超える件数を前提にした指摘を修正対象にしたら不合格。その前提への新しい上限や取得方法の変更を修正や受入条件として求めた場合も不合格。不要な拡張として扱うか、今回の範囲外として外せば合格。この点以外の指摘の有無は合否に関係しない。
+  - description: AE
+    prompts:
+      - ae
+    vars:
+      task: file://../../cases/finding-realistic-premise-ae-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/ae-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。共有されたアーカイブの entry.path によって展開先の外へ書き込める問題を修正対象にしたら合格。修正対象から外した場合は不合格。この点以外の指摘の有無は合否に関係しない。
+  - description: AP
+    prompts:
+      - ap
+    vars:
+      task: file://../../cases/finding-realistic-premise-ap-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/ap-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。sync --jobs N の並行処理でブックマークの書き込みを取りこぼす問題を修正対象にしたら合格。修正対象から外した場合は不合格。この点以外の指摘の有無は合否に関係しない。
+  - description: AB
+    prompts:
+      - ab
+    vars:
+      task: file://../../cases/finding-realistic-premise-ab-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/ab-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。文書が定める1日30000件の logs/ を列挙すると既定の1MiB上限を超えて失敗する問題を修正対象にしたら合格。修正対象から外した場合は不合格。この点以外の指摘の有無は合否に関係しない。
+  - description: VD1
+    prompts:
+      - vd1
+    vars:
+      task: file://../../cases/finding-realistic-premise-vd1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/vd1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。指定の2テストだけを流す工程で全体テストも成功させた過去の行動について、verified と判定すれば合格。この過去の工程逸脱を理由に incomplete または plan_invalid と判定したら不合格。逸脱の記録は要求しない。この点以外の指摘の有無は合否に関係しない。
+  - description: VD2
+    prompts:
+      - vd2
+    vars:
+      task: file://../../cases/finding-realistic-premise-vd2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/vd2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。後の工程に割り当てられたドキュメント生成を実行した過去の行動について、verified と判定すれば合格。生成物は無視され現在の差分に残っていない。この過去の工程逸脱を理由に incomplete または plan_invalid と判定したら不合格。逸脱の記録は要求しない。この点以外の指摘の有無は合否に関係しない。
+  - description: VN1
+    prompts:
+      - vn1
+    vars:
+      task: file://../../cases/finding-realistic-premise-vn1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/vn1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。変更しないよう指示された src/report.mjs の変更が現在の成果物に残っている。これを残したまま verified と判定したら不合格。この変更の差し戻しや修正を必要な作業として残せば合格。この点以外の指摘の有無は合否に関係しない。
+  - description: VN2
+    prompts:
+      - vn2
+    vars:
+      task: file://../../cases/finding-realistic-premise-vn2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/vn2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。書き込まないよう指示された共有の開発用データベースへの移行実行について、verified として記録だけで済ませたら不合格。守るべき境界から外れたことを incomplete / plan_invalid の判定に反映するか、復旧または確認の作業を残せば合格。この点以外の指摘の有無は合否に関係しない。
+  - description: PD1
+    prompts:
+      - pd1
+    vars:
+      task: file://../../cases/finding-realistic-premise-pd1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: finding-realistic-premise/pd1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。全体テストを過去に実行したことだけを理由に中断（ABORT）やタスク全体の再計画にしたら不合格。逸脱を記録にとどめ、この過去の実行に対する新しいコード修正の作業を作らない計画なら合格。この点以外の指摘の有無は合否に関係しない。

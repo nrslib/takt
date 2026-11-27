@@ -225,7 +225,25 @@ call: called
   });
 
   it.each([
-    ['description', 'description: review'],
+    ['inherit the fragment description', '', 'Review the task'],
+    ['prefer the caller description', '\n        description: Review the implementation', 'Review the implementation'],
+  ])('should accept an agent parallel sub-step description and %s', (_case, override, expectedDescription) => {
+    writeProjectFragment(projectDir, 'review', 'description: Review the task\ninstruction: review the task\n');
+    const workflowPath = writeWorkflow(projectDir, 'parallel-agent-description', `  - name: reviewers
+    parallel:
+      - uses: review${override}${COMPLETE_PARALLEL_CALLER_RULES}
+    rules:
+      - condition: all("done")
+        next: COMPLETE`, 'reviewers');
+
+    const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+
+    expect(workflow.steps[0]?.parallel).toMatchObject([
+      { name: 'review', description: expectedDescription, instruction: 'review the task' },
+    ]);
+  });
+
+  it.each([
     ['delay_before_ms', 'delay_before_ms: 1'],
     ['structured_output', 'structured_output: {}'],
     ['system_inputs', 'system_inputs: []'],

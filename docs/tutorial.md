@@ -18,7 +18,7 @@ You will build a small browser-based expense memo.
 2. **Phase 2:** Add total amount, category filtering, deletion, and persistence
 3. **Phase 3:** Polish mobile layout, empty states, focus states, and visual design
 
-Instead of asking TAKT to do everything at once, you queue one phase, inspect the result, and then instruct the next improvement.
+Queue one phase at a time, inspect the result, and then instruct the next improvement.
 
 ## 1. Start Without GitHub
 
@@ -106,13 +106,15 @@ After the task instruction is generated, TAKT shows actions. Choose **Save as Ta
 
 ```text
 What would you like to do?
-    Execute now
   ❯ Save as Task
-    Continue editing
     Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Save as Task` appends the generated instruction to `.takt/tasks.yaml`. `Execute now` runs the task immediately; it also asks `Create worktree?` (default Yes), so by default it runs in an isolated worktree as well. The normal tutorial flow is to queue the task and run it with `takt run`.
+`Save as Task` is selected initially. Press Enter to proceed to saving the generated instruction in `.takt/tasks.yaml`. This tutorial queues tasks and runs them with `takt run`.
+
+`Execute here now` first explains that this TUI will be unavailable until the workflow finishes and that the normal flow is to save the task and use `takt run`. Its confirmation defaults to No (`[y/N]`). Only y starts execution in the current directory; N, Enter, or Esc returns to the same menu with the selection preserved. Esc in the menu returns to conversation input.
 
 After choosing **Save as Task**, TAKT asks for worktree settings. `Auto-create PR?` defaults to Yes; answer `n` if you are proceeding without GitHub.
 
@@ -292,16 +294,18 @@ Review the generated task instruction and choose **Create Issue**.
 
 ```text
 What would you like to do?
-    Execute now
     Save as Task
-    Continue editing
   ❯ Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Create Issue` creates the Issue and saves it as a task in one flow: after the Issue is created, the worktree settings prompts follow directly (it does not return to the menu). If you already know the Issue number, you can also use `takt add`.
+`Create Issue` asks `Save as a task too? [Y/n]` before creating anything. For this tutorial, answer Y or Enter to create the Issue and continue to task saving and worktree settings. n creates only the Issue without saving a task. Esc creates nothing and returns to the same proposal's menu with the selection preserved; Esc in that menu returns to conversation input. The Issue option is hidden in `--pr` sessions.
+
+If you already know the Issue number, you can also use `takt add`.
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 Then continue with the same local flow.
@@ -320,10 +324,10 @@ If you create a GitHub Issue while talking with Codex or another development ass
 Assume Codex created Issue `#1`.
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` fetches the GitHub Issue title, body, and comments, then saves them as a pending TAKT task.
+`takt add '#1'` fetches the GitHub Issue title, body, and comments, then saves them as a pending TAKT task.
 
 Run it.
 

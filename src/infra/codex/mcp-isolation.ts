@@ -1,0 +1,153 @@
+import type { CodexOptions } from '@openai/codex-sdk';
+import { z } from 'zod/v4';
+import { delimiter } from 'node:path';
+import { resolveCodexSdkCli } from './cli-runtime.js';
+import { hasCodexMcpServer, runCodexMcpList } from './mcp-list.js';
+import type { CodexCallOptions } from './types.js';
+
+const serverListSchema = z.array(z.object({ name: z.string().min(1), enabled: z.boolean() }));
+
+export async function prepareCodexMcpExclusions(
+  options: CodexCallOptions,
+  config: NonNullable<CodexOptions['config']>,
+  env: Record<string, string>,
+): Promise<string[]> {
+  const excludedNames = new Set(options.preparedMcp?.excludedServerNames);
+  if (excludedNames.size === 0) return [];
+  const ambientConfig = { ...config };
+  delete ambientConfig.mcp_servers;
+  const executablePath = resolveCodexSdkCli(options.codexPathOverride).executablePath;
+  const configOverrides = serializeCodexConfig(ambientConfig);
+  const existingNames: string[] = [];
+  for (const serverName of excludedNames) {
+    // `mcp list` probes HTTP authentication; `get` reads only the selected configuration.
+    if (await hasCodexMcpServer({
+      executablePath, configOverrides, serverName,
+      cwd: options.cwd, env, abortSignal: options.abortSignal,
+      configProfile: options.configProfile,
+    })) existingNames.push(serverName);
+  }
+  // A disabled entry still needs an existing transport in Codex's merged schema.
+  // Do not invent entries for excluded names absent from the effective config.
+  if (existingNames.length === 0) return [];
+
+  const configuredServers = config.mcp_servers as Record<string, unknown> | undefined;
+  const disabledNames = new Set(existingNames);
+  const mcpServers = Object.fromEntries([
+    ...Object.entries(configuredServers ?? {}).map(([name, existing]) => {
+      if (!disabledNames.has(name)) return [name, existing];
+      const existingEntry = existing !== null && typeof existing === 'object' && !Array.isArray(existing)
+        ? existing as Record<string, unknown>
+        : {};
+      return [name, { ...existingEntry, enabled: false }];
+    }),
+    ...existingNames.filter((name) => !Object.hasOwn(configuredServers ?? {}, name))
+      .map((name) => [name, { enabled: false }]),
+  ]);
+  return Object.keys(mcpServers).length === 0 ? [] : serializeCodexConfig({ mcp_servers: mcpServers });
+}
+
+function tomlValue(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) return `[${value.map(tomlValue).join(', ')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value).filter(([, child]) => child !== undefined)
+      .map(([key, child]) => `${JSON.stringify(key)} = ${tomlValue(child)}`).join(', ')}}`;
+  }
+  throw new Error('Unsupported Codex config override value');
+}
+
+export function serializeCodexConfig(config: Record<string, unknown>): string[] {
+  const overrides: string[] = [];
+  const flatten = (value: unknown, path: string[]): void => {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+      && Object.keys(value).every((key) => /^[A-Za-z0-9_-]+$/.test(key))) {
+      for (const [key, child] of Object.entries(value)) {
+        if (child !== undefined) flatten(child, [...path, key]);
+      }
+    } else {
+      overrides.push(`${path.join('.')}=${tomlValue(value)}`);
+    }
+  };
+  for (const [key, value] of Object.entries(config)) {
+    if (value !== undefined) flatten(value, [key]);
+  }
+  return overrides;
+}
+
+function parseCodexMcpServerList(json: string): z.infer<typeof serverListSchema> {
+  try {
+    return serverListSchema.parse(JSON.parse(json) as unknown);
+  } catch {
+    throw new Error('Invalid effective Codex MCP server list');
+  }
+}
+
+function buildCodexIsolatedMcpServers(json: string, ownServers: Record<string, unknown>): Record<string, unknown> {
+  const servers = parseCodexMcpServerList(json);
+  if (servers.some((server) => Object.hasOwn(ownServers, server.name))) {
+    throw new Error('TAKT MCP server name conflicts with an existing Codex MCP server');
+  }
+  return { ...Object.fromEntries(servers.map(({ name }) => [name, { enabled: false }])), ...ownServers };
+}
+
+export async function prepareCodexMcpIsolation(
+  options: CodexCallOptions,
+  codexConfig: NonNullable<CodexOptions['config']>,
+  environment: Record<string, string>,
+  permissionConfigOverrides: readonly string[],
+): Promise<{ codexPathOverride: string; env: Record<string, string>; configOverrides: string[] }> {
+  const codexEnvironment = { ...environment };
+  if (!codexEnvironment.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
+    codexEnvironment.CODEX_INTERNAL_ORIGINATOR_OVERRIDE = 'codex_sdk_ts';
+  }
+  if (options.openaiApiKey) codexEnvironment.CODEX_API_KEY = options.openaiApiKey;
+  const runtime = resolveCodexSdkCli(options.codexPathOverride);
+  const codexPathOverride = runtime.executablePath;
+  if (runtime.pathDirs.length > 0) {
+    const pathKeys = Object.keys(codexEnvironment).filter((key) => key.toLowerCase() === 'path');
+    const pathKey = process.platform === 'win32'
+      ? pathKeys.includes('Path') ? 'Path' : pathKeys.at(-1) ?? 'PATH'
+      : 'PATH';
+    if (process.platform === 'win32') {
+      for (const key of pathKeys) {
+        if (key !== pathKey) delete codexEnvironment[key];
+      }
+    }
+    const existingPaths = (codexEnvironment[pathKey] ?? '').split(delimiter)
+      .filter((entry) => entry.length > 0 && !runtime.pathDirs.includes(entry));
+    codexEnvironment[pathKey] = [...runtime.pathDirs, ...existingPaths].join(delimiter);
+  }
+  // Enumerate before adding TAKT's definitions so recursive TOML merging cannot hide a name collision.
+  const ambientConfig = { ...codexConfig };
+  delete ambientConfig.mcp_servers;
+  const isolationConfig: NonNullable<CodexOptions['config']> = {
+    ...ambientConfig,
+    approval_policy: 'never', notify: [],
+    ...(options.baseUrl === undefined ? {} : { openai_base_url: options.baseUrl }),
+    ...(options.model === undefined ? {} : { model: options.model }),
+    features: {
+      ...(ambientConfig.features as Record<string, boolean> | undefined),
+      apps: false, browser_use: false, browser_use_external: false,
+      computer_use: false, image_generation: false, plugins: false, hooks: false,
+    },
+  };
+  const sessionOverrides = [
+    ...serializeCodexConfig(isolationConfig),
+    ...await prepareCodexMcpExclusions(options, ambientConfig, codexEnvironment),
+  ];
+  const json = await runCodexMcpList({
+    executablePath: codexPathOverride, cwd: options.cwd, env: codexEnvironment,
+    configOverrides: sessionOverrides, configProfile: options.configProfile,
+    abortSignal: options.abortSignal,
+  });
+  const ownServers = options.preparedMcp?.config?.mcp_servers ?? {};
+  // CLI paths split on dots without parsing quoted keys. Serialize unusual names as one table,
+  // including TAKT's servers, since a later override of the whole table would replace earlier ones.
+  const configOverrides = [
+    ...sessionOverrides, ...serializeCodexConfig({ mcp_servers: buildCodexIsolatedMcpServers(json, ownServers) }),
+    ...permissionConfigOverrides,
+  ];
+  return { codexPathOverride, env: codexEnvironment, configOverrides };
+}

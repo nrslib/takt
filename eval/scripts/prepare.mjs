@@ -25,9 +25,15 @@
  * Usage:
  *   node eval/scripts/prepare.mjs [targetId...]   # default: all targets
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { MERGE_CI_TARGETS, prepareMergeCiRecovery } from './prepare-merge-ci-recovery.mjs';
+import { PHASE_AWARENESS_TARGET, preparePhaseAwareness } from './prepare-phase-awareness.mjs';
+import { ADJUDICATOR_TARGETS, buildAdjudicatorFixture } from '../adjudicator-no-fix-cases.mjs';
+import { REPAIR_STRATEGY_TARGET } from '../repair-strategy-cases.mjs';
+import { prepareRepairStrategy } from './prepare-repair-strategy.mjs';
 
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
@@ -46,6 +52,94 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...['carry', 'update'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `review-adjudication-carry-forward-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/review-adjudication-carry-forward/${caseId}`,
+    projectFromFixture: true, copyFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'], reportFile: 'review-resolution.md',
+    carryForwardDecision: true,
+  }))),
+  ...['ordinary', 'reconsider', 'open-normal', 'explicit-current'].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `review-proportionality-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/review-proportionality/${caseId}`,
+    projectFromFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'],
+  }))),
+  ...["input-local","input-external","local-condition","long-condition","quality","misdirected-evidence"].flatMap((caseId) => ['ja', 'en'].map((language) => ({
+    id: `adjudication-scope-${caseId}-${language}`,
+    workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/fixtures/adjudication-scope/${caseId}`,
+    ...(language === 'en' ? { fixtureOverlay: `eval/fixtures/adjudication-scope/en/${caseId}` } : {}),
+    projectFromFixture: true, copyFixture: true, language,
+    requiredFacetKinds: ['policies', 'knowledge'], reportFile: 'review-resolution.md',
+  }))),
+  ...ADJUDICATOR_TARGETS.map((id) => ({
+    id, workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/.work/${id}`, projectFromFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'], promptExtension: 'j2',
+  })),
+  ...[
+    ['rt', 'security-review'],
+    ['rc', 'coding-review'],
+    ['rq', 'arch-review'],
+    ['ne', 'security-review'],
+    ['np', 'coding-review'],
+    ['nb', 'arch-review'],
+  ].map(([caseId, step]) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step,
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+    ...(step === 'security-review' ? {
+      dynamicFacetSelection: {
+        sourceWorkflow: 'development-review',
+        pool: 'security-review-facets',
+        candidateIds: ['cli'],
+      },
+    } : {}),
+  })),
+  ...['at', 'ac', 'aq', 'ae', 'ap', 'ab'].map((caseId) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  ...['vd1', 'vd2', 'vn1', 'vn2', 'pd1'].map((caseId) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'review-remediation',
+    step: caseId === 'pd1' ? 'verification-replan' : 'fix-verifier',
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  ...['a1', 'a2', 'a3', 'a4'].map((caseId) => ({
+    id: `review-adjudication-applicable-inputs-${caseId}`,
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  ...['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4'].map((caseId) => ({
+    id: `fix-verification-applicable-inputs-${caseId}`,
+    workflow: ['r1', 'r2', 'n4'].includes(caseId) ? 'review-remediation' : caseId.startsWith('a') ? 'peer-review' : 'review-remediation',
+    step: ['r1', 'r2', 'n4'].includes(caseId) ? 'verification-replan' : caseId.startsWith('a') ? 'review-adjudication' : 'fix-verifier',
+    fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
   ...['a1', 'a3', 'a5'].map((caseId) => ({
     id: `security-threat-model-${caseId}`,
     workflow: 'takt-development-review',
@@ -59,6 +153,50 @@ const TARGETS = [
       pool: 'takt-security-review-facets',
       candidateIds: ['cli'],
     },
+  })),
+  {
+    id: 'finding-premise-scope-rv1',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/finding-premise-scope/rv1',
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  },
+  ...['rv2', 'rn1'].map((caseId) => ({
+    id: `finding-premise-scope-${caseId}`,
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'coding-review',
+    fixture: `eval/fixtures/finding-premise-scope/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  {
+    id: 'finding-premise-scope-rn2',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'security-review',
+    fixture: 'eval/fixtures/finding-premise-scope/rn2',
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+    dynamicFacetSelection: {
+      sourceWorkflow: 'development-review',
+      pool: 'security-review-facets',
+      candidateIds: ['cli'],
+    },
+  },
+  ...['pl1', 'pn1'].map((caseId) => ({
+    id: `finding-premise-scope-${caseId}`,
+    workflow: 'development-core',
+    step: 'replan',
+    fixture: `eval/fixtures/finding-premise-scope/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
   })),
   ...['a2', 'a4'].map((caseId) => ({
     id: `security-threat-model-${caseId}`,
@@ -166,6 +304,214 @@ const TARGETS = [
     promptExtension: 'j2',
   },
   {
+    id: 'review-external-confirmation-basis-not-applicable',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/review-external-confirmation/basis-not-applicable',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+  },
+  {
+    id: 'spec-deviation-grounded-generic-ja',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/grounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-grounded-peer-ja',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/grounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-grounded-generic-en',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/grounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-grounded-peer-en',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/grounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-reinterpretation-generic-ja',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/reinterpretation',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-reinterpretation-peer-ja',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/reinterpretation',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-reinterpretation-generic-en',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/reinterpretation',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-reinterpretation-peer-en',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/reinterpretation',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-ungrounded-generic-ja',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/ungrounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-ungrounded-peer-ja',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/ungrounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-ungrounded-generic-en',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/ungrounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-ungrounded-peer-en',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/ungrounded',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-clean-generic-ja',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/clean',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-clean-peer-ja',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/clean',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-clean-generic-en',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/clean',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-clean-peer-en',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/clean',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-other-unmet-generic-ja',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/other-unmet',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-other-unmet-peer-ja',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/other-unmet',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'ja',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-other-unmet-generic-en',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/spec-deviation/other-unmet',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
+    id: 'spec-deviation-other-unmet-peer-en',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/spec-deviation/other-unmet',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+    language: 'en',
+    reportFile: 'summary.md',
+  },
+  {
     id: 'supervise-external-confirmation-generic',
     workflow: 'final-gate',
     step: 'supervise',
@@ -198,10 +544,26 @@ const TARGETS = [
     promptExtension: 'j2',
   },
   {
+    id: 'supervise-external-confirmation-basis-not-applicable',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/supervise-external-confirmation/basis-not-applicable',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+  },
+  {
     id: 'replan-external-confirmation-handoff',
     workflow: 'development-core',
     step: 'replan',
     fixture: 'eval/fixtures/replan-external-confirmation/handoff',
+    projectFromFixture: true,
+    promptExtension: 'j2',
+  },
+  {
+    id: 'replan-external-confirmation-basis-not-applicable',
+    workflow: 'development-core',
+    step: 'replan',
+    fixture: 'eval/fixtures/replan-external-confirmation/basis-not-applicable',
     projectFromFixture: true,
     promptExtension: 'j2',
   },
@@ -243,12 +605,23 @@ const TARGETS = [
     requiredFacetKinds: ['policies', 'knowledge'],
     promptExtension: 'j2',
   },
+  ...['good', 'bad', 'bad2', 'good-hook'].map(variant => ({
+    id: `frontend-mediator-review-${variant}`,
+    workflow: 'frontend',
+    step: 'frontend-review',
+    fixture: `eval/fixtures/frontend-mediator-review/${variant}`,
+    snapshotPrefix: 'frontend-review-context',
+    copyFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'],
+    promptExtension: 'j2',
+  })),
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
   // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
+  { id: 'frontend-mediator-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-mediator', mutable: true, requiredFacetKinds: ['policies', 'knowledge'] },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
   { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-self-scan', workflow: 'peer-review', step: 'fix', fixture: 'eval/fixtures/fix-self-scan', mutable: true },
@@ -615,25 +988,9 @@ const TARGETS = [
       candidateIds: ['cli'],
     },
   },
-  {
-    id: 'fix-verifier-family-boundary',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-family-boundary',
-  },
-  {
-    id: 'fix-verifier-state-closure',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-state-closure',
-  },
-  {
-    id: 'fix-verifier-state-routing',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-state-closure',
-    phase: 'phase3',
-  },
+  { id: 'fix-verifier-family-boundary', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-family-boundary' },
+  { id: 'fix-verifier-state-closure', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-state-closure' },
+  { id: 'fix-verifier-state-routing', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-state-closure', phase: 'phase3' },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
     id: 'review-adjudication-phase2',
@@ -663,27 +1020,20 @@ const TARGETS = [
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },
-  {
-    id: 'fix-verification-scope',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verification-scope',
-  },
-  {
-    id: 'fix-verification-current-diff-regression',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verification-current-diff-regression',
-  },
-  {
-    id: 'fix-verification-preserved-condition',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verification-preserved-condition',
-  },
+  { id: 'fix-verification-scope', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-scope' },
+  { id: 'fix-verification-current-diff-regression', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-current-diff-regression' },
+  { id: 'fix-verification-preserved-condition', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-preserved-condition' },
+
 ];
 
-export const PREPARE_TARGET_IDS = Object.freeze(TARGETS.map(({ id }) => id));
+const ARTIFACT_HANDOFF_TARGET = 'review-artifact-input-handoff';
+export const PREPARE_TARGET_IDS = Object.freeze([
+  ...TARGETS.map(({ id }) => id),
+  ARTIFACT_HANDOFF_TARGET,
+  REPAIR_STRATEGY_TARGET,
+  PHASE_AWARENESS_TARGET,
+  ...MERGE_CI_TARGETS,
+]);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
@@ -877,11 +1227,24 @@ function composeConfiguredDynamicFacets(target, selection, targetId, stepName, p
 async function main() {
   const requested = process.argv.slice(2);
   for (const id of requested) {
-    if (!TARGETS.some((t) => t.id === id)) {
-      throw new Error(`Unknown target "${id}". Available: ${TARGETS.map((t) => t.id).join(', ')}`);
+    if (!PREPARE_TARGET_IDS.includes(id)) {
+      throw new Error(`Unknown target "${id}". Available: ${PREPARE_TARGET_IDS.join(', ')}`);
     }
   }
+  if (requested.includes(REPAIR_STRATEGY_TARGET)) await prepareRepairStrategy();
+  if (requested.includes(PHASE_AWARENESS_TARGET)) preparePhaseAwareness();
+  if (requested.includes(ARTIFACT_HANDOFF_TARGET)) {
+    execFileSync(process.execPath, ['eval/scripts/prepare-review-artifact-input-handoff.mjs'], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    });
+  }
+  await prepareMergeCiRecovery(requested.filter((id) => MERGE_CI_TARGETS.includes(id)));
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
+
+  for (const { id, fixture } of targets) {
+    if (ADJUDICATOR_TARGETS.includes(id)) buildAdjudicatorFixture(resolve(repoRoot, fixture), id.at(-1));
+  }
 
   const preparedDirs = new Set();
 
@@ -893,6 +1256,7 @@ async function main() {
     step: stepName,
     monitorCycle,
     fixture,
+    fixtureOverlay,
     mutable,
     workflowCallVars,
     projectFromFixture,
@@ -909,6 +1273,7 @@ async function main() {
     fixtureConfig,
     language: targetLanguage,
     reportsSeed,
+    carryForwardDecision,
   } of targets) {
     const language = targetLanguage ?? EVAL_LANGUAGE;
     process.env.TAKT_CONFIG_DIR = language === EVAL_LANGUAGE
@@ -928,6 +1293,12 @@ async function main() {
       rmSync(runDir, { recursive: true, force: true });
       mkdirSync(dirname(runDir), { recursive: true });
       cpSync(fixtureDir, runDir, { recursive: true });
+    }
+    if (fixtureOverlay !== undefined) {
+      if (!copyFixture && !mutable) {
+        throw new Error(`Target "${id}" requires a copied fixture for fixtureOverlay`);
+      }
+      cpSync(resolve(repoRoot, fixtureOverlay), runDir, { recursive: true });
     }
     if (fixtureConfig !== undefined) {
       if (!projectFromFixture || (!copyFixture && !mutable)) {
@@ -1086,6 +1457,16 @@ async function main() {
       workflowCallVars: effectiveWorkflowCallVars,
       workflowRules,
       language,
+      ...(carryForwardDecision === true ? { declaredReportInputs: [
+        { declaredNames: ['coding-review.md'], reports: [{
+          reference: 'coding-review.md', scope: 'declared-producer', producer: 'reviewers',
+          content: readFileSync(join(reportDir, 'coding-review.md'), 'utf8'),
+        }] },
+        { declaredNames: ['review-resolution.md'], reports: [{
+          reference: 'review-resolution.md', scope: 'declared-producer', producer: 'review-adjudication',
+          content: `Previous completed report: 1 / 1; execution=eval-prior; path=\`${join(runDir, 'previous-decision.md')}\`\n\n${readFileSync(join(runDir, 'previous-decision.md'), 'utf8')}`,
+        }] },
+      ] } : {}),
     };
 
     const instruction = companionSystemPrompt !== undefined
@@ -1135,6 +1516,9 @@ async function main() {
         .replaceAll(TASK_MARKER, '{{task}}')
         .replaceAll(PREV_MARKER, '{{previous_response}}');
       writeFileSync(join(outDir, `${id}.phase2.md`), reportPrompt);
+      if (promptExtension === 'j2') {
+        writeFileSync(join(outDir, `${id}.phase2.j2`), reportPrompt);
+      }
     }
 
     const targetName = companionName ?? (monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName);

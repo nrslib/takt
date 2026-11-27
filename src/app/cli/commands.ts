@@ -7,6 +7,9 @@ import { InvalidArgumentError, type Command } from 'commander';
 import type { Language } from '../../core/models/config-types.js';
 import type { RoutingTelemetryStatus } from '../../infra/config/global/globalConfigAccessors.js';
 import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTypes.js';
+import { isDeletableTaskStatus, type DeletableTaskStatus } from '../../features/tasks/list/taskDeleteSelection.js';
+import { getLabel } from '../../shared/i18n/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { program } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 
@@ -39,6 +42,82 @@ export function parsePullRequestNumber(value: string): number {
   return prNumber;
 }
 
+export function parseMergeConcurrency(value: string): number {
+  if (!/^\d+$/u.test(value)) throw new InvalidArgumentError('Merge concurrency must be a positive integer');
+  const concurrency = Number(value);
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new InvalidArgumentError('Merge concurrency must be a positive safe integer');
+  }
+  return concurrency;
+}
+
+function parseMergeArgument(value: string): number | string {
+  if (/^\d+$/u.test(value)) return parsePullRequestNumber(value);
+  if (value.trim().length === 0) throw new InvalidArgumentError('PR selection text must not be empty');
+  return value;
+}
+
+const workerCommand = program.command('worker')
+  .description('Connect a remote worker to a daemon using --url and --token; manage registrations with add, list and remove')
+  .option('--url <url>', 'Daemon URL (HTTPS is required outside localhost)')
+  .option('--token <token>', 'Worker registration token')
+  .action(async (options: { url?: string; token?: string }) => {
+    if (options.url === undefined || options.token === undefined) throw new Error('Worker startup requires --url and --token');
+    const { startWorker } = await import('../../features/workerPool/workerCommands.js');
+    await startWorker(options.url, options.token);
+  });
+workerCommand.command('add').description('Register a worker and print its token once')
+  .argument('<name>', 'Worker name').option('--concurrency <number>', 'Maximum concurrent tasks', (value: string) => {
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new InvalidArgumentError('Worker concurrency must be a nonnegative safe integer');
+    return Number(value);
+  }).action(async (name: string, options: { concurrency?: number }) => {
+    if (options.concurrency === undefined) throw new Error('Worker registration requires --concurrency');
+    const { addWorker } = await import('../../features/workerPool/workerCommands.js');
+    await addWorker(name, options.concurrency);
+  });
+workerCommand.command('list').description('List worker names and concurrency without tokens').action(async () => {
+  const { listWorkers } = await import('../../features/workerPool/workerCommands.js');
+  await listWorkers();
+});
+workerCommand.command('remove').description('Remove a worker registration and disconnect it')
+  .argument('<name>', 'Worker name').action(async (name: string) => {
+    const { removeWorker } = await import('../../features/workerPool/workerCommands.js');
+    await removeWorker(name);
+  });
+
+program
+  .command('daemon')
+  .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
+  .option('--resident', 'Keep the daemon running without work or TUI connections', false)
+  .action(async (options: { resident: boolean }) => {
+    const { runDaemonForeground } = await import('../../features/daemon/lifecycle.js');
+    await runDaemonForeground(options.resident);
+  })
+  .command('stop')
+  .description('Stop the manager daemon')
+  .action(async () => {
+    const { stopDaemon } = await import('../../features/daemon/lifecycle.js');
+    await stopDaemon();
+  });
+
+program
+  .command('director')
+  .description('Open the experimental director conversation TUI')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runDirector } = await import('../../features/director/runDirector.js');
+    await runDirector({ cwd: getCliExecutionContext().cwd, agentOverrides: resolveAgentOverrides(program) });
+  });
+
+program
+  .command('manager')
+  .description('Open the experimental manager conversation TUI')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runManager } = await import('../../features/manager/runManager.js');
+    await runManager({ cwd: getCliExecutionContext().cwd, agentOverrides: resolveAgentOverrides(program) });
+  });
+
 program
   .command('run')
   .description('Run all pending tasks from .takt/tasks.yaml')
@@ -56,7 +135,7 @@ program
 program
   .command('install')
   .description('Install a managed provider runtime')
-  .argument('[component]', 'Provider runtime to install (deepseek-harness)')
+  .argument('[component]', 'Provider runtime to install (claude-sdk, codex, opencode, pi, deepseek-harness)')
   .option('--force', 'Reinstall the managed runtime even when it passes integrity checks')
   .action(async (component?: string, opts?: { force?: boolean }) => {
     if (component === undefined) {
@@ -65,7 +144,9 @@ program
       await executeDefaultAction('install');
       return;
     }
-    if (component !== 'deepseek-harness') {
+    const { managedProviderFor } = await import('../../infra/managed-providers/definitions.js');
+    const provider = managedProviderFor(component);
+    if (provider === undefined) {
       throw new Error(`Unsupported install target: ${component}`);
     }
     const controller = new AbortController();
@@ -73,21 +154,50 @@ program
     const onSigint = (): void => {
       if (interrupted !== undefined) return;
       interrupted = 'SIGINT';
-      controller.abort(new Error('DeepSeek Harness installation interrupted by SIGINT.'));
+      controller.abort(new Error(`${provider} installation interrupted by SIGINT.`));
     };
     const onSigterm = (): void => {
       if (interrupted !== undefined) return;
       interrupted = 'SIGTERM';
-      controller.abort(new Error('DeepSeek Harness installation interrupted by SIGTERM.'));
+      controller.abort(new Error(`${provider} installation interrupted by SIGTERM.`));
     };
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
     try {
-      const { installDeepSeekHarness, getDeepSeekHarnessManagedPackagePaths } = await import('../../infra/deepseek-harness/managed-package.js');
+      const { installProvider } = await import('../../infra/managed-providers/loader.js');
       const { success } = await import('../../shared/ui/index.js');
-      await installDeepSeekHarness({ signal: controller.signal, force: opts?.force === true });
+      await installProvider(provider, { signal: controller.signal, force: opts?.force === true });
       if (interrupted !== undefined) return;
-      success(`DeepSeek Harness SDK/runtime is ready in ${getDeepSeekHarnessManagedPackagePaths().current}`);
+      success(`${provider} SDK/runtime is ready.`);
+    } catch (error) {
+      if (interrupted === undefined) throw error;
+    } finally {
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      if (interrupted !== undefined) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
+    }
+  });
+
+program
+  .command('update')
+  .description('Update installed managed providers to the versions pinned by TAKT')
+  .argument('[provider]', 'Update one provider; omit to update all installed providers with version drift')
+  .action(async (component?: string) => {
+    const { MANAGED_PROVIDERS, managedProviderFor } = await import('../../infra/managed-providers/definitions.js');
+    const provider = component === undefined ? undefined : managedProviderFor(component);
+    if (component !== undefined && provider === undefined) throw new Error(`Unsupported update target: ${component}`);
+    const { inspectProviderInstallation, installProvider } = await import('../../infra/managed-providers/loader.js');
+    const controller = new AbortController();
+    let interrupted: NodeJS.Signals | undefined;
+    const onSigint = (): void => { interrupted ??= 'SIGINT'; controller.abort(new Error('Managed provider update interrupted.')); };
+    const onSigterm = (): void => { interrupted ??= 'SIGTERM'; controller.abort(new Error('Managed provider update interrupted.')); };
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
+    try {
+      for (const target of provider === undefined ? MANAGED_PROVIDERS : [provider]) {
+        controller.signal.throwIfAborted();
+        if ((await inspectProviderInstallation(target)).state === 'stale') await installProvider(target, { signal: controller.signal });
+      }
     } catch (error) {
       if (interrupted === undefined) throw error;
     } finally {
@@ -153,6 +263,61 @@ program
   });
 
 program
+  .command('merge')
+  .description('Run a merge workflow for a pull request or one batch of open pull requests')
+  .argument('[pr-number-or-text]', 'Pull request number (ignores selection conditions) or AI selection text', parseMergeArgument)
+  .allowExcessArguments(false)
+  .option('--author <login>', 'Filter by author')
+  .option('--label <label>', 'Require every specified label', (value: string, previous: string[]) => [...previous, value], [])
+  .option('--base <branch>', 'Filter by base branch')
+  .option('--head <pattern>', 'Filter by head branch (* wildcard)')
+  .option('--managed-by-takt', 'Select TAKT-managed pull requests')
+  .option('--include-forks', 'Include pull requests from forks (requires threat checks)')
+  .option('--include-draft', 'Include draft pull requests')
+  .option('--workflow <name-or-path>', 'Workflow to execute')
+  .option('--concurrency <count>', 'Maximum concurrent pull request workflows', parseMergeConcurrency)
+  .action(async (prNumberOrText: number | string | undefined, opts) => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { resolveConfigValue } = await import('../../infra/config/index.js');
+    const { runMerge, resolveMergeSettings } = await import('../../features/merge/index.js');
+    const { info, error: logError } = await import('../../shared/ui/index.js');
+    const { getErrorMessage, sanitizeTerminalText } = await import('../../shared/utils/index.js');
+    const projectCwd = getCliExecutionContext().cwd;
+    const where = {
+      ...(opts.author === undefined ? {} : { author: opts.author }),
+      ...(opts.label.length === 0 ? {} : { labels: opts.label }),
+      ...(opts.base === undefined ? {} : { base_branch: opts.base }),
+      ...(opts.head === undefined ? {} : { head_branch: opts.head }),
+      ...(opts.managedByTakt === undefined ? {} : { managed_by_takt: opts.managedByTakt }),
+    };
+    try {
+      const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
+      const result = await runMerge({
+        projectCwd, settings,
+        prNumber: typeof prNumberOrText === 'number' ? prNumberOrText : undefined,
+        ...(typeof prNumberOrText === 'string' ? {
+          selectionText: prNumberOrText,
+          onSelectionResult: (results: readonly import('../../features/merge/selection.js').PrSelectionResult[]) => {
+            for (const result of results) {
+              info(result.selected
+                ? `Selected PR #${result.number}: ${sanitizeTerminalText(result.reason)}`
+                : `Excluded PR #${result.number}`);
+            }
+          },
+        } : {}),
+        concurrency: opts.concurrency ?? settings.concurrency,
+        workflow: opts.workflow, includeDraft: opts.includeDraft, includeForks: opts.includeForks,
+        ...(Object.keys(where).length === 0 ? {} : { where }),
+      });
+      info(`Processed: ${result.processedCount}, merged: ${result.mergedCount}, prepared: ${result.preparedCount}`);
+      process.exitCode = result.exitCode;
+    } catch (error) {
+      logError(sanitizeTerminalText(getErrorMessage(error)));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('add')
   .description('Add a new task')
   .argument('[task]', 'Task description or issue reference (e.g. "#28")')
@@ -191,6 +356,13 @@ program
   .description('List task branches (merge/delete)')
   .option('--non-interactive', 'Run list in non-interactive mode')
   .option('--action <action>', 'Non-interactive action (diff|sync|try|merge|delete)')
+  .option('--status <status...>', getLabel('taskDeletion.statusOption'), (value: string, previous: DeletableTaskStatus[] = []) => {
+    if (!isDeletableTaskStatus(value)) {
+      throw new InvalidArgumentError(getLabel('taskDeletion.invalidStatus', undefined, { status: sanitizeTerminalText(value) }));
+    }
+    return [...previous, value];
+  })
+  .option('--goal <goalId>', getLabel('taskDeletion.goalOption'))
   .option('--format <format>', 'Output format for non-interactive list (text|json)')
   .option('--yes', 'Skip confirmation prompts in non-interactive mode')
   .action(async (_opts, command) => {
@@ -203,6 +375,8 @@ program
       {
         enabled: opts.nonInteractive === true,
         action: opts.action as string | undefined,
+        status: opts.status as DeletableTaskStatus[] | undefined,
+        goal: opts.goal as string | undefined,
         branch: opts.branch as string | undefined,
         format: opts.format as string | undefined,
         yes: opts.yes === true,

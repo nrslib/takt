@@ -252,13 +252,16 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     const ready = await waitFor(() => output.includes('Watching:') || watcher?.exitCode !== null, 30_000);
     expect(ready, output).toBe(true);
     expect(watcher.exitCode, output).toBeNull();
-    writeFileSync(tasksPath, stringifyYaml({ tasks: [pendingTask('watched-task', fixture.workflowPath)] }));
+    const added = runTakt({ injectProvider: false, args: ['--workflow', fixture.workflowPath, 'add', 'Execute watched-task'],
+      cwd: repo.path, env: fixture.env, input: 'n\n', timeout: 30_000 });
+    expect(added.exitCode, added.stdout + added.stderr).toBe(0);
     const completed = await waitFor(() => {
       const stored = parseYaml(readFileSync(tasksPath, 'utf8')) as { tasks: Array<Record<string, unknown>> };
-      return stored.tasks.some((task) => task.name === 'watched-task' && task.status === 'completed');
+      return stored.tasks.length === 1 && stored.tasks[0]?.summary === 'Execute watched-task'
+        && stored.tasks[0]?.status === 'completed';
     }, 120_000);
 
-    expect(completed, output).toBe(true);
+    expect(completed, output + readFileSync(tasksPath, 'utf8')).toBe(true);
     const calls = readCalls(fixture.callLog).filter((call) => call.event === 'start' && call.personaName === 'agents/test-coder');
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ provider: 'mock', model: 'assignment-cost' });

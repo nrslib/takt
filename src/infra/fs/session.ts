@@ -99,6 +99,7 @@ export function parseNdjsonLogContent(content: string, sourcePath: string): Sess
             instruction: record.instruction,
             status: record.status,
             timestamp: record.timestamp,
+            iteration: record.iteration,
             content: record.content,
             ...(record.workflow ? { workflow: record.workflow } : {}),
             ...(record.stack ? { stack: record.stack } : {}),
@@ -111,6 +112,21 @@ export function parseNdjsonLogContent(content: string, sourcePath: string): Sess
           });
           sessionLog.iterations++;
         }
+        break;
+
+      case 'step_start':
+        if (sessionLog) {
+          const start = {
+            step: record.step, iteration: record.iteration, timestamp: record.timestamp,
+            ...(record.workflow === undefined ? {} : { workflow: record.workflow }),
+            ...(record.stack === undefined ? {} : { stack: record.stack }),
+          };
+          (sessionLog.stepStarts ??= []).push(start);
+        }
+        break;
+
+      case 'workflow_call_complete':
+        if (sessionLog) (sessionLog.workflowCallCompletions ??= []).push({ stack: record.stack });
         break;
 
       case 'workflow_complete':

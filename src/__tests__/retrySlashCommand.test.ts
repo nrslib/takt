@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -29,6 +29,11 @@ import {
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
 import { selectOption } from '../shared/prompt/index.js';
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready' as const, directory: '/test/managed-sdk' })),
+}));
 
 // --- Mocks (infrastructure only) ---
 
@@ -73,18 +78,19 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -115,6 +121,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { runDirectRetryMode, runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
 
 const mockGetProvider = vi.mocked(getProvider);
@@ -162,10 +169,13 @@ function buildRetryContext(overrides?: Partial<RetryContext>): RetryContext {
 
 describe('/retry slash command', () => {
   let tmpDir: string;
+  let projectConfigDir: string;
 
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    projectConfigDir = mkdtempSync(join(tmpdir(), 'takt-retry-command-config-'));
+    vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
     mockGlobalConfig.provider = 'mock';
     mockResolveFormalSpecConfigurationWithoutPrompt.mockReturnValue({ mode: false, comments: true, modelCheckTimeoutSeconds: 300 });
     mockRunFormalSpecVerification.mockResolvedValue({
@@ -179,6 +189,7 @@ describe('/retry slash command', () => {
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(projectConfigDir, { recursive: true, force: true });
   });
 
   it('should not route previous order content to execution when /retry is typed', async () => {

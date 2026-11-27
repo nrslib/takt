@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { SummaryActionOption, SummaryActionValue } from '../features/interactive/interactive-summary-types.js';
 import {
   resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig,
   type AssistantCliOverrides,
@@ -36,12 +37,27 @@ const { mockUpdatePersonaSession } = vi.hoisted(() => ({
   mockUpdatePersonaSession: vi.fn(),
 }));
 
-const { mockGetGitProvider, mockRunAssistantRetryCommand } = vi.hoisted(() => ({
+const { mockGetGitProvider, mockRunAssistantRetryCommand, mockRunFormalSpecVerification } = vi.hoisted(() => ({
   mockGetGitProvider: vi.fn(),
   mockRunAssistantRetryCommand: vi.fn(),
+  mockRunFormalSpecVerification: vi.fn(),
 }));
 
+const recordWriteFailure = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../infra/config/project/sessionStore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/project/sessionStore.js')>();
+  return { ...actual, writeFileAtomic: (...args: Parameters<typeof actual.writeFileAtomic>) => {
+    if (recordWriteFailure.enabled && String(args[0]).endsWith('interactive-sessions.json')) throw new Error('write failed');
+    return actual.writeFileAtomic(...args);
+  } };
+});
+
 // --- Infrastructure mocks ---
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
+}));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -53,7 +69,6 @@ vi.mock('../infra/config/index.js', () => ({
   resolveNonWorkflowProviderOptions: vi.fn(() => ({
     codex: { skills: { repo: false, user: false } },
   })),
-  takeSessionState: vi.fn(() => null),
   updatePersonaSession: mockUpdatePersonaSession,
 }));
 
@@ -96,53 +111,87 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
-  takeSessionState: vi.fn(() => null),
+  getProjectConfigDir: vi.fn(() => process.env.TAKT_CONFIG_DIR!),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
-vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: vi.fn().mockResolvedValue('execute'),
-}));
+vi.mock('../features/interactive/pipedSummaryInput.js', async () => {
+  const { selectOption, selectOptionWithDefault, confirmWithCancel } = await import('../shared/prompt/index.js');
+  return {
+    selectPipedSummaryAction: (
+      _task: string,
+      _proposedLabel: string,
+      message: string,
+      options: readonly SummaryActionOption[],
+      initialAction?: SummaryActionValue,
+    ) => initialAction === undefined
+      ? selectOption(message, [...options])
+      : selectOptionWithDefault(message, [...options], initialAction),
+    confirmPipedSummaryAction: confirmWithCancel,
+  };
+});
 
-const mockSelectRecentSession = vi.fn<(cwd: string, lang: 'en' | 'ja') => Promise<string | null>>();
+vi.mock('../shared/prompt/index.js', async (importOriginal) => {
+  const select = vi.fn().mockResolvedValue('execute');
+  return {
+    ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+    selectOption: select,
+    selectOptionWithDefault: select,
+    confirmWithCancel: vi.fn().mockResolvedValue({ kind: 'value', value: true }),
+  };
+});
+
+const mockSelectRecentSession = vi.fn<(...args: Parameters<typeof import('../features/interactive/sessionSelector.js').selectRecentSession>) => Promise<string | null>>();
 
 vi.mock('../features/interactive/sessionSelector.js', () => ({
-  selectRecentSession: (...args: [string, 'en' | 'ja']) => mockSelectRecentSession(...args),
+  selectRecentSession: (...args: Parameters<typeof import('../features/interactive/sessionSelector.js').selectRecentSession>) => mockSelectRecentSession(...args),
 }));
 
 vi.mock('../features/interactive/assistantRetryCommand.js', () => ({
   runAssistantRetryCommand: (...args: unknown[]) => mockRunAssistantRetryCommand(...args),
 }));
 
-vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
-    key === 'interactive.issueCommand.fetched'
-      ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
-      : 'Mock label'
-  )),
-  getLabelObject: vi.fn(() => ({
-    intro: 'Intro',
-    resume: 'Resume',
-    noConversation: 'No conversation',
-    summarizeFailed: 'Summarize failed',
-    continuePrompt: 'Continue?',
-    proposed: 'Proposed:',
-    actionPrompt: 'What next?',
-    retryNoOrder: 'No previous order found.',
-    cancelled: 'Cancelled',
-    actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
-  })),
+vi.mock('../features/interactive/formalSpecVerification.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/interactive/formalSpecVerification.js')>()),
+  runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
 }));
+
+vi.mock('../shared/i18n/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/i18n/index.js')>();
+  return {
+    getLabel: vi.fn((key: string, _lang: string, variables?: Record<string, string>) => (
+      key === 'interactive.issueCommand.fetched'
+        ? `Fetched Issues: ${variables?.issues ?? ''}. Source Context replaced.`
+        : key === 'interactive.resumeSessionLoaded' ? 'Session loaded'
+          : key === 'interactive.resumeSessionFailed' ? 'Session resume failed' : 'Mock label'
+    )),
+    getLabelObject: vi.fn(() => ({
+      ...actual.getLabelObject<Record<string, unknown>>('interactive.ui', 'en'),
+      intro: 'Intro',
+      resume: 'Resume',
+      noConversation: 'No conversation',
+      summarizeFailed: 'Summarize failed',
+      continuePrompt: 'Continue?',
+      proposed: 'Proposed:',
+      actionPrompt: 'What next?',
+      retryNoOrder: 'No previous order found.',
+      cancelled: 'Cancelled',
+      actions: { execute: 'Execute', saveTask: 'Save', continue: 'Continue' },
+    })),
+  };
+});
 
 // --- Imports (after mocks) ---
 
@@ -150,17 +199,62 @@ import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
-import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
+import { getRecordsPath, listRecords, recordTurn } from '../features/interactive/interactiveSessionRecords.js';
 import { SlashCommand } from '../shared/constants.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
 import type { SummaryPromptOptions } from '../features/interactive/conversationLoop.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogError = vi.mocked(logError);
+
+const { verificationIoFailure } = vi.hoisted(() => ({
+  verificationIoFailure: { cwd: undefined as string | undefined, ownership: false, retention: false, move: false },
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined && target.startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.retention && target.endsWith('.retain')) {
+        throw new Error('retention marker write failed');
+      }
+      return actual.writeFileSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (verificationIoFailure.cwd !== undefined && String(args[0]).startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.move && String(args[1]).endsWith('.retain')) {
+        throw new Error('retention marker move failed');
+      }
+      return actual.renameSync(...args);
+    },
+    mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined
+        && target.startsWith(verificationIoFailure.cwd)
+        && target.endsWith('specs')) {
+        throw new Error('specification setup failed');
+      }
+      return actual.mkdirSync(...args);
+    },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined
+        && target.startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.ownership && target.endsWith('.active')) {
+        throw new Error('ownership release failed');
+      }
+      return actual.rmSync(...args);
+    },
+  };
+});
 
 // --- Helpers ---
 
@@ -198,6 +292,12 @@ beforeEach(() => {
   mockGetGitProvider.mockReset();
   mockSelectOption.mockResolvedValue('execute');
   mockSelectRecentSession.mockResolvedValue(null);
+  mockRunFormalSpecVerification.mockResolvedValue({
+    verdict: 'passed',
+    verificationStarted: true,
+    quint: { status: 'passed' },
+    alloy: { status: 'passed' },
+  });
   mockResolveAssistantConfigLayers.mockReturnValue({
     local: { provider: 'mock' },
     global: {},
@@ -205,6 +305,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  recordWriteFailure.enabled = false;
   restoreStdin();
 });
 
@@ -572,6 +673,217 @@ describe('callAIWithRetry', () => {
 // /resume command
 // =================================================================
 describe('/resume command', () => {
+  it('continues the conversation after resetting unreadable session records', async () => {
+    const recordsPath = getRecordsPath('/test');
+    fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+    fs.writeFileSync(recordsPath, '{invalid json');
+    setupRawStdin(toRawInputs(['/cancel']));
+
+    const result = await runConversationLoop('/test', createSessionContext(), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(JSON.parse(fs.readFileSync(recordsPath, 'utf8'))).toEqual([]);
+    expect(listRecords('/test', 'mock')).toEqual([]);
+  });
+
+  it('keeps the conversation and resume list usable while record recovery cannot write', async () => {
+    const recordsPath = getRecordsPath('/test');
+    fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+    fs.writeFileSync(recordsPath, '{invalid json');
+    recordWriteFailure.enabled = true;
+    setupRawStdin(toRawInputs(['first', '/resume', 'second', '/cancel']));
+    const { provider } = createScenarioProvider([
+      { content: 'reply one', sessionId: 'conversation' },
+      { content: 'reply two', sessionId: 'conversation' },
+    ]);
+    mockSelectRecentSession.mockImplementation(async (...args) => {
+      const actual = await vi.importActual<typeof import('../features/interactive/sessionSelector.js')>('../features/interactive/sessionSelector.js');
+      return actual.selectRecentSession(...args);
+    });
+    mockSelectOption.mockImplementation(async (_message, choices) => {
+      expect(choices).toEqual(expect.arrayContaining([expect.objectContaining({ label: 'first', value: 'conversation' })]));
+      expect(fs.readFileSync(recordsPath, 'utf8')).toBe('{invalid json');
+      recordWriteFailure.enabled = false;
+      return '__new__';
+    });
+    const result = await runConversationLoop('/test', createSessionContext({ provider }), defaultStrategy, undefined, undefined);
+    expect(result.action).toBe('cancel');
+    expect(JSON.parse(fs.readFileSync(recordsPath, 'utf8'))).toMatchObject([
+      { sessionId: 'conversation', inputs: ['first', 'second'], response: 'reply two' },
+    ]);
+  });
+
+  it('records raw conversation inputs and the latest response for resume', async () => {
+    setupRawStdin(toRawInputs(['first', 'second', 'third', 'fourth', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'reply one', sessionId: 'conversation' },
+      { content: 'reply two', sessionId: 'conversation' },
+      { content: 'reply three', sessionId: 'conversation' },
+      { content: 'reply four', sessionId: 'conversation' },
+    ]);
+    await runConversationLoop('/test', createSessionContext({ provider }), {
+      ...defaultStrategy,
+      transformPrompt: (message: string) => `wrapped: ${message}`,
+    }, undefined, undefined);
+
+    expect(capture.prompts[3]).toContain('wrapped: fourth');
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'conversation', inputs: ['second', 'third', 'fourth'], response: 'reply four',
+    }]);
+  });
+
+  it('keeps the latest raw input and previous reply when a later provider call fails', async () => {
+    setupRawStdin(toRawInputs(['one', 'two']));
+    const { provider } = createScenarioProvider([
+      { content: 'reply one', sessionId: 'conversation' },
+      { content: 'provider failed', status: 'error', sessionId: 'conversation' },
+    ]);
+
+    const result = await runConversationLoop('/test', createSessionContext({ provider, disableSessionRetry: true }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'conversation', inputs: ['one', 'two'], response: 'reply one',
+    }]);
+  });
+
+  it('records earlier raw inputs after a new session ID becomes available', async () => {
+    setupRawStdin(toRawInputs(['one', 'two', '/cancel']));
+    const { provider } = createScenarioProvider([
+      { content: '', throws: new Error('provider failed') },
+      { content: 'reply two', sessionId: 'created' },
+    ]);
+
+    await runConversationLoop('/test', createSessionContext({ provider }), defaultStrategy, undefined, undefined);
+
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'created', inputs: ['one', 'two'], response: 'reply two',
+    }]);
+  });
+
+  it('reports a missing selected session and continues with a fresh session', async () => {
+    setupRawStdin(toRawInputs(['/resume', 'first input', 'next input', '/cancel']));
+    mockSelectRecentSession.mockResolvedValue('deleted-session');
+    recordTurn({ cwd: '/test', provider: 'mock', sessionId: 'deleted-session', input: 'old input', response: 'old reply' });
+    recordTurn({ cwd: '/test', provider: 'pi', sessionId: 'deleted-session', input: 'other input', response: 'other reply' });
+    const { provider } = createScenarioProvider([]);
+    const sessionIds: Array<string | undefined> = [];
+    provider._call.mockImplementation(async (_prompt: string, options: { sessionId?: string }) => {
+      sessionIds.push(options.sessionId);
+      if (options.sessionId === 'deleted-session') {
+        return {
+          persona: 'test', status: 'error', content: '', error: 'session no longer exists',
+          failureCategory: 'session_continuation_unsupported', timestamp: new Date(),
+        };
+      }
+      return { persona: 'test', status: 'done', content: 'fresh response', sessionId: 'fresh-session', timestamp: new Date() };
+    });
+    const ctx = createSessionContext({ provider, providerType: 'mock' });
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(sessionIds).toEqual(['deleted-session', undefined, 'fresh-session']);
+    expect(listRecords('/test', 'mock')).toMatchObject([{ sessionId: 'fresh-session', inputs: ['first input', 'next input'] }]);
+    expect(listRecords('/test', 'mock')).toHaveLength(1);
+    expect(listRecords('/test', 'pi')).toMatchObject([{ sessionId: 'deleted-session', response: 'other reply' }]);
+    const notices = [...mockLogInfo.mock.calls, ...mockLogError.mock.calls].map(([message]) => String(message));
+    expect(notices.some((message) => /(?:resume|session).*(?:fail|not found|no longer|could not)/i.test(message))).toBe(true);
+  });
+
+  it('shows the fresh retry error and accepts the next input after a selected session cannot resume', async () => {
+    setupRawStdin(toRawInputs(['/resume', 'first input', 'next input', '/cancel']));
+    mockSelectRecentSession.mockResolvedValue('deleted-session');
+    const { provider } = createScenarioProvider([]);
+    const sessionIds: Array<string | undefined> = [];
+    provider._call.mockImplementation(async (_prompt: string, options: { sessionId?: string }) => {
+      sessionIds.push(options.sessionId);
+      if (options.sessionId === 'deleted-session') {
+        return {
+          persona: 'test', status: 'error', content: '', error: 'session no longer exists',
+          failureCategory: 'session_continuation_unsupported', timestamp: new Date(),
+        };
+      }
+      if (sessionIds.length === 2) {
+        return { persona: 'test', status: 'error', content: '', error: 'fresh retry failed', timestamp: new Date() };
+      }
+      return { persona: 'test', status: 'done', content: 'next reply', sessionId: 'new-session', timestamp: new Date() };
+    });
+
+    const result = await runConversationLoop('/test', createSessionContext({ provider }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(sessionIds).toEqual(['deleted-session', undefined, undefined]);
+    expect(mockLogError).toHaveBeenCalledWith('fresh retry failed');
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'new-session', inputs: ['first input', 'next input'], response: 'next reply',
+    }]);
+  });
+
+  it('keeps a selected session record after an unrelated provider error', async () => {
+    setupRawStdin(toRawInputs(['/resume', 'new input']));
+    mockSelectRecentSession.mockResolvedValue('selected-session');
+    recordTurn({ cwd: '/test', provider: 'mock', sessionId: 'selected-session', input: 'old input', response: 'old reply' });
+    const { provider } = createScenarioProvider([
+      { content: 'provider unavailable', status: 'error', sessionId: 'selected-session' },
+    ]);
+
+    const result = await runConversationLoop('/test', createSessionContext({ provider, disableSessionRetry: true }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(listRecords('/test', 'mock')).toMatchObject([
+      { sessionId: 'selected-session', inputs: ['old input', 'new input'], response: 'old reply' },
+    ]);
+  });
+
+  it('discards a session that disappears between selection and resume', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/cancel']));
+    mockSelectRecentSession.mockImplementation(async () => {
+      recordTurn({ cwd: '/test', provider: 'claude', sessionId: 'disappeared', input: 'old input', response: 'old reply' });
+      return 'disappeared';
+    });
+
+    const result = await runConversationLoop('/test', createSessionContext({ providerType: 'claude' }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(listRecords('/test', 'claude')).toEqual([]);
+  });
+
+  it('passes the current provider to the session selector', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/cancel']));
+    const ctx = createSessionContext({ providerType: 'codex' });
+
+    await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en', 'codex', expect.anything());
+  });
+  it('should keep the existing session and prompt settings and process the next input after confirmation cancellation', async () => {
+    setupRawStdin(toRawInputs(['before resume', '/resume', 'after cancellation', '/go']));
+    mockSelectRecentSession.mockResolvedValue('unapproved-session');
+    const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue(null);
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.', 'Task instruction.']);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'], sessionId: 'initial-session',
+    });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      systemPrompt: 'initial system prompt',
+      formalSpec: true,
+      formalSpecComments: false,
+      resolveResumedSessionConfiguration,
+    }, undefined, undefined);
+
+    expect(result.action).toBe('execute');
+    expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
+    expect(capture.callCount).toBe(3);
+    expect(capture.sessionIds).not.toContain('unapproved-session');
+    expect(capture.systemPrompts.slice(0, 2)).toEqual(Array(2).fill(withProgressNotesGuidance('initial system prompt', 'en')));
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(capture.prompts[2]).toMatch(/Quint/);
+    expect(capture.prompts[2]).toMatch(/Alloy/);
+    expect(mockLogInfo).not.toHaveBeenCalledWith('Session loaded');
+  });
   it('should call selectRecentSession and update sessionId when session selected', async () => {
     // Given: /resume → select session → /cancel
     setupRawStdin(toRawInputs(['/resume', '/cancel']));
@@ -584,7 +896,7 @@ describe('/resume command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     // Then: selectRecentSession called
-    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
+    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en', 'mock', expect.anything());
 
     // Then: info about loaded session displayed
     expect(mockLogInfo).toHaveBeenCalled();
@@ -609,7 +921,7 @@ describe('/resume command', () => {
     }, undefined, undefined);
 
     // Then: selectRecentSession called but returned null
-    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
+    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en', 'mock', expect.anything());
     expect(resolveResumedSessionConfiguration).not.toHaveBeenCalled();
 
     // Then: cancelled
@@ -667,7 +979,7 @@ describe('/resume command', () => {
 
       expect(result.action).toBe('execute');
       expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
-      expect(capture.systemPrompts[0]).toBe(`resumed system prompt formalSpec=${formalSpec}`);
+      expect(capture.systemPrompts[0]).toBe(withProgressNotesGuidance(`resumed system prompt formalSpec=${formalSpec}`, 'en'));
       if (formalSpec) {
         expect(capture.prompts[1]).toMatch(/\bQuint\b/);
         expect(capture.prompts[1]).toMatch(/\bAlloy\b/);
@@ -679,7 +991,6 @@ describe('/resume command', () => {
   );
 
   it('should apply resumed comments=false to the summary prompt while keeping formal specifications enabled', async () => {
-    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
     setupRawStdin(toRawInputs(['/resume', '/go add rollback plan']));
     mockSelectRecentSession.mockResolvedValue('resumed-session-xyz');
     const resolveResumedSessionConfiguration = vi.fn().mockResolvedValue({
@@ -687,7 +998,7 @@ describe('/resume command', () => {
       formalSpec: true,
       formalSpecComments: false,
     });
-    const { provider } = createScenarioProvider([
+    const { provider, capture } = createScenarioProvider([
       { content: 'Generated task instruction.' },
     ]);
     const ctx = createSessionContext({
@@ -703,18 +1014,10 @@ describe('/resume command', () => {
 
     expect(result.action).toBe('execute');
     expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
-    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
-      expect.any(Array),
-      true,
-      'en',
-      expect.any(String),
-      expect.any(String),
-      undefined,
-      undefined,
-      undefined,
-      true,
-      false,
-    );
+    expect(capture.prompts[0]).toMatch(/\bQuint\b/);
+    expect(capture.prompts[0]).toMatch(/\bAlloy\b/);
+    expect(capture.prompts[0]).toContain('add rollback plan');
+    expect(capture.prompts[0]).not.toMatch(/natural-language comments|complete adjacent meaning comment/u);
   });
 
   it('should keep inline /go text as user note after resuming a session', async () => {
@@ -770,6 +1073,42 @@ describe('/resume command', () => {
     // Then
     expect(mockLogInfo).toHaveBeenCalled();
     expect(mockSelectRecentSession).not.toHaveBeenCalled();
+    expect(result.action).toBe('cancel');
+  });
+
+  it('shows /retry without a previous order and passes the result to the next AI turn', async () => {
+    setupRawStdin(toRawInputs(['/retry', 'What can I do next?', '/cancel']));
+    const { provider, capture } = createMockProvider(['You can create a new order.']);
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enableRetryCommand: true,
+      enableAssistantRetryCommands: false,
+      previousOrderContent: undefined,
+    }, undefined, undefined);
+
+    expect(mockLogInfo).toHaveBeenCalledWith('No previous order found.');
+    expect(capture.prompts).toHaveLength(1);
+    expect(capture.prompts[0]).toContain('No previous order found.');
+    expect(capture.prompts[0]).toContain('What can I do next?');
+    expect(result.action).toBe('cancel');
+  });
+
+  it.each(['retry', 'requeue'] as const)('should process the next input in the same dialogue after /%s confirmation cancellation', async (command) => {
+    setupRawStdin(toRawInputs(['before command', `/${command} keep scope`, 'after cancellation', '/cancel']));
+    const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);
+    mockRunAssistantRetryCommand.mockResolvedValue('The task was not changed.');
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'], sessionId: 'initial-session' });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy, enableAssistantRetryCommands: true,
+    }, undefined, undefined);
+
+    expect(mockRunAssistantRetryCommand).toHaveBeenCalledWith(expect.objectContaining({ command }));
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[1]).toContain('after cancellation');
+    expect(capture.sessionIds).toEqual(['initial-session', 'initial-session']);
     expect(result.action).toBe('cancel');
   });
 
@@ -1037,9 +1376,162 @@ describe('/issue command', () => {
 });
 
 // =================================================================
+// /verify command: seeded initial input handling
+// =================================================================
+describe('/verify command', () => {
+  it.each(['none', 'ownership', 'write', 'move'] as const)('prints the real directory and diagnostics after an initialization error with retention failure=%s', async (failure) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-loop-retained-'));
+    const actual = await vi.importActual<typeof import('../features/interactive/formalSpecVerification.js')>(
+      '../features/interactive/formalSpecVerification.js',
+    );
+    mockRunFormalSpecVerification.mockImplementationOnce(actual.runFormalSpecVerification);
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: '```alloy\nrun {} for 3\n```' },
+      { content: 'interpretation without a path' },
+    ]);
+    verificationIoFailure.cwd = cwd;
+    const ownershipFailure = failure === 'ownership';
+    verificationIoFailure.ownership = ownershipFailure;
+    verificationIoFailure.retention = failure === 'write' || failure === 'move';
+    verificationIoFailure.move = failure === 'move';
+    try {
+      await runConversationLoop(cwd, createSessionContext({
+        provider: provider as SessionContext['provider'], providerType: 'codex',
+      }), { ...defaultStrategy, formalSpec: true }, undefined, undefined);
+      const verification = await (mockRunFormalSpecVerification.mock.results[0]!.value as ReturnType<typeof actual.runFormalSpecVerification>);
+      const runDirectory = verification.artifacts!.runDirectory;
+      expect(verification).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(capture.callCount).toBe(2);
+      expect(capture.prompts[1]).toContain(runDirectory);
+      const systemPrompt = capture.systemPrompts[1]!;
+      if (failure === 'move') {
+        expect(systemPrompt).toMatch(/could not be confirmed/);
+        expect(systemPrompt).toMatch(/copy any needed artifacts manually/);
+        expect(systemPrompt).not.toMatch(/artifacts are retained/);
+      } else {
+        expect(systemPrompt).toMatch(/artifacts are retained/);
+        expect(systemPrompt).toMatch(/remove them manually/);
+      }
+      expect(mockLogInfo.mock.calls.some(([message]) => String(message).includes(runDirectory))).toBe(true);
+      const notice = mockLogInfo.mock.calls.map(([message]) => String(message)).find((message) => message.includes(runDirectory))!;
+      if (verificationIoFailure.retention) expect(notice).toContain('retention marker write failed');
+      if (failure === 'move') {
+        expect(notice).toContain('retention marker move failed');
+        expect(verification.artifactRetention?.status).toBe('error');
+      }
+      expect(fs.existsSync(path.join(runDirectory, '.retain'))).toBe(failure !== 'move');
+      expect(fs.existsSync(path.join(runDirectory, '.active'))).toBe(ownershipFailure || failure === 'move');
+    } finally {
+      verificationIoFailure.cwd = undefined;
+      verificationIoFailure.ownership = false;
+      verificationIoFailure.retention = false;
+      verificationIoFailure.move = false;
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { verdict: 'passed', interpretationFails: false },
+    { verdict: 'failed', interpretationFails: false },
+    { verdict: 'error', interpretationFails: false },
+    { verdict: 'failed', interpretationFails: true },
+  ] as const)('keeps artifacts readable during interpretation and reports their path for $verdict with interpretationFails=$interpretationFails', async ({ verdict, interpretationFails }) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-loop-verify-'));
+    const runDirectory = path.join(cwd, '.takt', 'runs', 'verify-current');
+    fs.mkdirSync(runDirectory, { recursive: true });
+    const specificationPath = path.join(runDirectory, 'spec.als');
+    fs.writeFileSync(specificationPath, 'run Scenario for 3');
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const { provider } = createMockProvider([]);
+    let calls = 0;
+    provider._call.mockImplementation(async () => {
+      calls++;
+      if (calls === 2) expect(fs.readFileSync(specificationPath, 'utf8')).toBe('run Scenario for 3');
+      return {
+        persona: 'test', status: calls === 2 && interpretationFails ? 'error' : 'done',
+        content: calls === 1 ? '```alloy\nrun Scenario for 3\n```' : 'interpretation without a path',
+        sessionId: 'verification-session', timestamp: new Date(),
+      };
+    });
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict, verificationStarted: true,
+      quint: { status: 'skipped' }, alloy: { status: verdict },
+      ...(verdict === 'passed' ? {} : { artifactRetention: { status: 'passed' } }),
+      artifacts: { runDirectory, specifications: { alloy: specificationPath }, logs: {} },
+    });
+    try {
+      await runConversationLoop(cwd, createSessionContext({
+        provider: provider as SessionContext['provider'], providerType: 'codex',
+      }), { ...defaultStrategy, formalSpec: true }, undefined, undefined);
+      expect(calls).toBe(2);
+      expect(fs.existsSync(runDirectory)).toBe(verdict !== 'passed');
+      if (verdict !== 'passed') {
+        const messages = [...mockLogInfo.mock.calls, ...mockLogError.mock.calls].map(([message]) => String(message));
+        expect(messages.some((message) => message.includes(runDirectory))).toBe(true);
+      }
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { verificationStarted: false, expectedCalls: 2 },
+    { verificationStarted: true, expectedCalls: 3 },
+  ])('should not resend the seeded input after /verify when verificationStarted=$verificationStarted', async ({ verificationStarted, expectedCalls }) => {
+    setupRawStdin(toRawInputs(['/verify', 'follow up', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated specification', sessionId: 'verify-session' },
+      ...(verificationStarted ? [{ content: 'Verification interpretation', sessionId: 'verify-session' }] : []),
+      { content: 'Follow-up answer', sessionId: 'chat-session' },
+    ]);
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: verificationStarted ? 'passed' : 'error',
+      verificationStarted,
+      quint: { status: verificationStarted ? 'passed' : 'skipped' },
+      alloy: { status: verificationStarted ? 'passed' : 'skipped' },
+    });
+
+    await runConversationLoop('/test', createSessionContext({
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+    }), {
+      ...defaultStrategy,
+      formalSpec: true,
+    }, undefined, { userMessage: 'Seeded initial request' });
+
+    expect(capture.callCount).toBe(expectedCalls);
+    expect(capture.prompts[0]).toContain('Seeded initial request');
+    expect(capture.prompts.at(-1)).toContain('follow up');
+    expect(capture.prompts.at(-1)).not.toContain('Seeded initial request');
+  });
+});
+
+// =================================================================
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  describe.each(['en', 'ja'] as const)('inline utterance in %s', (lang) => {
+    it.each([false, true])('renders the real /go prompt without merging the utterance when history=%s', async (hasHistory) => {
+      const note = lang === 'ja' ? 'それでお願いします' : 'That works for me.';
+      setupRawStdin(toRawInputs([...(hasHistory ? ['Implement authentication.'] : []), `/go ${note}`]));
+      const { provider, capture } = createScenarioProvider([
+        ...(hasHistory ? [{ content: 'Use iOS only.' }] : []),
+        { content: '# Generated authentication order' },
+      ]);
+      const result = await runConversationLoop('/test', createSessionContext({
+        provider: provider as SessionContext['provider'], lang,
+      }), defaultStrategy, undefined, undefined);
+      const prompt = capture.prompts.at(-1)!;
+      const headings = prompt.split('\n').filter((line) => /^#{1,6}\s.*\/go/u.test(line));
+      expect(headings).toHaveLength(1);
+      if (lang === 'ja') expect(headings[0]).toMatch(/[\p{Script=Han}\p{Script=Hiragana}]/u);
+      expect(prompt.split(note)).toHaveLength(2);
+      expect(prompt.split('\n').filter((line) => line.startsWith('User:')).join('\n')).not.toContain(note);
+      if (hasHistory) expect(prompt).toContain('Assistant: Use iOS only.');
+      expect(result).toEqual({ action: 'execute', task: '# Generated authentication order' });
+    });
+  });
   it('does not turn a disabled /accept into an execution result in a guarded mode', async () => {
     setupRawStdin(toRawInputs(['/accept', '/go']));
     const { provider } = createScenarioProvider([
@@ -1084,41 +1576,6 @@ describe('/go command', () => {
       expect(capture.prompts[0]).not.toMatch(/\bQuint\b/);
       expect(capture.prompts[0]).not.toMatch(/\bAlloy\b/);
     }
-  });
-
-  it('should pass the resolved formal specification mode to the summary builder', async () => {
-    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
-    setupRawStdin(toRawInputs(['/go improve parser behavior']));
-    const { provider } = createScenarioProvider([
-      { content: 'Generated task instruction.' },
-    ]);
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'mock',
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    const result = await runConversationLoop('/test', ctx, {
-      ...defaultStrategy,
-      formalSpec: true,
-    }, undefined, undefined);
-
-    expect(result.action).toBe('execute');
-    expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
-      expect.any(Array),
-      false,
-      'en',
-      expect.any(String),
-      expect.any(String),
-      undefined,
-      undefined,
-      undefined,
-      true,
-      true,
-    );
   });
 
   it('should keep the session value instead of re-resolving project config inside the conversation loop', async () => {

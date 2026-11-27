@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import * as workflowTrustBoundary from '../infra/config/loaders/workflowTrustBoundary.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { getWorkflowTrustInfo, type WorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
+import { getBuiltinWorkflowsDir } from '../infra/config/paths.js';
 
 describe('workflowTrustBoundary', () => {
   let projectDir: string;
@@ -32,6 +34,36 @@ describe('workflowTrustBoundary', () => {
   it('should keep load-time project workflow trust boundary private', () => {
     expect(workflowTrustBoundary).not.toHaveProperty('validateProjectWorkflowTrustBoundary');
     expect(workflowTrustBoundary).not.toHaveProperty('validateProjectWorkflowTrustBoundaryForSteps');
+  });
+
+  it.each(['ja', 'en'] as const)('allows privileged calls between distributed %s builtin workflows', (language) => {
+    const parent = loadWorkflowByIdentifier(join(getBuiltinWorkflowsDir(language), 'merge-review-fix-simple.yaml'), projectDir)!;
+    const child = loadWorkflowByIdentifier(join(getBuiltinWorkflowsDir(language), 'merge-review.yaml'), projectDir)!;
+    expect(parent).not.toBeNull();
+    expect(child).not.toBeNull();
+    expect(() => workflowTrustBoundary.validateWorkflowCallTrustBoundary(
+      getWorkflowTrustInfo(parent, projectDir), child, 'delegate', projectDir,
+    )).not.toThrow();
+  });
+
+  it.each((['parent', 'child'] as const).flatMap((side) =>
+    (['external', 'forged-source', 'forged-path', 'missing-path'] as const).map((kind) => ({ side, kind })),
+  ))('rejects privileged builtin calls with a $kind $side', ({ side, kind }) => {
+    const builtinPath = join(getBuiltinWorkflowsDir('en'), 'merge-review.yaml');
+    const builtin = loadWorkflowByIdentifier(builtinPath, projectDir)!;
+    const builtinTrust = getWorkflowTrustInfo(builtin, projectDir);
+    const untrusted: WorkflowTrustInfo = {
+      source: kind === 'forged-source' || kind === 'missing-path' ? 'builtin' : 'external',
+      ...(kind === 'missing-path' ? {} : {
+        sourcePath: kind === 'forged-path' ? builtinPath : join(externalDir, 'merge-review.yaml'),
+      }),
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    };
+    const child = side === 'child' ? attachWorkflowTrustInfo({ ...builtin }, untrusted) : builtin;
+    expect(() => workflowTrustBoundary.validateWorkflowCallTrustBoundary(
+      side === 'parent' ? untrusted : builtinTrust, child, 'delegate', projectDir,
+    )).toThrow();
   });
 
   it('rejects privileged child when project parent is outside workflows root', () => {

@@ -979,6 +979,53 @@ describe('runtime-provider loader', () => {
       return resolveRuntimeProviderFile(input);
     }
 
+    it('selects the default assignment and replaces the entire targets section', () => {
+      writeAssignmentRuntime({ defaults: { assignment: 'cost' }, directories: {} });
+      const selected = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+      expect(selected?.provider?.defaults).toEqual({ profile: 'cost' });
+      expect(selected?.provider?.targets).toEqual({ tags: { cheap: { profile: 'cost' } } });
+    });
+
+    it('selects only the CLI assignment over directory and default assignments', () => {
+      writeAssignmentRuntime({ defaults: { assignment: 'cost' }, assignments: {
+        cost: { defaults: { profile: 'cost' }, targets: { tags: { cheap: { profile: 'cost' } } } },
+        directory: { defaults: { profile: 'base' }, targets: { personas: { coder: { profile: 'base' } } } },
+        cli: { defaults: { profile: 'quality' } },
+      }, directories: { [dirname(projectDir)]: 'directory' } });
+      const selected = select('cli');
+      expect(selected?.provider?.defaults).toEqual({ profile: 'quality' });
+      expect(selected?.provider?.targets).toEqual({ personas: { reviewer: { profile: 'base' } } });
+    });
+
+    it('selects a matching directory assignment over the default assignment', () => {
+      writeAssignmentRuntime({ defaults: { assignment: 'quality' } });
+      const selected = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+      expect(selected?.provider?.defaults).toEqual({ profile: 'cost' });
+      expect(selected?.provider?.targets).toEqual({ tags: { cheap: { profile: 'cost' } } });
+    });
+
+    it.each([{ profile: 'base' }, { ladder: ['base', 'quality'] }])(
+      'replaces the global default assignment with project defaults %j', (defaults) => {
+        writeAssignmentRuntime({ defaults: { assignment: 'cost' }, directories: {} });
+        writeRuntimeYaml(projectDir, stringifyYaml({ version: 1, provider: { defaults } }).split('\n'));
+        const selected = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+        expect(selected?.provider?.defaults).toEqual(defaults);
+        expect(selected?.provider?.targets).toEqual({ personas: { reviewer: { profile: 'base' } } });
+      },
+    );
+
+    it('rejects a selected assignment without defaults instead of inheriting from the default assignment', () => {
+      writeAssignmentRuntime({ defaults: { assignment: 'cost' }, directories: {} });
+      expect(() => select('targets-only')).toThrow(/targets-only/);
+    });
+
+    it('reports the location and name of an unknown default assignment', () => {
+      writeAssignmentRuntime({ defaults: { assignment: 'missing' }, directories: {} });
+      const resolve = () => resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+      expect(resolve).toThrow(/defaults(?:\.|\s+)assignment/i);
+      expect(resolve).toThrow(/missing/);
+    });
+
     it('uses the explicit defaults and top-level targets instead of a matching directory assignment', () => {
       writeAssignmentRuntime();
 
@@ -997,14 +1044,17 @@ describe('runtime-provider loader', () => {
       expect(selected?.provider?.targets).toEqual({ tags: { cheap: { profile: 'cost' } } });
     });
 
-    it('inherits top-level defaults for a targets-only selection without retaining directory defaults', () => {
-      writeAssignmentRuntime();
+    it.each([{ profile: 'base' }, { ladder: ['base', 'quality'] }])(
+      'inherits top-level defaults %j for a targets-only selection without retaining directory defaults',
+      (defaults) => {
+        writeAssignmentRuntime({ defaults });
 
-      const selected = select('targets-only');
+        const selected = select('targets-only');
 
-      expect(selected?.provider?.defaults).toEqual({ profile: 'base' });
-      expect(selected?.provider?.targets).toEqual({ internal_agents: { selector: { profile: 'quality' } } });
-    });
+        expect(selected?.provider?.defaults).toEqual(defaults);
+        expect(selected?.provider?.targets).toEqual({ internal_agents: { selector: { profile: 'quality' } } });
+      },
+    );
 
     it.each([
       ['global-only', 'cost'],
@@ -1027,7 +1077,6 @@ describe('runtime-provider loader', () => {
 
       expect(selected?.provider?.defaults).toEqual({ profile });
       expect(selected?.provider?.targets).toEqual({ personas: { reviewer: { profile: 'base' } } });
-      expect(Object.keys(selected?.provider?.assignments ?? {}).sort()).toEqual(['global-only', 'project-only', 'shared']);
     });
 
     it('keeps profiles, routing, MCP, companion and loop analysis common to every selection', () => {

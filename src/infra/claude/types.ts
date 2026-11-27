@@ -9,6 +9,7 @@ import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthro
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
 import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type {
   StreamEvent as SharedStreamEvent,
   StreamCallback as SharedStreamCallback,
@@ -84,6 +85,7 @@ export interface ClaudeResult {
   sessionId?: string;
   error?: string;
   errorKind?: AgentErrorKind;
+  failureCategory?: AgentFailureCategory;
   rateLimitInfo?: RateLimitInfo;
   interrupted?: boolean;
   /** All assistant text accumulated during execution (for status detection) */
@@ -102,6 +104,9 @@ export interface ClaudeResultWithQueryId extends ClaudeResult {
 /** Options for calling Claude (high-level, used by client/providers/agents) */
 export interface ClaudeCallOptions {
   cwd: string;
+  callerManagedSession?: true;
+  strictToolAllowlist?: readonly string[];
+  mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -121,6 +126,7 @@ export interface ClaudeCallOptions {
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (from workflow step) */
   permissionMode?: PermissionMode;
+  aiReviewPermissions?: boolean;
   /** Enable streaming mode with callback for real-time output */
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
@@ -138,6 +144,8 @@ export interface ClaudeCallOptions {
   outputSchema?: Record<string, unknown>;
   /** Sandbox settings for Claude SDK */
   sandbox?: SandboxSettings;
+  /** Resolved permissions.deny rules passed to Claude as flag settings */
+  denyRules?: string[];
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
   imageAttachments?: ProviderImageAttachment[];
@@ -147,6 +155,9 @@ export interface ClaudeCallOptions {
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
 export interface ClaudeSpawnOptions {
   cwd: string;
+  callerManagedSession?: true;
+  strictToolAllowlist?: readonly string[];
+  mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -174,6 +185,7 @@ export interface ClaudeSpawnOptions {
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (TAKT abstract value, mapped to SDK value in SdkOptionsBuilder) */
   permissionMode?: PermissionMode;
+  aiReviewPermissions?: boolean;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
@@ -190,6 +202,8 @@ export interface ClaudeSpawnOptions {
   onStderr?: (data: string) => void;
   /** Sandbox settings for Claude SDK */
   sandbox?: SandboxSettings;
+  /** Resolved permissions.deny rules passed to Claude as flag settings */
+  denyRules?: string[];
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
   imageAttachments?: ProviderImageAttachment[];

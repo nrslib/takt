@@ -44,7 +44,7 @@ test('recursive discovery rejects duplicate suite names across categories', () =
   }
 });
 
-test('recursive discovery returns nested configs with root-relative paths and ignores non-YAML files', () => {
+test('recursive discovery returns nested configs and ignores non-YAML files and leftover manager filters', () => {
   const directory = mkdtempSync(join(tmpdir(), 'takt-eval-registry-'));
   try {
     const agentDirectory = join(directory, 'agents', 'review', 'nested');
@@ -54,6 +54,8 @@ test('recursive discovery returns nested configs with root-relative paths and ig
     writeFileSync(join(agentDirectory, 'alpha.yaml'), 'description: alpha\n');
     writeFileSync(join(scenarioDirectory, 'beta.yml'), 'description: beta\n');
     writeFileSync(join(agentDirectory, 'README.md'), '# ignored\n');
+    writeFileSync(join(agentDirectory, '.manager-filter-interrupted.yaml'), 'description: temporary\n');
+    writeFileSync(join(scenarioDirectory, '.manager-filter-interrupted.yaml'), 'description: temporary\n');
 
     const discovered = discoverPromptEvalConfigs(directory);
 
@@ -88,6 +90,14 @@ test('individual suite selection preserves active and retained compatibility', (
   assert.deepEqual(selected.map(({ tier }) => tier), ['active', 'retained']);
 });
 
+test('manager work split and phase awareness remain selectable together', () => {
+  const names = ['manager-work-split', 'phase-awareness'];
+
+  const selected = selectPromptEvalSuites({ names });
+
+  assert.deepEqual(selected.map(({ name }) => name), names);
+});
+
 test('prepare targets are resolved from the same suite registry', () => {
   const selected = selectPromptEvalSuites({
     names: ['coding', 'final-readiness-preservation', 'fix-loop-convergence'],
@@ -99,34 +109,6 @@ test('prepare targets are resolved from the same suite registry', () => {
   );
 });
 
-test('frontend suite prompts bind to their matching prepared run directories', () => {
-  for (const configName of ['frontend.yaml', 'frontend-opus.yaml']) {
-    const source = readFileSync(
-      new URL(`./agents/frontend-review/${configName}`, import.meta.url),
-      'utf8',
-    );
-    assert.match(
-      source,
-      /label: frontend-review\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review/s,
-    );
-    assert.match(
-      source,
-      /label: frontend-review-react\s+raw: file:\/\/\.\.\/\.\.\/prompts\/frontend-review-react\.phase1\.j2\s+config:\s+working_dir: \.work\/frontend-review-react/s,
-    );
-    assert.match(
-      source,
-      /required_snapshots:\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-policies\.md\s+- \.takt\/eval-snapshots\/frontend-review(?:-react)?-knowledge\.md/s,
-    );
-    assert.doesNotMatch(source, /working_dir: fixtures\/frontend-design/);
-  }
-
-  const selected = selectPromptEvalSuites({ names: ['frontend', 'frontend-opus'] });
-  assert.deepEqual(
-    promptEvalPrepareTargets(selected),
-    ['frontend-review', 'frontend-review-react'],
-  );
-});
-
 test('every registered prepare target resolves to an actual prepare target', () => {
   const availableTargets = new Set(PREPARE_TARGET_IDS);
   const unresolvedTargets = promptEvalPrepareTargets(PROMPT_EVAL_SUITES)
@@ -135,7 +117,7 @@ test('every registered prepare target resolves to an actual prepare target', () 
   assert.deepEqual(unresolvedTargets, []);
 });
 
-test('threat model and platform cases bind each task to its own isolated fixture', () => {
+test('agent cases bind each task to its own isolated fixture', () => {
   for (const [suite, directory, cases] of [
     ['security-threat-model', 'security-review', ['a1', 'a2', 'a3', 'a4', 'a5']],
     ['secondary-platform-adjudication', 'review-adjudication',
@@ -167,29 +149,6 @@ test('threat model and platform cases bind each task to its own isolated fixture
       if (suite === 'security-threat-model') {
         assert.equal(testCase.assert.length, 1);
         assert.equal(testCase.assert[0].type, 'llm-rubric');
-      } else {
-        assert.equal(testCase.assert.length, 1);
-        assert.deepEqual(testCase.assert.map(({ metric }) => metric),
-          [`${suite}/${caseId}-boundary`]);
-        assert.ok(testCase.assert[0].value.startsWith(
-          '見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。',
-        ));
-        if (caseId === 'b2') {
-          assert.match(testCase.assert[0].value, /今回の範囲外.*または.*代替経路/);
-        }
-        if (caseId === 'b11') {
-          assert.match(testCase.assert[0].value, /実装とこの環境で動くテスト、または.*処理前/);
-        }
-        if (caseId === 'b12') {
-          assert.match(testCase.assert[0].value, /修正対象または外部確認待ちを残した場合だけ不合格/);
-        }
-        if (caseId === 'b13') {
-          assert.match(testCase.assert[0].value, /処理を始める前.*文書.*修正対象/);
-        }
-        if (caseId === 'c1') {
-          assert.match(testCase.assert[0].value, /APPROVE または同等の合格判定/);
-          assert.match(testCase.assert[0].value, /Windows 実機確認の未実施を理由に REJECT、BLOCKED/);
-        }
       }
     }
 
@@ -201,13 +160,91 @@ test('threat model and platform cases bind each task to its own isolated fixture
       && provider.working_dir === undefined));
     assert.deepEqual(promptEvalPrepareTargets(selectPromptEvalSuites({ names: [suite] })),
       cases.map((caseId) => `${suite}-${caseId}`));
-    if (suite === 'secondary-platform-adjudication') {
-      assert.equal(config.evaluateOptions.maxConcurrency, 3);
-      const latestDecision = readFileSync(new URL(
-        './fixtures/secondary-platform-adjudication/c1/reports-seed/review-resolution.md',
-        import.meta.url,
-      ), 'utf8');
-      assert.match(latestDecision, /実機で確認する.*受入条件から外し、今回の範囲外/);
+  }
+});
+
+test('manager work split is active, explicit, costly and has no prepare targets', () => {
+  const [suite] = selectPromptEvalSuites({ names: ['manager-work-split'] });
+  assert.equal(suite.tier, 'active');
+  assert.equal(suite.execution.defaultEligible, false);
+  assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
+  assert.equal(suite.execution.cost, 'high');
+  assert.deepEqual(promptEvalPrepareTargets([suite]), []);
+  assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
+  const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
+  assert.equal(new Set(config.providers.map(({ label }) => label)).size, config.providers.length);
+  assert.deepEqual(Object.fromEntries(config.providers.map(({ label, id, config: { model, reasoning_effort } }) => [
+    label, { id, model, reasoning_effort },
+  ])), {
+    'codex-sol-low': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-sol',
+      reasoning_effort: 'low',
+    },
+    'claude-opus-5': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+    'codex-luna-max': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6-luna',
+      reasoning_effort: 'max',
+    },
+    'codex-terra-medium': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-terra',
+      reasoning_effort: 'medium',
+    },
+    'claude-sdk-opus-5': {
+      id: 'file://../../providers/manager-work-split-execution.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+  });
+  assert.equal(config.tests.length, 174);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 87);
+  const executionTests = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
+  assert.equal(executionTests.length, 8);
+  assert.equal(new Set(executionTests.map(({ vars }) => vars.case)).size, 4);
+  const replayTests = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
+  assert.equal(replayTests.length, 166);
+  assert.equal(new Set(replayTests.map(({ vars }) => vars.case)).size, 83);
+  for (const caseId of [
+    'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
+    'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
+    'spec-formal-on-code', 'spec-formal-off-code', 'spec-docs-goal',
+    'spec-review-investigation',
+    'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
+    'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
+    'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication', 'existing-invoice-format',
+    'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
+    'permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction',
+    'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
+    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
+    'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
+    'stopped-background-execution', 'integrated-task-execution',
+    'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
+    'csv-export-scope-conversation', 'search-index-scope-conversation',
+    'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit',
+    'running-subworkflow-progress',
+  ]) {
+    assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
+    if (['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued'].includes(caseId)) {
+      for (const entry of config.tests.filter(({ vars }) => vars.case === caseId)) {
+        assert.deepEqual(entry.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+      }
     }
+  }
+});
+
+
+test('repair strategy history targets accompany both existing stage suites', () => {
+  for (const name of ['review-adjudication', 'fix-plan-bounded-proof']) {
+    const [suite] = selectPromptEvalSuites({ names: [name] });
+    assert.deepEqual(promptEvalPrepareTargets([suite]), [name, 'repair-strategy']);
+    assert.equal(suite.execution.defaultEligible, false);
+    assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
   }
 });

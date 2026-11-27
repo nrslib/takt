@@ -22,7 +22,7 @@ TAKT 提供了用于积累多个任务并批量执行的任务管理流程：
 takt add "Implement user authentication"
 
 # 从 GitHub Issue 添加任务
-takt add #28
+takt add '#28'
 ```
 
 添加任务时会询问：
@@ -40,9 +40,27 @@ takt add #28
 
 **要求：** [GitHub CLI](https://cli.github.com/)（`gh`）必须已安装并完成认证。
 
+### 自动附加 GitHub PR 和 Issue 图片
+
+`takt add --pr N` 和 `takt add --issue N`（包括 `takt add '#N'`）会下载 GitHub 附件图片。图片来源包括 PR 正文、对话评论、审查摘要、审查线程评论，以及 Issue 正文和评论中的 Markdown 图片语法与 HTML `<img src>`。Pipeline 也支持 `--pr N` 和 `--issue N`。
+
+下载成功的图片保存为 `.takt/tasks/<slug>/attachments/image-N.png` 等文件。同一 URL 只保存一份，编号按成功下载并保存的图片首次出现顺序连续分配。原始图片语法保持不变，其后追加 `[Image #N]`；`order.md` 末尾按现有的 `## 添付画像` 格式追加文件列表。
+
+执行时，图片复制到执行目录的 `.takt/runs/<run-slug>/context/task/attachments/`，并由同目录的 `order.md` 引用。Pipeline 在执行后删除临时 task spec，run 中的图片和指令文件仍然保留。
+
+支持 PNG、JPEG、GIF、WebP，每张图片上限为 10 MiB。TAKT 检查 Content-Type 和 magic bytes，不下载 GitHub 附件以外的外部图片，也不处理代码示例或 HTML 注释中的图片。认证失败、404、网络错误、超过大小限制或格式不符时，会警告并跳过该图片，继续注册任务或执行 Pipeline。失败的引用不会追加标记。
+
+下载优先使用已认证的 `gh` 凭据。某些环境中，仅凭令牌认证无法下载私有仓库附件，因此不保证成功；不使用浏览器 Cookie。GitLab 附件和普通文本输入不在自动下载范围内。
+
 ### 从交互模式保存任务
 
-也可以从交互模式保存任务。对话完善需求后，使用 `/save`（或提示出现时的 save action），将任务持久化到 `tasks.yaml`，而不是立即执行。
+也可以从交互模式保存任务。对话完善需求后，使用 `/go` 查看指令预览，再选择 **Save as Task** 保存到 `tasks.yaml`。
+
+加载 Issue #N 后，其内容会作为对话的参考信息。每次 `/go` 都判断最新任务是否属于当前 Issue；只有相关指令才在任务标题之后的独立行显示 `Issue: #N`，并将 N 传给执行、任务保存和 Issue 创建。保存记录的 `issue`、生成分支 `takt/N/{slug}` 和 PR 正文 `Closes #N` 使用同一编号。无关任务省略绑定；可选择 **Continue editing** 修正。`/issue` 替换上下文后重新判断。创建新 Issue M 时，若指令绑定 N，保存任务仍绑定 N，并在 N 评论 M 的链接；没有绑定时保存新编号 M。
+
+CLI、TUI 和 MCP 注册允许同一 Issue、PR 或分支已有 pending/running 任务时继续注册，不增加警告或确认。只有 workflow 自动 enqueue 在保存锁内拒绝同一目标的活动任务重复。直接 `takt add '#N'` 仍保存 N，无需指令绑定行。
+
+自动生成的分支名通过 Git 检查本地 ref、remote-tracking ref 和所有已配置的 remote，包括尚未 fetch 的分支，并检查其他任务克隆的所有权元数据。冲突时继续检查 `-2`、`-3` 等候选，并从 base 创建新分支。如果保存所有权信息时发生竞争，则将新克隆的分支改为其他名称后保存，不覆盖已有元数据。查询或保存失败时停止创建。明确指定的名称保留现有 fetch 和复用行为。
 
 在普通交互模式中，选择 **Save as Task** 后，在任一 worktree 设置问题按 Esc 都会取消本次保存并返回操作菜单。已确认的指令正文和附件会保留在同一会话中。再次选择 **Save as Task** 时会从第一个设置问题重新开始，不会沿用已取消尝试中的回答。
 
@@ -50,7 +68,13 @@ takt add #28
 
 MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令，无需调用 shell 命令。`takt_enqueue_task` 将待处理记录写入 `.takt/tasks.yaml`；`takt_list_tasks` 返回紧凑摘要，`takt_get_run` 读取一个 run 的详细信息，`takt_tell_run` 重新确认后只向正在运行的 clone 写入。如果创建 Issue 后保存任务失败且已解析到 Issue 编号，Issue 会保持打开，MCP 错误结果会返回编号以便重试；如果无法解析编号，结果可能提供 Issue URL。工具要求 server 允许的项目根目录内的绝对路径 `cwd`；enqueue 和 tell 还要求非空正文。使用 `takt run` 执行，使用 `takt watch` 监视和持续执行。输入字段详见 [CLI 参考](./cli-reference.zh-CN.md#mcp-server)。
 
+`takt_cleanup_tasks` 用于先查看筛选后的任务，再执行删除。必需输入为绝对路径的 `cwd` 和 `reason`。可选输入为 `statuses`（可指定一个或多个 `pending`、`completed`、`failed`、`exceeded`、`pr_failed`，不能指定 `running`）、`goalId`、`branch` 和 `confirm`（默认 `false`）。必须至少指定 `statuses`、`goalId` 或 `branch` 中的一个。
+
+省略 `confirm` 或设为 `false` 时，只返回匹配列表，不删除任何内容。只有 `confirm: true` 才会删除，删除范围与 `takt list` 相同。此工具仅在 `all` 工具集中提供，不包含在 `read-only` 或 `manager` 中；`manager` 另有 `takt_remove_goal_task` 工具。
+
 普通 assistant 对话在 provider 支持 MCP 时只接收只读的 task 状态工具。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标、查看内容并确认，重新排队失败任务时使用 `/requeue` 或 `/retry`。不支持 MCP 的 provider 仍可继续对话，但无法查询 task 状态。
+
+通过 `takt_tell_run` 或 CLI `/tell` 发送的追加指令会在投递成功后连同指令 ID 和接收时间写入任务的源 `order.md`，并反映到正在运行的 run 的 `context/task/order.md`。保存成功时，后续 agent 和恢复后的 run 都可以读取这些指令。保存失败时会向标准错误输出警告，但不会阻止投递，也不会使 tell 失败。
 
 ## 任务目录格式
 
@@ -139,6 +163,8 @@ MCP 客户端可以加入任务队列、读取 task/run 状态，并向正在运
 
 ### 并行执行（Concurrency）
 
+本节介绍单机并行执行。若要将 daemon 自动执行的 manager 目标任务分配到其他机器，请参阅 [worker pool 部署指南](./worker-pool.zh-CN.md)。`takt run`、`takt watch` 和交互模式不需要注册 worker 或启动常驻 daemon。
+
 `takt run` 和 `takt watch` 使用同一个 worker pool，默认顺序执行（`concurrency: 1`）。在 `~/.takt/config.yaml` 中配置：
 
 ```yaml
@@ -146,7 +172,7 @@ concurrency: 3              # takt run / takt watch 的并行任务数（1-10）
 task_poll_interval_ms: 500   # takt run / takt watch 的轮询间隔（100-5000ms）
 ```
 
-当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会优雅关闭并等待正在执行的任务完成。
+当 concurrency 大于 1 时，TAKT 使用 worker pool：最多同时运行 N 个任务，在配置的间隔轮询新任务，worker 空闲后领取新任务，并为每个任务显示带颜色前缀的输出。Ctrl+C 会停止领取新任务。`takt run` 中断正在执行的任务，并等待执行和清理结束；`takt watch` 则等待这些任务自然结束，不主动中断。
 
 ### 中断任务清理
 
@@ -200,7 +226,7 @@ takt list
 | **Pull from remote** | 从 remote origin 拉取最新修改（仅 fast-forward） |
 | **Try merge** | squash merge（只 stage，不 commit，便于人工检查） |
 | **Merge & cleanup** | squash merge 并删除分支 |
-| **Delete** | 丢弃全部修改并删除分支 |
+| **Delete** | 删除任务和工作树并删除分支；被删除的 worktree/clone 中的未提交修改也会丢失。`worktree: false` 的任务，以及 `worktree` 设置为 `true` 或路径字符串但未记录 `worktree_path` 的任务会保留分支 |
 
 ### 失败任务的操作
 
@@ -212,7 +238,7 @@ takt list
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
 
-在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 任务和起点，显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后会将任务置为 `pending`，不修改 `order.md`。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。补充说明仅作为对话判断的参考，不直接指定任务。目标含糊或没有候选时会返回提示，不显示确认界面。两种命令都需要交互式终端，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
+在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务，`/retry [补充说明]` 根据对话确定 failed 任务。两种命令都使用独立于对话 session 的 AI 调用，传入最近达成的一致意见、补充说明、候选的完整路径和子 workflow 标题说明。补充说明按上下文解释。响应格式错误或值不在候选中时，每个选择阶段只重新询问一次；仍然无效时切换到手动菜单，并区分 JSON 格式错误、未知任务名称和未知起点 ID。无法判断或 provider 失败时直接进入手动选择。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。对于 `/requeue`，确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
 
 ### Pending 任务的操作
 
@@ -224,9 +250,12 @@ takt list
 
 | 操作 | 说明 |
 |------|------|
-| **Mark as failed** | 将卡住的 `running` 任务标记为 `failed` |
+| **Stop** | 请求停止一个运行中的任务；worker 自行中断并决定最终状态 |
+| **Mark as failed** | 将卡住的 `running` 任务标记为 `failed`；不会停止 worker |
 
 选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务或讨论新任务。`/tell` 在确认后再次检查目标，只向确认时选中的任务写入；已完成、已删除、slug 不匹配或非 clone 的 run 不会成为候选，也不会接收指令。
+
+由 `takt merge` 启动的合并任务，以及 requeue 或 retry 后由 `takt run` / `takt watch` 执行的合并任务，只要仍在运行且具有 worktree clone，也可作为 `/tell` 的目标。CLI/TUI 对话、从 `takt list` 打开的对话和 MCP 的 `takt_tell_run` 使用相同的目标解析。合并 run 的元数据和介入记录保存在原项目的 `.takt/runs/<slug>/` 中。指令会在下一个 agent step 送达，包括子 workflow 内的 agent step；system step 不会消费这些指令。
 
 ### Exceeded 任务的操作
 
@@ -235,7 +264,7 @@ takt list
 | **Requeue** | 返回 `pending`，从停止处继续 |
 | **Delete** | 永久删除任务 |
 
-会话中的 `/requeue` 也可以处理 exceeded 任务。确认已停止的位置后，它会保留已有恢复信息并将任务置为 `pending`，不提供起点选择，也不会启动 worker。
+会话中的 `/requeue` 也可以处理 exceeded 任务。补充说明用于判断继续已保存的执行或从指定步骤（包括子 workflow 的步骤）重新执行，确认界面会显示操作和位置。继续会保留已有执行信息，重新执行会清除旧 checkpoint 和 iteration limit 信息。指定位置不可用或 AI 无法确定起点时，会显示可用起点供用户选择。没有补充说明时保留已保存的停止位置。不修改指示书，也不会启动 worker。任务列表中的 **Requeue** 仍使用已保存的停止位置。
 
 ### PR-Failed 任务的操作
 
@@ -273,15 +302,25 @@ TAKT 管理的远程 push 会禁用 Git 的 HTTPS 终端和 askpass 提示，以
 
 1. 显示失败详情（失败 step、错误消息、最后一条 agent 消息）
 2. 要求选择 workflow
-3. 要求选择起点：**Resume failed position** 或 **Restart from**
+3. 从一棵 workflow 树中选择起点
 4. 打开预加载失败上下文、run session 数据和 workflow 结构的 retry 对话
 5. 允许通过 AI 完善指令
 
-**Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。Retry 和 Requeue 都可以选择 **Resume**（从失败点继续，保留执行状态）或 **Restart**（从任意 step 新开始）；`workflow_call` 子 workflow 中的 step 也可以作为起点。
+**Requeue** 使用相同的 workflow 和起点选择，但不打开对话，直接把任务保存为 `pending`。起点选择将 workflow 显示为树。有有效的恢复位置时，第一行为 **Resume failed position**，表示从失败点继续并保留执行状态，其下将各 step 显示为可选的叶节点。`workflow_call` 子 workflow 作为不可选择的标题显示，子 step 缩进排列，不能选择子 workflow 本身。有有效恢复位置时，默认选择 Resume 行。没有保存位置但现有工作 clone 仍在时，默认选择 **Start workflow from the beginning**，在同一 clone 和分支中从初始 step 开始。明确选择某个叶节点会从该 step 开始新的执行。保存位置无效时，仍需选择可用的重新执行位置或取消。
 
 终端中的 Resume 选项显示简短标签，例如 `Resume failed position: "review" (default)`，并在标签正下方以淡色显示路径说明。路径以 root workflow 开头，以失败 step 结尾，每次调用表示为 `"调用 step" → "目标 workflow"`，例如 `"takt-default" > "develop" → "development-core" > "review"`。终端宽度为80列或以上时，说明会换行显示完整路径。宽度为60列时，仅说明从末尾截断并保留 root 一侧，标签中的失败 step 名和默认标记仍然可见。Web UI 下拉选项和 `Selected start position: …` 确认日志均保留标签与完整路径。
 
-重新排队后，执行使用新的 namespace，因此不会继承原有 ledger，而是从空 ledger 开始。
+通过 Retry、Requeue 或 Instruct 从中途 step（`start_step` 或已保存的恢复位置）开始时，TAKT 会恢复源 run 在该次 step 执行开始前的完整 system context、effect 结果和 AI 结构化输出。保存的恢复位置通过 occurrence 对应执行次数；`start_step` 等未指定执行次数的选择使用该 step 最后一次开始前的状态。目标执行尚未开始时，使用最后保存的状态。循环中也会恢复当时存在的上一轮结果，不会根据推测的依赖关系删除结果。
+
+新 run 在第一个 step 执行前保存本次恢复的状态，之后只保存自身开始的各次执行开始前及结束后的状态，不复制源 run 的逐次执行快照。在新 run 中恢复到尚未开始的某次执行时，使用该 run 最后保存的状态。最新状态保存在 `workflow-results.json`，每次执行开始前的状态保存在 `workflow-results/` 下的独立文件中，不重写全部历史。结果为空时也创建保存文件。
+
+保存或继承失败时会警告并继续执行。保存失败的执行也会记录到后续保存中，以区别于尚未开始的执行。从该次执行恢复时，会警告并从空结果开始，不使用其他时刻的结果替代。保存失败后，TAKT 尝试写入无效状态；若仍失败，则尝试删除旧文件。无效化或删除成功后，从该状态恢复会警告并使用空结果。如果两者都失败，也会警告，但旧文件可能保留。先前的输入获取、effects 和 AI step 不会自动重新执行，后续 step 仍按通常方式获取最新状态。
+
+父 workflow 名称相同且继续同一 call instance 时，只将所选恢复位置对应的子 workflow 状态作为该子 workflow 的初始快照继承。即使在进入子 workflow 前失败，下次恢复也能使用该状态。不会复制子 workflow 过去的逐次执行快照，也不会将上一次子 workflow 的结果复制到新调用或新循环中。父 workflow 名称改变时，不继承子 workflow 结果。不具备此保存格式的旧 run 会警告，并按原有方式从空结果恢复；step 引用未保存的前段结果时，会在该 step 产生引用错误。
+
+恢复时继承的报告参与记录和调用记录按 workflow 名称、step 名称和调用位置进行匹配。即使定义的内容哈希发生变化，也可以使用同一位置的记录。不匹配或有冲突的记录，以及来自未完成调用的输入会被排除并发出警告，执行会从指定位置继续。即使从子 workflow 的中途恢复，也可以在子 workflow 完成后，将本次未重新执行的前段 step 的报告传给后续 step。如果找不到对应的正文，会发出警告并省略该输入，不会使用其他调用位置的同名报告补充。在本次 run 中重新执行生成该报告的 step 后，会按通常条件检查该次执行的完成状态和输出。
+
+保存的报告引用还会匹配调用路径上每个 workflow_call 的执行实例。同一调用实例的引用在定义内容哈希变化后仍可继承，不会使用其他实例的引用。无法确定调用实例的旧引用会被排除并发出警告，执行仍从指定位置继续。
 
 `/go` 后 retry 对话会显示更新后的指示，提供 **Save as Task**（首项且默认）和 **Continue editing**。选择 Save as Task 会更新原任务并将其放回 `pending`，但不会立即启动 worker。Retry 对话不提供 `/retry`、`/replay` 或立即执行选项；使用 `/cancel` 可在不修改任务的情况下退出。
 
@@ -311,6 +350,21 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 可用 action：`diff`、`sync`、`try`、`merge`、`delete`。
 
+`takt list --non-interactive --action delete` 的 `--status <status...>` 可指定一个或多个状态，允许值为 `pending`、`completed`、`failed`、`exceeded` 和 `pr_failed`。不能指定 `running`，因为运行中的任务不能删除。`--goal <goalId>` 只选择属于指定目标的任务。仍可使用 `--branch <branch>`，单独指定时只选择 `completed` 任务。
+
+必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
+
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。clone 任务也会在清理后使用 `git branch -d` 删除原仓库中的同名分支。配置为 `worktree: false` 的任务会保留记录的分支和工作区中的修改。对于 `worktree` 设置为 `true` 或路径字符串但未记录 `worktree_path` 的任务，无论任务状态或分支是否已合并，都会保留记录的分支。如果该分支仍有 clone 元数据，则仍会清理对应 clone 和元数据。如果 Git 因分支尚未完全合并等原因拒绝删除，则保留分支并发出警告，但 clone 和任务记录的删除仍会成功。
+
+```bash
+# 先确认匹配列表，再执行删除
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 以 JSON 查看预览列表
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
+
 ## 任务目录工作流
 
 推荐的端到端流程：
@@ -323,13 +377,15 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 ## CodeRabbit 审查循环（`caccia`）
 
-任务后处理成功创建或更新 PR 后，TAKT 可以运行 Caccia 审查循环。该自动关联路径默认关闭，只有在项目或全局配置中设置 `caccia.enabled: true` 才会启动。Pipeline 模式在 `--auto-pr` 成功创建 PR 后也使用同一入口。
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `sync → commit_and_push → caccia → wait_ci → merge_pr` 执行。初次同步和重新同步均遵循相同条件：无冲突时跳过完整审查，直接进入 push → Caccia → 返回 head 的 CI 等待；AI 解决冲突后，必须先完成审查和修复，再执行 `commit_and_push`。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。Git push 本身不会启动 Caccia。启用 `caccia.enabled: true` 时，worktree 任务的 `auto_pr` 和 Pipeline 的 `--auto-pr` 会在 PR 创建或更新成功后执行 Caccia。发布失败、没有 PR、goal 管理任务以及非 GitHub 提供商不会执行后处理 Caccia。若执行的 workflow（包括实际调用的子 workflow）包含明确的 `caccia` system effect，也会跳过后处理。设置 `merge.auto_start: true` 时，若选定的合并 workflow（包括其调用的 workflow）包含该 effect，则跳过后处理 Caccia，由合并 workflow 负责执行；否则先完成 Caccia，再启动合并 workflow。step 名称和指令文本不算 effect。
 
-Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会向 PR 发布评论或回复。自动关联的 Caccia 结果不会改变已完成任务的结果；成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。CI 首次通过时不执行恢复流程，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
 
-`wait_timeout_ms` 适用于初次审查和每次推送提交后的复审等待。初次等待超时会跳过自动关联的 Caccia，并保留任务结果。等待推送提交的复审超时会记录错误，同时保留已完成的任务结果。单独运行 `takt caccia` 时，两种超时都会以非零状态退出。
+`caccia` system effect 在配置关闭时返回 `skipped`，原因为 `skipReason: config_disabled`。配置启用但提供商不是 GitHub 时，返回 `skipped`，原因为 `skipReason: github_unavailable`。仅当配置启用且提供商为 GitHub 时，effect 才检查由 `coderabbitai` 发起且尚未解决的线程，并在没有符合条件的线程时跳过 CodeRabbit 审查等待，返回 `skipped`，原因为 `skipReason: no_review_threads`。合并 workflow 继续进入 `wait_ci`，等待返回 head 的 CI 完成。有符合条件的线程时，执行既有的审查处理循环。独立命令 `takt caccia` 和 PR 发布后的自动 Caccia 保留初次审查等待。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会回复审查评论。成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
 
-自动关联的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。父任务会等待 Caccia 结束后再完成。
+`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时通过 `@coderabbitai review` 评论请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。system effect 返回 `success: false` 与 `error`；单独运行 `takt caccia` 时，跳过或出错都会以非零状态退出。
+
+effect 的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。workflow 等待 effect 结果后进入下一步。
 
 也可以运行 `takt caccia <PR-number>` 手动处理现有 PR。命令结果和配置见[CLI 参考](./cli-reference.md#takt-caccia)与[配置参考](./configuration.zh-CN.md#caccia-review-loop)。
 
@@ -352,7 +408,9 @@ TAKT 使用 `git clone --reference <main-repo> --dissociate` 创建带独立 `.g
 
 YAML 字段仍叫 `worktree` 是为了兼容；内部使用独立 clone，而不是 `git worktree`。
 
-### 临时生命周期
+### clone 的创建与清理
+
+clone 作为任务的临时工作目录，按以下流程创建、使用和清理。
 
 1. **Create** — 执行前创建 clone
 2. **Execute** — 在 clone 中运行任务
@@ -360,14 +418,14 @@ YAML 字段仍叫 `worktree` 是为了兼容；内部使用独立 clone，而不
 4. **Preserve** — 执行后保留 clone，以便 instruct/retry
 5. **Cleanup** — 分支是持久产物，使用 `takt list` 合并或删除
 
-### 双工作目录
+### 执行目录与保存目录
 
 | 目录 | 用途 |
 |------|------|
 | `cwd`（clone 路径） | agent 运行位置和 report 写入位置 |
 | `projectCwd`（项目根目录） | 日志和 session 数据存储位置 |
 
-worktree 执行期间，report 写入 `cwd/.takt/runs/{slug}/reports/`，防止 agent 发现主仓库路径。当 `cwd !== projectCwd` 时跳过 session resume，以避免跨目录污染。
+worktree 执行期间，report 写入 `cwd/.takt/runs/{slug}/reports/`，防止 agent 发现主仓库路径。使用 `session: continue` 且未发生 provider fallback 时，同一 run 内的后续 step 会恢复与当前 clone 关联的相同 persona、provider 和 model 的已保存 session，不会使用其他 clone 或项目根目录的 session。通过 retry、requeue 或 instruct 在现有 clone 中开始新的尝试时，每个 persona 首次执行都创建新 session，后续 step 继续该 session。
 
 ## Session 日志
 

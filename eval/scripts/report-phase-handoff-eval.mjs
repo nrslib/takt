@@ -43,7 +43,8 @@ export function captureRuntime({ revisionRoot, workspace, configDirectory, sampl
   });
   writeFileSync(join(directory, 'capture.stdout.log'), diagnostics);
   const captured = readJson(resultPath);
-  if (captured.phase2Options.sessionIdPresent || captured.phase2Options.allowedTools.length !== 0) throw new Error('Invalid production Phase 2 capability boundary');
+  if (captured.phase2Options.executionPhase !== 2 || captured.phase2Options.sessionIdPresent
+    || captured.phase2Options.permissionMode !== 'readonly') throw new Error('Invalid production Phase 2 capability boundary');
   if (sample.liveInput !== undefined
     && (!captured.phase1Prompt.includes(sample.liveInput)
       || captured.liveInstructions.length !== 1
@@ -82,7 +83,7 @@ async function freeze(baselineRevision, candidateRevision, directory) {
     target: cases.target, grader: cases.grader, repeats: cases.repeats, languages: cases.languages,
     permissions: { sandbox: 'read-only', approvalPolicy: 'never', networkAccessEnabled: false, webSearchMode: 'disabled', inheritedSkills: false },
     maxConcurrency: 1, cache: false, node: process.version,
-    p2ToolEnforcement: 'Production allowedTools=[] captured; SDK read-only permits reads. Prompt prohibits all tools and executed tool items deterministically fail the evaluation.',
+    p2ToolEnforcement: 'Production executionPhase=2 and permissionMode=readonly captured; reads are permitted. Executed tool receipts are audited for test/build/install/write attempts.',
     harnessHashes: ['scripts/report-phase-handoff-eval.mjs', 'scripts/report-phase-handoff-runtime.mjs', 'providers/report-phase-handoff-model.mjs']
       .map(path => ({ path, sha256: digest(readFileSync(join(repoRoot, 'eval', path))) })),
     revisions: {}, samples: [],
@@ -189,7 +190,7 @@ async function runPhase(phase, directory) {
           phase2Prompt = captured.phase2Prompt;
         }
         const phase2 = await runReadOnlyModel({ prompt: phase2Prompt, cwd: sample.workspace, ...cases.target, artifactPrefix: join(artifactDirectory, 'phase2') });
-        const boundary = scoreExecutionBoundary(source, phase2.trace, phase1?.trace);
+        const boundary = scoreExecutionBoundary(source, phase2.trace, phase1?.trace, sample.workspace);
         observations.set(sample.sampleId, { boundary, phase1: phase1?.trace, phase2: phase2.trace });
         console.log(`${phase} ${sample.sampleId}: target complete; tools=${phase2.trace.toolCount}; execution=${boundary.pass}`);
         return { output: phase2.output, metadata: { boundary, phase1: phase1?.trace, phase2: phase2.trace } };

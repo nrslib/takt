@@ -74,4 +74,4 @@ TAKTに関する独立した判定を一つの正本で行う。
 | セッションキーにプロバイダーが含まれない | REJECT（クロスプロバイダー汚染） |
 | 継続すべき Phase 間でセッションが切れている | REJECT（コンテキスト喪失） |
 | 新規セッション retry 成功後に、古い resumed session を残している | REJECT（意図しない resume） |
-| report retry/fallback で readonly、tool-free、能力 override が落ちている | REJECT |
+| report retry/fallback で readonly、読み取り専用のツール制限、能力 override が落ちている | REJECT |

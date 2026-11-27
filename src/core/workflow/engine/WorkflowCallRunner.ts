@@ -718,6 +718,9 @@ export class WorkflowCallRunner {
         step,
         childResult,
       );
+      if (childResult.status === 'completed') {
+        this.executor.markCompletedInvocation(attempt.preparedExecution);
+      }
       this.deps.state.stepOutputs.set(step.name, response);
       this.deps.state.lastOutput = response;
       this.deps.state.previousResponseSourcePath = undefined;
@@ -764,6 +767,9 @@ export class WorkflowCallRunner {
           step,
           childResult,
         );
+        if (childResult.status === 'completed') {
+          this.executor.markCompletedInvocation(attempt.preparedExecution);
+        }
       } catch (error) {
         throw preserveWorkflowCallChildExecutionState(
           error,

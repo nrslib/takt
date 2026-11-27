@@ -3,7 +3,7 @@ import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   workflowPrListWhereEquals,
 } from './workflow-types.js';
-import type { WorkflowPrListWhere } from './workflow-types.js';
+import type { WorkflowPrListWhere, WorkflowTemplateReference } from './workflow-types.js';
 import {
   IssueListSystemInputRawSchema,
   IssueSelectionSystemInputRawSchema,
@@ -26,13 +26,13 @@ const EffectTemplateReferenceSchema = z.string().regex(
 const TemplateReferenceSchema = z.union([
   ScopedTemplateReferenceSchema,
   EffectTemplateReferenceSchema,
-]);
+]).transform((value) => value as WorkflowTemplateReference);
 
 const SystemInputBindingSchema = z.object({
   as: z.string().min(1),
 });
 
-const PrListWhereRawSchema = z.object({
+export const PrListWhereRawSchema = z.object({
   author: z.string().min(1).optional(),
   base_branch: z.string().min(1).optional(),
   head_branch: z.string().min(1).optional(),
@@ -43,6 +43,22 @@ const PrListWhereRawSchema = z.object({
 }).strict();
 
 export const SystemInputRawSchema = z.discriminatedUnion('type', [
+  SystemInputBindingSchema.extend({
+    type: z.literal('command'),
+    command: z.string().min(1),
+    timeout_ms: z.number().int().min(1).max(2147483647),
+    output: z.literal('json').optional(),
+  }).strict(),
+  SystemInputBindingSchema.extend({
+    type: z.literal('pr_status'),
+    source: z.literal('current_pr'),
+    rerun_from: TemplateReferenceSchema.optional(),
+  }),
+  SystemInputBindingSchema.extend({
+    type: z.literal('pr_ci_failure'),
+    source: z.literal('current_pr'),
+    head_sha: TemplateReferenceSchema,
+  }),
   SystemInputBindingSchema.extend({
     type: z.literal('task_context'),
     source: z.literal('current_task'),
@@ -134,6 +150,19 @@ const EnqueueTaskEffectBaseSchema = z.object({
 }).strict();
 
 export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('rerun_ci'),
+    pr: EffectReferenceScalarSchema,
+    failure: TemplateReferenceSchema,
+  }).strict(),
+  z.object({
+    type: z.literal('caccia'),
+    pr: EffectReferenceScalarSchema,
+  }).strict(),
+  z.object({
+    type: z.literal('commit_and_push'),
+    pr: EffectReferenceScalarSchema,
+  }).strict(),
   EnqueueTaskEffectBaseSchema.superRefine((data, ctx) => {
     if (data.mode === 'from_pr' && data.pr === undefined) {
       ctx.addIssue({
@@ -188,6 +217,7 @@ export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
     type: z.literal('comment_pr'),
     pr: EffectReferenceScalarSchema,
     body: z.string().min(1),
+    body_format: z.literal('plain_text').optional(),
   }).strict(),
   z.object({
     type: z.literal('sync_with_root'),
@@ -222,7 +252,7 @@ export function validateSystemStepFields(
   ctx: z.core.$RefinementCtx,
 ): void {
   const stepKind = getWorkflowStepKind(data);
-  const hasSystemFields = data.system_inputs !== undefined || data.effects !== undefined;
+  const hasSystemFields = data.system_inputs !== undefined || data.effects !== undefined || data.wait !== undefined;
   if (hasSystemFields && stepKind !== 'system') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

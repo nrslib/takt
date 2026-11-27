@@ -9,7 +9,9 @@ import type {
   WorkflowState,
 } from '../../models/types.js';
 import type { RunPaths } from '../run/run-paths.js';
-import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
+import { inheritWorkflowResults } from '../run/workflow-results.js';
+import { resumeWorkflowMatches, trimResumePointStackForWorkflow } from '../run/resume-point.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import {
   resolveWorkflowCallChildAutoRouting,
 } from '../workflow-call-provider-context.js';
@@ -21,9 +23,9 @@ import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
-  workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
+import { parseWorkflowCallInvocationIdentity } from '../workflow-execution-identity-codec.js';
 import {
   buildWorkflowCallNamespaceSegment,
   parseWorkflowCallNamespaceSegment,
@@ -41,9 +43,11 @@ import type {
 } from '../types.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
 import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
+import { resolveDeclaredReportInputs } from '../instruction/declared-report-inputs.js';
 import type { LiveInterventionChannel } from '../live-intervention/types.js';
 
 const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
+const log = createLogger('workflow-call');
 
 export interface WorkflowCallSessionUpdate {
   expectedSessionId: string | undefined;
@@ -130,12 +134,7 @@ interface WorkflowCallExecutorDeps {
     options: WorkflowEngineOptions,
   ) => WorkflowCallChildEngine;
   emit: (event: string, ...args: unknown[]) => void;
-  state: {
-    iteration: number;
-    personaSessions: Map<string, string>;
-    stepIterations: Map<string, number>;
-    userInputs: string[];
-  };
+  state: WorkflowState;
   setActiveResumePoint: (
     step: WorkflowCallStep,
     iteration: number,
@@ -271,7 +270,7 @@ export class WorkflowCallExecutor {
     }
 
     const nextEntry = resumePoint.stack[resumeStackPrefix.length + 1];
-    if (!nextEntry || !workflowEntryMatchesWorkflow(nextEntry, childWorkflow)) {
+    if (!nextEntry || !resumeWorkflowMatches(nextEntry, childWorkflow)) {
       return undefined;
     }
 
@@ -297,12 +296,14 @@ export class WorkflowCallExecutor {
     if (frame === undefined) {
       return undefined;
     }
+    const currentFrame = { ...frame, workflow_ref: getWorkflowReference(this.deps.getConfig()) };
+    const savedResumePoint = options.resumePoint;
     const resumePoint = trimResumePointStackForWorkflow({
       workflow: childWorkflow,
-      resumePoint: options.resumePoint,
+      resumePoint: savedResumePoint,
       resumeStackPrefix: [
         ...resumeStackPrefix,
-        frame,
+        currentFrame,
       ],
       resolveWorkflowCall: (parentWorkflow, nestedStep) => this.deps.resolveWorkflowCall({
         parentWorkflow,
@@ -311,9 +312,26 @@ export class WorkflowCallExecutor {
         lookupCwd: this.deps.getCwd(),
       }),
     });
+    const savedChildEntry = savedResumePoint?.stack[resumeStackPrefix.length + 1];
+    if (
+      savedResumePoint !== undefined
+      && savedChildEntry !== undefined
+      && resumePoint?.stack.length !== savedResumePoint.stack.length
+    ) {
+      const unresolvedEntry = resumePoint === undefined
+        ? savedChildEntry
+        : savedResumePoint.stack[resumePoint.stack.length]!;
+      const location = JSON.stringify(`${unresolvedEntry.workflow}/${unresolvedEntry.step}`);
+      throw new Error(`Saved resume position ${location} cannot be resolved for workflow_call step "${step.name}"`);
+    }
     return {
-      frame,
-      ...(resumePoint !== undefined ? { resumePoint } : {}),
+      frame: currentFrame,
+      ...(resumePoint !== undefined ? {
+        resumePoint: {
+          ...resumePoint,
+          stack: [...resumeStackPrefix, currentFrame, ...resumePoint.stack.slice(resumeStackPrefix.length + 1)],
+        },
+      } : {}),
     };
   }
 
@@ -324,17 +342,62 @@ export class WorkflowCallExecutor {
   ): void {
     const parentConfig = this.deps.getConfig();
     const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
+    const rebind = index.rebindResumeInvocation(
+      this.deps.sharedRuntime.resumeInvocationSource, parentConfig, step.name, resumeStackPrefix, occurrence,
+      this.deps.sharedRuntime.restartNavigator?.isActive() === true,
+    );
+    if (rebind !== undefined) {
+      this.deps.sharedRuntime.reportExecutions?.rebindInheritedInvocation(rebind.from, rebind.to, rebind.previousCallInstance, rebind.callInstance);
+      this.deps.sharedRuntime.workflowStepParticipationIndex!.rebindInvocation(
+        rebind.from,
+        rebind.to,
+        rebind.previousCallInstance,
+        rebind.callInstance,
+      );
+    }
     const existing = index.get(parentConfig, step.name, resumeStackPrefix);
     if (existing?.call_instance === occurrence) {
+      if (existing.completed === true) {
+        index.replace(parentConfig, step.name, resumeStackPrefix, {
+          call_instance: existing.call_instance,
+          report_namespace_segment: existing.report_namespace_segment,
+        });
+      }
       return;
     }
-    index.record(parentConfig, step.name, resumeStackPrefix, {
+    const pending = {
       call_instance: occurrence,
       report_namespace_segment: `${buildWorkflowCallNamespaceSegment(
         step.name,
         step.call,
         occurrence,
       )}--site-${PENDING_WORKFLOW_CALL_SITE_DIGEST}`,
+    };
+    index.record(parentConfig, step.name, resumeStackPrefix, pending);
+  }
+
+  private inheritInvocationResults(source: WorkflowCallInvocationRecord, target: WorkflowCallInvocationRecord): void {
+    if (this.deps.getOptions().resumeSource === undefined || source.call_instance !== target.call_instance) return;
+    // Only move results when resolving the namespace of the same logical call.
+    inheritWorkflowResults(
+      join(this.deps.runPaths.contextAbs, 'subworkflows', source.report_namespace_segment),
+      join(this.deps.runPaths.contextAbs, 'subworkflows', target.report_namespace_segment),
+    );
+  }
+
+  markCompletedInvocation(prepared: PreparedWorkflowCallExecution): void {
+    const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
+    const parentConfig = this.deps.getConfig();
+    const current = index.get(parentConfig, prepared.stepName, prepared.resumeStackPrefix);
+    if (
+      current?.call_instance !== prepared.occurrence
+      || current.report_namespace_segment !== prepared.invocation.report_namespace_segment
+    ) {
+      throw new Error(`workflow_call step "${prepared.stepName}" completion does not match its invocation`);
+    }
+    index.replace(parentConfig, prepared.stepName, prepared.resumeStackPrefix, {
+      ...current,
+      completed: true,
     });
   }
 
@@ -373,6 +436,7 @@ export class WorkflowCallExecutor {
       step.name,
       resumeStackSnapshot,
     );
+    let invocation = expectedInvocation;
     if (existing?.call_instance === occurrence) {
       if (existing.report_namespace_segment !== expectedInvocation.report_namespace_segment) {
         const existingNamespace = parseWorkflowCallNamespaceSegment(
@@ -382,12 +446,34 @@ export class WorkflowCallExecutor {
           existingNamespace?.siteDigest === PENDING_WORKFLOW_CALL_SITE_DIGEST
           && existingNamespace?.workflowName === step.call
         ) {
+          this.inheritInvocationResults(existing, expectedInvocation);
           this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.replace(
             parentConfig,
             step.name,
             resumeStackSnapshot,
             expectedInvocation,
           );
+        } else if ((this.deps.getOptions().resumePoint !== undefined || this.deps.getOptions().restartPoint !== undefined || this.deps.sharedRuntime.restartNavigator !== undefined)
+          && existingNamespace?.stepName === step.name
+          && existingNamespace.iteration !== '*'
+          && existingNamespace.workflowName === childWorkflow.name) {
+          const savedOccurrence = existingNamespace.iteration;
+          const sourceRecord = Object.entries(this.deps.sharedRuntime.resumeInvocationSource?.workflow_call_invocations ?? {})
+            .find(([, record]) => record.report_namespace_segment === existing.report_namespace_segment);
+          const sourceIdentity = sourceRecord === undefined ? undefined : parseWorkflowCallInvocationIdentity(sourceRecord[0]);
+          const savedPrefix = sourceIdentity?.calls.length === resumeStackSnapshot.length
+            ? resumeStackSnapshot.map((entry, index) => ({ ...entry, occurrence: sourceIdentity.calls[index]!.instance }))
+            : resumeStackSnapshot;
+          const sameDefinitionNamespace = buildWorkflowCallSiteIdentity({
+            stack: [...savedPrefix, buildWorkflowResumePointEntry(
+              parentConfig, step.name, 'workflow_call', savedOccurrence, this.deps.state.stepIterations, existing.call_instance,
+            )],
+            childWorkflow,
+          }).runPathSegment;
+          if (existing.report_namespace_segment !== sameDefinitionNamespace) {
+            log.warn('Saved workflow call site digest differs from current workflow', { step: step.name, saved: existing.report_namespace_segment, current: expectedInvocation.report_namespace_segment });
+          }
+          invocation = existing;
         } else {
           throw new Error(`workflow_call step "${step.name}" invocation record does not match the canonical call site`);
         }
@@ -406,7 +492,7 @@ export class WorkflowCallExecutor {
       childWorkflow,
       occurrence,
       resumeStackPrefix: resumeStackSnapshot,
-      invocation: expectedInvocation,
+      invocation,
     });
   }
 
@@ -509,6 +595,7 @@ export class WorkflowCallExecutor {
     const inheritedOptions = { ...options };
     delete inheritedOptions.maxStepsOverride;
     delete inheritedOptions.restartPoint;
+    delete inheritedOptions.inheritedReportInputs;
     const parentConfig = this.deps.getConfig();
     const prepared = request.preparedExecution;
     if (
@@ -520,6 +607,9 @@ export class WorkflowCallExecutor {
     const childWorkflow = prepared.childWorkflow;
     const occurrence = prepared.occurrence;
     const resumeStackPrefix = prepared.resumeStackPrefix;
+    const reportInputScope = resumeStackPrefix.at(-1)?.kind === 'parallel'
+      ? resumeStackPrefix.slice(0, -1)
+      : resumeStackPrefix;
     const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
       parentConfig,
       request.step.name,
@@ -573,6 +663,18 @@ export class WorkflowCallExecutor {
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
       ...inheritedOptions,
+      inheritedReportInputs: request.step.inputReports === undefined
+        ? options.inheritedReportInputs
+        : resolveDeclaredReportInputs(request.step, {
+            workflow: parentConfig,
+            state: this.deps.state,
+            sharedRuntime: this.deps.sharedRuntime,
+            workflowCallResolver: this.deps.resolveWorkflowCall,
+            projectCwd: this.deps.projectCwd,
+            lookupCwd: this.deps.getCwd(),
+            reportDir: this.deps.runPaths.reportsAbs,
+            resumeStackPrefix: reportInputScope,
+          }),
       abortSignal: this.deps.getAbortSignal?.() ?? options.abortSignal,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),

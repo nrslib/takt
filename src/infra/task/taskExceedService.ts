@@ -2,14 +2,21 @@ import type { WorkflowResumePoint } from '../../core/models/index.js';
 import type { TaskRecord } from './schema.js';
 import { buildExceededTaskRecord } from './taskRecordMutations.js';
 import { TaskStore } from './store.js';
+import { assertTaskStopHandled } from './taskStop.js';
 
 export interface ExceedTaskOptions {
+  completion?: import('../goals/schema.js').GoalTaskResult;
   currentStep: string;
   newMaxSteps: number;
   currentIteration: number;
   resumePoint?: WorkflowResumePoint;
   worktreePath?: string;
   branch?: string;
+}
+
+export interface RequeueExceededTaskOptions {
+  retryNote?: string;
+  runtimeAssignment?: string;
 }
 
 export class TaskExceedService {
@@ -24,6 +31,7 @@ export class TaskExceedService {
         throw new Error(`Task not found: ${taskName} (running)`);
       }
 
+      assertTaskStopHandled(current.tasks[index]!, options.completion);
       const updated = buildExceededTaskRecord(current.tasks[index]!, options);
 
       const tasks = [...current.tasks];
@@ -32,7 +40,7 @@ export class TaskExceedService {
     });
   }
 
-  requeueExceededTask(taskName: string): void {
+  requeueExceededTask(taskName: string, options?: RequeueExceededTaskOptions): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex(
         (task) => task.name === taskName && task.status === 'exceeded',
@@ -45,6 +53,8 @@ export class TaskExceedService {
       const updated: TaskRecord = {
         ...target,
         status: 'pending',
+        execution_id: undefined,
+        stop_request: undefined,
         started_at: null,
         completed_at: null,
         owner_pid: null,
@@ -52,6 +62,8 @@ export class TaskExceedService {
         failure: undefined,
         ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
         resume_mode: 'requeue',
+        ...(options?.retryNote === undefined ? {} : { retry_note: options.retryNote }),
+        ...(options?.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
       };
 
       const tasks = [...current.tasks];

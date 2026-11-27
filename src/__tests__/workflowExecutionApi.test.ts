@@ -26,7 +26,8 @@ vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
   executeWorkflowForRun: (...args: unknown[]) => mockExecuteWorkflowForRun(...args),
 }));
 
-vi.mock('../features/tasks/execute/loopAnalysis.js', () => ({
+vi.mock('../features/tasks/execute/loopAnalysis.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/tasks/execute/loopAnalysis.js')>()),
   LOOP_ANALYSIS_WORKFLOW: 'loop-analysis',
   createLoopAnalysisScheduler: (...args: unknown[]) => mockCreateLoopAnalysisScheduler(...args),
 }));
@@ -59,6 +60,9 @@ describe('runWorkflowExecution', () => {
           mcpServers: request.mcpServers,
           provider: request.agentOverrides?.provider,
           model: request.agentOverrides?.model,
+          cacciaExecutionSource: request.cacciaExecutionSource,
+          cacciaPushedHead: request.cacciaPushedHead,
+          prMergePushRecorder: request.prMergePushRecorder,
           ...(request.loopAnalysisPublication === undefined
             ? {}
             : { loopAnalysisPublication: request.loopAnalysisPublication }),
@@ -147,6 +151,17 @@ describe('runWorkflowExecution', () => {
         model: 'mock-model',
       }),
     );
+  });
+
+  it.each([undefined, 'goal-a'])('preserves terminal details only for goal-owned execution: %s', async (goalId) => {
+    mockExecuteWorkflow.mockResolvedValue({ success: false, setupFailed: true, interrupted: false, reason: 'setup failed' });
+    const result = await runWorkflowExecution({
+      task: 'Implement validation', cwd: '/repo', projectCwd: '/repo', workflowIdentifier: 'takt-default',
+      ...(goalId === undefined ? {} : { goalId }),
+    });
+    expect(result).toEqual(goalId === undefined
+      ? { success: false, reason: 'setup failed' }
+      : { success: false, setupFailed: true, interrupted: false, reason: 'setup failed' });
   });
 
   it('should fail before execution when cwd is missing', async () => {
@@ -245,9 +260,10 @@ describe('runWorkflowExecution', () => {
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
   });
 
-  it('should return structured failure information without process exit', async () => {
+  it.each([undefined, 'step_transition', 'runtime_error'] as const)('should return structured failure information without process exit for abort kind %s', async (abortKind) => {
     mockExecuteTaskWorkflow.mockResolvedValueOnce({
       success: false,
+      ...(abortKind === undefined ? {} : { abortKind }),
       reason: 'Step "draft" failed',
       lastStep: 'draft',
       lastMessage: 'provider error',
@@ -266,6 +282,7 @@ describe('runWorkflowExecution', () => {
 
     expect(result).toEqual({
       success: false,
+      ...(abortKind === undefined ? {} : { abortKind }),
       reason: 'Step "draft" failed',
       lastStep: 'draft',
       lastMessage: 'provider error',
@@ -363,6 +380,36 @@ describe('runWorkflowExecution', () => {
       '/repo',
       expect.objectContaining({ loopAnalysisScheduler: scheduler }),
     );
+  });
+
+  it.each([
+    { goalId: undefined, runContext: undefined },
+    { goalId: 'goal-a', runContext: undefined },
+    { goalId: undefined, runContext: { ignoreIterationLimit: true } },
+    { goalId: 'goal-a', runContext: { ignoreIterationLimit: true } },
+  ])('should attach enabled loop analysis only to non-goal tasks: %o', async ({ goalId, runContext }) => {
+    const scheduler = vi.fn();
+    mockCreateLoopAnalysisScheduler.mockReturnValue(scheduler);
+
+    await runWorkflowExecution({
+      task: 'Run with loop analysis enabled',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'default',
+      agentOverrides: { provider: 'mock' },
+      ...(goalId === undefined ? {} : { goalId }),
+    }, runContext);
+
+    const executor = runContext === undefined ? mockExecuteWorkflow : mockExecuteWorkflowForRun;
+    expect(executor).toHaveBeenCalledTimes(1);
+    const options = executor.mock.calls[0]?.[3];
+    if (goalId === undefined) {
+      expect(mockCreateLoopAnalysisScheduler).toHaveBeenCalledOnce();
+      expect(options).toHaveProperty('loopAnalysisScheduler', scheduler);
+    } else {
+      expect(mockCreateLoopAnalysisScheduler).not.toHaveBeenCalled();
+      expect(options).not.toHaveProperty('loopAnalysisScheduler');
+    }
   });
 
   it('Given a central run, When execution is configured, Then it preserves central options without a project-local scheduler', async () => {

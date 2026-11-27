@@ -18,7 +18,7 @@
 2. **阶段 2：** 增加总金额、类别筛选、删除和持久化
 3. **阶段 3：** 打磨移动端布局、空状态、焦点状态和视觉设计
 
-不要一次让 TAKT 完成全部内容，而是每次将一个阶段加入队列，检查结果，再提出下一项改进。
+每次将一个阶段加入队列，检查结果，再提出下一项改进。
 
 ## 1. 不使用 GitHub 开始
 
@@ -106,13 +106,15 @@ TAKT 可能会提出澄清问题或整理任务。当范围明确后，使用 `/
 
 ```text
 What would you like to do?
-    Execute now
   ❯ Save as Task
-    Continue editing
     Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Save as Task` 会将生成的指令追加到 `.takt/tasks.yaml`。`Execute now` 会立即执行任务，并询问 `Create worktree?`（默认 Yes），因此默认也会在隔离 worktree 中运行。教程的常规流程是先排队，再使用 `takt run` 执行。
+`Save as Task` 是初始选项，按 Enter 即可进入将生成的指令保存到 `.takt/tasks.yaml` 的步骤。本教程先将任务加入队列，再使用 `takt run` 执行。
+
+`Execute here now` 会先说明此 TUI 在 workflow 结束前不可用，通常应保存任务后用 `takt run` 执行。确认默认是 No（`[y/N]`）。只有 y 会在当前目录开始执行；N、Enter 或 Esc 不执行任务，并保留选中位置返回同一个菜单。在菜单中按 Esc 则返回对话输入。
 
 选择 **Save as Task** 后，TAKT 会询问 worktree 设置。`Auto-create PR?` 默认是 Yes；如果不使用 GitHub，请回答 `n`。
 
@@ -292,16 +294,18 @@ takt
 
 ```text
 What would you like to do?
-    Execute now
     Save as Task
-    Continue editing
   ❯ Create Issue
+    Execute here now
+    Continue editing
 ```
 
-`Create Issue` 会在一个流程中创建 Issue 并保存任务：Issue 创建后会直接进入 worktree 设置提问，不会返回操作菜单。如果已经知道 Issue 编号，也可以使用 `takt add`：
+`Create Issue` 会在创建前询问 `Save as a task too? [Y/n]`。本教程请选择 Y 或 Enter，创建 Issue 后继续保存任务和设置 worktree。n 只创建 Issue，不保存任务。Esc 不创建任何内容，并保留选中位置返回同一个提案的菜单；在该菜单中按 Esc 则返回对话输入。`--pr` 会话不显示 Issue 选项。
+
+如果已经知道 Issue 编号，也可以使用 `takt add`：
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
 然后继续本地流程：
@@ -320,10 +324,10 @@ takt list
 假设 Codex 创建了 Issue `#1`：
 
 ```bash
-takt add #1
+takt add '#1'
 ```
 
-`takt add #1` 会获取 GitHub Issue 的标题、正文和评论，并将其保存为待处理的 TAKT 任务。
+`takt add '#1'` 会获取 GitHub Issue 的标题、正文和评论，并将其保存为待处理的 TAKT 任务。
 
 运行任务：
 

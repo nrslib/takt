@@ -1,0 +1,26 @@
+{
+  "name": "faceted-prompting",
+  "version": "0.6.1",
+  "description": "Faceted Prompting \u2014 structured prompt composition for LLMs",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli/facet-includes": {
+      "types": "./dist/cli/facet-includes.d.ts",
+      "import": "./dist/cli/facet-includes.js"
+    }
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {}
+}

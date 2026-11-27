@@ -19,12 +19,33 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
-| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Interrupted user messages are quoted in sending order before the next regular message, whether queued or typed later, until an answer completes. Commands such as /go keep them pending and summarize the original history; ending the conversation sends nothing further. User lines and history retain each original message once. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded silently when the TUI starts; only the plain reader still prints it once. Workflows started from the TUI session itself are still announced when they finish |
+| `--tui` | Explicitly require the task-conversation TUI. It is already enabled when stdin and stdout are TTYs. Without a TTY, fail with `--tui requires an interactive terminal` |
+
+Ink draws the task conversation whenever stdin and stdout are TTYs, with or without this flag. Piped input uses the plain reader. With `--tui`, the absence of a TTY causes an error without falling back to that reader. Workflow, mode and post-summary selections use the usual selectors; the TUI draws the conversation.
+
+Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, and Esc interrupts the answer in progress. Input submitted while the assistant is answering is queued and sent when it finishes. Before the queue starts moving, ↑ takes back the last queued line for editing. Interrupting an answer sends queued input as the next turn.
+
+Interrupted user messages are quoted in sending order before the next regular message, whether queued or typed later. Another interruption also retains the current message, until an answer completes. Commands do not receive or consume these pending messages; `/go` summarizes the original history, including undelivered messages. The display and history retain each original message once. Ending the conversation without another regular message sends nothing further.
+
+The session stays open after a task runs, until `/cancel`. A result saved by an earlier run (for example a `takt run` finished in another terminal) is discarded without display when the TUI starts. The plain reader still prints it once at startup. Workflows started from the TUI session itself are still announced when they finish.
+
+When the terminal is resized, the TUI briefly pauses live drawing and redraws only the
+input/status region once resizing settles. Existing terminal scrollback, including shell
+output and earlier conversation messages, remains available through the terminal's usual
+scrolling controls. Committed messages are not replayed on resize or when returning from
+selectors and tasks. User and AI paragraphs use the terminal's native wrapping, so
+previously committed paragraphs can widen again; explicit source newlines remain.
+History printed by the older hard-wrapping renderer retains its existing breaks.
+The draft, queued input, and in-flight requests are retained.
+In the task conversation, the caret row is the first row inside the input box;
+status, notices and queued input appear below the box. Earlier display rows are folded,
+with `↑ N` indicating their count. Up/down still edits those rows, and folding or
+resizing does not change the submitted text.
 
 `--workflow` is the canonical option.
 
@@ -34,8 +55,11 @@ The global config directory (default: `~/.takt/`) can be changed with the `TAKT_
 and other subcommands. It changes only the assignment's defaults/targets; shared sections and
 existing provider/model/auto-strategy override priority stay unchanged. A missing name or no active
 runtime provider section fails before any agent starts and reports available names (or no definitions).
-The selection is not written to configuration or task records and is not restored by requeue/retry/instruct.
-Without this option, directory selection works as before.
+The CLI selection applies only to that invocation and is not saved in configuration or task records.
+Manager can specify `runtimeAssignment` when enqueueing a task or returning it to pending through retry or requeue; the name is saved as the task's `runtime_assignment`.
+Starting with `--runtime-assignment` gives that selection priority over the task's saved value.
+Without this option, the task's saved value is used; tasks without one use directory selection as before.
+See [Manager runtime assignments](./configuration.md#manager-runtime-assignments) for the conditions for saving and changing task assignments.
 
 ```sh
 takt --runtime-assignment cost "#123"
@@ -46,23 +70,101 @@ takt --pipeline --runtime-assignment cost "#123"
 See [named assignments](./configuration.md#named-assignments) for shared cost/quality presets
 and personal assignments in `~/.takt/runtime.yaml`.
 
+## Managed SDK installation and updates
+
+Claude SDK, Codex, OpenCode, Pi and DeepSeek Harness SDKs are separate from the normal TAKT installation. Each TAKT release ships pinned manifests and locks. Installation uses `npm ci --omit=dev --ignore-scripts` in the managed directory and requires npm and registry access.
+
+```sh
+takt install claude-sdk
+takt install codex
+takt install opencode
+takt install pi
+takt install deepseek-harness
+takt update           # Update installed providers with version drift only
+takt update codex     # Update the selected provider only
+```
+
+Interactive entry points confirm required installations and approximate disk space before execution. Declining to install a missing SDK prevents execution; conversations explain how to install it and return to input. Declining an update keeps the intact older SDK with a warning; if that version fails, TAKT explains how to update it. Running workflows never prompt, install or update. Install required providers explicitly before CI, pipeline and watcher execution.
+
+Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
+
+Pi's exception handler does not add update advice. If you are using an older SDK, update it with `takt update pi`.
+
 ## DeepSeek Harness
 
-`takt install deepseek-harness` installs the pinned official SDK and runtime under the TAKT managed directory. It needs network access to the npm registry and inherits your npm registry and proxy settings. npm resolution prefers the npm shipped with the Node running TAKT, then falls back to npm in an absolute directory on `PATH`. It leaves an installation that passes integrity checks unchanged and repairs detected damage. If the provider still malfunctions, `takt install deepseek-harness --force` reinstalls it regardless of the ready check. `takt install` without a target still treats `install` as a task. The old `takt deepseek-harness install` command remains removed. Configure `provider: deepseek-harness` and the credential source as described in the [Configuration Guide](./configuration.md#deepseek-harness-deepseek-harness).
+`takt install deepseek-harness` installs the required official SDK. It needs access to the npm registry. If the provider still malfunctions after installation, run `takt install deepseek-harness --force`. See the [configuration guide](./configuration.md#deepseek-harness-deepseek-harness) for credentials and `provider: deepseek-harness`.
 
-## Web UI execution boundary
+## Manager (experimental)
+
+In the manager TUI, `Ctrl+R` opens inquiries and `Ctrl+G` opens ongoing goals. Both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑↓` to choose **Register goal** or **Return to conversation without registering**, then press `Enter`. The default returns to the conversation and dismisses the proposal. Select **Register goal** to register it. Insufficient material is reported so you can continue the conversation. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Send `/clear` to start the conversation over: manager's AI begins a new session and earlier messages are no longer shown, while goals and proposals stay as they are. Input starting with `/` other than `/make-goal`, `/verify`, and `/clear` is sent to manager as a regular message. See [Managing goals](./goal-management.md) for menu operations.
+
+Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval. Previous messages, completed tool history, and replies are also shown again in the conversation log, in that order for each turn (Thinking and text shown between tool calls are not). See [Managing goals](./goal-management.md) for message acceptance and waiting, storage, and interruption after a daemon restart.
+
+The daemon does not exit automatically while Slack reception is active or when started with `--resident`. To keep it running without Slack, use:
+
+```bash
+takt daemon --resident
+```
+
+If a daemon is already running, this command keeps the existing daemon running, explains why resident startup could not proceed, and exits with a nonzero status. To start in resident mode, run `takt daemon stop` to stop the existing daemon, then run `takt daemon --resident`.
+
+This command stays in the foreground. Stop it with `takt daemon stop` from another terminal, or send a signal such as SIGTERM. Plain `takt daemon` and daemons automatically started by manager retain their existing behavior. Without active Slack reception, they exit automatically once all of the following are absent:
+
+- TUI connections and conversation connections being initialized
+- Remote worker connections and tasks running in the worker pool
+- Pending or running events, unfinished wait requests, and delivery of their results
+- Unfinished goals in the monitored projects: goals whose `status` is not `completed` and whose `executionStatus` is not `aborted`
+- Inbox JSON events, `pending` or `running` tasks, and undelivered inquiry answers
+
+The daemon waits for project inspection to finish and checks the conditions again. It also stays running when a goal cannot be read and its completion cannot be confirmed. Slack configuration or tokens alone do not keep it running; reception must actually be active. A saved pending summary alone does not keep the daemon running.
+
+If `takt manager` has a different version or CLI path from a resident daemon, it leaves the daemon running, displays the mismatch and update instructions, and exits. To update, run `takt daemon stop`, restart with `takt daemon --resident` from the new version you intend to use, then open manager. A manager with the same version and CLI path reuses the running daemon.
+
+`takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
+
+## worker
+
+`takt worker` executes daemon goal tasks on another machine. See the [worker pool deployment guide](./worker-pool.md) for the architecture and cloud setup.
+
+| Command | Behavior |
+|---------|----------|
+| `takt worker --url <url> --token <token>` | Connects to the daemon and keeps executing assigned tasks; both options are required |
+| `takt worker add <name> --concurrency <number>` | Registers a worker and prints its connection token to standard output once |
+| `takt worker list` | Prints registered names and concurrency separated by a tab |
+| `takt worker remove <name>` | Removes a registration and disconnects it |
+
+Run add/list/remove as the daemon user with the same global configuration directory, optionally selected through `TAKT_CONFIG_DIR`. `add` requires `--concurrency`, a nonnegative safe integer. A value of 0 prevents assignment to that worker. `builtin` is reserved. The list shows neither tokens nor connection status. To change concurrency, remove and register the worker again, then supply the new token to the worker.
+
+The startup URL must use HTTPS outside localhost and cannot contain credentials, a query, or a fragment. Use the same TAKT version on the worker and daemon. The registration supplies the worker name and limit; there are no startup `--name` or `--concurrency` options. Stop the worker with SIGINT or SIGTERM.
+
+Removing a registration invalidates its connection token but does not revoke a Git token already distributed. Revoke it on GitHub as well when necessary. See [daemon configuration](./configuration.md#daemon-worker-pool) for builtin capacity and distributed credentials.
+
+## Director (experimental)
+
+`takt director` opens a conversation TUI in an interactive terminal. The daemon owns the conversation: closing and reopening the TUI continues the same conversation, including when launched from another assigned repository. Previous messages and replies are not redisplayed; history is managed by the provider's session.
+
+```bash
+takt director
+takt director --help
+```
+
+Director is experimental; behavior and saved data formats may change without notice. Human and event turns incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director responsibilities](./goal-management.md#director-responsibilities) for responsibilities, global `director.slack` settings, and Slack setup.
+
+Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers.
+
+## Web UI startup and execution records
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
 
-The Web UI stores its queued tasks, runs, and sessions in channel-neutral central state below `TAKT_CONFIG_DIR`. The CLI keeps its existing project-local state behavior. Concurrent execution or mutation of the same canonical project through the CLI and Web UI is not supported; use one channel for a given execution target at a time.
+The Web UI stores execution records under `TAKT_CONFIG_DIR`. Using the CLI and Web UI to operate on the same project simultaneously is unsupported. Use one interface at a time while a task runs.
 
-Viewer is focused on execution status, the observed execution path, live log, and reports. Use its “Create task” action to open the dedicated conversation surface. `/setup` configures the worktree, task branch, base branch, automatic pull-request creation, and draft status; an instruction produced by `/go` keeps a snapshot of those settings. The header language control switches between Japanese and English and persists the choice in the browser. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. A failed central task can be submitted again with the same settings from `Requeue` in its run detail.
+Viewer shows execution status, live logs, and reports. Use “Create task” to start a conversation, then `/setup` to configure the worktree, task branch, base branch, automatic pull-request creation, and draft status. An instruction produced by `/go` keeps those settings. The header switches the display language. When automatic PR creation is enabled, a successful workflow is committed, pushed, and published as a PR. Tasks in `failed` or `exceeded` status can be submitted again with the same settings using `Requeue` in the run detail.
 
-Chat transcript rendering is role-specific: assistant responses use Markdown, while user and system messages are shown as literal text with their line breaks preserved. Retry task-action instructions remain literal text; the TASK and execution/run detail views keep their existing rendering.
+Chat shows your conversation history.
 
 The execution map is evidence-based: “observed participant” and “observed boundary” labels come from persisted lifecycle records, while “pool” indicates scheduler classification rather than an observed edge. `PREV` and `NEXT` name the incoming and outgoing ports of a step or boundary. A parallel invocation is drawn as one fork from the boundary's `PREV` port and one join into its `NEXT` port; participants are not connected to each other merely because their events were recorded sequentially.
 
-Central workflow bundles keep ordinary MCP configuration portable. Non-credential environment variables and headers (for example `LOG_LEVEL`, `NODE_ENV`, `ENDPOINT`, and `Content-Type`) may remain literal. Credential-bearing environment/header keys and credential flags in stdio arguments must use one complete `${ENV_VAR}` reference; mixed or literal credential values are rejected. MCP URLs reject userinfo and credential-bearing query or fragment keys, while ordinary metadata such as `version=2` is allowed. Local CLI bundles keep their existing behavior.
+For credentials in Web UI MCP settings, use an environment-variable reference in `${ENV_VAR}` form. See the [Web UI guide](../web-ui/README.md) for setup and operations.
 
 ## Interactive Mode
 
@@ -80,7 +182,7 @@ takt hello
 
 **Note:** `--task` option skips interactive mode and executes the task directly. Issue references (`#6`, `--issue`) are used as initial input in interactive mode.
 
-In the TUI conversation history, submitted user messages are shown with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
+In the TUI conversation history, submitted user messages are initially printed with a full-width background band, one blank row above and below the text, and a `❯` marker followed by a space. The band and text colors adapt to the terminal background when the terminal reports it, with a dark-gray and white fallback. Previously painted background padding is not repainted when the terminal is resized. The current, unsubmitted draft remains in the normal input area and does not use this styling. You can scroll through earlier messages while an answer is being generated with your terminal's usual mouse wheel or scroll shortcut.
 
 ### Flow
 
@@ -91,6 +193,8 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 5. Execute (run workflow, create PR)
 
 `/go` creates instructions for the latest task topic; earlier topics are included only when you explicitly combine them into the same task.
+
+When an Issue is loaded, each `/go` judges whether the latest task belongs to that current Issue. A related instruction shows `Issue: #N` immediately after the task heading in the preview, before the existing action menu. Execute, Save as Task, and Create Issue use N only when that line matches the current Issue. Unrelated tasks follow the flow without a loaded Issue. Choose Continue editing to correct the binding; no extra confirmation is added. After `/issue` replaces the context, the next instruction is judged again without inheriting earlier bindings.
 
 ### Interactive Mode Variants
 
@@ -110,16 +214,18 @@ In the TUI conversation history, submitted user messages are shown with a full-w
 | `/model <value>` | Use a free-form model override for this conversation. |
 | `/effort <value>` | Use a free-form reasoning effort override for this conversation. |
 | `/tell [instruction]` | Select a running worktree-clone task, review an additional instruction, and send it after confirmation. With no inline instruction, the latest discussion about that task is converted into a standalone additional-instruction body. An interactive terminal is required; no instruction is sent when confirmation is unavailable. |
-| `/requeue [guidance]` | In an assistant or grill-me conversation, resolve a failed or exceeded task from the conversation. Select a start position for a failed task; an exceeded task keeps its saved stopping position. Show the task details, then ask for Y/n confirmation. The inline text is guidance, not a task name. |
-| `/retry [guidance]` | In an assistant or grill-me conversation, resolve a failed task from the conversation and prepare a complete revised order for Save task / Continue confirmation. The inline text is guidance, not a task name. |
+| `/requeue [guidance]` | In an assistant or grill-me conversation, requeue a failed or exceeded task. Independent selection uses the conversation agreement and guidance. Invalid responses receive one correction request before manual selection. Review the task details and confirm with Y/n. Without guidance, exceeded tasks keep the saved stopping position. |
+| `/retry [guidance]` | In an assistant or grill-me conversation, select a failed task and start position, with one correction request for invalid responses before manual selection, and prepare a complete revised order for Save task / Continue confirmation. The inline text is guidance, not a task name. |
 
 `/tell` is available in the ordinary CLI/TUI `assistant`, `grill-me`, and `persona` conversations, including after switching between those modes. It still requires a running task backed by a valid TAKT-managed worktree clone when selecting a recipient. The Web UI does not execute the local `/tell` handoff; text such as `/tell review this task` is sent to the assistant as a regular message. Dedicated Retry and Instruct conversations do not expose `/tell`; use their task-action controls instead.
 
 Use `/issue <number>` or `/issue <number> <number> ...` in an ordinary CLI/TUI `assistant`, `grill-me`, or `persona` conversation to fetch Issues from the configured VCS provider and replace the current Source Context. Both bare numbers and `#`-prefixed numbers are accepted. The conversation history and AI session stay active; later messages and `/go` use the replacement context. If fetching any requested Issue fails, the existing context remains active. This command is not available in `takt exec`.
 
-`/requeue` and the assistant-conversation form of `/retry` are available only in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` considers failed and exceeded tasks; `/retry` considers failed tasks. The assistant chooses the task and, for failed tasks, the start position from the conversation. If there is no eligible task or the task is ambiguous, TAKT returns a notice without showing a confirmation. `/requeue` displays the task name, summary, workflow, and start position, then asks for Y/n; approval returns it to `pending` without changing `order.md`. `/retry` displays those details and the complete revised `order.md`; **Save task** archives the prior order and returns the task to `pending`, while **Continue** returns to the conversation without changes. Neither command starts a workflow. An interactive terminal is required. In persona conversations and the Web UI, these strings are ordinary messages. The existing `/retry` handling in the dedicated `takt resume` direct-retry conversation remains separate. In Workflow Maker (`takt make`), these strings do not perform task actions and are sent to the provider as ordinary conversation messages.
+Use `/requeue` and `/retry` in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` confirms and resubmits a failed or exceeded task. `/retry` revises a failed task's instructions before resubmitting it. Both commands select through independent AI calls using the latest conversation agreement, inline guidance, complete workflow and step paths, and heading descriptions. Each stage retries malformed or out-of-candidate responses once, then offers manual selection with a reason distinguishing JSON format mismatch, unknown task name, and unknown start position ID. Undecided responses and provider failures go directly to manual selection. Cancelling selection or confirmation leaves the task unchanged and records the result in the conversation. Both commands return the confirmed task to `pending` without running it immediately. Both require an interactive terminal; without a TTY, neither selection nor task changes occur. To change the restart position for an exceeded task, add guidance to `/requeue`. In the Web UI, use the action on the task instead.
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
+
+The results of saving, creating an Issue, or executing after /go, and of /tell, /retry, and /requeue, are recorded in the conversation with the same facts as the screen notice. Subsequent messages and /go can refer to the saved task name, Issue number, cancellation, and failure reason. Saving or Issue creation failures return to the same conversation after displaying the reason. Cancelling the save settings also returns to the conversation without reopening the selector. If saving fails after an Issue was created, the notice distinguishes the existing Issue from the unsaved task. Notices for /issue and conversation settings changes are excluded from these operation records.
 
 ### Formal Specification Verification
 
@@ -234,6 +340,15 @@ The server exposes these tools:
 | `takt_list_tasks` | Read compact task and run summaries without loading log or report contents. |
 | `takt_get_run` | Read one run's current step, phase, logs, reports, and live-intervention delivery state. |
 | `takt_tell_run` | Recheck and send an additional instruction to one running worktree-clone task. |
+| `takt_cleanup_tasks` | Preview filtered tasks and delete them only with `confirm: true` (`all` only). |
+
+`takt_cleanup_tasks` previews filtered tasks before deletion. It requires an absolute `cwd` and a `reason`. Optional inputs are `statuses` (one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`; `running` is not allowed), `goalId`, `branch`, and `confirm` (default `false`). At least one of `statuses`, `goalId`, or `branch` is required.
+
+Omitting `confirm` or setting it to `false` returns only the matching list without deleting anything. Only `confirm: true` deletes tasks, with the same deletion scope as `takt list`. This tool is available only in the `all` tool set, not in `read-only` or `manager`; `manager` has the separate `takt_remove_goal_task` tool.
+
+`takt_stop_goal_task` is available in the `manager` and `all` tool sets. Pass an absolute `cwd`. From one task item returned by `takt_list_tasks`, pass its `name` value as `taskName` and use its `goalId` and `executionId`. The owner PID must be alive. When an owner start time is saved, the current start time must be available and match it. Without a saved start time, matching goalId, taskName and executionId, running status, and a live owner PID are sufficient to accept the request. Mismatched identities, non-running tasks, and ended owners are rejected with a reason and no stop request is saved. The tool only saves the request; the task stays `running` while its worker polls every 500 ms and aborts itself. After execution and cleanup finish, the worker saves `failed` with a task stop reason, distinct from a goal abort. Other tasks and the goal remain active. Repeated requests return the saved request only if the same execution is still `running` and its owner can be verified when the request is evaluated; retries use a new execution ID.
+
+Before processing each project's events, the daemon recovers interrupted tasks to `failed` and creates goal-task completion events, even when no pending tasks exist. Recovery requires an absent or dead owner PID, or a known mismatch between the saved and current owner start times. A live PID with unavailable saved or current owner identity is left running.
 
 Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
 
@@ -274,9 +389,11 @@ MCP can enqueue tasks, inspect task/run state, and send additional instructions 
 
 ### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
 
-All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
+All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `currentStep` is the current step recorded for the run: normally the top-level step, but it becomes the branch step when a branch of a top-level parallel step starts a step of its child workflow. `currentStepPath` lists each workflow and step from the top-level workflow down to the running leaf step, and only the last entry carries the leaf's `startedAt` and `executionCount`. The leaf is the top-level step itself, a step of a child workflow, a parallel step itself, or a loop monitor judge step (a step starting with `_loop_judge_` in the workflow of the step that triggered it). When `currentStep` names a branch of a top-level parallel step and the latest step that branch started in the current run of the parallel step is running, the path lists the parallel step, that branch step, and then the steps of the child workflow the branch calls. Once that step of the branch has completed or the child workflow of the branch has ended, the leaf is the parallel step itself, with the start of its current run, until the branch logs its next start. `executionCount` counts starts of the leaf from the same call site in the latest log; `0` means the start of the current step is not logged yet (`currentStepPath` then holds only `currentStep`), and `null` means unknown. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
 
 `takt_list_tasks` returns all tasks even when an individual worktree validation or run metadata read fails. Only the affected entry gains a sanitized `error` string alongside its available basic information; other entries retain their previous contents. Run information is never read from a worktree that failed validation. An unreadable queue or a `cwd` outside the allowed root remains a whole-tool error with no task array.
+
+After delivery succeeds, `takt_tell_run` and CLI `/tell` append instructions to the task's source `order.md` and refresh the active run's `context/task/order.md`. When persistence succeeds, each addition retains its instruction ID and receipt time so later agents and resumed runs can read it. If persistence fails, a warning is written to standard error; the accepted instruction remains delivered and tell still succeeds.
 
 ## Instant Exec Mode
 
@@ -314,11 +431,11 @@ You can execute GitHub Issues directly as tasks. Issue title, body, labels, and 
 
 ```bash
 # Execute by specifying issue number
-takt #6
+takt '#6'
 takt --issue 6
 
 # Issue + workflow specification
-takt #6 --workflow dual
+takt '#6' --workflow dual
 ```
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
@@ -389,7 +506,7 @@ takt watch --ignore-exceed
 
 ### takt caccia
 
-Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched, and Caccia does not post pull-request comments or replies.
+Wait for CodeRabbit and handle its unresolved review threads on an existing GitHub pull request. Each iteration runs the configured Caccia workflow in a temporary clone, records a decision report under `.takt/runs/`, pushes fixes, resolves the reviewed CodeRabbit threads, and waits for a review of the pushed commit. Human-started review threads are left untouched. If a CodeRabbit rate-limit notice provides a retry time before the original wait deadline, Caccia posts one `@coderabbitai review` request after that time is reached; it does not post review replies.
 
 ```bash
 takt caccia 123
@@ -399,7 +516,9 @@ During execution, Caccia shows review waiting and continued polling, unresolved 
 
 The PR number is required. Exit code `0` means no unresolved CodeRabbit threads remain after review. A non-zero code indicates that the repository is not using GitHub, CodeRabbit did not post before the wait limit, the iteration limit was reached, or execution failed. The iteration-limit message includes the number of remaining threads. This command requires an authenticated GitHub CLI (`gh`).
 
-The `wait_timeout_ms` limit applies to the initial CodeRabbit check and to each review of a pushed commit. If the initial check times out, Caccia skips processing and this command exits non-zero. If a review of a pushed commit does not arrive before the limit, the run fails and this command exits non-zero.
+Git fetch and push in the temporary clones used by `takt merge` and `takt caccia` use your usual Git configuration and credentials.
+
+`wait_timeout_ms` bounds the initial CodeRabbit review wait and each pushed-commit review wait, including a retry request. If a rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. This command exits non-zero on a skip or error.
 
 ### takt list
 
@@ -416,11 +535,30 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-`--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Non-interactive actions require `--branch`, and `delete` also requires `--yes`. A failed `sync` exits with code `1`.
+`--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Actions other than `delete` require `--branch` in non-interactive mode. A failed `sync` exits with code `1`.
+
+`takt list --non-interactive --action delete` accepts `--status <status...>` to select one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`. `running` is not allowed because running tasks cannot be deleted. `--goal <goalId>` selects tasks belonging to that goal. `--branch <branch>` is also available; when used alone, it targets only `completed` tasks.
+
+At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
+
+Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. For a task configured with `worktree: false`, its recorded branch and uncommitted changes are left untouched. A task with `worktree` set to `true` or a path string and no recorded `worktree_path` keeps its recorded branch regardless of task status or whether the branch is merged. If clone metadata exists for that recorded branch, its clone and metadata are still cleaned up.
+
+```bash
+# Preview matching tasks, then delete them after checking the list
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# Preview as JSON
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
+In interactive mode, **Delete selected…** opens a checkbox list of non-running tasks. Select tasks with Space and confirm the selection with Enter, then approve one confirmation showing the selected count. Empty selections, cancellation, or declining confirmation return to the menu without deleting anything. Each selected task uses the same cleanup as individual **Delete**, including branches and merge-task clones; tasks with `worktree: false` keep their recorded branches and uncommitted changes, as do tasks with `worktree` set to `true` or a path string and no recorded `worktree_path`, regardless of status or whether the branch is merged. If clone metadata exists for a recorded branch, its clone and metadata are still cleaned up. Processing continues after a failure and ends with `Deleted M of N tasks.` showing the successful and selected counts. **All Delete** and individual **Delete** remain available with their existing behavior.
+
 #### Consult a running task
+
+In `takt list`, **Stop** requests a stop for one running task after confirmation. The worker interrupts itself and determines the final state. **Mark as failed** only changes the task status and does not stop the worker.
 
 Selecting a task in `takt list` opens its status-specific action menu. Existing actions such as Instruct and Requeue remain available for their respective task states. For a running task with a worktree clone, select **Interactive** to open the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks, discuss a new task, and use `/go` to execute or save it. `/tell` displays the task name, workflow, current step, and instruction, then writes only to the task selected at confirmation; `/cancel` closes the conversation or cancels the pending action. `/tell` requires an interactive terminal and sends nothing when confirmation cannot be obtained. **Mark as failed** remains available in the action menu.
 
@@ -431,7 +569,7 @@ Only running tasks backed by a valid TAKT-managed worktree clone are `/tell` can
 1. Run `takt add` and confirm a pending record is created in `.takt/tasks.yaml`.
 2. Open the generated `.takt/tasks/{slug}/order.md` and add detailed specifications/references as needed.
 3. Run `takt run` (or `takt watch`) to execute pending tasks from `tasks.yaml`.
-4. Verify outputs in `.takt/runs/{slug}/reports/` using the same slug as `task_dir`.
+4. Find the execution directory through `run_slug` in `tasks.yaml` and verify outputs in `.takt/runs/{run_slug}/reports/`.
 
 ## Pipeline Mode
 
@@ -641,3 +779,57 @@ takt purge
 # Specify retention period
 takt purge --retention-days 14
 ```
+
+### takt merge
+
+`merge-review-fix` and `merge-review-fix-simple` resynchronize with the base branch when CI completes and the PR is `CONFLICTING`, resolving conflicts when needed. On both initial synchronization and resynchronization, a clean sync skips the full review and continues through push → Caccia → CI on the new HEAD → merge evaluation. Every AI conflict resolution is followed by review and fixes before push. A PR that is only `BEHIND` proceeds to the existing review and merge conditions without resynchronization. The limit is `max(2, runtime concurrency - 1)`: two resynchronizations at concurrency 2 or 3, and three at concurrency 4. Initial synchronization does not count. Runtime concurrency, including a CLI `--concurrency` override, is saved with the task and retained by Requeue and Retry. If the PR is still conflicting at the limit, TAKT comments with the reason and ends ABORT without merging. Resynchronization preserves the CI fix and rerun budgets already used.
+
+Run a workflow for a pull request. With an explicit number, selection conditions are ignored. Without a number, TAKT collects every open PR number in creation order before reading each PR's details and applying the selection conditions. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts.
+
+```bash
+takt merge 123
+takt merge 123 --workflow merge-review-fix
+takt merge 123 --workflow merge-review
+takt merge 123 --workflow merge-prepare
+takt merge --author alice --label ready --include-forks --concurrency 4
+takt merge "everything except prompt changes"
+```
+
+Use `merge-review-ci` to review only PRs whose CI has already succeeded:
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+For review and evaluation comments without code changes, commits, pushes or merges, use the existing project setting in `.takt/config.yaml`:
+
+```yaml
+caccia:
+  enabled: false
+```
+
+Numbered and bulk runs check the existing `pr_status` before review. All checks must be finished and successful; `SUCCESS`, `NEUTRAL` and `SKIPPED` count as success. Pending, failed or absent checks end `COMPLETE` immediately without AI review, Caccia or evaluation comments. The initial check does not wait or retry and needs no new configuration or CLI option. Successful PRs delegate through `workflow_call` to the existing `merge-review`, including its later CI check and `TAKT evaluation: approved={true|false}. {reason}` comment. Existing fork selection and threat checks still apply: bulk runs require `--include-forks` to include forks; an explicit PR number bypasses selection conditions but still undergoes the threat check. Rejection retains its existing stop comment. Other merge workflows and the default workflow are unchanged.
+
+`merge-prepare` performs the same preparation as `merge-review-fix-simple` through CI, then succeeds without merging. Task completion records distinguish preparation, merge and unresolved work through `mergeOutcome`. Posting a failure comment does not count as success. Goal PR merge tasks safely fast-forward the original goal branch after push, preserving and reporting divergence or checked-out worktrees.
+
+The single positional argument is a PR number when it contains only decimal digits; otherwise it is AI selection text. A number bypasses selection conditions and AI selection. With text, TAKT first applies the existing CLI filters or `merge.where` settings and draft/fork exclusions, then judges each remaining candidate using its title, body, labels, head/base branch names, and complete list of changed file paths. Diff contents and review comments are not selection material. Text alone preserves configured filters.
+
+After every candidate has a valid structured decision, TAKT displays selected PR numbers with reasons and excluded PR numbers, then starts only selected PR workflows without confirmation. Missing or invalid decisions, provider errors, or failure to obtain complete selection material stop the command with a nonzero exit code before any PR workflow starts. No candidates or no selected PRs means zero processed, zero merged, and exit code 0. The processed and actual merged counts retain their existing meaning.
+
+Available filters are `--author`, repeatable `--label` (all labels must match), `--base`, `--head` (with `*` wildcards), and `--managed-by-takt`. Specifying only `--workflow` preserves the configured selection conditions.
+
+By default, draft PRs and forks are excluded. Use `--include-draft` and `--include-forks` to include them. Any CLI selection condition replaces all configured selection conditions. Bulk runs execute two PR workflows at a time by default; `merge.concurrency` changes this limit and `--concurrency` overrides it for one invocation. An explicit PR number processes only that PR. A failure for one PR does not stop the others. The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia. Automatic post-PR Caccia follows the enablement, exclusion, and ordering rules in the [configuration reference](./configuration.md#caccia-review-loop). The command reports processed, merged and prepared counts. A workflow ending with `COMPLETE` succeeds; one ending with `ABORT` fails (`unresolved`). On success, the outcome is `merged` if the PR is merged when the workflow ends, or `prepared` if it is not. The command exits 0 if all workflows succeed, or 1 if any workflow is unresolved or fails. Zero targets exits 0.
+
+`merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. CI timeouts also end ABORT as unresolved; `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.
+
+Workflow selection uses the CLI override, then `merge.workflow`, then `merge-review-fix-simple`. After AI conflict resolution, the default gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes, verification, and follow-up review in separate steps. A clean sync skips this full review and proceeds to push. Like `merge-review-fix`, it synchronizes, resolves conflicts when needed, pushes changes, runs the explicit Caccia effect and waits for CI on its returned head, blocks a CHANGES_REQUESTED review, and merges. Use `--workflow merge-review-fix` for parallel review.
+
+GitLab supports explicit MR numbers and bulk selection. Caccia returns `skipped` with `github_unavailable`, then the workflow waits for CI on the returned head. Merge methods and head constraints remain unsupported, so merge operations using either fail. Completing the CI wait alone does not count as a successful merge.
+
+Each PR merge is recorded as a task in `takt list`. Its isolated clone uses the same `worktree_dir` setting as ordinary tasks: by default `../takt-worktrees`, with `.takt/worktrees` as the existing fallback when the parent directory is not writable. If the workflow fails or stops at a conflict, the clone and Git merge state remain available for inspection. Running `takt merge` again creates a new task and isolated clone while preserving the failed task and clone. Use **Requeue** in `takt list` to resume the existing task or **Retry** to revise its instruction and resume; the saved PR identity and fork checks are verified again. A running or pending merge task for the same PR blocks both a new merge and resumption of a failed task. The clone is removed after successful preparation or merging. AI conflict resolution may update related source files, tests, and lockfiles; TAKT stages those changes while preserving preexisting unstaged and untracked user edits.
+
+Fork PRs undergo a threat check before the main workflow, whether selected by number, in bulk, or through automatic startup. Same-repository PRs skip it. TAKT first checks dangerous Git configuration keys in the clone and additions or changes to instruction files and CI definitions in the cumulative diff. If these checks pass, AI evaluates the diff once from the original repository's project root and returns a structured decision. The diff and changed-file list are passed as untrusted data.
+
+Dangerous settings or changes, or changes the AI considers suspicious, stop processing after a PR comment identifies the finding or changed location and reason. If the diff exceeds `merge.threat_check_max_diff_bytes` (default: 200,000 UTF-8 bytes), or no valid structured decision is available, TAKT leaves a comment requesting human review instead of making an automatic decision. Bulk processing does not wait for interactive input.

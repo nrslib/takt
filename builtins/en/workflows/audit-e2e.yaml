@@ -26,6 +26,7 @@ loop_monitors:
 
 steps:
   - name: plan
+    description: Map all user flows to existing E2E tests and organize the audit scope and priorities for missing scenarios.
     tags:
       - plan
     persona: test-planner
@@ -49,6 +50,7 @@ steps:
         next: ABORT
 
   - name: audit
+    description: Divide the target flows, audit their code and E2E tests in parallel, and record coverage and gaps.
     tags:
       - review
     edit: false
@@ -75,6 +77,7 @@ steps:
         next: supervise
 
   - name: supervise
+    description: Check E2E audit coverage, evidence, and issue-ready detail, and decide whether to complete or re-audit.
     tags:
       - review
       - supervise
@@ -95,6 +98,7 @@ steps:
         next: review
 
   - name: review
+    description: Re-audit unaudited or insufficiently evidenced flows and scenarios and integrate the results into the existing report.
     tags:
       - review
     edit: false

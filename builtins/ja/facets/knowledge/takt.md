@@ -34,7 +34,7 @@ CLI → WorkflowEngine → Runner（4種） → RuleEvaluator → 次の step
 | フェーズ | 目的 | ツール | 条件 |
 |---------|------|--------|------|
 | Phase 1 | メイン作業 | step の allowed_tools | 常に |
-| Phase 2 | レポート出力 | Write のみ | output_contracts 定義時 |
+| Phase 2 | レポート出力 | 読み取り専用のツール | output_contracts 定義時 |
 | Phase 3 | ステータス判定 | なし（判定のみ） | タグベースルール時 |
 
 ## ルール評価
@@ -109,13 +109,13 @@ compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 
 ## テストレイヤーと実行ゲート
 
-TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で unit、軽い IT、重い IT、E2E を分類する。実子プロセスを起動しても、利用者の入口ではなく内部 client からローカルの偽 CLI を呼ぶ検証なら E2E ではなく重い IT である。
+TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で unit、light IT（`npm run test:it` で回るテスト）、heavy IT（`npm run test:it:heavy` で回るテスト）、E2E を分類する。実子プロセスを起動しても、利用者の入口ではなく内部 client からローカルの偽 CLI を呼ぶ検証なら E2E ではなく heavy IT である。
 
 | レイヤー | 境界 | 標準ゲート |
 |---------|------|-----------|
 | unit | 個別関数・クラス。直接依存を test double に置き換え、実 process・Git・filesystem・workflow engine を使わない | `npm test` |
-| 軽い IT | 実 filesystem・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
-| 重い IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
+| light IT | 実 filesystem・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
+| heavy IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
 | E2E | 利用者が使う CLI などの公開入口からアプリケーション全体を実行し、利用者から見える結果を観測する | provider 別 E2E gate |
 
 ### 開発時の実行順
@@ -123,12 +123,14 @@ TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で un
 | 状態 | 実行 |
 |------|------|
 | 実装中 | unit gate を反復する |
-| 実装完了時 | unit gate の後に軽い IT gate を実行する |
+| 実装完了時 | unit gate の後に light IT gate を実行する |
 | IT を追加・変更した | 分類契約テスト `releaseVerificationWiring.test.ts` を単体実行する |
-| 重い IT を追加・変更した | 全重い IT を待たず、変更したファイルを target 指定で自分で実行する |
-| Pull Request / release | 軽い IT と重い IT の全件を実行する |
+| heavy IT を追加・変更した | 変更したファイルを `npm test -- <test-file>` で対象指定し、自分で実行する |
+| PR CI / release の確認 | light IT と heavy IT の全件を実行する |
 
-重い IT runner は、process・Git・同期 I/O の競合を避けるため1 workerで動く。ローカルの全件実行は直列であり、PR CI は重い parallel IT を独立 runner の6シャードへ分割し、serial groupも別 runnerへ分離する。`npm test -- <test-file>` は分類済みの対象を対応 runner へ送る。重い IT を追加・変更した担当者は、この target 実行を完了証拠として残し、PR での全重い IT だけに初回検証を委ねない。`npm run check:release` は unit、軽い IT、重い IT、E2E を順に実行する。
+ユーザーが明示的に指示した場合を除き、heavy IT の全件（`npm run test:it:heavy`）をローカルで実行してはならない。ローカルでは、追加・変更した heavy IT、または今回の変更を直接検証する heavy IT だけを `npm test -- <test-file>` で対象指定して実行する。それ以外の heavy IT は実行しない。
+
+PR CI は heavy IT を1 runner 内で1 workerで動かし、heavy parallel を独立 runner の6シャードへ分割し、serial group ごとに別 runnerへ分離する。heavy parallel のテストは `mkdtemp` で隔離され、リポジトリ内のファイル、固定の `/tmp` パス、`tmpdir()` 直下の列挙などの共有パスを取り合わない。取り合いを避けられないテストは serial group に分類される。`npm test -- <test-file>` は分類済みの対象を対応 runner へ送る。heavy IT を追加・変更した担当者は、この target 実行を完了証拠として残し、PR での heavy IT の全件実行だけに初回検証を委ねない。`npm run check:release` は unit、light IT、heavy IT、E2E を順に実行する。
 
 ### Mock プロバイダー
 
@@ -161,13 +163,13 @@ TAKT では Windows を副次プラットフォームとして扱う。主要な
 
 ## セッション管理
 
-エージェントセッションは cwd と provider ごとに保存される。worktree/clone 実行時はセッション再開をスキップする。
+エージェントセッションは cwd と provider ごとに保存される。worktree/clone 実行では provider fallback を除く `session: continue` の step が同一 run 内で同じクローンに紐づく同一 persona・provider・model の保存済み session を再開し、別クローンやプロジェクトルートの session は使わない。既存クローンで retry・requeue・instruct による新しい試行を始めると、各 persona は新規 session で開始し、後続 step でその session を継続する。
 
 通常の Phase 1 応答で `sessionId` が欠落しているだけなら、既存セッションを直ちに破棄する根拠にはならない。既存の resume context を継続してよい経路では、古い sessionId を維持する。
 
 一方、明示的に新しいセッションとして実行した retry/fallback が成功した場合、応答に `sessionId` がなければ古い resumed session を使い続けてはならない。新規実行の結果として sessionId が得られなかったことを保存層へ伝え、古い session を clear または隔離する。
 
-Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly かつ tool-free の実行契約を持つ。report retry/fallback でも `permissionMode: readonly`、空の tool 許可、provider 能力 override（例: turn 上限）を落としてはならない。
+Report Phase は、読み取り専用のツールで Phase 1 の実行記録や関連ファイルの必要な箇所を読み、結果をまとめる Phase 2 である。ファイル変更、テスト・ビルド実行、新しい調査や指摘・判定・計画の追加は行わず、回答本文を TAKT が保存する。report retry/fallback でも `permissionMode: readonly`、読み取り専用のツール制限、provider 能力 override（例: turn 上限）が維持される。Phase 3 はツールを使わない。
 
 
 ## 非同期処理とプロセス境界

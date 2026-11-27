@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +31,10 @@ describe('Web UI project registry', () => {
       join(globalConfigDirectory, 'projects', `${registered.id}.json`),
       'utf8',
     ))).toMatchObject({ id: registered.id, projectDirectory });
+    expect(JSON.parse(await readFile(
+      join(globalConfigDirectory, 'projects', `${registered.id}.json`),
+      'utf8',
+    ))).not.toHaveProperty('fingerprint');
   });
 
   it('rejects an unregistered id and ignores symlinked registry entries', async () => {
@@ -49,7 +53,7 @@ describe('Web UI project registry', () => {
       .rejects.toThrow('Project is not registered');
   });
 
-  it('keeps a state unavailable when the canonical directory fingerprint changes', async () => {
+  it.each(['dev', 'ino'] as const)('retains the state and availability when the saved %s differs', async (field) => {
     const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-project-registry-'));
     const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-project-'));
     const registered = await registerProject({
@@ -59,13 +63,21 @@ describe('Web UI project registry', () => {
     });
     const path = join(globalConfigDirectory, 'projects', `${registered.locationId}.json`);
     const stored = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-    stored.fingerprint = { dev: registered.fingerprint.dev, ino: registered.fingerprint.ino + 1 };
+    const current = await stat(registered.canonicalDirectory);
+    stored.fingerprint = { dev: current.dev, ino: current.ino, [field]: current[field] + 1 };
     await writeFile(path, JSON.stringify(stored));
 
-    await expect((await readProjectRegistry(globalConfigDirectory)).projects[0]).toMatchObject({
+    expect((await readProjectRegistry(globalConfigDirectory)).projects[0]).toMatchObject({
       stateId: registered.stateId,
-      available: false,
+      available: true,
     });
+    await expect(resolveRegisteredProject(globalConfigDirectory, registered.locationId))
+      .resolves.toMatchObject({ stateId: registered.stateId, canonicalDirectory: registered.canonicalDirectory });
+    const reRegistered = await registerProject({ globalConfigDirectory, projectDirectory, command: 'manager' });
+    expect(reRegistered.stateId).toBe(registered.stateId);
+    const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    expect(saved).toMatchObject({ stateId: registered.stateId, lastCommand: 'manager' });
+    expect(saved).not.toHaveProperty('fingerprint');
   });
 
   it('repairs an unsupported same-location record only during explicit registration', async () => {
@@ -200,7 +212,7 @@ describe('Web UI project registry', () => {
     expect(JSON.parse(await readFile(target, 'utf8'))).toEqual(conflictingRecord);
   });
 
-  it('does not repair a current-version record with a malformed fingerprint', async () => {
+  it.each([undefined, { dev: 1 }, null])('ignores an obsolete fingerprint value %j without replacing the state', async (fingerprint) => {
     const globalConfigDirectory = await mkdtemp(join(tmpdir(), 'takt-project-registry-'));
     const projectDirectory = await mkdtemp(join(tmpdir(), 'takt-project-'));
     const registered = await registerProject({
@@ -210,15 +222,18 @@ describe('Web UI project registry', () => {
     });
     const target = join(globalConfigDirectory, 'projects', `${registered.locationId}.json`);
     const currentRecord = JSON.parse(await readFile(target, 'utf8')) as Record<string, unknown>;
-    currentRecord.fingerprint = { dev: registered.fingerprint.dev };
+    currentRecord.fingerprint = fingerprint;
     await writeFile(target, JSON.stringify(currentRecord));
 
+    const snapshot = await readProjectRegistry(globalConfigDirectory);
+    expect(snapshot.warnings).toEqual([]);
+    expect(snapshot.projects).toEqual([expect.objectContaining({ stateId: registered.stateId, available: true })]);
     await expect(registerProject({
       globalConfigDirectory,
       projectDirectory,
       command: 'ui-recovery',
-    })).rejects.toThrow('fingerprint is invalid');
-    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual(currentRecord);
+    })).resolves.toMatchObject({ stateId: registered.stateId, lastCommand: 'ui-recovery' });
+    expect(JSON.parse(await readFile(target, 'utf8'))).not.toHaveProperty('fingerprint');
   });
 
   it('does not replace a registration path that is not a regular file', async () => {

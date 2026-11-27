@@ -8,6 +8,7 @@ if (!provider) {
 
 const commonTests = [
   'e2e/specs/add-and-run.e2e.ts',
+  'e2e/specs/goal-specification-file.e2e.ts',
   'e2e/specs/worktree.e2e.ts',
   'e2e/specs/pipeline.e2e.ts',
   'e2e/specs/task-auto-pr.e2e.ts',
@@ -31,6 +32,7 @@ const providerSpecificTests: Record<string, string[]> = {
 export default defineConfig({
   test: {
     ...e2eBaseTestConfig,
+    globalSetup: ['e2e/helpers/managed-sdk-setup.ts'],
     include: [
       ...commonTests,
       ...(providerSpecificTests[provider] ?? []),

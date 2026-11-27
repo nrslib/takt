@@ -5,6 +5,7 @@ max_steps: 10
 initial_step: plan
 steps:
   - name: plan
+    description: 調査依頼を分解し、調査項目・情報源の候補・優先順位を定めた計画を作成する
     tags:
       - plan
     persona: research-planner
@@ -17,6 +18,7 @@ steps:
       - condition: 情報が不足しており計画を立てられない
         next: ABORT
   - name: dig
+    description: 計画を独立したサブタスクに分けて並列調査し、出典付きのデータと分析・結論を報告する
     tags:
       - plan
     persona: research-digger
@@ -29,6 +31,7 @@ steps:
       - condition: 調査を実行できない
         next: ABORT
   - name: supervise
+    description: 調査結果の網羅性・根拠・分析の深さを確認し、依頼への回答が十分か、再計画が必要か判定する
     tags:
       - review
       - supervise

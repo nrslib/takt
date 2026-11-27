@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: implement
+description: Implement the plan, perform the necessary verification, and report the changes and results.
 capabilities: edit
 tags:
   - coding

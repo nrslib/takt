@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: plan
+description: Examine the requirements and current code and create an implementation plan including design decisions.
 capabilities: readonly
 tags:
   - plan

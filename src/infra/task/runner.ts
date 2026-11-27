@@ -2,21 +2,25 @@ import type { TaskFileData, TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskListItem, TaskState } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
-import { TaskLifecycleService } from './taskLifecycleService.js';
+import { TaskLifecycleService, type PrMergeTaskInput, type TaskClaimResult } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
-import { TaskDeletionService } from './taskDeletionService.js';
-import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
+import { TaskDeletionService, type TaskDeletionCleanup } from './taskDeletionService.js';
+import { TaskExceedService, type ExceedTaskOptions, type RequeueExceededTaskOptions } from './taskExceedService.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import {
   TaskRetryService,
   type AutoRequeueResult,
   type TaskRetryOptions,
 } from './taskRetryService.js';
+import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
+import type { FileLockAcquisitionErrorHandler } from '../fs/file-lock.js';
 
 export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
 export interface TaskRunnerOptions {
   onWarning?: (warning: string) => void;
+  goalTasksOnly?: boolean;
+  onAcquisitionError?: FileLockAcquisitionErrorHandler;
 }
 
 export class TaskRunner {
@@ -32,9 +36,9 @@ export class TaskRunner {
     private readonly projectDir: string,
     options?: TaskRunnerOptions,
   ) {
-    this.store = new TaskStore(projectDir);
+    this.store = new TaskStore(projectDir, options?.onAcquisitionError);
     this.tasksFile = this.store.getTasksFilePath();
-    this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning);
+    this.lifecycle = new TaskLifecycleService(projectDir, this.tasksFile, this.store, options?.onWarning, options?.goalTasksOnly);
     this.query = new TaskQueryService(projectDir, this.tasksFile, this.store);
     this.deletion = new TaskDeletionService(this.store);
     this.exceed = new TaskExceedService(this.store);
@@ -43,6 +47,18 @@ export class TaskRunner {
 
   ensureDirs(): void {
     this.store.ensureDirs();
+  }
+
+  claimTask(taskName: string, workerName: string): TaskClaimResult {
+    return this.lifecycle.claimTask(taskName, workerName);
+  }
+
+  failUnreadableGoalTask(taskName: string): TaskState | undefined {
+    return this.lifecycle.failUnreadableGoalTask(taskName);
+  }
+
+  setPendingWaitingReason(taskNames: readonly string[], reason: string | undefined): void {
+    this.lifecycle.setPendingWaitingReason(taskNames, reason);
   }
 
   getTasksFilePath(): string {
@@ -57,25 +73,69 @@ export class TaskRunner {
       worktree_path?: string;
       slug?: string;
       summary?: string;
+      deduplicateActiveTargets?: boolean;
     },
   ): TaskInfo {
     return this.lifecycle.addTask(content, options);
+  }
+
+  startPrMergeTask(input: PrMergeTaskInput & { parentTaskName?: string }): TaskInfo {
+    return this.lifecycle.startPrMergeTask(input);
+  }
+
+  enqueuePrMergeTask(input: PrMergeTaskInput & { goalId: string }): TaskInfo {
+    return this.lifecycle.enqueuePrMergeTask(input);
+  }
+
+  clearCompletedPrMergeWorktree(taskName: string): void {
+    this.lifecycle.clearCompletedPrMergeWorktree(taskName);
+  }
+
+  recordPrMergeClonePrepared(taskName: string): void {
+    this.lifecycle.recordPrMergeClonePrepared(taskName);
+  }
+
+  recordPrMergeKnownRemoteHead(taskName: string, headSha: string): void {
+    this.lifecycle.recordPrMergeKnownRemoteHead(taskName, headSha);
+  }
+
+  recordPrMergePushedHead(
+    taskName: string, headSha: string, previousRemoteHeadSha: string,
+    source: NonNullable<TaskFileData['merge_push_source']>,
+  ): void {
+    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha, source);
+  }
+
+  recordCacciaPushedHead(taskName: string, headSha: string, context: PrExecutionContext): void {
+    this.lifecycle.recordCacciaPushedHead(taskName, headSha, context);
   }
 
   listTasks(): TaskInfo[] {
     return this.query.listTasks();
   }
 
-  claimNextTasks(count: number): TaskInfo[] {
-    return this.lifecycle.claimNextTasks(count);
+  listTasksForProviderPreflight(): TaskInfo[] {
+    return this.query.listTasksForProviderPreflight();
   }
 
-  failInterruptedRunningTasks(): number {
-    return this.lifecycle.failInterruptedRunningTasks();
+  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
+    return this.lifecycle.claimNextTasks(count, goalSetupFailure);
+  }
+
+  failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
+    return this.lifecycle.failInterruptedRunningTasks(goalId, onRecovered);
+  }
+
+  invalidatePendingGoalTasks(goalId: string): void {
+    this.lifecycle.invalidatePendingGoalTasks(goalId);
   }
 
   completeTask(result: TaskResult): string {
     return this.lifecycle.completeTask(result);
+  }
+
+  requestTaskStop(goalId: string | undefined, taskName: string, executionId: string) {
+    return this.lifecycle.requestTaskStop(goalId, taskName, executionId);
   }
 
   failTask(result: TaskResult): string {
@@ -133,6 +193,10 @@ export class TaskRunner {
     return this.retry.autoRequeueFailedTask(taskRef, options);
   }
 
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+    return this.retry.isAutoRequeueEligible(taskRef, maxAttempts);
+  }
+
   requeueTask(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
@@ -150,15 +214,31 @@ export class TaskRunner {
     return this.retry.startReExecution(taskRef, allowedStatuses, resumeMode, options);
   }
 
-  deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed'): void {
-    this.deletion.deleteTaskByNameAndStatus(name, kind);
+  deleteTask(
+    name: string,
+    kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed',
+    cleanup?: TaskDeletionCleanup,
+  ): void {
+    this.deletion.deleteTaskByNameAndStatus(name, kind, cleanup);
+  }
+
+  deleteTaskWithCleanup(
+    name: string,
+    kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed',
+    cleanup: () => boolean,
+  ): boolean {
+    return this.deletion.deleteTaskWithCleanup(name, kind, cleanup);
+  }
+
+  deleteFinishedGoalTasks(goalId: string): void {
+    this.deletion.deleteFinishedGoalTasks(goalId);
   }
 
   exceedTask(taskName: string, options: ExceedTaskOptions): void {
     this.exceed.exceedTask(taskName, options);
   }
 
-  requeueExceededTask(taskName: string): void {
-    this.exceed.requeueExceededTask(taskName);
+  requeueExceededTask(taskName: string, options?: RequeueExceededTaskOptions): void {
+    this.exceed.requeueExceededTask(taskName, options);
   }
 }
