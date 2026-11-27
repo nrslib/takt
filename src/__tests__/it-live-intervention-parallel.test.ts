@@ -234,6 +234,90 @@ describe('ParallelRunner live intervention integration', () => {
     });
   });
 
+  it('delivers a completed gate failure with a live instruction only to its own sub-step', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const firstInstruction = 'Revise the parallel implementation';
+    const secondInstruction = 'Preserve the finished files';
+    const guidance = 'Inspect the generated fixture.';
+    const privateOutput = 'fixture command output';
+    const attempts = join(projectCwd, 'gate-attempts');
+    const firstSiblingTurn = createDeferred<void>();
+    writeFileSync(join(projectCwd, 'check.mjs'), [
+      "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
+      'const attempt = existsSync("gate-attempts") ? readFileSync("gate-attempts", "utf8").trim().split("\\n").length + 1 : 1;',
+      'appendFileSync("gate-attempts", String(attempt) + "\\n");',
+      'while (attempt <= 2 && !existsSync("release-gate-" + attempt)) await new Promise((resolve) => setTimeout(resolve, 20));',
+      `if (attempt === 1) { process.stderr.write(${JSON.stringify(privateOutput)}); process.exitCode = 7; }`,
+    ].join('\n'));
+    let firstSibling = true;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      markProviderDispatch(persona, instruction, options);
+      if (persona === '../personas/b.md' && firstSibling) {
+        firstSibling = false;
+        await firstSiblingTurn.promise;
+      }
+      return makeResponse({ content: 'approved', sessionId: `${persona}-session` });
+    });
+    const step = makeStep('reviewers', {
+      concurrency: 2,
+      parallel: [
+        makeStep('a', {
+          passPreviousResponse: false,
+          qualityGates: [{
+            type: 'command', runAt: 'before_report', name: 'fixture-check', command: 'node check.mjs', guidance, timeoutMs: 10000,
+          }],
+          rules: [makeRule('approved', 'COMPLETE')],
+        }),
+        makeStep('b', { rules: [makeRule('approved', 'COMPLETE')] }),
+      ],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    });
+    engine = new WorkflowEngine({
+      name: 'live-intervention-parallel-gate', maxSteps: 5, initialStep: step.name, steps: [step],
+    }, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+    const execution = engine.run();
+
+    try {
+      await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('1\n'));
+      await store.issue(firstInstruction);
+      firstSiblingTurn.resolve(undefined);
+      writeFileSync(join(projectCwd, 'release-gate-1'), 'ready');
+
+      await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('1\n2\n'));
+      await store.issue(secondInstruction);
+      writeFileSync(join(projectCwd, 'release-gate-2'), 'ready');
+      expect((await execution).status).toBe('completed');
+      expect(readFileSync(attempts, 'utf8')).toBe('1\n2\n3\n');
+
+      const calls = vi.mocked(runAgent).mock.calls;
+      const workerPrompts = calls.filter(([persona]) => persona === '../personas/a.md').map(([, prompt]) => prompt);
+      const siblingPrompts = calls.filter(([persona]) => persona === '../personas/b.md').map(([, prompt]) => prompt);
+      expect(workerPrompts).toHaveLength(3);
+      expect(siblingPrompts).toHaveLength(3);
+      const retry = workerPrompts[1]!;
+      expect(retry).toContain(firstInstruction);
+      expect(retry).toContain('Quality gate failed: fixture-check');
+      expect(retry).toContain('Exit code: 7');
+      expect(retry).toContain(`Guidance for the failed check:\n\n${JSON.stringify(guidance)}`);
+      const logRef = retry.match(/^Output log: (.+)$/m)?.[1];
+      expect(logRef).toBeDefined();
+      expect(readFileSync(join(projectCwd, logRef!), 'utf8')).toContain(privateOutput);
+      expect(retry).not.toContain(privateOutput);
+      for (const prompt of siblingPrompts.slice(1)) {
+        expect(prompt).toContain(firstInstruction);
+        expect(prompt).not.toMatch(/fixture-check|Exit code: 7|Output log:|Inspect the generated fixture/);
+      }
+      expect(workerPrompts[2]).toContain(secondInstruction);
+      expect(workerPrompts[2]).not.toMatch(/Quality gate failed:|Exit code: 7|Output log:|Guidance for the failed check/);
+    } finally {
+      firstSiblingTurn.resolve(undefined);
+      for (const attempt of [1, 2]) {
+        writeFileSync(join(projectCwd, `release-gate-${attempt}`), 'cleanup');
+      }
+      await execution.catch(() => undefined);
+    }
+  });
+
   it('reruns the whole parallel step when the parent status judgment receives an instruction', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     let issued = false;

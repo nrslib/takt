@@ -46,17 +46,29 @@ interface WorkerEvent { kind: string; pid?: number; assignment?: RemoteAssignmen
 // These acceptance tests require the OS to deny daemon paths in every descendant, including Git.
 const isolatedWorkerTest = it.skipIf(process.platform !== 'darwin');
 
-function storedText(directory: string): string {
+function readScannedText(path: string, taskQueueLockPath: string | undefined): string | undefined {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    // TaskStore releases this lock by unlinking it; the file only holds process identity.
+    if (path === taskQueueLockPath && privateFile.hasCode(error, 'ENOENT')) return undefined;
+    throw error;
+  }
+}
+
+function storedText(directory: string, taskQueueLockPath?: string): string {
   return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.name !== '.git').map((entry) => {
     const path = join(directory, entry.name);
-    return entry.isDirectory() ? storedText(path) : entry.isFile() ? readFileSync(path, 'utf8') : '';
+    if (entry.isDirectory()) return storedText(path, taskQueueLockPath);
+    return entry.isFile() ? readScannedText(path, taskQueueLockPath) : undefined;
   }).join('\n');
 }
 
-function filesContaining(directory: string, value: string): string[] {
+function filesContaining(directory: string, value: string, taskQueueLockPath?: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.name !== '.git').flatMap((entry) => {
     const path = join(directory, entry.name);
-    return entry.isDirectory() ? filesContaining(path, value) : entry.isFile() && readFileSync(path, 'utf8').includes(value) ? [path] : [];
+    if (entry.isDirectory()) return filesContaining(path, value, taskQueueLockPath);
+    return entry.isFile() && readScannedText(path, taskQueueLockPath)?.includes(value) ? [path] : [];
   });
 }
 
@@ -499,7 +511,7 @@ it('authenticates a separate worker process and persists its assignment and work
     expect(storedText(join(f.directory, 'worker-pull-responses'))).not.toContain(f.registered.token);
     worker.child.send({ kind: 'complete', executionId: assignment.executionId });
     await vi.waitFor(() => expect(f.store.read().tasks[0]!.status, JSON.stringify(f.store.read().tasks[0]!.failure)).toBe('completed'), { timeout: 10_000 });
-    expect(storedText(f.directory)).not.toContain(f.registered.token);
+    expect(storedText(f.directory, `${f.store.getTasksFilePath()}.lock`)).not.toContain(f.registered.token);
   } finally { await f.close(); }
 });
 
@@ -607,7 +619,7 @@ MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
     expect(merged.isError, firstTextContent(merged.content)).toBeUndefined();
     expect(git('show', `${goal.branch}:remote-result.txt`).stdout).toBe('remote execution result\n');
     expect(worker.output()).not.toContain(f.registered.token);
-    expect(storedText(f.directory)).not.toContain(f.registered.token);
+    expect(storedText(f.directory, `${f.store.getTasksFilePath()}.lock`)).not.toContain(f.registered.token);
   } finally { await f.close(); rmSync(origin, { recursive: true, force: true }); }
 });
 
@@ -735,7 +747,7 @@ isolatedWorkerTest('delivers daemon credentials only to each concurrent task and
     expect(worker.parent()).toMatchObject({ openai: hash('worker-env-value'), git: null });
     for (const value of ['first-distributed-api-value', 'second-distributed-api-value', 'distributed-git-value', 'distributed-gh-value', f.registered.token]) {
       expect(filesContaining(worker.config, value)).toEqual([]);
-      expect(filesContaining(f.directory, value)).toEqual([]);
+      expect(filesContaining(f.directory, value, `${f.store.getTasksFilePath()}.lock`)).toEqual([]);
       for (const call of worker.calls()) expect(filesContaining(call.cwd as string, value)).toEqual([]);
     }
     for (const call of worker.calls()) {
@@ -807,7 +819,7 @@ isolatedWorkerTest.each(['distributed-provider-error-value', 'z', 'xy', 'abc'])(
       expect(JSON.stringify(task.completion).includes(secret + '123')).toBe(false);
       if (secret.length > 3) {
         expect(filesContaining(worker.config, secret)).toEqual([]);
-        expect(filesContaining(f.directory, secret)).toEqual([]);
+        expect(filesContaining(f.directory, secret, `${f.store.getTasksFilePath()}.lock`)).toEqual([]);
         expect(worker.output().includes(secret)).toBe(false);
       }
     } finally { await f.close(); vi.unstubAllEnvs(); }

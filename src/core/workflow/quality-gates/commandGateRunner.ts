@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { DEFAULT_COMMAND_GATE_TIMEOUT_MS } from '../../models/quality-gate-defaults.js';
-import { isRealPathInside } from '../../../shared/utils/index.js';
+import { assertPathSegmentsAreSafe, isRealPathInside } from '../../../shared/utils/index.js';
 import { pickCommandGateNestedObservabilityEnv } from '../../../shared/telemetry/index.js';
 import { buildCommandEnv, MAX_COMMAND_OUTPUT_BYTES, runBoundedCommand } from '../../../shared/utils/bounded-command-runner.js';
 import { sanitizeSensitiveText } from './commandGateMessage.js';
+import { resolveGateCwd } from './commandGateCwd.js';
 import {
   ensurePrivateDirectory,
   writePrivateFile,
@@ -19,10 +20,6 @@ const OUTPUT_LIMIT_FAILURE_DETAILS: CommandOutputLimitFailureDetails = {
   outputLimitExceeded: true,
   outputLimitBytes: MAX_COMMAND_OUTPUT_BYTES,
 };
-
-function resolveGateCwd(projectRoot: string, cwd: string | undefined): string {
-  return cwd ? path.resolve(projectRoot, cwd) : projectRoot;
-}
 
 function formatUnknownError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -39,18 +36,23 @@ function writeOutputLog(
   cwd: string,
   stdout: string,
   stderr: string,
+  executionDetails?: readonly string[],
 ): { outputLogPath?: string; outputLogError?: string } {
-  if (!stdout && !stderr) {
+  if (executionDetails === undefined && !stdout && !stderr) {
     return {};
   }
 
   try {
     const logDir = path.join(projectRoot, '.takt', 'quality-gates', 'logs');
+    if (executionDetails !== undefined) {
+      assertPathSegmentsAreSafe(projectRoot, logDir, () => new Error('Unsafe quality gate output log directory'));
+    }
     ensurePrivateDirectory(logDir);
     const logPath = path.join(logDir, `${Date.now()}-command-gate-${randomUUID()}.log`);
     const content = [
       `Command: ${sanitizeCommandForOutputLog(command)}`,
       `Cwd: ${sanitizeSensitiveText(cwd)}`,
+      ...(executionDetails === undefined ? [] : [...executionDetails, `Completed at: ${new Date().toISOString()}`]),
       '',
       'Stdout:',
       sanitizeSensitiveText(stdout),
@@ -76,8 +78,7 @@ function buildCommandGateEnv(
 }
 
 function buildFailure(
-  gateName: string,
-  gateCommand: string,
+  gate: RunCommandQualityGateOptions['gate'],
   cwd: string,
   projectRoot: string,
   stdout: string,
@@ -87,11 +88,15 @@ function buildFailure(
   outputLimitFailure: CommandOutputLimitFailureDetails | undefined,
   exitCode?: number,
 ): CommandQualityGateResult {
-  const outputLog = writeOutputLog(projectRoot, gateCommand, cwd, stdout, stderr);
+  const exitDetails = timedOut ? `Timeout: ${timeoutMs}ms` : `Exit code: ${exitCode ?? 'unavailable'}`;
+  const outputLog = writeOutputLog(
+    projectRoot, gate.command, cwd, stdout, stderr,
+    gate.runAt === 'before_report' ? [exitDetails] : undefined,
+  );
   const failure = {
-    gateName,
+    gateName: gate.name ?? gate.command,
     type: 'command' as const,
-    command: gateCommand,
+    command: gate.command,
     cwd,
     projectRoot,
     ...(exitCode !== undefined ? { exitCode } : {}),
@@ -114,14 +119,15 @@ export async function runCommandQualityGate({
   gate,
   projectRoot,
   childProcessEnv,
+  signal,
 }: RunCommandQualityGateOptions): Promise<CommandQualityGateResult> {
+  signal?.throwIfAborted();
   const cwd = resolveGateCwd(projectRoot, gate.cwd);
   const gateName = gate.name ?? gate.command;
 
   if (!isRealPathInside(projectRoot, cwd)) {
     return buildFailure(
-      gateName,
-      gate.command,
+      gate,
       cwd,
       projectRoot,
       '',
@@ -138,12 +144,31 @@ export async function runCommandQualityGate({
     cwd,
     timeoutMs: effectiveTimeoutMs,
     env: buildCommandGateEnv(process.env, childProcessEnv),
+    signal,
   });
+  signal?.throwIfAborted();
   if (result.exitCode === 0 && !result.timedOut && result.error === undefined) {
+    if (gate.runAt === 'before_report') {
+      const log = writeOutputLog(projectRoot, gate.command, cwd, result.stdout, result.stderr, ['Exit code: 0']);
+      if (log.outputLogPath === undefined) {
+        throw new Error(`Could not save successful quality gate result: ${sanitizeSensitiveText(log.outputLogError ?? '')}`);
+      }
+      return {
+        ok: true,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        evidence: {
+          name: sanitizeSensitiveText(gateName),
+          command: sanitizeCommandForOutputLog(gate.command),
+          exitCode: 0,
+          outputLogPath: path.relative(projectRoot, log.outputLogPath),
+        },
+      };
+    }
     return { ok: true, stdout: result.stdout, stderr: result.stderr };
   }
   return buildFailure(
-    gateName, gate.command, cwd, projectRoot,
+    gate, cwd, projectRoot,
     result.stdout, result.stderr, result.timedOut,
     result.timedOut ? effectiveTimeoutMs : undefined,
     result.outputLimitExceeded ? OUTPUT_LIMIT_FAILURE_DETAILS : undefined,

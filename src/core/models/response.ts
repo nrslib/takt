@@ -69,6 +69,11 @@ export interface AgentResponse {
   /** How the rule match was detected */
   matchedRuleMethod?: RuleMatchMethod;
   systemWaitTimeout?: boolean;
+  /** Workflow-side failure that must be sent to the next work attempt. */
+  beforeReportGateFailed?: true;
+  beforeReportGateGuidance?: string;
+  /** Failures from the latest parallel attempt, scoped to their originating child. */
+  parallelBeforeReportGateFailures?: readonly AgentResponse[];
   /** Structured output returned by provider SDK (JSON Schema mode) */
   structuredOutput?: Record<string, unknown>;
   /** Provider-native usage payload normalized for TAKT observability */

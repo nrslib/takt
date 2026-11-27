@@ -378,6 +378,23 @@ describe('applyQualityGateOverrides', () => {
       expect(result).toEqual([globalCommandGate]);
     });
 
+    it.each([{ globalCovers: undefined }, { globalCovers: [] }])('uses the first specified coverage list without duplicating identical checks (global: $globalCovers)', ({ globalCovers }) => {
+      const gate = { type: 'command', runAt: 'before_report', command: 'npm run check' } as const;
+      const projectGate = {
+        ...gate, covers: ['npm test -- fixture.test.ts'], guidance: 'Inspect the generated fixtures',
+      };
+      const result = applyOverrides(
+        'implement',
+        [{ ...gate, covers: ['npm run check:other'], guidance: 'Consult the worktree log' }],
+        true,
+        undefined,
+        { qualityGates: [projectGate] },
+        { qualityGates: [{ ...gate, covers: globalCovers }] },
+      );
+
+      expect(result).toEqual([{ ...projectGate, covers: globalCovers ?? projectGate.covers }]);
+    });
+
     it('keeps command gates with different command values', () => {
       const lintGate = {
         type: 'command',
