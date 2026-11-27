@@ -1725,7 +1725,7 @@ describe('WorkflowRunLoop step deadline', () => {
     vi.useRealTimers();
   });
 
-  it.each(['normal', 'parallel'] as const)('lets a %s report gate exceed the provider inactivity timeout', async (kind) => {
+  it.each(['normal', 'parallel', 'concurrency-limited parallel'] as const)('lets a %s report gate exceed the provider inactivity timeout', async (kind) => {
     vi.useFakeTimers();
     const cwd = mkdtempSync(join(tmpdir(), 'takt-report-gate-deadline-'));
     const gateStarted = join(cwd, 'gate-started');
@@ -1740,12 +1740,14 @@ describe('WorkflowRunLoop step deadline', () => {
       qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs', timeoutMs: 5 * MINUTE }],
       rules: [makeRule('complete', 'COMPLETE')],
     });
-    const step = kind === 'parallel'
-      ? makeStep('work-in-parallel', {
-          parallel: [work],
+    const queued = makeStep('queued', { rules: [makeRule('complete', 'COMPLETE')] });
+    const step = kind === 'normal'
+      ? work
+      : makeStep('work-in-parallel', {
+          parallel: kind === 'parallel' ? [work] : [work, queued],
+          ...(kind === 'concurrency-limited parallel' ? { concurrency: 1 } : {}),
           rules: [makeRule('all("complete")', 'COMPLETE')],
-        })
-      : work;
+        });
     const engine = new WorkflowEngine(makeConfig(step), cwd, 'Run a long check', {
       projectCwd: cwd,
       reportDirName: 'report-gate-deadline',
@@ -1758,6 +1760,14 @@ describe('WorkflowRunLoop step deadline', () => {
       options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
       return makeResponse({ persona: 'work', content: 'complete' });
     });
+    let queuedSignalWasAborted: boolean | undefined;
+    if (kind === 'concurrency-limited parallel') {
+      agent.mockImplementationOnce(async (_persona, instruction, options) => {
+        queuedSignalWasAborted = options?.abortSignal?.aborted;
+        options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+        return makeResponse({ persona: 'queued', content: 'complete' });
+      });
+    }
     mockRuleEvaluation.mockReturnValue({ index: 0, method: 'auto_select' });
     vi.mocked(runReportPhase).mockClear();
     const execution = engine.runSingleIteration();
@@ -1775,6 +1785,9 @@ describe('WorkflowRunLoop step deadline', () => {
       expect(result?.nextStep).toBe('COMPLETE');
       expect(vi.mocked(runReportPhase).mock.calls[0]?.[2].beforeReportGateEvidence)
         .toEqual([expect.objectContaining({ exitCode: 0 })]);
+      if (kind === 'concurrency-limited parallel') {
+        expect(queuedSignalWasAborted).toBe(false);
+      }
     } finally {
       if (!existsSync(finishGate)) writeFileSync(finishGate, 'cleanup');
       await settled;

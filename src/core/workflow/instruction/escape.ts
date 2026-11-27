@@ -76,19 +76,8 @@ export function prepareTemplatePlaceholders(
 
   // Replace {previous_response}
   if (step.passPreviousResponse || context.previousOutput?.beforeReportGateFailed) {
-    if (context.previousResponseText !== undefined) {
-      result = result.replace(
-        /\{previous_response\}/g,
-        escapeTemplateChars(context.previousResponseText),
-      );
-    } else if (context.previousOutput) {
-      result = result.replace(
-        /\{previous_response\}/g,
-        escapeTemplateChars(context.previousOutput.content),
-      );
-    } else {
-      result = result.replace(/\{previous_response\}/g, '');
-    }
+    const previousResponse = context.previousResponseText ?? context.previousOutput?.content ?? '';
+    result = result.replace(/\{previous_response\}/g, () => escapeTemplateChars(previousResponse));
   }
 
   // Replace {user_inputs}

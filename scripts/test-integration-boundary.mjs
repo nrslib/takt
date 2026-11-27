@@ -29,6 +29,7 @@ const integrationBuiltinModules = new Set([
 export function hasIntegrationBoundary(filePath, sourceText) {
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
   const importedBoundaryNames = new Set();
+  const importedNamespaces = new Set();
   const importedBuiltinModules = new Set();
   const mockedModules = new Set();
   let invokesBoundary = false;
@@ -38,14 +39,18 @@ export function hasIntegrationBoundary(filePath, sourceText) {
       continue;
     }
     const importClause = statement.importClause;
-    if (
-      integrationBuiltinModules.has(statement.moduleSpecifier.text)
-      && !importClause?.isTypeOnly
-    ) {
+    if (importClause?.isTypeOnly) {
+      continue;
+    }
+    if (integrationBuiltinModules.has(statement.moduleSpecifier.text)) {
       importedBuiltinModules.add(statement.moduleSpecifier.text);
     }
     const namedBindings = importClause?.namedBindings;
-    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+    if (namedBindings === undefined) {
+      continue;
+    }
+    if (ts.isNamespaceImport(namedBindings)) {
+      importedNamespaces.add(namedBindings.name.text);
       continue;
     }
     for (const element of namedBindings.elements) {
@@ -70,16 +75,20 @@ export function hasIntegrationBoundary(filePath, sourceText) {
       ) {
         mockedModules.add(firstArgument.text);
       }
-      if (ts.isIdentifier(node.expression) && importedBoundaryNames.has(node.expression.text)) {
+    }
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      const callee = node.expression;
+      if (ts.isIdentifier(callee) && importedBoundaryNames.has(callee.text)) {
         invokesBoundary = true;
       }
-    }
-    if (
-      ts.isNewExpression(node)
-      && ts.isIdentifier(node.expression)
-      && importedBoundaryNames.has(node.expression.text)
-    ) {
-      invokesBoundary = true;
+      if (
+        ts.isPropertyAccessExpression(callee)
+        && ts.isIdentifier(callee.expression)
+        && importedNamespaces.has(callee.expression.text)
+        && integrationBoundaryNames.has(callee.name.text)
+      ) {
+        invokesBoundary = true;
+      }
     }
     ts.forEachChild(node, visit);
   }

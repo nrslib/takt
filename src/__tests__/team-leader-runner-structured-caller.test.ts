@@ -197,6 +197,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             dispose: vi.fn(),
             inactivityTimeoutMs: 60_000,
           }),
+      finish: vi.fn(),
       runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
         <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
           deadlineContext.runWith<T>(deadline, operation)
@@ -446,6 +447,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
     const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
       begin: vi.fn(() => selectorDeadline),
+      finish: vi.fn(),
       runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
         <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
           deadlineContext.runWith<T>(deadline, operation)
@@ -573,6 +575,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         events.push(`begin:${executionUnitKey}`);
         return leaderDeadline;
       }),
+      finish: vi.fn(),
       runWith: vi.fn<WorkflowStepExecutionDeadlineContext['runWith']>(
         <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>) => (
           deadlineContext.runWith<T>(deadline, operation)

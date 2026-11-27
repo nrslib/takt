@@ -695,6 +695,15 @@ describe('release verification wiring', () => {
     expect(packageJson.scripts.test).toContain('test:types');
   });
 
+  it.each(['new engine.WorkflowEngine(config)', 'engine.runAllTasks(tasks)'])(
+    'recognizes namespace-imported integration boundaries in %s',
+    (invocation) => {
+      const source = `import * as engine from './engine.js';
+${invocation};`;
+      expect(hasIntegrationBoundary('sample.test.ts', source)).toBe(true);
+    },
+  );
+
   it('should keep process, Git, storage, and workflow-engine boundaries out of unit tests', () => {
     const explicitlyClassified = new Set([
       ...parallelIntegrationTestFiles,

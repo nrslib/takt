@@ -136,6 +136,7 @@ export interface WorkflowStepExecutionDeadlineContext {
     executionUnitKey: string,
     providerInfo: WorkflowStepDeadlineProviderInfo,
   ): WorkflowStepInactivityDeadline;
+  finish(executionUnitKey: string): void;
   runWith<T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T>;
 }
 

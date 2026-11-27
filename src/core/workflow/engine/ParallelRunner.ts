@@ -636,22 +636,22 @@ export class ParallelRunner {
       return [subStep.name, providerInfo];
     }));
 
-    const subStepDeadlineByName = new Map<string, WorkflowStepInactivityDeadline>();
-    const getSubStepDeadline = (subStep: WorkflowStep): WorkflowStepInactivityDeadline | undefined => {
-      if (executionDeadlineContext === undefined) {
-        return undefined;
-      }
-      const existing = subStepDeadlineByName.get(subStep.name);
-      if (existing !== undefined) {
-        return existing;
+    const runWithSubStepDeadline = async <T>(subStep: WorkflowStep, operation: () => Promise<T>): Promise<T> => {
+      if (executionDeadlineContext === undefined || !isAgentParallelSubStep(subStep)) {
+        return operation();
       }
       const providerInfo = providerInfoByStep.get(subStep.name);
       if (providerInfo === undefined) {
         throw new Error(`Provider preflight result is missing for parallel sub-step "${subStep.name}"`);
       }
-      const deadline = executionDeadlineContext.begin(`parallel:${subStep.name}`, providerInfo);
-      subStepDeadlineByName.set(subStep.name, deadline);
-      return deadline;
+      // Preparation and execution each hold their own semaphore slot. The wait between them has no active provider.
+      const key = `parallel:${subStep.name}`;
+      const deadline = executionDeadlineContext.begin(key, providerInfo);
+      try {
+        return await executionDeadlineContext.runWith(deadline, operation);
+      } finally {
+        executionDeadlineContext.finish(key);
+      }
     };
 
     const subStepStartedAtByName = new Map<string, number>();
@@ -663,10 +663,8 @@ export class ParallelRunner {
           await semaphore.acquire();
         }
         try {
-          const subStepDeadline = getSubStepDeadline(subStep);
-          return await runWithExecutionDeadline(
-            executionDeadlineContext,
-            subStepDeadline,
+          return await runWithSubStepDeadline(
+            subStep,
             async () => {
               const subIteration = incrementStepIteration(
                 state,
@@ -716,12 +714,8 @@ export class ParallelRunner {
           restartIfLiveInterventionPending();
           const startedAt = Date.now();
           subStepStartedAtByName.set(subStep.name, startedAt);
-          const subStepDeadline = isAgentParallelSubStep(subStep)
-            ? getSubStepDeadline(subStep)
-            : undefined;
-          const result = await runWithExecutionDeadline(
-            executionDeadlineContext,
-            subStepDeadline,
+          const result = await runWithSubStepDeadline(
+            subStep,
             async () => {
           if (isWorkflowCallStep(subStep)) {
             if (workflowCallResumeStack === undefined) {
