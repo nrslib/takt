@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, symlinkSync, existsSync, readdirSync, renameSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, symlinkSync, existsSync, readdirSync, renameSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RemoteExecutionStore, remoteExecutionDirectory, remoteFilePath } from '../infra/task/remoteExecutionStore.js';
@@ -775,8 +775,7 @@ it('rejects a corrupt transferred file before starting the task process', async 
 const tell = (instructionId: number, content: string): Omit<RemoteControl, 'sequence'> => ({ kind: 'tell', instructionId,
   content, issuedAt: '2026-11-13T00:00:00.000Z' });
 
-it('records a remote delivery without overwriting a later pending daemon instruction', async () => {
-  const f = fixture(); mkdirSync(f.destination, { recursive: true });
+function runningRemoteTask(f: ReturnType<typeof fixture>) {
   const assignment = RemoteAssignmentSchema.parse({ workerId: 'w1', workerName: 'w1', registrationGeneration: randomUUID(),
     projectId: f.cwd, taskName: 'T', executionId: f.executionId, assignmentGeneration: 1, requestId: 'claim',
     originalSha: 'a'.repeat(40), origin: '/unused-origin', branch: 'result', leaseExpiresAt: Date.now() + 60_000,
@@ -785,16 +784,66 @@ it('records a remote delivery without overwriting a later pending daemon instruc
   store.update(() => ({ tasks: [TaskRecordSchema.parse({ name: 'T', content: 'work', status: 'running',
     created_at: new Date().toISOString(), started_at: new Date().toISOString(), completed_at: null,
     remote_assignment: assignment, execution_id: f.executionId, run_slug: 'test-run' })] }));
+  return { lifecycle: new RemoteTaskLifecycle(f.cwd, store, vi.fn()), tasksPath: store.getTasksFilePath(),
+    execution: { kind: 'execution' as const, assignment: executionIdentity(assignment), now: Date.now() } };
+}
+
+it('acknowledges records and delivers controls without replacing the tasks file', async () => {
+  const f = fixture(); mkdirSync(f.destination, { recursive: true });
+  const { lifecycle, tasksPath, execution } = runningRemoteTask(f);
+  const tasksInode = statSync(tasksPath).ino;
+  const log = record(1, 'first\n');
+  expect(await lifecycle.request({ ...execution, command: { kind: 'record', record: log } }, 1))
+    .toEqual({ kind: 'execution', response: { kind: 'record', acknowledgedSequence: 1 } });
+  expect(statSync(tasksPath).ino).toBe(tasksInode);
+
+  await new LiveInterventionFileStore(f.cwd, 'test-run').issue('first instruction');
+  expect(await lifecycle.request({ ...execution, command: { kind: 'controls', acknowledgedSequence: 0 } }, 1))
+    .toMatchObject({ kind: 'execution', response: { kind: 'controls', controls: [{ sequence: 1, content: 'first instruction' }] } });
+  expect(statSync(tasksPath).ino).toBe(tasksInode);
+  expect(await lifecycle.request({ ...execution, command: { kind: 'controls', acknowledgedSequence: 1 } }, 1))
+    .toEqual({ kind: 'execution', response: { kind: 'controls', controls: [] } });
+  expect(statSync(tasksPath).ino).toBe(tasksInode);
+});
+
+it('records a remote delivery without overwriting a later pending daemon instruction', async () => {
+  const f = fixture(); mkdirSync(f.destination, { recursive: true });
+  const { lifecycle, execution } = runningRemoteTask(f);
   const instructions = new LiveInterventionFileStore(f.cwd, 'test-run');
   await instructions.issue('first'); await instructions.issue('later pending instruction');
-  const lifecycle = new RemoteTaskLifecycle(f.cwd, store, vi.fn());
-  const delivery = { kind: 'execution' as const, assignment: executionIdentity(assignment), now: Date.now(),
+  const delivery = { ...execution,
     command: { kind: 'intervention-delivery' as const, instructionIds: [1], context: { mode: 'next_step' as const, step: 'work', phase: 1 as const } } };
   expect(await lifecycle.request(delivery, 1)).toEqual({ kind: 'execution', response: { kind: 'intervention-delivery' } });
   expect(instructions.read()).toMatchObject({ pending: 1, issuedTotal: 2, deliveredNextStep: 1,
     instructions: [{ instructionId: 1, state: 'deliveredNextStep' }, { instructionId: 2, content: 'later pending instruction', state: 'pending' }] });
   await lifecycle.request(delivery, 1);
   expect(instructions.read()).toMatchObject({ pending: 1, deliveredNextStep: 1 });
+});
+
+it('only replaces the control journal when adding a new instruction', async () => {
+  const f = fixture(); const sender = new RemoteExecutionControls(f.directory);
+  const path = join(f.directory, 'controls.json');
+  expect(await sender.poll(0, [])).toEqual([]);
+  expect(existsSync(path)).toBe(false);
+
+  const firstInstruction = tell(1, 'first instruction');
+  const first = { ...firstInstruction, sequence: 1 };
+  writeFileSync(path, JSON.stringify({ acknowledgedSequence: 0, controls: [first] }));
+  const oldInode = statSync(path).ino;
+  expect(await sender.poll(1, [firstInstruction])).toEqual([]);
+  expect(statSync(path).ino).toBe(oldInode);
+  expect(await sender.poll(0, [firstInstruction])).toEqual([first]);
+  expect(statSync(path).ino).toBe(oldInode);
+
+  const second = { ...tell(2, 'second instruction'), sequence: 2 };
+  expect(await sender.poll(1, [firstInstruction, tell(2, 'second instruction')])).toEqual([second]);
+  expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ acknowledgedSequence: 0, controls: [first, second] });
+  const newInode = statSync(path).ino;
+  expect(newInode).not.toBe(oldInode);
+  const restored = new RemoteExecutionControls(f.directory);
+  expect(await restored.poll(1, [])).toEqual([second]);
+  expect(await restored.poll(2, [])).toEqual([]);
+  expect(statSync(path).ino).toBe(newInode);
 });
 
 it('applies the next instruction after the acknowledged control sequence and retains a receipt', async () => {

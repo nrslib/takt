@@ -29,6 +29,7 @@ export const RemoteAssignmentSchema = RemoteExecutionIdentitySchema.extend({
   originalSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
   origin: z.string().min(1), branch: z.string().min(1),
   leaseExpiresAt: z.number().finite(),
+  // Older workers on this protocol require these fields. Progress is tracked in the execution journals.
   lastAcknowledgedLogSequence: sequence, controlSequence: sequence,
   workLocation: z.string().nullable(), retryReservation: z.boolean(),
   retryWaitUntil: z.number().finite().optional(), retryReady: z.boolean().optional(), restartReason: z.string().optional(),

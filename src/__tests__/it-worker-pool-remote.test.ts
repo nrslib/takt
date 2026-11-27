@@ -18,6 +18,7 @@ import { writeDaemonOwner } from '../infra/daemon/owner.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
+import { RemoteExecutionStore } from '../infra/task/remoteExecutionStore.js';
 import { getSelfProcessIdentity } from '../infra/task/process.js';
 import { WorkerRegistry } from '../infra/worker-pool/workerRegistry.js';
 import { listTaktTasks, getTaktRun, tellTaktRun } from '../features/mcp/operations.js';
@@ -1381,6 +1382,16 @@ isolatedWorkerTest.each(['create', 'update', 'disabled', 'create-fail', 'comment
     } finally { await f.close(); }
   });
 
+async function waitForControlAcknowledgement(f: Awaited<ReturnType<typeof fixture>>, executionId: string, sequence: number) {
+  await vi.waitFor(() => {
+    const acknowledged = f.requests.some((request) => request.kind === 'execution' && request.assignment.executionId === executionId
+      && request.command.kind === 'controls' && request.command.acknowledgedSequence === sequence
+      && f.responses.some((response) => response.kind === 'execution' && response.requestId === request.requestId
+        && response.response.kind === 'controls'));
+    expect(acknowledged).toBe(true);
+  }, { timeout: 10_000 });
+}
+
 isolatedWorkerTest('delivers an instruction and a stop to the same real execution and waits for the executor to stop', async () => {
   const f = await fixture(); const worker = controlledRealWorker(f);
   try {
@@ -1405,7 +1416,7 @@ isolatedWorkerTest('delivers an instruction and a stop to the same real executio
       taskName: f.task.name, executionId: first.executionId }, {}, new AbortController().signal);
     expect(stopped.isError, firstTextContent(stopped.content)).not.toBe(true);
     await vi.waitFor(() => expect(worker.aborted(second)).toBe(true), { timeout: 10_000 });
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.remote_assignment!.controlSequence).toBe(2), { timeout: 10_000 });
+    await waitForControlAcknowledgement(f, first.executionId, 2);
     expect(f.store.read().tasks[0]!.status).toBe('running');
     worker.release(second);
     await vi.waitFor(() => expect(f.store.read().tasks[0]!).toMatchObject({ status: 'failed',
@@ -1428,7 +1439,7 @@ isolatedWorkerTest.each(['pause', 'abort'] as const)('delivers goal %s to the sa
       : await abortTaktGoal({ ...input, reason: 'Stop remote work' }, {}, new AbortController().signal);
     expect(result.isError, firstTextContent(result.content)).not.toBe(true);
     await vi.waitFor(() => expect(worker.aborted(call)).toBe(true), { timeout: 10_000 });
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.remote_assignment!.controlSequence).toBe(1), { timeout: 10_000 });
+    await waitForControlAcknowledgement(f, call.executionId, 1);
     expect(f.store.read().tasks[0]!.status).toBe('running');
     worker.release(call);
     await vi.waitFor(() => expect(f.store.read().tasks[0]!).toMatchObject({ status: 'failed',
@@ -1445,12 +1456,13 @@ isolatedWorkerTest.each([false, true])('continues the same real executor and tra
     const first = await worker.wait(1);
     await vi.waitFor(() => expect(JSON.stringify(runPage(f, 'report', 'phase-1.md'))).toContain('remote report 1'), { timeout: 10_000 });
     const before = f.store.read().tasks[0]!;
-    const sequence = before.remote_assignment!.lastAcknowledgedLogSequence;
+    const logs = new RemoteExecutionStore(f.project, first.executionId);
+    const sequence = await logs.acknowledgedSequence();
     expect(sequence).toBeGreaterThan(0);
     const runSlug = before.run_slug!;
     const told = await tellTaktRun({ cwd: f.project, runSlug, content: '切断前の指示' });
     expect(told.isError, firstTextContent(told.content)).not.toBe(true);
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.remote_assignment!.controlSequence).toBe(1), { timeout: 10_000 });
+    await waitForControlAcknowledgement(f, first.executionId, 1);
     f.disconnect();
     const pending = await tellTaktRun({ cwd: f.project, runSlug, content: '再接続後に適用する指示' });
     expect(pending.isError, firstTextContent(pending.content)).not.toBe(true);
@@ -1469,14 +1481,13 @@ isolatedWorkerTest.each([false, true])('continues the same real executor and tra
     if (restart) {
       await f.start();
       expect(f.store.read().tasks[0]!.remote_assignment!.leaseExpiresAt).toBe(deadline);
-      expect(f.store.read().tasks[0]!.remote_assignment!.controlSequence).toBe(1);
     }
     f.resume();
     await vi.waitFor(() => expect(runPage(f)).toMatchObject({ currentStep: 'verify' }), { timeout: 15_000 });
     await vi.waitFor(() => expect(JSON.stringify(runPage(f, 'report', 'phase-2.md'))).toContain('remote report 2'), { timeout: 10_000 });
     expect(f.store.read().tasks[0]!).toMatchObject({ status: 'running', execution_id: first.executionId });
-    expect(f.store.read().tasks[0]!.remote_assignment!.lastAcknowledgedLogSequence).toBeGreaterThan(sequence);
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.remote_assignment!.controlSequence).toBe(2), { timeout: 10_000 });
+    expect(await logs.acknowledgedSequence()).toBeGreaterThan(sequence);
+    await waitForControlAcknowledgement(f, first.executionId, 2);
     await vi.waitFor(() => expect(JSON.stringify(runPage(f, 'log')).match(/remote log 2/g)).toHaveLength(1), { timeout: 10_000 });
     const completedWork = (runPage(f).stepLogs as { step: string; index: number }[]).filter((entry) => entry.step === 'work');
     expect(completedWork).toHaveLength(1);
@@ -1492,7 +1503,7 @@ isolatedWorkerTest.each([false, true])('continues the same real executor and tra
     await vi.waitFor(() => expect(f.store.read().tasks[0]!.status).toBe('completed'), { timeout: 20_000 });
     expect(worker.calls()).toHaveLength(4);
     expect(JSON.stringify(runPage(f, 'log', undefined, workIndex)).match(/remote log 2/g)).toHaveLength(1);
-    expect(f.store.read().tasks[0]!.remote_artifacts?.finalLogSequence).toBe(f.store.read().tasks[0]!.remote_assignment!.lastAcknowledgedLogSequence);
+    expect(f.store.read().tasks[0]!.remote_artifacts?.finalLogSequence).toBe(await logs.acknowledgedSequence());
   } finally { worker.releaseAll(); await f.close(); }
 });
 

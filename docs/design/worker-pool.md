@@ -124,7 +124,7 @@ worker は URL とトークンだけを持ち、外向きに接続する。接�
 | execution ID / assignment generation | タスクの一回の実行と単調増加する割り当て世代 |
 | original SHA / origin / branch | 再現するコードと受領対象 |
 | lease expires at | daemon が決める有効期限 |
-| last acknowledged log sequence / control sequence | 再送と制御の重複排除 |
+| last acknowledged log sequence / control sequence | 同じバージョンの旧 worker が割り当てを読み取るための互換用フィールド |
 | work location / retry reservation | 同じ worker 上での再開と空き予約 |
 
 すべての記録・制御・完了要求に上記の割り当て識別子を付ける。daemon は現在の登録と割り当てに一致し、有効期限内の要求だけを受理する。登録削除は登録世代を無効化し、接続を閉じ、実行中タスクを登録削除の理由で失敗にする。それ以降の push が origin に存在しても受領・取り込みを許さない。
@@ -175,7 +175,7 @@ heartbeat 間隔は5秒、再接続の猶予と lease は最後の正常確認�
 
 切断の猶予内は running と割り当てを保持する。再接続で登録、execution ID、世代が一致すれば継続し、欠けた記録と未 ACK の制御を再送する。猶予を超えたら切断理由で失敗として記録し、自動で別 worker へ渡さない。失敗後の再接続には停止を返し、遅れて届いた完了や成果を拒否する。
 
-daemon の再起動では永続化した割り当て、lease、記録の ACK、制御の ACK を復元する。停止時間を含む元の期限まで再接続を待ち、期限内なら running のまま続ける。期限を延ばし直さない。期限を超えた割り当ては切断失敗とし、途中まで受け取った run 記録は残す。
+daemon の再起動では永続化した割り当てと lease を復元する。記録の ACK は daemon に保存した sequence に基づく。制御の再送範囲は daemon に保存した制御履歴と worker が通知する適用済み sequence から決める。停止時間を含む元の期限まで再接続を待ち、期限内なら running のまま続ける。期限を延ばし直さない。期限を超えた割り当ては切断失敗とし、途中まで受け取った run 記録は残す。
 
 ## リモートの失敗予約と再試行
 

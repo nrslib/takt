@@ -202,10 +202,6 @@ export class RemoteTaskLifecycle {
         candidates.push({ kind: goal.executionStatus === 'paused' ? 'pause' : 'abort', issuedAt: new Date().toISOString() });
       }
       const controls = await new RemoteExecutionControls(store.directory).poll(command.acknowledgedSequence, candidates);
-      withGoalExecutionLock(this.cwd, () => this.store.update((current) => ({ tasks: current.tasks.map((candidate) =>
-        candidate.status === 'running' && candidate.remote_assignment !== undefined && sameExecution(candidate.remote_assignment, request.assignment)
-          ? { ...candidate, remote_assignment: { ...candidate.remote_assignment,
-            controlSequence: Math.max(candidate.remote_assignment.controlSequence, command.acknowledgedSequence) } } : candidate) })));
       const control = controls[0];
       if (control?.content !== undefined) {
         const content = Buffer.from(control.content, 'utf8');
@@ -220,9 +216,6 @@ export class RemoteTaskLifecycle {
       return { kind: 'execution', response: { kind: command.kind, controls: control === undefined ? [] : [control] } };
     }
     const acknowledgedSequence = await store.receiveRecord(command.record);
-    withGoalExecutionLock(this.cwd, () => this.store.update((current) => ({ tasks: current.tasks.map((candidate) =>
-      candidate.status === 'running' && candidate.remote_assignment !== undefined && sameExecution(candidate.remote_assignment, request.assignment)
-        ? { ...candidate, remote_assignment: { ...candidate.remote_assignment, lastAcknowledgedLogSequence: acknowledgedSequence } } : candidate) })));
     return { kind: 'execution', response: { kind: 'record', acknowledgedSequence } };
   }
 

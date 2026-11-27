@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod/v4';
-import { REMOTE_CHUNK_BYTES, RemoteInputManifestSchema, RemotePathSchema, RemoteRecordSchema, isRemoteRunArtifactPath,
+import { REMOTE_CHUNK_BYTES, RemoteInputManifestSchema, RemotePathSchema, isRemoteRunArtifactPath,
   type RemoteInputManifest, type RemoteRecord } from '../../core/worker-pool/remoteExecutionProtocol.js';
 import { readPrivateFile, writePrivateFile } from '../daemon/privateFile.js';
 
@@ -75,8 +75,7 @@ export class RemoteExecutionStore {
     if (pending.length !== 0) throw new Error('Remote final log sequence has unfinished file replacements');
   }
 
-  async receiveRecord(input: RemoteRecord): Promise<number> {
-    const record = RemoteRecordSchema.parse(input);
+  async receiveRecord(record: RemoteRecord): Promise<number> {
     const manifest = await this.inputManifest();
     if (record.runSlug !== manifest.runSlug) throw new Error('Remote record run does not match the assignment');
     // The daemon owns pending instructions. A worker must not replace this file.

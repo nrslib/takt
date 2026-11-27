@@ -1,13 +1,12 @@
 import { join } from 'node:path';
 import { z } from 'zod/v4';
-import { RemoteControlSchema, type RemoteControl } from '../../core/worker-pool/remoteExecutionProtocol.js';
+import type { RemoteControl } from '../../core/worker-pool/remoteExecutionProtocol.js';
 import { readPrivateFile, writePrivateFile } from '../daemon/privateFile.js';
 
 export class RemoteControlReceiver {
   constructor(private readonly directory: string) {}
 
-  async apply(input: RemoteControl, apply: (control: RemoteControl) => Promise<void>): Promise<number> {
-    const control = RemoteControlSchema.parse(input);
+  async apply(control: RemoteControl, apply: (control: RemoteControl) => Promise<void>): Promise<number> {
     const sequencePath = join(this.directory, 'control-sequence.json');
     const bytes = await readPrivateFile(sequencePath, 256);
     const acknowledged = bytes === undefined ? 0 : z.number().int().nonnegative().safe().parse(JSON.parse(bytes.toString('utf8')) as unknown);
