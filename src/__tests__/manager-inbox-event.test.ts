@@ -9,7 +9,7 @@ const directory = '/workspace/project';
 
 describe('managerInboxTurnEvent', () => {
   it('preserves a standalone human answer and its saved question through director delivery', () => {
-    const answer = { text: 'CSV', answeredAt: common.createdAt, source: 'slack' };
+    const answer = { answeredBy: 'human' as const, text: 'CSV', answeredAt: common.createdAt, source: 'slack' };
     const saved = ManagerEventSchema.parse({ ...common, kind: 'answer', goalId: null,
       questionId: '650e8400-e29b-41d4-a716-446655440002', questionBody: 'Which format?', answer }) as Extract<ManagerEvent, { kind: 'answer' }>;
     expect(managerInboxTurnEvent(directory, saved)).toEqual(inquiryAnswerEvent(saved.questionId, saved.answer, saved.questionBody));
@@ -43,7 +43,7 @@ describe('managerInboxTurnEvent', () => {
   });
 
   it('maps a saved answer with its structured decision', () => {
-    const answer = { text: 'Continue', answeredAt: common.createdAt, decision: 'allow' as const, source: 'tui' as const, scope: 'once' as const };
+    const answer = { answeredBy: 'human' as const, text: 'Continue', answeredAt: common.createdAt, decision: 'allow' as const, source: 'tui' as const, scope: 'once' as const };
     const saved = { ...common, kind: 'answer' as const, questionId: '650e8400-e29b-41d4-a716-446655440002', answer };
     expect(managerInboxTurnEvent(directory, saved)).toEqual({ kind: 'inquiry_answered', repositoryDirectory: directory,
       goalId: common.goalId, questionId: saved.questionId, answer });

@@ -5,13 +5,20 @@ import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
 
 export const GoalExecutionOriginSchema = z.enum(['human', 'manager']);
 export type GoalExecutionOrigin = z.infer<typeof GoalExecutionOriginSchema>;
+export const GoalCreationOriginSchema = z.enum(['manager', 'director']);
+export const GoalQuestionRouteSchema = z.enum(['human', 'director']);
+export const GoalQuestionTypeSchema = z.enum(['routine', 'permission', 'irreversible', 'agreement', 'humanTask', 'humanFact', 'unsure']);
+export type GoalCreationOrigin = z.infer<typeof GoalCreationOriginSchema>;
+export type GoalQuestionRoute = z.infer<typeof GoalQuestionRouteSchema>;
+export type GoalQuestionType = z.infer<typeof GoalQuestionTypeSchema>;
 
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
 const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const GoalIdSchema = z.uuid();
 export const GoalQuestionInputSchema = z.object({
-  recipient: z.literal('human').default('human'),
+  recipient: GoalQuestionRouteSchema.default('human'),
+  questionType: GoalQuestionTypeSchema.default('routine'),
   body: goalText,
   options: z.array(goalText).min(1).optional(),
   recommendation: goalText.optional(),
@@ -36,6 +43,7 @@ const goalAnswerFields = {
 };
 export const GoalAnswerInputSchema = z.object(goalAnswerFields).strict();
 export const GoalAnswerSchema = GoalAnswerInputSchema.extend({
+  answeredBy: GoalQuestionRouteSchema.default('human'),
   source: z.enum(['tui', 'slack', 'mcp']), answeredAt: z.iso.datetime(),
 }).superRefine((answer, ctx) => {
   if (answer.text.trim().length === 0 && answer.decision === undefined && answer.report === undefined) {
@@ -81,6 +89,9 @@ export const GoalQuestionSchema = GoalInquiryInputSchema.extend({
     ctx.addIssue({ code: 'custom', path: ['consumedAt'], message: 'Only allowed approvals can be consumed' });
   }
 });
+export const StandaloneInquirySchema = GoalQuestionSchema.refine(question => question.recipient === 'human', {
+  message: 'Standalone inquiries must be addressed to a human',
+}).transform(({ questionType: _questionType, ...question }) => question);
 export const GoalNotificationInputSchema = z.object({
   kind: z.enum(MANAGER_NOTIFICATION_KINDS),
   body: z.string().refine((value) => value.trim().length > 0),
@@ -88,8 +99,9 @@ export const GoalNotificationInputSchema = z.object({
   source: z.literal('manager_turn_failure').optional(),
 }).strict();
 // Existing callers may construct questions without kind; parsing always supplies it.
-export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {
+export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind' | 'questionType'> & {
   kind?: z.infer<typeof GoalQuestionSchema>['kind'];
+  questionType?: GoalQuestionType;
 };
 export type GoalQuestionInput = z.input<typeof GoalInquiryInputSchema>;
 export type GoalNotificationInput = z.infer<typeof GoalNotificationInputSchema>;
@@ -136,7 +148,13 @@ export const GoalSummarySchema = z.object({
   integrationBranch: goalBranch.optional(),
 }).strict();
 
+const directorProposalSchema = z.object({
+  conversationId: z.string().regex(/^director-[a-f0-9]{64}$/),
+  revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
 export const GoalCreateInputSchema = GoalSummarySchema.extend({
+  creationOrigin: z.literal('manager').default('manager'),
   id: GoalIdSchema,
   cwd: z.string().refine(isAbsolute),
 });
@@ -176,6 +194,9 @@ export const GoalWorkLogSchema = GoalWorkLogInputSchema.extend({
 });
 
 export const GoalRecordObjectSchema = z.object({
+  directorProposal: directorProposalSchema.optional(),
+  creationOrigin: GoalCreationOriginSchema.default('manager'),
+  questionRoute: GoalQuestionRouteSchema.default('human'),
   id: GoalIdSchema,
   createdAt: z.iso.datetime().optional(),
   lastPatrolCompletedAt: z.iso.datetime().optional(),
@@ -207,4 +228,4 @@ export const GoalSchema = readableGoal.superRefine((goal, ctx) => {
 });
 
 export type Goal = Omit<z.infer<typeof GoalSchema>, 'questions'> & { questions?: GoalQuestion[] };
-export type GoalCreateInput = z.infer<typeof GoalCreateInputSchema>;
+export type GoalCreateInput = z.input<typeof GoalCreateInputSchema>;

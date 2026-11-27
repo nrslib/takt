@@ -8,7 +8,7 @@ import { WatchGoalReader } from '../features/daemon/watchers/goalReader.js';
 import { readWatchGoals } from '../features/daemon/watchers/state.js';
 import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
-import { DaemonRouting } from '../features/daemon/routing.js';
+import { DaemonRouting, projectKey } from '../features/daemon/routing.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
@@ -21,6 +21,34 @@ import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { abortEpic, completeEpic, getEpic, recordEpicVerificationResult, startEpicVerification } from '../infra/epics/index.js';
 import { completedEpicGoal, epicRecord, verificationResultFor } from './helpers/epic-fixtures.js';
+import { WatchObservations, type WatchRecord } from '../features/daemon/watchers/observations.js';
+import type { AcceptedEvent, EventInput } from '../core/daemon/events.js';
+import { changeDirectorGoalQuestionRoute } from '../features/director/goalQuestions.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createTaktMcpServer } from '../features/mcp/server.js';
+import { createConversationTurnService } from '../features/manager/conversationService.js';
+import { turnStart } from './helpers/daemon-turn.js';
+import { readManagerEvents } from '../infra/goals/events.js';
+import type { InquiryNotice } from '../core/daemon/messages.js';
+import type { SnapshotItem } from '../features/manager/conversationPort.js';
+import { startDaemon } from '../features/daemon/runDaemon.js';
+import * as slackClient from '../infra/slack/client.js';
+import * as watchDirectories from '../features/daemon/watchers/directories.js';
+import * as watchLoops from '../features/daemon/watchers/loop.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
+import { readProcessOwner } from '../infra/daemon/process.js';
+import { writeDaemonOwner } from '../infra/daemon/owner.js';
+import { packageVersion } from '../shared/package-info.js';
+import { daemonEntryPath } from '../features/daemon/lifecycle.js';
+import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
+import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
+import { ControlledTurnRunner } from './helpers/controlledDaemon.js';
+import { SlackInquiryBindings } from '../infra/slack/inquiryBindings.js';
+import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import type { KnownBlock } from '@slack/types';
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 
 let directory: string;
 let reader: WatchGoalReader;
@@ -38,14 +66,359 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function watchSource(onError: (error: unknown) => void) {
+async function watchSource(onError: (error: unknown) => void, stateChanges?: WatchObservations,
+  publish: (notice: InquiryNotice) => Promise<void> = async () => {}) {
   const globalDirectory = join(directory, 'global');
   await registerProject({ globalConfigDirectory: globalDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
   conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
     new DaemonNotifications(globalDirectory), async () => {}, onError, { readTurns: async () => [] });
-  source = new FileDaemonWatchSource(conversations, async () => {}, onError);
+  source = new FileDaemonWatchSource(conversations, publish, onError, stateChanges);
   return { source, files: new DaemonPersistedFiles(globalDirectory) };
 }
+
+async function inquiryDaemon(options: { slack: boolean; failPost?: string }) {
+  const globalDirectory = getGlobalConfigDir();
+  await registerProject({ globalConfigDirectory: globalDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
+  if (options.slack) {
+    await mkdir(join(directory, '.takt'), { recursive: true });
+    await writeFile(join(directory, '.takt', 'config.yaml'), JSON.stringify({ manager: { slack: { channel_id: 'manager', allowed_user_ids: ['user'] } } }));
+    await writeFile(join(globalDirectory, 'config.yaml'), JSON.stringify({ director: { slack: { channel_id: 'director', allowed_user_ids: ['user'] } } }));
+  }
+  const posts: Array<{ channelId: string; parentTs: string; text: string; blocks: KnownBlock[] }> = [];
+  const messages = new Map<string, { parentTs: string; text: string; blocks: KnownBlock[] }>();
+  let failPost = options.failPost;
+  let failUpdate: string | undefined;
+  const client: slackClient.SlackClient = {
+    start: vi.fn(async () => {}), stopAccepting: vi.fn(), close: vi.fn(async () => {}),
+    postThreadMessage: vi.fn(async () => ({ kind: 'delivered' as const })),
+    postMessage: vi.fn(async (channelId, text, blocks) => {
+      if (failPost === channelId) { failPost = undefined; return { kind: 'unavailable' as const, reason: 'Post unavailable' }; }
+      const parentTs = `${posts.length + 1}.000`;
+      posts.push({ channelId, parentTs, text, blocks });
+      messages.set(channelId, { parentTs, text, blocks });
+      return { kind: 'delivered' as const, parentTs };
+    }),
+    updateMessage: vi.fn(async (thread, text, blocks) => {
+      if (failUpdate === thread.channelId) { failUpdate = undefined; return { kind: 'unavailable' as const, reason: 'Update unavailable' }; }
+      expect(messages.get(thread.channelId)?.parentTs).toBe(thread.parentTs);
+      messages.set(thread.channelId, { parentTs: thread.parentTs, text, blocks });
+      return { kind: 'delivered' as const };
+    }),
+  };
+  vi.spyOn(slackClient, 'createSlackClient').mockReturnValue(client);
+  // ファイル監視の自動通知と idle 終了を止め、同じ watcher の実行を changed/drain で進める。
+  vi.spyOn(watchDirectories, 'startDirectoryWatcher').mockReturnValue({ wake() {}, async drain() {}, async close() {} });
+  const startLoop = watchLoops.startWatchLoop;
+  vi.spyOn(watchLoops, 'startWatchLoop').mockImplementation((interval, observe, onError) => interval === 500
+    ? { wake() {}, async drain() {}, async close() {} } : startLoop(interval, observe, onError));
+  const signal = new AbortController().signal;
+  const identity = await readProcessOwner(process.pid, { signal, timeoutMs: 5000 });
+  if (identity === undefined) throw new Error('Missing test process identity');
+  const owner = { pid: process.pid, identity: { startTime: identity.startTime }, version: packageVersion, cliPath: daemonEntryPath() };
+  await writeDaemonOwner(globalDirectory, owner);
+  const runner = new ControlledTurnRunner();
+  const daemon = await startDaemon({ configDirectory: globalDirectory, owner,
+    tokens: options.slack ? { appToken: 'test-app', botToken: 'test-bot' } : undefined, signal,
+    runnerFactory(bus) { runner.bus = bus; return runner; } });
+  const tui = new ConversationIpcClient({ kind: 'daemon' }, undefined, {
+    port: createTuiConversationPort(globalDirectory, { async deliver() { return { kind: 'delivered' }; } }), reconnect: false,
+  });
+  try {
+    await daemon.watchers.drain();
+    await tui.connect();
+    await vi.waitFor(() => expect(tui.getSnapshot().readStatus, JSON.stringify(tui.getSnapshot().items)).toBe('complete'));
+  } catch (error) { tui.close(); await daemon.close(); throw error; }
+  return { daemon, tui, client, posts, messages, globalDirectory,
+    failNextUpdate(channelId: string) { failUpdate = channelId; },
+    async tick() { daemon.watchers.changed(); await daemon.watchers.drain(); },
+    async questionCount(id: string) {
+      await tui.refresh();
+      await vi.waitFor(() => expect(tui.getSnapshot().readStatus, JSON.stringify(tui.getSnapshot().items)).toBe('complete'));
+      expect(tui.getSnapshot().connection).toBe('connected');
+      return tui.getSnapshot().items.filter(item => item.kind === 'inquiry' && item.inquiry.question.id === id).length;
+    },
+    async close() { tui.close(); await daemon.close(); },
+  };
+}
+
+function pendingDeliveryQuestion(questionType: 'permission' | 'routine') {
+  return { id: randomUUID(), body: 'Which implementation?', options: ['A', 'B'], kind: 'question' as const,
+    questionType, recipient: 'human' as const, status: 'pending' as const };
+}
+
+it('retries an initial director Slack post on the next watcher run and saves exactly one binding', async () => {
+  const question = pendingDeliveryQuestion('permission');
+  const goal = { ...goalRecord(), questions: [question] };
+  await new GoalStore(directory).create(goal);
+  const f = await inquiryDaemon({ slack: true, failPost: 'director' });
+  try {
+    expect(f.posts).toEqual([]);
+    expect(await f.questionCount(question.id)).toBe(1);
+    await f.tick();
+    expect(f.posts).toMatchObject([{ channelId: 'director', text: expect.stringContaining(question.body) }]);
+    expect(await new SlackInquiryBindings(f.globalDirectory, conversationId({ kind: 'daemon' })).question('director',
+      { repositoryDirectory: directory, goalId: goal.id }, question.id)).toMatchObject({ parentTs: f.posts[0]!.parentTs });
+    expect(await f.questionCount(question.id)).toBe(1);
+    await f.tick();
+    expect(f.client.postMessage).toHaveBeenCalledTimes(2);
+    expect(f.client.updateMessage).not.toHaveBeenCalled();
+  } finally { await f.close(); }
+});
+
+it.each(['manager', 'director'])('retries a new question after %s Slack fails without duplicating the other destination', async (failedChannel) => {
+  const f = await inquiryDaemon({ slack: true, failPost: failedChannel });
+  const question = pendingDeliveryQuestion('permission');
+  try {
+    await new GoalStore(directory).create({ ...goalRecord(), questions: [question] });
+    await f.tick();
+    expect(f.posts.some(post => post.channelId === failedChannel)).toBe(false);
+    await f.tick();
+    expect(f.posts.map(post => post.channelId).sort()).toEqual(['director', 'manager']);
+    for (const channelId of ['manager', 'director']) {
+      expect(f.messages.get(channelId)).toMatchObject({ text: expect.stringContaining(question.body) });
+    }
+    expect(await f.questionCount(question.id)).toBe(1);
+    await f.tick();
+    await vi.waitFor(() => expect(f.posts).toHaveLength(2));
+  } finally { await f.close(); }
+});
+
+it.each(['manager', 'director'])('retries %s Slack updates across human director human changes on the same posts and TUI connection', async (failedChannel) => {
+  execFileSync('git', ['init', '-q', directory]);
+  const f = await inquiryDaemon({ slack: true });
+  const question = pendingDeliveryQuestion('routine');
+  const goal = { ...goalRecord(), questions: [question] };
+  try {
+    await new GoalStore(directory).create(goal);
+    await f.tick();
+    expect(f.posts).toHaveLength(2);
+    const originalPosts = new Map(f.posts.map(post => [post.channelId, post.parentTs]));
+    expect(await f.questionCount(question.id)).toBe(1);
+    const human: AcceptedEvent = { eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationId({ kind: 'daemon' }),
+      source: 'tui', occurredAt: new Date().toISOString(), operationId: randomUUID(), acceptedSequence: 1, lane: 'human',
+      event: { kind: 'human_command', command: { kind: 'message', text: 'Change who answers this goal' }, speaker: { namespace: 'human', id: 'user' } } };
+    for (const route of ['director', 'human'] as const) {
+      await changeDirectorGoalQuestionRoute(f.globalDirectory, {
+        managerId: conversationId({ kind: 'repository', repositoryDirectory: directory }), cwd: directory, goalId: goal.id,
+      }, route, 'human', human, new AbortController().signal);
+      const previous = f.messages.get(failedChannel);
+      f.failNextUpdate(failedChannel);
+      await f.tick();
+      expect(f.messages.get(failedChannel)).toEqual(previous);
+      if (route === 'director' && failedChannel === 'director') {
+        // 同じ会話の Slack 更新が失敗しても snapshot は配送される。
+        await vi.waitFor(() => expect(f.tui.getSnapshot().items.filter(item => item.kind === 'inquiry' && item.inquiry.question.id === question.id))
+          .toHaveLength(0));
+      }
+      await f.tick();
+      // 昇格は配送された snapshot、戻しは画面と同じ refresh で観測する。
+      if (route === 'director') {
+        await vi.waitFor(() => expect(f.tui.getSnapshot().items.filter(item => item.kind === 'inquiry' && item.inquiry.question.id === question.id))
+          .toHaveLength(0));
+      } else expect(await f.questionCount(question.id)).toBe(1);
+      for (const channelId of ['manager', 'director']) {
+        const message = f.messages.get(channelId)!;
+        expect(message.parentTs).toBe(originalPosts.get(channelId));
+        expect(message.text).toContain(route === 'human' ? question.body : 'director');
+        expect(message.blocks.some(block => block.type === 'actions')).toBe(route === 'human');
+      }
+      expect(await f.questionCount(question.id)).toBe(route === 'human' ? 1 : 0);
+      expect(f.posts).toHaveLength(2);
+      const updates = vi.mocked(f.client.updateMessage).mock.calls.length;
+      await f.tick();
+      expect(f.client.updateMessage).toHaveBeenCalledTimes(updates);
+    }
+  } finally { await f.close(); }
+});
+
+it('finishes inquiry delivery without Slack configuration and keeps one item on the connected TUI', async () => {
+  const f = await inquiryDaemon({ slack: false });
+  const question = pendingDeliveryQuestion('permission');
+  try {
+    await new GoalStore(directory).create({ ...goalRecord(), questions: [question] });
+    const delivered = vi.spyOn(f.daemon.input, 'deliver');
+    await f.tick();
+    expect(await f.questionCount(question.id)).toBe(1);
+    const inquiryCount = () => delivered.mock.calls.filter(([, output]) => output.kind === 'inquiry').length;
+    expect(inquiryCount()).toBe(2);
+    await f.tick();
+    expect(inquiryCount()).toBe(2);
+    expect(f.client.postMessage).not.toHaveBeenCalled();
+  } finally { await f.close(); }
+});
+
+it('keeps standalone questions on manager Slack when director Slack is configured', async () => {
+  const f = await inquiryDaemon({ slack: true });
+  try {
+    const question = await new StandaloneInquiryStore(f.globalDirectory, { kind: 'repository', repositoryDirectory: directory })
+      .create({ body: 'Which repository?', recipient: 'human', options: ['A', 'B'] });
+    await f.tick();
+    expect(f.posts).toMatchObject([{ channelId: 'manager', text: expect.stringContaining(question.body) }]);
+    expect(await f.questionCount(question.id)).toBe(0);
+    await f.tick();
+    expect(f.posts).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+it('connects a manager MCP question to director delivery, a human answer and the durable manager inbox', async () => {
+  execFileSync('git', ['init', '-q', directory]);
+  const goal = { ...goalRecord(), creationOrigin: 'director' as const, questionRoute: 'director' as const };
+  await new GoalStore(directory).create(goal);
+  const notices: InquiryNotice[] = [];
+  const errors = vi.fn();
+  const { source } = await watchSource(errors, undefined, async notice => { notices.push(notice); await conversations!.inquiry(notice); });
+  const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: directory,
+    managerAssignment: { kind: 'repository', repositoryDirectory: directory } });
+  const client = new Client({ name: 'question-routing', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(b); await client.connect(a);
+  try {
+    const result = await client.callTool({ name: 'takt_ask_goal_question', arguments: {
+      cwd: directory, goalId: goal.id, body: 'May I use the paid service?', questionType: 'permission',
+    } });
+    expect(result.isError).toBeUndefined();
+    const saved = (await new GoalStore(directory).get(goal.id)).questions![0]!;
+    expect(saved).toMatchObject({ questionType: 'permission', recipient: 'human', status: 'pending' });
+    await source.inquiries();
+    expect(notices).toContainEqual(expect.objectContaining({ conversationId: conversationId({ kind: 'daemon' }), question: expect.objectContaining({ id: saved.id }) }));
+    const snapshot = await conversations!.snapshot(conversationId({ kind: 'daemon' }), { toolHistory: false });
+    const displayed = [];
+    try { for await (const item of snapshot.items) if (item.kind === 'inquiry') displayed.push(item.inquiry); snapshot.complete(); }
+    finally { snapshot.cancel(); }
+    expect(displayed).toContainEqual(expect.objectContaining({ question: expect.objectContaining({ id: saved.id, recipient: 'human' }) }));
+    const resolve = vi.fn();
+    const service = createConversationTurnService(join(directory, 'global'), { resolve, close: vi.fn() });
+    const turn = turnStart();
+    turn.state.assignment = { kind: 'daemon' };
+    turn.turn.conversationId = conversationId(turn.state.assignment);
+    turn.event.conversationId = turn.turn.conversationId;
+    turn.event.event = { kind: 'inquiry_answer', command: { kind: 'answer_question', target: { repositoryDirectory: directory, goalId: goal.id },
+      questionId: saved.id, answer: { text: 'Use the approved service' }, source: 'tui' } };
+    const answer = await service.execute(turn, { signal: new AbortController().signal, request: vi.fn(), progress: vi.fn() });
+    expect(answer).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(readManagerEvents(directory)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer', questionId: saved.id,
+      answer: expect.objectContaining({ text: 'Use the approved service', answeredBy: 'human', source: 'tui' }) }) }));
+    expect(errors).not.toHaveBeenCalled();
+  } finally { await client.close(); await server.close(); }
+});
+
+it('observes the same pending question across human director human route changes without recreating the watcher', async () => {
+  execFileSync('git', ['init', '-q', directory]);
+  const questionId = randomUUID();
+  const permissionId = randomUUID();
+  const goal = { ...goalRecord(), creationOrigin: 'manager', questionRoute: 'human', questions: [
+    { id: questionId, body: 'Which implementation?', kind: 'question', questionType: 'routine', recipient: 'human', status: 'pending' },
+    { id: permissionId, body: 'May I access this resource?', kind: 'question', questionType: 'permission', recipient: 'human', status: 'pending' },
+  ] };
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  const records = new Map<string, WatchRecord>();
+  const accepted: EventInput[] = [];
+  const stateChanges = new WatchObservations({
+    read: async (key) => records.get(key), write: async (key, record) => { records.set(key, record); },
+  }, { accept: async (event) => {
+    accepted.push(event);
+    return { kind: 'accepted', eventId: event.eventId, operationId: event.eventId, acceptedSequence: accepted.length };
+  } }, () => Date.parse('2026-11-18T00:00:00.000Z'));
+  const errors = vi.fn();
+  const { source } = await watchSource(errors, stateChanges);
+  const human: AcceptedEvent = { eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationId({ kind: 'daemon' }),
+    source: 'tui', occurredAt: '2026-11-18T00:00:00.000Z', operationId: randomUUID(), acceptedSequence: 1, lane: 'human',
+    event: { kind: 'human_command', command: { kind: 'message', text: 'Change who answers this goal' }, speaker: { namespace: 'human', id: 'user' } } };
+  await conversations!.ensure({ kind: 'daemon' });
+
+  for (const questionRoute of ['human', 'director', 'human'] as const) {
+    await changeDirectorGoalQuestionRoute(join(directory, 'global'), {
+      managerId: conversationId({ kind: 'repository', repositoryDirectory: directory }), cwd: directory, goalId: goal.id,
+    }, questionRoute, 'human', human, new AbortController().signal);
+    await source.inquiries();
+    expect(errors).not.toHaveBeenCalled();
+    const event = accepted.at(-1)!.event;
+    expect(event.kind).toBe('watch_observation');
+    if (event.kind !== 'watch_observation' || event.observation.kind !== 'director_state_changed') throw new Error('Expected a director state change');
+    expect(event.observation).toMatchObject({ goalId: goal.id, repositoryDirectory: directory });
+    expect(JSON.parse(event.observation.state)).toMatchObject({ questionRoute });
+    const snapshot = await conversations!.snapshot(human.conversationId, { toolHistory: false });
+    const humanQuestionIds: string[] = [];
+    try {
+      for await (const item of snapshot.items) if (item.kind === 'inquiry') humanQuestionIds.push(item.inquiry.question.id);
+      snapshot.complete();
+    } finally { snapshot.cancel(); }
+    expect(humanQuestionIds.sort()).toEqual((questionRoute === 'human' ? [questionId, permissionId] : [permissionId]).sort());
+    expect((await new GoalStore(directory).get(goal.id)).creationOrigin).toBe('manager');
+  }
+  expect(accepted).toHaveLength(3);
+  expect(new Set(accepted.map((event) => event.eventId)).size).toBe(3);
+});
+
+it('includes saved human goal inquiries in the initial director snapshot without an AI turn', async () => {
+  const question = { id: randomUUID(), kind: 'question' as const, recipient: 'human' as const,
+    status: 'pending' as const, body: 'Which account should I use?' };
+  const goal = { ...goalRecord(), questions: [question] };
+  await new GoalStore(directory).create(goal);
+  const errors = vi.fn();
+  await watchSource(errors);
+  await conversations!.ensure({ kind: 'daemon' });
+
+  const snapshot = await conversations!.snapshot(conversationId({ kind: 'daemon' }), { toolHistory: false });
+  const inquiries = [];
+  try {
+    for await (const item of snapshot.items) if (item.kind === 'inquiry') inquiries.push(item);
+    snapshot.complete();
+  } finally { snapshot.cancel(); }
+
+  expect(inquiries).toEqual([expect.objectContaining({ kind: 'inquiry', inquiry: expect.objectContaining({
+    target: { repositoryDirectory: directory, goalId: goal.id },
+    question: expect.objectContaining({ id: question.id, recipient: 'human', status: 'pending', body: question.body }),
+  }) })]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('reports unsupported standalone recipients before emitting a human inquiry or a display record', async () => {
+  const notices: InquiryNotice[] = [];
+  const errors = vi.fn();
+  const { source } = await watchSource(errors, undefined, async notice => { notices.push(notice); });
+  const path = join(directory, 'global', 'projects', projectKey(directory), 'inquiries');
+  await mkdir(path, { recursive: true });
+  const question = { id: randomUUID(), body: 'Unsupported standalone question', kind: 'question', questionType: 'routine',
+    recipient: 'director', status: 'pending' };
+  await writeFile(join(path, `${question.id}.json`), JSON.stringify(question));
+  await source.inquiries();
+  expect(errors).toHaveBeenCalledOnce();
+  expect(notices).toEqual([]);
+  const snapshot = await conversations!.snapshot(conversationId({ kind: 'repository', repositoryDirectory: directory }), { toolHistory: false });
+  const items: SnapshotItem[] = [];
+  try {
+    await expect((async () => { for await (const item of snapshot.items) items.push(item); })()).rejects.toThrow();
+  } finally { snapshot.cancel(); }
+  expect(items.some(item => item.kind === 'inquiry')).toBe(false);
+  expect(items.some(item => item.kind === 'display_event')).toBe(true);
+});
+
+it('retains readable director inquiries and reports an incomplete snapshot when another repository has corrupt goal data', async () => {
+  const badGoal = join(directory, '.takt', 'goals', goalRecord().id);
+  await mkdir(badGoal, { recursive: true });
+  await writeFile(join(badGoal, 'goal.json'), '{');
+  const good = join(directory, 'healthy');
+  await mkdir(good);
+  const question = { id: randomUUID(), body: 'Healthy question', recipient: 'human' as const, status: 'pending' as const };
+  await new GoalStore(good).create({ ...goalRecord(), questions: [question] });
+  const errors = vi.fn();
+  await watchSource(errors);
+  await registerProject({ globalConfigDirectory: join(directory, 'global'), projectDirectory: good, command: 'manager', managerUsed: true });
+  await conversations!.ensure({ kind: 'daemon' });
+  const snapshot = await conversations!.snapshot(conversationId({ kind: 'daemon' }), { toolHistory: false });
+  const items: SnapshotItem[] = [];
+  try {
+    await expect((async () => { for await (const item of snapshot.items) items.push(item); })()).rejects.toThrow();
+  } finally { snapshot.cancel(); }
+  expect(items).toContainEqual(expect.objectContaining({ kind: 'inquiry', inquiry: expect.objectContaining({
+    question: expect.objectContaining({ id: question.id }), target: { repositoryDirectory: good, goalId: goalRecord().id },
+  }) }));
+  expect(items).toContainEqual(expect.objectContaining({ kind: 'display_event', event: expect.objectContaining({ message: expect.stringContaining(directory) }) }));
+});
 
 it('keeps remote work alive while observing process identity only for local tasks', async () => {
   const errors = vi.fn(); const { source, files } = await watchSource(errors);
@@ -371,8 +744,8 @@ it.each(['missing', 'invalid JSON', 'wrong workspace'] as const)('keeps the daem
   expect(errors).toHaveBeenCalledWith(expect.any(Error));
 });
 
-it('republishes only goal answers left pending for publication and clears their marks', async () => {
-  const savedAnswer = { text: 'CSV', source: 'mcp' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
+it('republishes only goal answers left pending for publication and preserves the respondent while clearing their marks', async () => {
+  const savedAnswer = { text: 'CSV', source: 'mcp' as const, answeredBy: 'human' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
   const pendingId = randomUUID();
   const target = GoalSchema.parse({ ...goalRecord(), questions: [
     { id: pendingId, body: 'Which format?', recipient: 'human', status: 'answered', answer: savedAnswer, answerPublicationPending: true },

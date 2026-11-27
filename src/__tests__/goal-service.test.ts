@@ -1,4 +1,4 @@
-vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn(), readManagerEvents: doubles.readEvents }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoal, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
@@ -9,6 +9,7 @@ import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({
   assertAbsent: vi.fn(), create: vi.fn(), find: vi.fn(), refs: vi.fn(),
   prepare: vi.fn(), createBranch: vi.fn(), removeBranch: vi.fn(), project: vi.fn(),
+  readEvents: vi.fn(),
 }));
 vi.mock('../infra/config/global/projectRegistry.js', () => ({ registerProject: doubles.project }));
 vi.mock('../infra/goals/store.js', () => ({
@@ -30,6 +31,9 @@ describe('Goal registration service', () => {
   const request = () => ({
     cwd, ...goalInput(), id: goalRecord().id,
   });
+  const registeredRecord = () => ({
+    ...goalRecord(), creationOrigin: 'manager', questionRoute: 'human', createdAt: expect.any(String),
+  });
   beforeEach(() => {
     vi.resetAllMocks();
     doubles.prepare.mockResolvedValue({
@@ -37,10 +41,11 @@ describe('Goal registration service', () => {
     });
     doubles.create.mockImplementation(async (goal: unknown) => goal);
     doubles.refs.mockResolvedValue({ output: Buffer.alloc(0), truncated: false, code: 0 });
+    doubles.readEvents.mockReturnValue([{ event: { kind: 'registered', goalId: goalRecord().id } }]);
   });
 
   it('saves the approved record after creating its branch', async () => {
-    expect(await createGoal(request())).toStrictEqual({ ...goalRecord(), createdAt: expect.any(String) });
+    expect(await createGoal(request())).toStrictEqual(registeredRecord());
     expect(doubles.assertAbsent).toHaveBeenCalledWith(goalRecord().id);
     expect(doubles.createBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
     expect(doubles.createBranch.mock.invocationCallOrder[0]).toBeLessThan(doubles.create.mock.invocationCallOrder[0]!);
@@ -48,6 +53,66 @@ describe('Goal registration service', () => {
       globalConfigDirectory: process.env.TAKT_CONFIG_DIR,
       projectDirectory: cwd, command: 'manager', managerUsed: true,
     });
+  });
+
+  it.each([
+    { creationOrigin: 'manager', questionRoute: 'human' },
+    { creationOrigin: 'director', questionRoute: 'director' },
+  ] as const)('registers a $creationOrigin goal with initial route $questionRoute', async ({ creationOrigin, questionRoute }) => {
+    const directorProposal = { conversationId: `director-${'a'.repeat(64)}`, revision: 4 };
+    const input = { ...request(), ...(creationOrigin === 'director'
+      ? { creationOrigin, directorProposal } : { creationOrigin }) };
+
+    const goal = await registerReservedGoal(input);
+
+    expect(goal).toMatchObject({ creationOrigin, questionRoute });
+    expect(doubles.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ creationOrigin, questionRoute }));
+    if (creationOrigin === 'director') expect(goal.directorProposal).toEqual(directorProposal);
+  });
+
+  it.each([
+    { creationOrigin: 'director' },
+    ...[undefined, 'manager', 'director'].map((creationOrigin) => ({ creationOrigin,
+      directorProposal: { conversationId: `director-${'a'.repeat(64)}`, revision: 4 } })),
+  ])('rejects public creation metadata before any registration side effects %j', async (metadata) => {
+    const input = { ...request(), ...metadata } as unknown as Parameters<typeof createGoal>[0];
+    await expect(createGoal(input)).rejects.toThrow();
+    expect(doubles.project).not.toHaveBeenCalled();
+    expect(doubles.assertAbsent).not.toHaveBeenCalled();
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(doubles.createBranch).not.toHaveBeenCalled();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
+  });
+
+  it('requires a proposal reference for internal director registration before side effects', async () => {
+    const input = { ...request(), creationOrigin: 'director' } as unknown as Parameters<typeof registerReservedGoal>[0];
+    await expect(registerReservedGoal(input)).rejects.toThrow();
+    expect(doubles.find).not.toHaveBeenCalled();
+    expect(doubles.project).not.toHaveBeenCalled();
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
+  });
+
+  it('recovers a manager registration without resetting the route changed after registration', async () => {
+    const existing = { ...goalRecord(), creationOrigin: 'manager' as const, questionRoute: 'director' as const };
+    doubles.find.mockReturnValue(existing);
+    const input = { ...request(), creationOrigin: 'manager' as const };
+
+    expect(await registerReservedGoal(input)).toEqual(existing);
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(doubles.createBranch).not.toHaveBeenCalled();
+  });
+
+  it('rejects recovery against a different creation origin before creating another goal', async () => {
+    doubles.find.mockReturnValue({ ...goalRecord(), creationOrigin: 'manager', questionRoute: 'director' });
+    const input = { ...request(), creationOrigin: 'director' as const,
+      directorProposal: { conversationId: `director-${'a'.repeat(64)}`, revision: 4 } };
+
+    await expect(registerReservedGoal(input)).rejects.toThrow();
+    expect(doubles.find).toHaveBeenCalledWith(goalRecord().id);
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(doubles.createBranch).not.toHaveBeenCalled();
   });
 
   it('waits for branch preparation before creating or saving the goal', async () => {
@@ -63,7 +128,7 @@ describe('Goal registration service', () => {
     } finally {
       finishPreparation({ branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'b'.repeat(40) });
     }
-    expect(await creating).toEqual({ goal: { ...goalRecord(), createdAt: expect.any(String) } });
+    expect(await creating).toEqual({ goal: registeredRecord() });
     expect(doubles.createBranch).toHaveBeenCalledExactlyOnceWith(cwd, goalRecord().branch, 'b'.repeat(40));
     expect(doubles.createBranch.mock.invocationCallOrder[0]).toBeLessThan(doubles.create.mock.invocationCallOrder[0]!);
   });
@@ -105,7 +170,7 @@ describe('Goal registration service', () => {
     doubles.create.mockRejectedValueOnce(new Error('publication failed'));
     await expect(createGoal(request())).rejects.toThrow();
     expect(doubles.removeBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
-    expect(await createGoal(request())).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+    expect(await createGoal(request())).toEqual(registeredRecord());
   });
 
   it('reports a saved goal or matching branch as a registration artifact', async () => {
@@ -161,7 +226,7 @@ describe('Goal registration service', () => {
   it('keeps a committed registration successful when cancellation arrives after goal publication', async () => {
     const controller = new AbortController();
     doubles.create.mockImplementationOnce(async () => { controller.abort(); });
-    expect(await createGoal(request(), controller.signal)).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+    expect(await createGoal(request(), controller.signal)).toEqual(registeredRecord());
     expect(saveManagerEvent).toHaveBeenCalledExactlyOnceWith(cwd, { kind: 'registered', goalId: goalRecord().id });
     expect(doubles.removeBranch).not.toHaveBeenCalled();
   });

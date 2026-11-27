@@ -16,9 +16,10 @@ function gate<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
-async function fixture() {
+async function fixture(kind: 'repository' | 'daemon' = 'repository') {
   const delivery = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
-  const selected = await createTuiConversationPort('/config', delivery).resolve({ kind: 'repository', repositoryDirectory: '/repo' });
+  const selected = await createTuiConversationPort('/config', delivery).resolve(kind === 'daemon' ? { kind: 'daemon' }
+    : { kind: 'repository', repositoryDirectory: '/repo' });
   const snapshot = (): ConversationSnapshot => ({ transferId: 'read', conversationId: selected.conversationId,
     revision: 3, stateSequence: 5, operationId: '11111111-1111-4111-8111-111111111111', generation: 7, mode: 'initial', complete: vi.fn(), cancel: vi.fn(),
     turnState: { version: 1, assignment: selected.assignment, session: { provider: 'mock', model: null, sessionId: null }, revision: 3, pending: null, approval: null },
@@ -33,6 +34,36 @@ async function fixture() {
     command: { kind: 'message', text } });
   return { port, ingress, loadSnapshot, selected, opened, submit, delivery };
 }
+it('admits a director TUI question answer as an inquiry answer', async () => {
+  const f = await fixture('daemon');
+  const command = { kind: 'answer_question' as const, questionId: '11111111-1111-4111-8111-111111111111',
+    target: { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/repo' }, answer: { text: 'CSV' } };
+  expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'answer', speaker: f.selected.speaker, command }))
+    .toMatchObject({ kind: 'accepted' });
+  expect(f.ingress.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'tui',
+    event: { kind: 'inquiry_answer', command } }));
+  expect(f.ingress.accept).toHaveBeenCalledOnce();
+  f.port.close();
+});
+
+it.each(['approve_summary', 'dismiss_summary'] as const)('admits director %s only for the currently saved proposal', async (kind) => {
+  const f = await fixture('daemon');
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  const pending = { revision: 3, repositoryDirectory: '/blog',
+    managerId: 'manager-' + 'b'.repeat(64),
+    summary: { objective: '記事一覧', outOfScope: [], acceptanceCriteria: ['一覧できる'], constraints: [] } };
+  f.loadSnapshot.mockResolvedValue({ ...snapshot, turnState: { ...snapshot.turnState, pending } });
+  try {
+    expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'old', speaker: f.selected.speaker,
+      command: { kind, revision: 2, conversationId: f.selected.conversationId } })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+    expect(f.ingress.accept).not.toHaveBeenCalled();
+    const command = { kind, revision: 3, conversationId: f.selected.conversationId };
+    expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'current', speaker: f.selected.speaker, command }))
+      .toMatchObject({ kind: 'accepted' });
+    expect(f.ingress.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'tui',
+      conversationId: f.selected.conversationId, event: expect.objectContaining({ kind: 'human_command', command }) }));
+  } finally { f.port.close(); }
+});
 it('admits messages while an earlier save is paused and permits snapshot and interruption independently', async () => {
   const f = await fixture();
   const first = gate<Admission>();
@@ -298,6 +329,19 @@ it('admits director messages through the bus and waits for durable admission wit
     conversationId: 'manager', text: 'inspect goal', origin: 'human', eventId: expect.any(String), requestId: expect.any(String) }), signal);
   saved.resolve({ kind: 'event_accepted', admission: { kind: 'accepted', eventId: 'event', operationId: 'admitted', acceptedSequence: 4 } });
   expect(await pending).toMatchObject({ kind: 'accepted', operationId: 'admitted', acceptedSequence: 4, managerId: 'manager' });
+});
+
+it('keeps closed and director inquiries off the human live wire while allowing pending human questions', async () => {
+  const f = await fixture();
+  const question = { id: '11111111-1111-4111-8111-111111111111', body: 'Question', status: 'pending' as const, recipient: 'human' as const };
+  const target = { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/repo' };
+  const version = { revision: 3, stateSequence: 6, operationId: null };
+  await f.port.deliver(f.selected.conversationId, { kind: 'inquiry', target, question: { ...question, recipient: 'director' } }, version);
+  await f.port.deliver(f.selected.conversationId, { kind: 'inquiry', target, question: { ...question, status: 'withdrawn' } }, version);
+  expect(f.delivery.deliver).not.toHaveBeenCalled();
+  await f.port.deliver(f.selected.conversationId, { kind: 'inquiry', target, question }, version);
+  expect(f.delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, { kind: 'inquiry', target, question }, version);
+  f.port.close();
 });
 it('does not resend a rejected director message or submit after cancellation', async () => {
   const request = vi.fn(async (): Promise<DaemonStateReply> => ({ kind: 'event_accepted', admission: { kind: 'rejected', reason: 'storage' } }));

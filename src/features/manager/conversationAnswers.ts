@@ -44,7 +44,7 @@ export async function answerConversationInquiry(
       await standalone!.markAnswerPublished(command.questionId);
     } else {
       await answerGoalQuestionForPublication(target.repositoryDirectory, target.goalId, command.questionId, command.answer,
-        command.source, () => { answerSaved = true; });
+        command.source ?? 'tui', () => { answerSaved = true; }, 'human');
       await ensureManagerRun(target.repositoryDirectory);
     }
     return { kind: 'answer_saved', answerSaved, message: getLabel('manager.conversation.answer_saved', language) };

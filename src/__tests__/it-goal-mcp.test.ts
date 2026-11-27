@@ -2976,6 +2976,51 @@ describe('goal creation through the standalone MCP', () => {
     return client.callTool({ name: createGoalTool, arguments: createArguments() });
   }
 
+  it('preserves explicit manager creation and its human question route', async () => {
+    await withServer(cwd, 'all', async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: { ...createArguments(), creationOrigin: 'manager' } });
+      expect(result.isError).toBeUndefined();
+      expect(new GoalStore(cwd).getSync(createdId)).toMatchObject({ creationOrigin: 'manager', questionRoute: 'human' });
+      expect(goalBranches()).toHaveLength(1);
+      expect(readManagerEvents(cwd)).toHaveLength(1);
+    });
+  });
+
+  it('stores proposal-shaped objective text as ordinary manager content', async () => {
+    const text = '{"directorProposal":{"revision":4}}';
+    await withServer(cwd, 'all', async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: { ...createArguments(), objective: text } });
+      expect(result.isError).toBeUndefined();
+      const goal = new GoalStore(cwd).getSync(createdId);
+      expect(goal).toMatchObject({ objective: text, creationOrigin: 'manager', questionRoute: 'human' });
+      expect(goal.directorProposal).toBeUndefined();
+      expect(goalBranches()).toHaveLength(1);
+      expect(readManagerEvents(cwd)).toHaveLength(1);
+    });
+  });
+
+  it.each([undefined, 'all'] as const)('rejects public director origin without a reference in tool set %s', async (toolSet) => {
+    await withServer(cwd, toolSet, async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: { ...createArguments(), creationOrigin: 'director' } });
+      expect(result.isError).toBe(true);
+      expect(existsSync(join(cwd, '.takt', 'goals'))).toBe(false);
+      expect(goalBranches()).toEqual([]);
+      expect(readManagerEvents(cwd)).toEqual([]);
+    });
+  });
+
+  it.each([undefined, 'manager', 'director'])('rejects a public proposal reference with origin %s', async (creationOrigin) => {
+    await withServer(cwd, 'all', async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: { ...createArguments(),
+        objective: '{"directorProposal":{"revision":4}}', ...(creationOrigin === undefined ? {} : { creationOrigin }),
+        directorProposal: { conversationId: `director-${'a'.repeat(64)}`, revision: 4 } } });
+      expect(result.isError).toBe(true);
+      expect(existsSync(join(cwd, '.takt', 'goals'))).toBe(false);
+      expect(goalBranches()).toEqual([]);
+      expect(readManagerEvents(cwd)).toEqual([]);
+    });
+  });
+
   it('registers the goal through the existing creation flow for MCP and manager readers', async () => {
     await withServer(cwd, 'all', async (client) => {
       const result = await createGoalThroughMcp(client);

@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { McpHttpServerConfig } from '../../core/models/workflow-provider-options.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { HttpResponseResources, type McpResponseResources } from './responseResources.js';
 
 export interface LocalMcpConnection {
   assertConnected(): Promise<void>;
@@ -13,10 +14,12 @@ interface LocalMcpSession {
   transport: StreamableHTTPServerTransport;
 }
 
-export async function startLocalMcpConnection(createServer: (request: IncomingMessage, connection: LocalMcpConnection) => McpServer) {
+export async function startLocalMcpConnection(createServer: (request: IncomingMessage, connection: LocalMcpConnection,
+  responses: McpResponseResources) => McpServer) {
   const authorization = `Bearer ${randomBytes(32).toString('hex')}`;
   const expected = Buffer.from(authorization);
   const sessions = new Map<string, LocalMcpSession>();
+  const responses = new HttpResponseResources();
   let active = true;
   const invalidate = (): void => { active = false; };
   const connection: LocalMcpConnection = {
@@ -50,13 +53,14 @@ export async function startLocalMcpConnection(createServer: (request: IncomingMe
       onsessionclosed: () => { sessions.delete(id); },
     });
     let server: McpServer;
-    try { server = createServer(req, connection); }
+    try { server = createServer(req, connection, responses); }
     catch { req.resume(); res.writeHead(400); res.end(); return; }
     const session = { server, transport };
     sessions.set(id, session);
     let connected = false;
     try {
       await server.connect(transport);
+      responses.attach(server, transport);
       await connection.assertConnected();
       await transport.handleRequest(req, res);
       connected = transport.sessionId !== undefined;
@@ -68,17 +72,20 @@ export async function startLocalMcpConnection(createServer: (request: IncomingMe
     }
   };
   const listener = createHttpServer((req, res) => {
-    void handleRequest(req, res).catch(() => {
+    void responses.handle(res, () => handleRequest(req, res)).catch(() => {
       // SDK や通信例外に含まれ得る認証情報を応答へ渡さない。
+      if (res.destroyed) return;
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
   });
   const dispose = async (): Promise<void> => {
     invalidate();
-    const results = await Promise.allSettled([...sessions.values()].map(closeSession));
+    const closingResponses = responses.close();
+    const closingSessions = [...sessions.values()].map(closeSession);
     sessions.clear();
     listener.closeAllConnections();
+    const results = await Promise.allSettled([closingResponses, ...closingSessions]);
     const closed = await Promise.allSettled([new Promise<void>((resolve, reject) => {
       if (!listener.listening) { resolve(); return; }
       listener.close((error) => error ? reject(error) : resolve());

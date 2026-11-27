@@ -13,7 +13,7 @@ import { DaemonNotifications } from '../../infra/daemon/notifications.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { ConversationState, OperationResult, OutputVersion, PortOutput, SnapshotItem } from '../manager/conversationPort.js';
-import { conversationProjection } from './conversationProjection.js';
+import { conversationProjection, directorInquiryProjection } from './conversationProjection.js';
 import { CLEAR_COMMAND } from '../manager/conversationCommands.js';
 import { DaemonRouting } from './routing.js';
 import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
@@ -45,12 +45,13 @@ export class DaemonConversations implements ConversationOwner {
     private readonly onError: (error: unknown) => void,
     private readonly turns: ConversationTurns) {}
 
-  async ensure(assignment: ConversationAssignment): Promise<void> {
+  async ensure(assignment: ConversationAssignment, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const id = conversationId(assignment);
     if (await this.store.read(id) !== undefined) return;
     await this.store.create({ schemaVersion: 1, id, agent: assignment.kind === 'daemon' ? 'director' : 'manager', assignment,
       counterpart: { namespace: 'local', id: 'operator' }, lastSpeaker: null, provider: 'claude-sdk', model: null, sessionId: null,
-      bindings: [], revision: 0, pending: null, approval: null, running: null });
+      bindings: [], revision: 0, pending: null, approval: null, running: null }, signal);
   }
 
   private version(id: string, revision: number, operationId: string | null): OutputVersion {
@@ -208,15 +209,29 @@ export class DaemonConversations implements ConversationOwner {
   }
 
   async inquiry(notice: import('../../core/daemon/messages.js').InquiryNotice): Promise<void> {
-    await this.ordered(notice.conversationId, async () => {
+    if (notice.conversationId === conversationId({ kind: 'daemon' })) await this.ensure({ kind: 'daemon' });
+    const { delivery } = await this.ordered(notice.conversationId, async () => {
       const current = await this.store.read(notice.conversationId);
       if (current === undefined) throw new Error('Missing inquiry conversation');
+      const outputs: Array<{ output: PortOutput; version: OutputVersion }> = [{
+        output: { kind: 'inquiry', target: notice.target, question: notice.question },
+        version: this.version(notice.conversationId, current.state.revision, null),
+      }];
       if (notice.question.status !== 'pending' || notice.question.recipient !== 'human') {
         const read = await this.captureSnapshot(notice.conversationId, false);
-        this.send(notice.conversationId, { kind: 'snapshot', read }, read);
-      } else this.send(notice.conversationId, { kind: 'inquiry', target: notice.target, question: notice.question },
-        this.version(notice.conversationId, current.state.revision, null));
+        outputs.push({ output: { kind: 'snapshot', read }, version: read });
+      }
+      // snapshot の配送は同じ会話を読み直すため、直列化区間の外で完了を待つ。
+      const delivery = Promise.allSettled(outputs.map(({ output, version }) => this.deliver(notice.conversationId, output, version)))
+        .then((results) => {
+          const failed = results.find(result => result.status === 'rejected');
+          if (failed?.status === 'rejected') throw failed.reason;
+        });
+      this.deliveries.add(delivery);
+      void delivery.then(() => { this.deliveries.delete(delivery); }, () => { this.deliveries.delete(delivery); });
+      return { delivery };
     });
+    await delivery;
   }
 
   snapshot(id: string, request: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot> {
@@ -281,7 +296,10 @@ export class DaemonConversations implements ConversationOwner {
     try {
       if (current.state.assignment.kind !== 'daemon') {
         for await (const item of conversationProjection(this.routing, this.displayFiles, current.state.assignment)) items.push(item);
-      } else items.push({ kind: 'assignment', assignment: await this.routing.display(current.state.assignment) });
+      } else {
+        items.push({ kind: 'assignment', assignment: await this.routing.display(current.state.assignment) });
+        for await (const item of directorInquiryProjection(this.routing, this.displayFiles)) items.push(item);
+      }
     } catch (error) { projectionError = error; }
     for await (const notice of this.notifications.iterate()) {
       if ((notice.conversationId ?? conversationId({ kind: 'daemon' })) === id) {

@@ -3,6 +3,16 @@ import { createDaemonSlackPorts, dispatchSlackEvent } from '../features/daemon/s
 import type { SlackClient, SlackEvent } from '../infra/slack/client.js';
 import type { ConversationInput, SnapshotRead } from '../features/manager/conversationPort.js';
 import type { createSlackConversationPort } from '../features/manager/slackConversationPort.js';
+import { createInquiry } from '../infra/goals/inquiry.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS } from '../features/manager/slackConversationPort.js';
+
+function goalAction(channelId: string, userId: string, actionId: string, value: string, parentTs?: string): SlackEvent {
+  return { type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: channelId }, user: { id: userId },
+    container: { type: 'message', channel_id: channelId, message_ts: 'posted' },
+    message: { ts: 'posted', ...(parentTs === undefined ? {} : { thread_ts: parentTs }) },
+    actions: [{ type: 'button', action_id: actionId, value }] } };
+}
 
 const doubles = vi.hoisted(() => ({ config: vi.fn(), error: vi.fn(), port: vi.fn() }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error }) }));
@@ -85,12 +95,12 @@ it('dispatches an authorized button with its exact parent and action while rejec
 
 function directorFixture() {
   const client = { start: vi.fn<SlackClient['start']>(), postMessage: vi.fn<SlackClient['postMessage']>(),
-    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(),
+    updateMessage: vi.fn<SlackClient['updateMessage']>().mockResolvedValue({ kind: 'delivered' }), postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(),
     stopAccepting: vi.fn(), close: vi.fn<SlackClient['close']>() };
   client.start.mockResolvedValue(undefined);
   client.postMessage.mockResolvedValue({ kind: 'delivered', parentTs: 'posted' });
   client.postThreadMessage.mockResolvedValue({ kind: 'delivered' });
-  const read: SnapshotRead = { transferId: 'read', conversationId: 'director', revision: 0, stateSequence: 0, operationId: null,
+  const read: SnapshotRead = { transferId: 'read', conversationId: conversationId({ kind: 'daemon' }), revision: 0, stateSequence: 0, operationId: null,
     mode: 'initial', items: (async function* () {})(), cancel: vi.fn(), complete: vi.fn() };
   vi.mocked(input.open).mockResolvedValue({ attachmentId: 'director-attachment', read });
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'director-operation' });
@@ -100,6 +110,106 @@ function directorFixture() {
     director: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] }, language: 'en' as const } };
   return { client, factory, options };
 }
+
+it.each([SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS])('routes the emitted director %s button from a parent post using only the director allowlist', async (actionId) => {
+  const { client, options } = directorFixture();
+  const managerPort = { ...mockPort(vi.fn()), delivery: { deliver: vi.fn(async () => ({ kind: 'delivered' as const })) },
+    stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.port.mockReturnValue(managerPort);
+  const ports = await createDaemonSlackPorts({ ...options,
+    repositories: [{ ...options.repositories[0]!, channelId: 'C0DIR', allowedUserIds: ['U0BBB'] }] });
+  try {
+    const id = conversationId({ kind: 'daemon' });
+    const pending = { revision: 4, repositoryDirectory: '/blog',
+      managerId: conversationId({ kind: 'repository', repositoryDirectory: '/blog' }),
+      summary: { objective: '記事一覧', outOfScope: [], acceptanceCriteria: ['一覧できる'], constraints: [] } };
+    await ports.delivery.deliver(id, { kind: 'pending', state: { conversationId: id, assignment: { kind: 'daemon' },
+      revision: 4, pending, approval: null, running: null, interrupted: false } }, { revision: 4, stateSequence: 1, operationId: null });
+    expect(client.postMessage).toHaveBeenCalledOnce();
+    const blocks = client.postMessage.mock.calls[0]![2];
+    const button = blocks.flatMap((block) => block.type === 'actions' ? block.elements : [])
+      .find((element) => element.type === 'button' && element.action_id === actionId);
+    if (button?.type !== 'button' || button.value === undefined) throw new Error('Expected a director proposal button');
+    const receive = client.start.mock.calls[0]![0];
+    await receive(goalAction('C0DIR', 'U0BBB', actionId, button.value));
+    expect(input.open).not.toHaveBeenCalled();
+    expect(input.submit).not.toHaveBeenCalled();
+    expect(managerPort.receiveAction).not.toHaveBeenCalled();
+
+    await receive(goalAction('C0DIR', 'U0AAA', actionId, button.value));
+    expect(input.open).toHaveBeenCalledWith(expect.objectContaining({ conversationId: id, assignment: { kind: 'daemon' } }), expect.any(Object));
+    expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command:
+      actionId === SLACK_GOAL_APPROVE ? { kind: 'approve_summary', revision: 4, conversationId: id, requirePending: true } : { kind: 'dismiss_summary', revision: 4, conversationId: id } }));
+    expect(managerPort.receiveAction).not.toHaveBeenCalled();
+    expect(managerPort.receive).not.toHaveBeenCalled();
+  } finally { await ports.close(); }
+});
+
+it('routes a director proposal button in its thread even without an inquiry binding', async () => {
+  const { client, options } = directorFixture();
+  const ports = await createDaemonSlackPorts({ ...options, repositories: [] });
+  try {
+    const value = JSON.stringify({ conversationId: conversationId({ kind: 'daemon' }), revision: 4 });
+    await client.start.mock.calls[0]![0](goalAction('C0DIR', 'U0AAA', SLACK_GOAL_APPROVE, value, 'parent'));
+    expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      command: { kind: 'approve_summary', revision: 4, conversationId: conversationId({ kind: 'daemon' }), requirePending: true } }));
+  } finally { await ports.close(); }
+});
+
+it('keeps manager proposal buttons on the manager route when it shares the director channel', async () => {
+  const { client, options } = directorFixture();
+  const managerPort = { ...mockPort(vi.fn()), stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.port.mockReturnValue(managerPort);
+  const ports = await createDaemonSlackPorts({ ...options,
+    repositories: [{ ...options.repositories[0]!, channelId: 'C0DIR', allowedUserIds: ['U0BBB'] }] });
+  try {
+    const value = JSON.stringify({ conversationId: conversationId({ kind: 'repository', repositoryDirectory: '/repo' }), revision: 4 });
+    const receive = client.start.mock.calls[0]![0];
+    await receive(goalAction('C0DIR', 'U0AAA', SLACK_GOAL_APPROVE, value, 'manager-parent'));
+    expect(managerPort.receiveAction).not.toHaveBeenCalled();
+    await receive(goalAction('C0DIR', 'U0BBB', SLACK_GOAL_APPROVE, value, 'manager-parent'));
+    expect(managerPort.receiveAction).toHaveBeenCalledExactlyOnceWith(
+      { teamId: 'T1', channelId: 'C0DIR', userId: 'U0BBB', parentTs: 'manager-parent' }, SLACK_GOAL_APPROVE, value, expect.any(String));
+    expect(input.submit).not.toHaveBeenCalled();
+  } finally { await ports.close(); }
+});
+
+it('ignores a director proposal button outside the configured director channel', async () => {
+  const { client, options } = directorFixture();
+  const ports = await createDaemonSlackPorts({ ...options, repositories: [] });
+  try {
+    await client.start.mock.calls[0]![0](goalAction('C0OTHER', 'U0AAA', SLACK_GOAL_APPROVE,
+      JSON.stringify({ conversationId: conversationId({ kind: 'daemon' }), revision: 4 }), 'parent'));
+    expect(input.open).not.toHaveBeenCalled();
+    expect(input.submit).not.toHaveBeenCalled();
+  } finally { await ports.close(); }
+});
+
+it('routes a director inquiry button only for the configured director user', async () => {
+  const { client, options } = directorFixture();
+  const target = { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/repo' };
+  const question = createInquiry({ body: 'Which format?', options: ['CSV'] });
+  vi.mocked(input.open).mockImplementation(async () => ({ attachmentId: 'question', read: {
+    transferId: 'read', conversationId: conversationId({ kind: 'daemon' }), revision: 0, stateSequence: 0,
+    operationId: null, mode: 'initial', complete: vi.fn(), cancel: vi.fn(),
+    items: (async function* () { yield { kind: 'inquiry' as const, inquiry: { target, question } }; })(),
+  } }));
+  const ports = await createDaemonSlackPorts({ ...options, repositories: [] });
+  try {
+    await ports.delivery.deliver(conversationId({ kind: 'daemon' }), { kind: 'inquiry', target, question }, { revision: 0, stateSequence: 0, operationId: null });
+    expect(client.postMessage).toHaveBeenCalledOnce();
+    const receive = client.start.mock.calls[0]![0];
+    const body = { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C0DIR' },
+      container: { type: 'message', channel_id: 'C0DIR', message_ts: 'posted' }, message: { ts: 'posted' },
+      actions: [{ type: 'button', action_id: 'takt_inquiry_answer_option_0', value: 'option_0' }] };
+    await receive({ type: 'interactive', body: { ...body, user: { id: 'U0BBB' } } });
+    expect(input.submit).not.toHaveBeenCalled();
+    await receive({ type: 'interactive', body: { ...body, user: { id: 'U0AAA' } } });
+    expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: {
+      kind: 'answer_question', target, questionId: question.id, answer: { text: 'CSV' }, source: 'slack',
+    } }));
+  } finally { await ports.close(); }
+});
 
 it('shares the connection while routing director and manager messages through their own authorization', async () => {
   const { client, factory, options } = directorFixture();

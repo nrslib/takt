@@ -90,6 +90,28 @@ export class FileAsyncLock implements AsyncLock {
     path: string, action: () => Promise<T>, options: IoOptions, timeoutScope: 'operation' | 'acquisition',
   ): Promise<T> {
     const scope = ioScope(options);
+    try {
+      const release = await this.acquire(path, { signal: scope.signal, timeoutMs: options.timeoutMs });
+      let value!: T;
+      let failure: unknown;
+      let failed = false;
+      try {
+        scope.signal.throwIfAborted();
+        if (timeoutScope === 'acquisition') scope.close();
+        value = await action();
+        if (timeoutScope === 'operation') scope.signal.throwIfAborted();
+      } catch (error) { failed = true; failure = error; }
+      try { await release(); } catch (error) {
+        if (failed) throw new AggregateError([failure, error], 'Lock action and release failed');
+        throw error;
+      }
+      if (failed) throw failure;
+      return value;
+    } finally { scope.close(); }
+  }
+
+  async acquire(path: string, options: IoOptions): Promise<() => Promise<void>> {
+    const scope = ioScope(options);
     const absolute = resolve(path);
     let content: Buffer | undefined;
     let releaseLocal: (() => void) | undefined;
@@ -127,23 +149,22 @@ export class FileAsyncLock implements AsyncLock {
           throw error;
         }
       }
-      let value!: T;
-      let failure: unknown;
-      let failed = false;
-      try {
-        scope.signal.throwIfAborted();
-        if (timeoutScope === 'acquisition') scope.close();
-        value = await action();
-        if (timeoutScope === 'operation') scope.signal.throwIfAborted();
-      } catch (error) { failed = true; failure = error; }
-      try {
-        if (!await removeUnchanged(absolute, content)) throw new Error(`Lock ownership changed: ${absolute}`);
-      } catch (error) {
-        if (failed) throw new AggregateError([failure, error], 'Lock action and release failed');
+      const ownedContent = content;
+      const ownedLocal = releaseLocal;
+      releaseLocal = undefined;
+      const release = async () => {
+        try {
+          if (!await removeUnchanged(absolute, ownedContent)) throw new Error(`Lock ownership changed: ${absolute}`);
+        } finally { ownedLocal(); }
+      };
+      try { scope.signal.throwIfAborted(); }
+      catch (error) {
+        try { await release(); } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'Lock acquisition and cleanup failed');
+        }
         throw error;
       }
-      if (failed) throw failure;
-      return value;
+      return release;
     } finally { releaseLocal?.(); scope.close(); }
   }
 }

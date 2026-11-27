@@ -36,11 +36,51 @@ beforeEach(() => {
 });
 
 describe('inquiry persistence through GoalStore', () => {
+  it('reads legacy goal routing and respondent defaults without rewriting the saved JSON', async () => {
+    const legacyGoal: Record<string, unknown> = { ...goalRecord() };
+    delete legacyGoal.creationOrigin;
+    delete legacyGoal.questionRoute;
+    const legacy = JSON.stringify({ ...legacyGoal, questions: [{
+      id: questionId, body: '形式はどれですか', recipient: 'human', status: 'answered',
+      answer: { text: 'JSON', source: 'mcp', answeredAt: now },
+    }] });
+    files.set(path, legacy);
+
+    const restored = await new GoalStore('/project').get(goalId);
+
+    expect(restored).toMatchObject({ creationOrigin: 'manager', questionRoute: 'human', questions: [{
+      recipient: 'human', questionType: 'routine', answer: { text: 'JSON', source: 'mcp', answeredBy: 'human' },
+    }] });
+    expect(doubles.write).not.toHaveBeenCalled();
+    expect(files.get(path)).toBe(legacy);
+  });
+
+  it.each([
+    { answeredBy: 'human', source: 'tui' },
+    { answeredBy: 'human', source: 'slack' },
+    { answeredBy: 'human', source: 'mcp' },
+    { answeredBy: 'director', source: 'mcp' },
+  ] as const)('writes and restores $answeredBy answers through $source without inferring authorship from source', async ({ answeredBy, source }) => {
+    const question = GoalQuestionSchema.parse({
+      id: questionId, body: '形式はどれですか', kind: 'question', questionType: 'routine',
+      recipient: answeredBy, status: 'answered', answer: { text: 'JSON', source, answeredBy, answeredAt: now },
+    });
+    const goal = { ...goalRecord(), creationOrigin: 'manager' as const, questionRoute: answeredBy, questions: [question] };
+    const store = new GoalStore('/project');
+
+    await store.create(goal);
+
+    expect(JSON.parse(files.get(path)!)).toMatchObject({
+      creationOrigin: 'manager', questionRoute: answeredBy, questions: [{ answer: { source, answeredBy } }],
+    });
+    expect((await new GoalStore('/project').get(goalId)).questions?.[0]).toEqual(question);
+  });
+
   it('loads a goal with retired PR failure state and removes it on the next write', async () => {
     const legacy = JSON.stringify({ ...goalRecord(), pullRequestFailure: { error: 'push failed' } });
     files.set(path, legacy);
     const store = new GoalStore('/project');
-    expect(await store.get(goalId)).toEqual(goalRecord());
+    expect(await store.get(goalId)).toEqual({ ...goalRecord(), creationOrigin: 'manager', questionRoute: 'human' });
     expect(files.get(path)).toBe(legacy);
     await store.update(goalId, (goal) => goal);
     expect(JSON.parse(files.get(path)!)).not.toHaveProperty('pullRequestFailure');
@@ -62,7 +102,7 @@ describe('inquiry persistence through GoalStore', () => {
       if (failure) throw error;
       return saved;
     });
-    const saving = store.update(goalId, (goal) => answerGoalQuestion(goal, created.questionId, { text: 'CSV with headers' }), onSaved);
+    const saving = store.update(goalId, (goal) => answerGoalQuestion(goal, created.questionId, { text: 'CSV with headers' }, 'tui', 'human'), onSaved);
     if (failure) await expect(saving).rejects.toBe(error);
     else expect(await saving).toEqual(await store.get(goalId));
     expect(onSaved).toHaveBeenCalledOnce();
@@ -77,7 +117,7 @@ describe('inquiry persistence through GoalStore', () => {
     const onSaved = vi.fn();
     if (failure === 'write') doubles.write.mockImplementationOnce(() => { throw new Error('write failed'); });
     await expect(store.update(goalId, (goal) => failure === 'validation'
-      ? { ...goal, objective: '' } : answerGoalQuestion(goal, created.questionId, { text: 'CSV with headers' }), onSaved)).rejects.toThrow();
+      ? { ...goal, objective: '' } : answerGoalQuestion(goal, created.questionId, { text: 'CSV with headers' }, 'tui', 'human'), onSaved)).rejects.toThrow();
     expect(onSaved).not.toHaveBeenCalled();
     expect(files.get(path)).toBe(before);
     expect((await store.get(goalId)).questions![0]).toMatchObject({ status: 'pending' });
@@ -104,7 +144,7 @@ describe('inquiry persistence through GoalStore', () => {
 
     expect(restored.questions?.[0]).toMatchObject({ body: input.body, permissionProposal: input.permissionProposal });
     expect(JSON.parse(files.get(path)!).questions[0]).toMatchObject({ permissionProposal: input.permissionProposal });
-    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'allow', scope: 'project', text: '回答コメント' }));
+    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'allow', scope: 'project', text: '回答コメント' }, 'tui', 'human'));
     expect((await store.get(goalId)).questions?.[0]).toMatchObject({ permissionProposal: input.permissionProposal,
       answer: { decision: 'allow', scope: 'project', text: '回答コメント' } });
   });
@@ -120,7 +160,11 @@ describe('inquiry persistence through GoalStore', () => {
 
     const restored = await store.get(goalId);
 
-    expect(restored.questions).toEqual([pending, answered, withdrawn].map((question) => ({ ...question, kind: 'question' })));
+    expect(restored.questions).toEqual([
+      { ...pending, kind: 'question', questionType: 'routine' },
+      { ...answered, kind: 'question', questionType: 'routine', answer: { ...answered.answer, answeredBy: 'human' } },
+      { ...withdrawn, kind: 'question', questionType: 'routine' },
+    ]);
     expect(doubles.write).not.toHaveBeenCalled();
     expect(files.get(path)).toBe(legacy);
     await store.update(goalId, (current) => current);
@@ -147,7 +191,7 @@ describe('inquiry persistence through GoalStore', () => {
     const created = addGoalQuestion(goalRecord(), { kind: 'approval', body: '操作を許可しますか', operation });
     const store = new GoalStore('/project');
     await store.create(created.goal);
-    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'allow', scope }));
+    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'allow', scope }, 'tui', 'human'));
 
     const restored = await store.get(goalId);
 
@@ -158,7 +202,7 @@ describe('inquiry persistence through GoalStore', () => {
     const created = addGoalQuestion(goalRecord(), { kind: 'approval', body: '操作を許可しますか', operation });
     const store = new GoalStore('/project');
     await store.create(created.goal);
-    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'deny' }));
+    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'deny' }, 'tui', 'human'));
 
     const restored = await store.get(goalId);
 
@@ -170,7 +214,7 @@ describe('inquiry persistence through GoalStore', () => {
     const created = addGoalQuestion(goalRecord(), { kind: 'operation_request', body: '認証を更新してください' });
     const store = new GoalStore('/project');
     await store.create(created.goal);
-    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { report }));
+    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { report }, 'tui', 'human'));
 
     expect((await store.get(goalId)).questions?.[0]?.answer).toMatchObject({ text: '', report });
   });

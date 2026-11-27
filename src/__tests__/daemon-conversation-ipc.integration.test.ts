@@ -774,7 +774,7 @@ it.each(['answered', 'withdrawn'] as const)('keeps the TUI attached when the wat
   const source = createWatchSource(fixture.conversations, (notice) => fixture.dispatcher.inquiry(notice), (error) => { throw error; });
   await source.inquiries(); await fixture.conversations.close();
   saveGoal({ ...goal, questions: [{ ...question, status, ...(status === 'answered'
-    ? { answer: { text: 'answer', source: 'tui' as const, answeredAt: '2026-11-03T00:01:00Z' } }
+    ? { answer: { answeredBy: 'human' as const, text: 'answer', source: 'tui' as const, answeredAt: '2026-11-03T00:01:00Z' } }
     : { withdrawnAt: '2026-11-03T00:01:00Z' }) }] });
   await source.inquiries(); await fixture.conversations.close();
   const response = await value.request('snapshot', { attachmentId: attachment.attachmentId });

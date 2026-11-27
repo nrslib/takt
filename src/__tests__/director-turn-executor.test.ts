@@ -26,6 +26,35 @@ function fixture() {
   return { call, dispose, prepare, setup, executor, input, invalidateSession };
 }
 
+it.each(['structuredOutput', 'content'] as const)('returns the selected manager and complete proposal from %s', async (source) => {
+  const f = fixture();
+  const summary = { managerId: `manager-${'b'.repeat(64)}`, repositoryDirectory: '/blog',
+    objective: '記事一覧を追加する', outOfScope: ['記事の編集'], acceptanceCriteria: ['公開記事を一覧できる'], constraints: [] };
+  const output = { message: 'ブログの担当に任せます', summary };
+  f.call.mockResolvedValueOnce({ ...success, ...(source === 'content'
+    ? { content: JSON.stringify(output) } : { structuredOutput: output }) });
+
+  expect(await f.executor.execute(f.input)).toMatchObject(output);
+  expect(f.call.mock.calls[0]![1].outputSchema).toEqual(expect.any(Object));
+  expect(f.dispose).toHaveBeenCalledOnce();
+});
+
+it('returns the candidate question without a proposal when the manager is undecided', async () => {
+  const f = fixture();
+  const output = { message: 'ブログ A とブログ B のどちらに任せますか？', summary: null };
+  f.call.mockResolvedValueOnce({ ...success, content: JSON.stringify(output) });
+  expect(await f.executor.execute(f.input)).toMatchObject(output);
+});
+
+it('rejects a registration proposal without its selected manager', async () => {
+  const f = fixture();
+  f.call.mockResolvedValueOnce({ ...success, structuredOutput: { message: '登録案', summary: {
+    repositoryDirectory: '/blog', objective: '記事一覧', outOfScope: [], acceptanceCriteria: ['一覧できる'], constraints: [],
+  } } });
+  await expect(f.executor.execute(f.input)).rejects.toThrow();
+  expect(f.dispose).toHaveBeenCalledOnce();
+});
+
 it('exposes only the dedicated MCP set and preserves readonly restrictions on overflow retry', async () => {
   const f = fixture();
   f.call.mockRejectedValueOnce(new Error('prompt is too long'));

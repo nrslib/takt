@@ -47,6 +47,60 @@ function fixture() {
 beforeEach(() => { vi.resetAllMocks(); vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
+it.each(['unknown', 'launch', 'conversation', 'operation', 'generation'])('ignores a %s request cancellation and cancels only the matching live request', async (changed) => {
+  const child = childFixture(); const f = fixture(); const active = turnStart();
+  const first = deferred<Awaited<ReturnType<DaemonBus['request']>>>(); const second = deferred<Awaited<ReturnType<DaemonBus['request']>>>();
+  f.request.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  f.host.start(active, new AbortController().signal); child.receive({ kind: 'ready' });
+  for (const requestId of ['one', 'two']) child.child.emit('message', { ...child.envelope(), kind: 'daemon_request', turn: active.turn, requestId,
+    request: { kind: 'get_delivery', conversationId: requestId } });
+  const invalid = { ...child.envelope(), kind: 'cancel_daemon_request', turn: { ...active.turn }, requestId: 'one' };
+  if (changed === 'unknown') invalid.requestId = 'unknown';
+  if (changed === 'launch') invalid.launchId = 'previous-launch';
+  if (changed === 'conversation') invalid.turn.conversationId = 'other-conversation';
+  if (changed === 'operation') invalid.turn.operationId = 'other-operation';
+  if (changed === 'generation') invalid.turn.generation++;
+  child.child.emit('message', invalid);
+  const signals = f.request.mock.calls.map((call) => call[2]);
+  expect(signals.every((signal) => !signal.aborted)).toBe(true);
+  child.child.emit('message', { ...child.envelope(), kind: 'cancel_daemon_request', turn: active.turn, requestId: 'one' });
+  expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+  expect(child.messages.some((message) => message.kind === 'daemon_reply')).toBe(false);
+  first.resolve({ kind: 'error', code: 'stale_turn', message: 'cancelled' });
+  second.resolve({ kind: 'error', code: 'forbidden', message: 'done' });
+  await vi.waitFor(() => expect(child.messages.filter((message) => message.kind === 'daemon_reply')).toHaveLength(2));
+  child.exit.resolve({ code: 0, signal: null }); await f.host.close();
+  expect(f.onError).not.toHaveBeenCalled();
+});
+
+it('ignores a completed request cancellation while another request remains live', async () => {
+  const child = childFixture(); const f = fixture(); const active = turnStart();
+  const second = deferred<Awaited<ReturnType<DaemonBus['request']>>>();
+  f.request.mockResolvedValueOnce({ kind: 'error', code: 'forbidden', message: 'done' }).mockReturnValueOnce(second.promise);
+  f.host.start(active, new AbortController().signal); child.receive({ kind: 'ready' });
+  for (const requestId of ['one', 'two']) child.child.emit('message', { ...child.envelope(), kind: 'daemon_request', turn: active.turn, requestId,
+    request: { kind: 'get_delivery', conversationId: requestId } });
+  await vi.waitFor(() => expect(child.messages.some((message) => message.kind === 'daemon_reply' && message.requestId === 'one')).toBe(true));
+  child.child.emit('message', { ...child.envelope(), kind: 'cancel_daemon_request', turn: active.turn, requestId: 'one' });
+  expect(f.request.mock.calls.every((call) => !call[2].aborted)).toBe(true);
+  second.resolve({ kind: 'error', code: 'forbidden', message: 'done' });
+  child.exit.resolve({ code: 0, signal: null }); await f.host.close();
+});
+
+it('returns a processing completion reply while the child is shutting down', async () => {
+  const child = childFixture(); const f = fixture(); const active = turnStart();
+  const pending = deferred<Awaited<ReturnType<DaemonBus['request']>>>(); f.request.mockReturnValue(pending.promise);
+  f.host.start(active, new AbortController().signal); child.receive({ kind: 'ready' });
+  child.child.emit('message', { ...child.envelope(), kind: 'daemon_request', turn: active.turn, requestId: 'one',
+    request: { kind: 'get_delivery', conversationId: 'manager' } });
+  const closing = f.host.close();
+  expect(f.request.mock.calls[0]![2].aborted).toBe(true);
+  expect(child.messages.some((message) => message.kind === 'daemon_reply')).toBe(false);
+  pending.reject(new Error('processing ended'));
+  await vi.waitFor(() => expect(child.messages.some((message) => message.kind === 'daemon_reply' && message.requestId === 'one')).toBe(true));
+  child.exit.resolve({ code: 0, signal: null }); await closing;
+});
+
 it('initializes once, waits for ready, and reuses a committed conversation process', async () => {
   const child = childFixture(); const f = fixture(); const first = turnStart();
   f.host.start(first, new AbortController().signal);

@@ -9,6 +9,8 @@ import { createDirectorSlackConversationPort } from '../director/slackConversati
 import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
 import type { GlobalConfig } from '../../core/models/config-types.js';
 import type { Language } from '../../core/models/types.js';
+import { conversationId } from '../../infra/conversations/identity.js';
+import { parseSlackGoalProposal } from '../manager/slackGoalProposal.js';
 
 
 type SlackPort = ReturnType<typeof createSlackConversationPort>;
@@ -45,17 +47,20 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
       return;
     }
     case 'interactive': {
-      if (selected === undefined || !selected.allowedUserIds.includes(userId)) return;
       if (body.type === 'block_actions') {
         if (!isRecord(body.container) || body.container.type !== 'message' || body.container.channel_id !== channelId
           || typeof body.container.message_ts !== 'string' || !isRecord(body.message) || body.message.ts !== body.container.message_ts
           || !Array.isArray(body.actions) || body.actions.length !== 1) return;
         const action: unknown = body.actions[0];
         if (!isRecord(action) || action.type !== 'button' || typeof action.action_id !== 'string' || typeof action.value !== 'string') return;
-        const parentTs = action.action_id === SLACK_GOAL_APPROVE || action.action_id === SLACK_GOAL_DISMISS
-          ? body.message.thread_ts : body.container.message_ts;
+        const goalAction = action.action_id === SLACK_GOAL_APPROVE || action.action_id === SLACK_GOAL_DISMISS;
+        const parentTs = goalAction ? body.message.thread_ts ?? body.container.message_ts : body.container.message_ts;
         if (typeof parentTs !== 'string') return;
-        await selected.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
+        const directorAction = goalAction ? parseSlackGoalProposal(action.value)?.conversationId === conversationId({ kind: 'daemon' })
+          : await director?.port.isInquiryThread(channelId, parentTs);
+        const destination = director?.channelId === channelId && directorAction ? director : selected;
+        if (destination === undefined || !destination.allowedUserIds.includes(userId)) return;
+        await destination.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
           action.value, requestId);
       }
       return;
@@ -130,7 +135,7 @@ export async function createDaemonSlackPorts(options: {
     if (configuredDirector !== undefined) {
       client ??= (options.clientFactory ?? createSlackClient)(options.tokens);
       director = { ...configuredDirector, port: createDirectorSlackConversationPort({ channelId: configuredDirector.channelId,
-        input: options.input, client, language: options.director!.language }) };
+        configDirectory: options.configDirectory, input: options.input, client, language: options.director!.language }) };
     }
     if (client !== undefined) {
       try {
@@ -152,6 +157,7 @@ export async function createDaemonSlackPorts(options: {
   const delivery: ConversationDelivery = {
     async deliver(id, output, version) {
       const results = await Promise.all([...ports.values()].map(({ port }) => port.delivery.deliver(id, output, version)));
+      if (director !== undefined) results.push(await director.port.delivery.deliver(id, output, version));
       return results.find((result) => result.kind === 'unavailable') ?? { kind: 'delivered' };
     },
   };

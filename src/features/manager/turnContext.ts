@@ -14,7 +14,7 @@ export function buildManagerGoalSummary(cwd: string, goal: Goal, tasks: readonly
   const taskStates: Partial<Record<TaskState['status'], number>> = {};
   for (const task of goalTasks) taskStates[task.status] = (taskStates[task.status] ?? 0) + 1;
   return {
-    id: goal.id, objective: summary.objective, status: goal.status, executionStatus: goal.executionStatus,
+    id: goal.id, creationOrigin: goal.creationOrigin, questionRoute: goal.questionRoute, objective: summary.objective, status: goal.status, executionStatus: goal.executionStatus,
     branch: truncateUtf8(goal.branch, 256).value, integrationBranch: truncateUtf8(goal.integrationBranch, 256).value,
     taskCount: goalTasks.length, taskStates,
     workUnitCount: new Set(goalTasks.flatMap((task) => task.goalWorkKey === undefined ? [] : [task.goalWorkKey])).size,

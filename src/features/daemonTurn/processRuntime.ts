@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { addAbortListener } from 'node:events';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { TurnIdentity, TurnOutcome, TurnStart } from '../../core/daemon/messages.js';
 import { TURN_PROTOCOL_VERSION,
@@ -11,7 +12,7 @@ import { SerialSender } from '../../shared/utils/serialSender.js';
 
 export interface TurnIo {
   signal: AbortSignal;
-  request(request: DaemonStateRequest): Promise<DaemonStateReply>;
+  request(request: DaemonStateRequest, signal?: AbortSignal): Promise<DaemonStateReply>;
   progress(message: ConversationProgress): void | Promise<void>;
 }
 export interface TurnBusiness {
@@ -20,6 +21,13 @@ export interface TurnBusiness {
 }
 export interface TurnTransport {
   send(message: TurnProcessMessage): Promise<void>;
+}
+interface PendingRequest {
+  turn: TurnIdentity;
+  signal?: AbortSignal;
+  resolve(reply: DaemonStateReply): void;
+  reject(error: unknown): void;
+  listener?: ReturnType<typeof addAbortListener>;
 }
 const sameTurn = (a: TurnIdentity, b: TurnIdentity): boolean => a.conversationId === b.conversationId
   && a.operationId === b.operationId && a.generation === b.generation;
@@ -34,7 +42,7 @@ export function createTurnProcessRuntime(input: {
   let initialization: Promise<void> | undefined;
   let active: { turn: TurnIdentity; controller: AbortController; completion: Promise<void>; outcome?: TurnOutcome } | undefined;
   let closing: Promise<void> | undefined;
-  const requests = new Map<string, { turn: TurnIdentity; resolve(reply: DaemonStateReply): void; reject(error: unknown): void }>();
+  const requests = new Map<string, PendingRequest>();
   let progressCompletion = Promise.resolve();
   let progressAvailable = true;
   const sender = new SerialSender<TurnProcessMessage>((message, done) => {
@@ -47,29 +55,49 @@ export function createTurnProcessRuntime(input: {
   const send = async (value: unknown): Promise<void> => {
     await sender.send(parseTurnProcessMessage(value, envelope().launchId));
   };
-  const rejectRequests = (error: unknown): void => {
-    for (const pending of requests.values()) pending.reject(error);
-    requests.clear();
+  const removeRequest = (requestId: string) => {
+    const pending = requests.get(requestId);
+    requests.delete(requestId);
+    pending?.listener?.[Symbol.dispose]();
+    return pending;
   };
-  const request = (turn: TurnIdentity, value: DaemonStateRequest): Promise<DaemonStateReply> => {
+  const rejectRequests = (error: unknown): void => {
+    for (const requestId of requests.keys()) removeRequest(requestId)?.reject(error);
+  };
+  const cancelRequest = (requestId: string, pending: PendingRequest): void => {
+    if (requests.get(requestId) !== pending) return;
+    void send({ ...envelope(), kind: 'cancel_daemon_request', turn: pending.turn, requestId }).catch((error: unknown) => {
+      removeRequest(requestId)?.reject(error);
+      input.onFatal(error);
+    });
+  };
+  const request = (turn: TurnIdentity, value: DaemonStateRequest, signal?: AbortSignal): Promise<DaemonStateReply> => {
     if (active === undefined || !sameTurn(active.turn, turn) || active.outcome !== undefined || closing !== undefined) {
       return Promise.reject(new Error('Turn is no longer active'));
     }
     active.controller.signal.throwIfAborted();
+    signal?.throwIfAborted();
     const requestId = randomUUID();
     const message: TurnProcessMessage = { ...envelope(), kind: 'daemon_request', turn, requestId, request: value };
     return new Promise((resolve, reject) => {
-      requests.set(requestId, { turn, resolve, reject });
-      void send(message).catch((error: unknown) => {
-        requests.delete(requestId);
-        reject(error);
+      const pending: PendingRequest = { turn, signal, resolve, reject };
+      requests.set(requestId, pending);
+      const sending = send(message);
+      if (signal !== undefined && requests.get(requestId) === pending) {
+        pending.listener = addAbortListener(signal, () => cancelRequest(requestId, pending));
+      }
+      void sending.catch((error: unknown) => {
+        removeRequest(requestId)?.reject(error);
         input.onFatal(error);
       });
     });
   };
   const shutdown = (): Promise<void> => closing ??= (async () => {
     active?.controller.abort();
-    rejectRequests(new Error('Turn process is shutting down'));
+    for (const [requestId, pending] of requests) {
+      if (pending.signal === undefined) removeRequest(requestId)?.reject(new Error('Turn process is shutting down'));
+      else cancelRequest(requestId, pending);
+    }
     await initialization;
     const results = await Promise.allSettled([active?.completion, business?.close()]);
     const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
@@ -90,6 +118,14 @@ export function createTurnProcessRuntime(input: {
         return;
       }
       if (initialized === undefined) throw new Error('Initialize the turn process first');
+      if (message.kind === 'daemon_reply') {
+        const pending = requests.get(message.requestId);
+        if (pending !== undefined && sameTurn(pending.turn, message.turn)) {
+          removeRequest(message.requestId);
+          pending.resolve(message.reply);
+        }
+        return;
+      }
       if (message.kind === 'shutdown') { await shutdown(); return; }
       if (closing !== undefined) return;
       if (business === undefined) throw new Error('Turn process initialization is not complete');
@@ -107,7 +143,7 @@ export function createTurnProcessRuntime(input: {
             let outcome: TurnOutcome;
             try {
               outcome = await business!.execute(message.input, { signal: controller.signal,
-                request: (value) => request(current.turn, value),
+                request: (value, signal) => request(current.turn, value, signal),
                 progress: (value) => {
                   if (controller.signal.aborted || current.outcome !== undefined) return Promise.resolve();
                   const message = typeof value === 'string' ? truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value
@@ -139,19 +175,13 @@ export function createTurnProcessRuntime(input: {
             active = undefined;
           }
           break;
-        case 'daemon_reply': {
-          const pending = requests.get(message.requestId);
-          if (pending === undefined || !sameTurn(pending.turn, message.turn)) return;
-          requests.delete(message.requestId);
-          pending.resolve(message.reply);
-          break;
-        }
       }
     },
     async disconnect(): Promise<void> { await shutdown(); },
     /** IPC が切れた後は送信の完了通知が来ないので、送信待ちを解放してから終了する。 */
     async transportClosed(): Promise<void> {
       sender.close(new Error('Turn transport disconnected'));
+      rejectRequests(new Error('Turn transport disconnected'));
       await shutdown();
     },
   };

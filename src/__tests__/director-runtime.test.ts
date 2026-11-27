@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonConversationRuntime, prepareDirectorTurn } from '../features/director/conversationRuntime.js';
 import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
 import * as directorMcp from '../features/director/mcp.js';
+import { getDirectorOutputSchema } from '../features/director/turnResponse.js';
 import { createHash } from 'node:crypto';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), executor: vi.fn(), preflight: vi.fn(),
@@ -12,7 +13,9 @@ vi.mock('../features/mcp/localConnection.js', () => ({ startLocalMcpConnection: 
 vi.mock('../features/director/turnExecutor.js', () => ({ createDirectorTurnExecutor: doubles.executor }));
 vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.managers }));
 const signal = () => new AbortController().signal;
-const notices = { tellManager: vi.fn(async () => ({})), notifyHuman: vi.fn(async (message: string) => ({ id: 'notification', message })) };
+const notices = { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<() => void>(), addManager: vi.fn(async () => ({ managerId: `manager-${'a'.repeat(64)}` })),
+  fireManager: vi.fn(async (managerId: string) => ({ managerId })),
+  tellManager: vi.fn(async () => ({})), notifyHuman: vi.fn(async (message: string) => ({ id: 'notification', message })) };
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.plan.mockReturnValue({ cwd: '/config', systemPrompt: 'director', ctx: { provider: { preflight: doubles.preflight },
@@ -26,7 +29,8 @@ afterEach(() => vi.restoreAllMocks());
 it('prepares an isolated readonly turn and passes its connection to the executor', async () => {
   const abortSignal = signal();
   const prepared = await prepareDirectorTurn('/config', notices, abortSignal, {});
-  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST, abortSignal }));
+  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST, abortSignal,
+    outputSchema: getDirectorOutputSchema('mock') }));
   expect(doubles.executor).toHaveBeenCalledWith(doubles.plan.mock.results[0]!.value, expect.objectContaining({ type: 'http' }));
   expect(prepared).toMatchObject({ provider: 'mock', language: 'en', model: null });
   expect(doubles.dispose).not.toHaveBeenCalled();
@@ -128,8 +132,8 @@ it('waits for director MCP tool cleanup before completing the turn', async () =>
   const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
   const runtime = createDaemonConversationRuntime('/config', notices);
   const prepared = await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
-  doubles.connect.mock.calls[0]![0]();
-  const scope = server.mock.calls[0]![3]!;
+  doubles.connect.mock.calls[0]![0]({}, {}, { bind: vi.fn(() => ({ run: vi.fn() })) });
+  const scope = server.mock.calls[0]![4]!;
   const started = deferred<void>(); const cleanup = deferred<void>();
   doubles.execute.mockImplementation(async () => {
     void scope.run(async () => { started.resolve(); await cleanup.promise; });
@@ -139,7 +143,7 @@ it('waits for director MCP tool cleanup before completing the turn', async () =>
     assignment: undefined, abortSignal: signal() });
   await started.promise;
   let completed = false; void execution.then(() => { completed = true; });
-  await Promise.resolve(); expect(completed).toBe(false); expect(doubles.dispose).not.toHaveBeenCalled();
+  await Promise.resolve(); expect(completed).toBe(false); expect(doubles.dispose).toHaveBeenCalledOnce();
   cleanup.resolve(); await execution; await runtime.close();
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });

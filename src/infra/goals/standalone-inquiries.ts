@@ -5,7 +5,7 @@ import { writeFileAtomic } from '../../shared/utils/atomic-file.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
 import { withInquiryLock } from './inquiry-lock.js';
 import { createInquiry, answerInquiry, withdrawInquiry } from './inquiry.js';
-import { GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
+import { StandaloneInquirySchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
 
 export type InquiryOwner =
   | { readonly kind: 'workspace'; readonly workspaceId: string }
@@ -23,7 +23,7 @@ export class StandaloneInquiryStore {
 
   async create(input: GoalQuestionInput): Promise<GoalQuestion> {
     return withInquiryLock(this.configDirectory, async () => {
-      const question = createInquiry(input);
+      const question = StandaloneInquirySchema.parse(createInquiry(input));
       const directory = await this.directory();
       const path = join(directory, `${question.id}.json`);
       await this.assertUnusedId(path);
@@ -122,16 +122,15 @@ export class StandaloneInquiryStore {
   async answer(id: string, answer: string | GoalAnswerInput,
     source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): Promise<GoalQuestion> {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
-    const answered = answerInquiry(await this.read(path, id), answer, source);
-    this.write(path, answered);
-    return answered;
+    const answered = answerInquiry(await this.read(path, id), answer, source, 'human');
+    return this.write(path, answered);
   }
 
   async answerForPublication(id: string, answer: string | GoalAnswerInput,
     source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): Promise<GoalQuestion> {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
-    const answered = answerInquiry(await this.read(path, id), answer, source);
-    const pending = GoalQuestionSchema.parse({ ...answered, answerPublicationPending: true });
+    const answered = answerInquiry(await this.read(path, id), answer, source, 'human');
+    const pending = StandaloneInquirySchema.parse({ ...answered, answerPublicationPending: true });
     this.write(path, pending);
     return pending;
   }
@@ -140,7 +139,7 @@ export class StandaloneInquiryStore {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
     const question = await this.read(path, id);
     if (question.answerPublicationPending !== true) return question;
-    const result = GoalQuestionSchema.parse({ ...question, answerPublicationPending: undefined });
+    const result = StandaloneInquirySchema.parse({ ...question, answerPublicationPending: undefined });
     this.write(path, result);
     return result;
   }
@@ -149,8 +148,7 @@ export class StandaloneInquiryStore {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
     const question = await this.read(path, id);
     const withdrawn = withdrawInquiry(question, reason);
-    if (withdrawn !== question) this.write(path, withdrawn);
-    return withdrawn;
+    return withdrawn === question ? question : this.write(path, withdrawn);
   }
 
   private async directory(): Promise<string> {
@@ -161,7 +159,7 @@ export class StandaloneInquiryStore {
   }
 
   private async read(path: string, id: string): Promise<GoalQuestion> {
-    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    const question = StandaloneInquirySchema.parse(JSON.parse(await readFile(path, 'utf8')));
     if (question.id !== id) throw new Error('Saved question ID differs from its filename');
     return question;
   }
@@ -175,8 +173,9 @@ export class StandaloneInquiryStore {
     throw new Error('Question ID already exists');
   }
 
-  private write(path: string, question: GoalQuestion): void {
-    const parsed = GoalQuestionSchema.parse(question);
+  private write(path: string, question: GoalQuestion): GoalQuestion {
+    const parsed = StandaloneInquirySchema.parse(question);
     writeFileAtomic(path, `${JSON.stringify(parsed, null, 2)}\n`, 0o600);
+    return parsed;
   }
 }

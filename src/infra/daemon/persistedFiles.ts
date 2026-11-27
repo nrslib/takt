@@ -3,7 +3,7 @@ import { readFile, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, StandaloneInquirySchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
 import type { ConversationAssignment } from '../conversations/schema.js';
 import type { IoOptions } from '../../core/daemon/io.js';
@@ -60,7 +60,7 @@ export class DaemonPersistedFiles {
   async markInquiryAnswerPublished(owner: DaemonInquiryOwner, questionId: string) {
     const { path, question } = await this.readInquiryWithPath(owner, questionId);
     if (question.answerPublicationPending !== true) return question;
-    const result = GoalQuestionSchema.parse({ ...question, answerPublicationPending: undefined });
+    const result = StandaloneInquirySchema.parse({ ...question, answerPublicationPending: undefined });
     await writePrivateFile(path, `${JSON.stringify(result, null, 2)}\n`);
     return result;
   }
@@ -177,7 +177,7 @@ export class DaemonPersistedFiles {
   private async readInquiryWithPath(owner: DaemonInquiryOwner, questionId: string) {
     const id = inquiryId.parse(questionId);
     const path = join(await this.inquiryDirectory(owner), `${id}.json`);
-    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown);
+    const question = StandaloneInquirySchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown);
     if (question.id !== id) throw new Error('Saved question ID differs from its filename');
     return { path, question };
   }

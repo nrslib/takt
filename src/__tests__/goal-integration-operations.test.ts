@@ -101,7 +101,8 @@ it('passes the reason and cancellation through integration and notifies using th
   expect(doubles.reopen).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, saved.workLog[0]!.summary, signal);
   expect(doubles.notify).toHaveBeenCalledOnce();
   expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: {
-    id: saved.id, status: 'created', executionStatus: 'active', branch: saved.branch, integrationBranch: saved.integrationBranch,
+    id: saved.id, creationOrigin: saved.creationOrigin, questionRoute: saved.questionRoute,
+    status: 'created', executionStatus: 'active', branch: saved.branch, integrationBranch: saved.integrationBranch,
   }, workLogEntryId: saved.workLog[0]!.id });
 });
 it.each([false, true])('passes reviewed SHA, notification policy, cancellation, and preserveGoalWorktree=%s directly to integration', async (preserveGoalWorktree) => {

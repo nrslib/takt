@@ -21,6 +21,7 @@ export function formatPendingSummary(pending: PendingSummary, lang: 'ja' | 'en')
   const { summary } = pending;
   const lines = [
     getLabel('manager.summary.title', lang),
+    ...(pending.managerId === undefined ? [] : [`${getLabel('manager.summary.manager', lang)}: ${toDisplayText(pending.managerId)}`]),
     `${getLabel('manager.summary.repository', lang)}: ${toDisplayText(pending.repositoryDirectory)}`,
     `${getLabel('manager.summary.objective', lang)}: ${toDisplayText(summary.objective).replace(/\n/g, '\n  ')}`,
     `${getLabel('manager.summary.outOfScope', lang)}:`,

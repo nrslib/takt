@@ -56,7 +56,15 @@ function storedText(directory: string): string {
 function filesContaining(directory: string, value: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.name !== '.git').flatMap((entry) => {
     const path = join(directory, entry.name);
-    return entry.isDirectory() ? filesContaining(path, value) : entry.isFile() && readFileSync(path, 'utf8').includes(value) ? [path] : [];
+    if (entry.isDirectory()) return filesContaining(path, value);
+    if (!entry.isFile()) return [];
+    try {
+      return readFileSync(path, 'utf8').includes(value) ? [path] : [];
+    } catch (error) {
+      // The live daemon can remove a lock between listing and reading the file.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
   });
 }
 

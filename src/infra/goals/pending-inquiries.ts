@@ -22,7 +22,7 @@ interface PendingInquiryResult {
 const SUMMARY_MAX_BYTES = 512;
 
 function pendingQuestions(questions: readonly GoalQuestion[]): Pick<PendingInquiry, 'question' | 'kind' | 'summary'>[] {
-  return questions.filter((question) => question.status === 'pending').map((question) => ({
+  return questions.filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => ({
     question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value,
   }));
 }

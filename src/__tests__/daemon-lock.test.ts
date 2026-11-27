@@ -147,6 +147,60 @@ describe('FileAsyncLock acquisition-only deadline', () => {
 });
 
 describe('FileAsyncLock contention', () => {
+  it('limits acquisition without expiring a held operation and keeps contenders waiting', async () => {
+    const lock = new FileAsyncLock();
+    const release = await lock.acquire(path, { ...options(), timeoutMs: 100 });
+    const action = vi.fn(async () => 2);
+    const second = lock.exclusive(path, action, options());
+    await vi.advanceTimersByTimeAsync(200);
+    expect(files.has(path)).toBe(true);
+    expect(action).not.toHaveBeenCalled();
+    await release();
+    expect(await second).toBe(2);
+    expect(files.size).toBe(0);
+  });
+
+  it.each(['abort', 'deadline'] as const)('cleans up an acquisition cancelled by %s', async (kind) => {
+    const release = await new FileAsyncLock().acquire(path, options());
+    const controller = new AbortController();
+    const waiting = new FileAsyncLock().acquire(path, { signal: controller.signal, timeoutMs: 100 });
+    const rejected = expect(waiting).rejects.toMatchObject({ name: kind === 'abort' ? 'AbortError' : 'TimeoutError' });
+    if (kind === 'abort') controller.abort();
+    else await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    await release();
+    expect(await new FileAsyncLock().exclusive(path, async () => 3, options())).toBe(3);
+    expect(files.size).toBe(0);
+  });
+
+  it('reports release failure and unblocks the local queue', async () => {
+    const release = await new FileAsyncLock().acquire(path, options());
+    vi.mocked(unlink).mockRejectedValueOnce(new Error('release denied'));
+    await expect(release()).rejects.toThrow('release denied');
+    files.clear();
+    expect(await new FileAsyncLock().exclusive(path, async () => 4, options())).toBe(4);
+  });
+
+  it('removes a lock whose publication finishes after the acquisition deadline', async () => {
+    const publish = deferred<void>(); const writing = deferred<void>();
+    const openFile = vi.mocked(open).getMockImplementation()!;
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const file = await openFile(...args);
+      const write = file.writeFile.bind(file);
+      file.writeFile = vi.fn(async (data, options) => {
+        writing.resolve(); await publish.promise; return write(data, options);
+      });
+      return file;
+    });
+    const acquiring = new FileAsyncLock().acquire(path, { ...options(), timeoutMs: 100 });
+    const rejected = expect(acquiring).rejects.toMatchObject({ name: 'TimeoutError' });
+    await writing.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    publish.resolve(); await rejected;
+    expect(files.size).toBe(0);
+    expect(await new FileAsyncLock().exclusive(path, async () => 5, options())).toBe(5);
+  });
+
   it('shares one process identity lookup across concurrent paths and later acquisitions', async () => {
     const identity = deferred<Awaited<ReturnType<typeof readProcessOwner>>>();
     vi.mocked(readProcessOwner).mockReturnValue(identity.promise);

@@ -17,6 +17,12 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it('roundtrips request cancellation using the existing launch, turn and request identity', () => {
+    const cancellation = { ...common, kind: 'cancel_daemon_request', turn, requestId: 'rpc-1' };
+    expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(cancellation)), common.launchId)).toEqual(cancellation);
+    expect(() => parseTurnProcessMessage({ ...cancellation, requestId: '' }, common.launchId)).toThrow();
+    expect(() => parseTurnProcessMessage({ ...cancellation, launchId: 'old' }, common.launchId)).toThrow();
+  });
   it('roundtrips tool identities, batched completions and results larger than the intermediate text limit', () => {
     const toolActivity = { callId: 'call', operationId: turn.operationId, generation: turn.generation };
     const toolId = 'provider-tool-'.repeat(30);
@@ -113,7 +119,7 @@ describe('daemon turn process protocol', () => {
   it('transfers a standalone answer through the existing director message event shape', () => {
     const event = { ...acceptedEvent, lane: 'other', source: 'director', event: {
       kind: 'director_message', directorConversationId: 'director', text: 'A person answered a standalone inquiry.',
-      inquiryAnswer: { questionId: 'question-1', question: 'Which format?', answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-06T00:00:00Z' } },
+      inquiryAnswer: { questionId: 'question-1', question: 'Which format?', answer: { text: 'CSV', source: 'tui', answeredBy: 'human', answeredAt: '2026-11-06T00:00:00Z' } },
     } };
     const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
     expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
@@ -131,7 +137,8 @@ describe('daemon turn process protocol', () => {
       const record = EventRecordSchema.parse({ state: 'queued', event: {
         ...acceptedEvent, lane: 'other', event,
       } });
-      expect(record.event.event).toMatchObject({ kind: 'director_message', inquiryAnswer: { questionId: event.questionId, answer: event.answer } });
+      expect(record.event.event).toMatchObject({ kind: 'director_message', inquiryAnswer: { questionId: event.questionId,
+        answer: { ...event.answer, answeredBy: 'human' } } });
     }
   });
 
@@ -152,7 +159,8 @@ describe('daemon turn process protocol', () => {
         ...(['settling', 'settled'].includes(state) ? { result: { ...identity, event: saved, outcome: { kind: 'interrupted' } } } : {}) };
       expect(EventRecordWriteSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
       const restored = EventRecordSchema.parse(JSON.parse(JSON.stringify(record)));
-      const normalized = { ...saved, event: { ...saved.event, inquiryAnswer } };
+      const normalized = { ...saved, event: { ...saved.event, inquiryAnswer: { ...inquiryAnswer,
+        answer: { ...inquiryAnswer.answer, answeredBy: 'human' } } } };
       expect(restored.event).toEqual(normalized);
       if (restored.state === 'settling' || restored.state === 'settled') expect(restored.result.event).toEqual(normalized);
       const authored = { ...saved, event: { ...saved.event, origin: 'director' } };

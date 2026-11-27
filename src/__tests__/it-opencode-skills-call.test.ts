@@ -130,7 +130,7 @@ afterEach(() => {
 });
 
 describe('OpenCode Skill execution contract', () => {
-  it('limits director tools to its six MCP tools on new, resumed and retried calls while preserving manager skills', async () => {
+  it('limits director tools to its 13 MCP tools on new, resumed and retried calls while preserving manager skills', async () => {
     const directory = getGlobalConfigDir();
     writeFileSync(join(directory, 'config.yaml'), JSON.stringify({ provider: 'opencode', model: 'probe/probe', language: 'en',
       provider_options: { opencode: { skills: { enabled: true } } } }));
@@ -151,7 +151,7 @@ describe('OpenCode Skill execution contract', () => {
       expect(promptAsync.mock.calls[1]![0].sessionID).toBe(first.sessionId);
       expect(promptAsync.mock.calls[3]![0].sessionID).not.toBe(first.sessionId);
       const expected = DIRECTOR_TOOL_ALLOWLIST.map((tool) => toOpenCodeMcpToolName(tool)!);
-      expect(expected).toHaveLength(6);
+      expect(expected).toHaveLength(13);
       const hooks = new Map<string, (input: Record<string, unknown>) => Promise<void> | void>();
       const dispose = async () => {};
       const hook = async (name: string, callback: (input: Record<string, unknown>) => Promise<void> | void) => {

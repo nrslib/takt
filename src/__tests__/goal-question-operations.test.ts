@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import { beforeEach,expect,it,vi } from 'vitest';
 import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
 import { askTaktGoalQuestion,getTaktGoalQuestion,listTaktGoalQuestions,withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
-import { GoalQuestionSchema,GoalSchema,type Goal } from '../infra/goals/schema.js';
+import { GoalQuestionSchema,GoalSchema,StandaloneInquirySchema,type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { listTaktGoalRecords, recordTaktGoalWorkLog } from '../features/mcp/goalWorkLogOperations.js';
@@ -46,6 +46,62 @@ beforeEach(() => {
   });
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
   doubles.language.mockReturnValue('ja');
+});
+
+it.each([
+  { questionType: 'routine', recipient: 'director' },
+  { questionType: 'permission', recipient: 'human' },
+] as const)('passes $questionType from the manager question tool to saved recipient $recipient', async ({ questionType, recipient }) => {
+  const routed = { ...goalRecord(), creationOrigin: 'director' as const, questionRoute: 'director' as const };
+  goal = routed;
+  const details = { ...input, body: 'A と B のどちらを使いますか', questionType };
+
+  const result = await askTaktGoalQuestion(details, {}, signal);
+
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  const { questionId } = JSON.parse(firstTextContent(result.content));
+  expect(goal.questions).toEqual([expect.objectContaining({ id: questionId, questionType, recipient, status: 'pending' })]);
+  expect(goal.notifications?.length ?? 0).toBe(recipient === 'human' ? 1 : 0);
+});
+
+it('keeps identical question text separate when the routing type changes and reuses only the same type', async () => {
+  const routed = { ...goalRecord(), creationOrigin: 'director' as const, questionRoute: 'director' as const };
+  goal = routed;
+  const body = 'この方法で進めますか';
+  const routineInput = { ...input, body, questionType: 'routine' as const };
+  const routine = await askTaktGoalQuestion(routineInput, {}, signal);
+  expect(routine.isError, firstTextContent(routine.content)).toBeUndefined();
+  const permissionInput = { ...input, body, questionType: 'permission' as const };
+  const permission = await askTaktGoalQuestion(permissionInput, {}, signal);
+  expect(permission.isError, firstTextContent(permission.content)).toBeUndefined();
+  const again = await askTaktGoalQuestion(permissionInput, {}, signal);
+  expect(again.isError, firstTextContent(again.content)).toBeUndefined();
+
+  const routineId = JSON.parse(firstTextContent(routine.content)).questionId;
+  const permissionId = JSON.parse(firstTextContent(permission.content)).questionId;
+  expect(permissionId).not.toBe(routineId);
+  expect(JSON.parse(firstTextContent(again.content)).questionId).toBe(permissionId);
+  expect(goal.questions).toEqual([
+    expect.objectContaining({ id: routineId, questionType: 'routine', recipient: 'director' }),
+    expect.objectContaining({ id: permissionId, questionType: 'permission', recipient: 'human' }),
+  ]);
+});
+
+it('checks aborted state again inside the store update before creating an inquiry', async () => {
+  doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
+    goal = { ...goal, executionStatus: 'aborted' };
+    goal = transform(structuredClone(goal));
+    return structuredClone(goal);
+  });
+  const details = { ...input, body: '終了したゴールへの質問', questionType: 'routine' as const };
+
+  const result = await askTaktGoalQuestion(details, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(goal.executionStatus).toBe('aborted');
+  expect(goal.questions).toBeUndefined();
+  expect(goal.notifications).toBeUndefined();
+  expect(doubles.send).not.toHaveBeenCalled();
 });
 
 it('preserves question, notification and read operations for a paused goal', async () => {
@@ -156,7 +212,7 @@ it('preserves question changes made before the update reads the goal', async () 
   goal.questions = [previousQuestion];
   doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
     const current = { ...goal, questions: [
-      { ...previousQuestion, status: 'answered' as const, answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-14T00:00:00Z' } },
+      { ...previousQuestion, status: 'answered' as const, answer: { answeredBy: 'human' as const, text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-14T00:00:00Z' } },
       { ...previousQuestion, id: '650e8400-e29b-41d4-a716-446655440002', body: '別の質問' },
     ] };
     goal = transform(current);
@@ -397,10 +453,10 @@ it('returns structured answers, withdrawal details and consumed approval state f
   const records = [
     { ...base, id: '650e8400-e29b-41d4-a716-446655440001', kind: 'question', status: 'pending' },
     { ...base, id: '650e8400-e29b-41d4-a716-446655440002', kind: 'operation_request', status: 'answered',
-      answer: { text: '', report: 'unable', source: 'tui', answeredAt: now } },
+      answer: { answeredBy: 'human' as const, text: '', report: 'unable', source: 'tui', answeredAt: now } },
     { ...base, id: '650e8400-e29b-41d4-a716-446655440003', kind: 'approval', status: 'answered', consumedAt: now,
       operation: { toolName: 'Bash', args: '{}', cwd: '/project', argsDigest: 'a'.repeat(64) },
-      answer: { text: '', decision: 'allow', scope: 'workspace', source: 'tui', answeredAt: now } },
+      answer: { answeredBy: 'human' as const, text: '', decision: 'allow', scope: 'workspace', source: 'tui', answeredAt: now } },
     { ...base, id: '650e8400-e29b-41d4-a716-446655440004', kind: 'question', status: 'withdrawn', withdrawalReason: '不要です', withdrawnAt: now },
   ].map((record) => GoalQuestionSchema.parse(record));
   goal.questions = records;
@@ -416,7 +472,7 @@ it.each([
   { kind: 'repository' as const, repositoryDirectory: '/assigned' },
   { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' },
 ])('uses the resolved $kind owner and explicit paging for standalone reads', async (owner) => {
-  const inquiry = GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: 'pending' });
+  const inquiry = StandaloneInquirySchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: 'pending' });
   standalone.page.mockResolvedValue({ inquiries: [inquiry], totalCount: 4 });
   const result = await listTaktStandaloneInquiries({ cwd: '/validated', offset: 2, limit: 1 }, '/config', owner);
   expect(standalone.construct).toHaveBeenCalledWith('/config', owner);
@@ -431,7 +487,7 @@ it.each([
 
 it('defaults standalone paging and bounds response bytes without changing the store records', async () => {
   const owner = { kind: 'repository' as const, repositoryDirectory: '/assigned' };
-  const inquiries = Array.from({ length: 3 }, (_, index) => GoalQuestionSchema.parse({
+  const inquiries = Array.from({ length: 3 }, (_, index) => StandaloneInquirySchema.parse({
     id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
     body: '日本語\u0001'.repeat(10000), status: 'pending',
   }));
@@ -448,9 +504,9 @@ it('defaults standalone paging and bounds response bytes without changing the st
 
 it.each(['pending', 'answered', 'withdrawn'] as const)('returns the store result for standalone withdrawal from %s without duplicating the transition', async (status) => {
   const owner = { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' };
-  const inquiry = GoalQuestionSchema.parse({
+  const inquiry = StandaloneInquirySchema.parse({
     id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: status === 'pending' ? 'withdrawn' : status,
-    ...(status === 'answered' ? { answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-19T01:00:00.000Z' } } : {}),
+    ...(status === 'answered' ? { answer: { answeredBy: 'human' as const, text: 'JSON', source: 'tui', answeredAt: '2026-10-19T01:00:00.000Z' } } : {}),
   });
   standalone.withdraw.mockResolvedValue(inquiry);
   const reason = '  対象の操作は終了しました\n';

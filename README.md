@@ -382,7 +382,9 @@ takt director --help
 
 The daemon owns the conversation. Close and reopen the TUI to continue it; starting from another assigned repository connects to the same conversation. Previous messages and replies are not redisplayed. Director is experimental: behavior and saved data formats may change without notice. Human and event turns call the provider and incur costs; a clock alone does not trigger a model call.
 
-Manager advances goals within its repository or workspace, submits tasks, integrates results, and requests completion. Director checks goals and unanswered inquiries across all managers, notifies the human when attention is needed, and communicates through manager conversations. Human decisions remain with the human: director only relays an explicit request to merge to the responsible manager and never performs the merge itself.
+Manager advances goals within its repository or workspace, submits tasks, integrates results, and requests completion. Director selects a manager for your request, prepares a manager at an absolute Git repository path you supply when needed, and presents a goal proposal for one human confirmation. It answers ordinary questions for delegated goals and sends questions requiring human judgment directly to you. Director only relays an explicit human request to merge to the responsible manager and never performs the merge itself.
+
+See [Using director](./docs/director.md) for manager selection, registration, Slack buttons, question routing, promotion and return, removing a manager (fire), and Slack limitations.
 
 Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing reports unreadable projects with reasons and continues with readable managers.
 

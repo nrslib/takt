@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
-import { resolveCurrentManagerAssignment } from '../manager/assignment.js';
+import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { readProjectRegistry } from '../../infra/config/global/projectRegistry.js';
@@ -8,6 +8,7 @@ import { readWorkspaceRegistry } from '../../infra/config/global/workspaceRegist
 import { createLogger } from '../../shared/utils/debug.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { DirectorManagerStateStore } from '../../infra/director/managerState.js';
 
 const log = createLogger('director');
 
@@ -25,12 +26,16 @@ export async function listDirectorManagers(configDirectory: string): Promise<Dir
     .filter((project) => project.managerUsed === true)
     .map((project) => project.canonicalDirectory));
   const managers = new Map<string, ManagerAssignment>();
+  const workspaceByRepository = new Map<string, ManagerAssignment>();
   const errors: DirectorManagerList['errors'] = [];
   for (const workspace of workspaces) {
     const assignment = { kind: 'workspace' as const, workspaceId: workspace.id, name: workspace.name,
       repositoryDirectories: workspace.repositoryDirectories };
     managers.set(conversationId(assignment), assignment);
-    for (const directory of workspace.repositoryDirectories) directories.add(directory);
+    for (const directory of workspace.repositoryDirectories) {
+      directories.add(directory);
+      if (!workspaceByRepository.has(directory)) workspaceByRepository.set(directory, assignment);
+    }
   }
   for (const repositoryDirectory of [...directories].sort()) {
     try {
@@ -41,13 +46,21 @@ export async function listDirectorManagers(configDirectory: string): Promise<Dir
         || registeredDirectories.get(canonical)?.available === false) {
         throw new Error('Project directory is unavailable or has changed identity');
       }
-      const assignment = await resolveCurrentManagerAssignment({ kind: 'repository', repositoryDirectory: canonical }, configDirectory);
+      const root = await resolveGitRepositoryDirectory(canonical);
+      const assignment = workspaceByRepository.get(root) ?? {
+        kind: 'repository' as const, repositoryDirectory: canonical, repositoryDirectories: [canonical],
+      };
       managers.set(conversationId(assignment), assignment);
     } catch (error) {
       errors.push({ repositoryDirectory, reason: sanitizeSensitiveText(getErrorMessage(error)) });
     }
   }
-  return { managers: [...managers.values()], errors };
+  const states = new DirectorManagerStateStore(configDirectory);
+  const active: ManagerAssignment[] = [];
+  for (const assignment of managers.values()) {
+    if (!await states.isFired(conversationId(assignment))) active.push(assignment);
+  }
+  return { managers: active, errors };
 }
 
 export async function resolveDirectorManager(configDirectory: string, id: string): Promise<ManagerAssignment> {

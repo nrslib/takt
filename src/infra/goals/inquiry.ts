@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
-import { GoalInquiryInputSchema, GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
+import { GoalAnswerInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput, type GoalQuestionRoute } from './schema.js';
 
 export function createInquiry(input: GoalQuestionInput): GoalQuestion {
   const id = randomUUID();
@@ -23,12 +23,13 @@ export function withdrawInquiry(question: GoalQuestion, reason?: string): GoalQu
 }
 
 export function answerInquiry(question: GoalQuestion, answer: string | GoalAnswerInput,
-  source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): GoalQuestion {
+  source: NonNullable<GoalQuestion['answer']>['source'], answeredBy: GoalQuestionRoute): GoalQuestion {
   if (question.status !== 'pending') throw new Error('Question is not awaiting an answer');
-  if (question.recipient !== 'human') throw new Error('Question is not addressed to a human');
+  if (question.recipient !== answeredBy) throw new Error('Question is not addressed to this respondent');
+  const parsed = GoalAnswerInputSchema.parse(typeof answer === 'string' ? { text: answer } : answer);
   return GoalQuestionSchema.parse({
     ...question, status: 'answered', answer: {
-      ...(typeof answer === 'string' ? { text: answer } : answer), source, answeredAt: new Date().toISOString(),
+      ...parsed, source, answeredBy, answeredAt: new Date().toISOString(),
     },
   });
 }

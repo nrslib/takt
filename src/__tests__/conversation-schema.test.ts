@@ -6,6 +6,28 @@ import { ConversationAssignmentSchema, ConversationRecordSchema, PendingMessages
 import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
 
 describe('conversation identity and schema', () => {
+  it.each(['reserved', 'registered'] as const)('persists a director proposal and its %s approval with the selected manager', (state) => {
+    const managerId = conversationId({ kind: 'repository', repositoryDirectory: '/blog' });
+    const pending = { revision: 4, repositoryDirectory: '/blog', managerId,
+      summary: { objective: '記事一覧', outOfScope: ['編集'], acceptanceCriteria: ['一覧できる'], constraints: [] } };
+    const approval = { revision: 4, repositoryDirectory: '/blog', managerId,
+      goalId: '11111111-1111-4111-8111-111111111111', state };
+    const record = { ...directorConversationRecord(), revision: state === 'reserved' ? 4 : 5,
+      pending: state === 'reserved' ? pending : null, approval };
+    expect(ConversationRecordSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
+  });
+
+  it('rejects a director reservation for a different manager than the pending proposal', () => {
+    const pending = { revision: 4, repositoryDirectory: '/blog',
+      managerId: conversationId({ kind: 'repository', repositoryDirectory: '/blog' }),
+      summary: { objective: '記事一覧', outOfScope: [], acceptanceCriteria: ['一覧できる'], constraints: [] } };
+    const record = { ...directorConversationRecord(), revision: 4, pending,
+      approval: { revision: 4, repositoryDirectory: '/blog',
+        managerId: conversationId({ kind: 'workspace', workspaceId: '11111111-1111-4111-8111-111111111111' }),
+        goalId: '11111111-1111-4111-8111-111111111111', state: 'reserved' } };
+    expect(ConversationRecordSchema.safeParse(record).success).toBe(false);
+  });
+
   it('derives identity from the complete repository path and keeps the same assignment stable', () => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: '/work/example' };
     expect(conversationIdentity(assignment)).toEqual(['manager', 'repository', '/work/example']);

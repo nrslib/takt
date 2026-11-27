@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listPendingInquiries } from '../infra/goals/pending-inquiries.js';
-import { GoalQuestionSchema, type Goal, type GoalQuestion } from '../infra/goals/schema.js';
+import { GoalQuestionSchema, StandaloneInquirySchema, type Goal, type GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({ goals: vi.fn(), standalone: vi.fn() }));
@@ -40,10 +40,17 @@ beforeEach(() => {
       return result === undefined ? [] : [result];
     }), errors: [],
   }));
-  doubles.standalone.mockImplementation(async () => structuredClone(standalone.filter((entry) => entry.status === 'pending')));
+  doubles.standalone.mockImplementation(async () => standalone.filter((entry) => entry.status === 'pending').map(entry => StandaloneInquirySchema.parse(entry)));
 });
 
 describe('pending inquiry collection', () => {
+  it('excludes director questions from the human answer list after delegation', async () => {
+    const human = question(firstId, { questionType: 'permission' });
+    const delegated = question(secondId, { recipient: 'director' });
+    savedGoals.set('/repos/a', [{ ...goalRecord(), questionRoute: 'director', questions: [human, delegated] }]);
+    const result = await listPendingInquiries(config, repository);
+    expect(result.inquiries.map(entry => entry.question.id)).toEqual([human.id]);
+  });
   it('combines every assigned repository with workspace inquiries and keeps their provenance', async () => {
     const first = question(firstId, { kind: 'question' });
     const second = question(secondId, { kind: 'operation_request' });
@@ -51,7 +58,7 @@ describe('pending inquiry collection', () => {
     savedGoals.set('/repos/a', [{ ...goalRecord(), objective: '最初の目的', questions: [first] }]);
     savedGoals.set('/repos/b', [{ ...goalRecord(), id: secondGoalId, objective: '別の目的', executionStatus: 'aborted', questions: [second] }]);
     savedGoals.set('/repos/outside', [{ ...goalRecord(), questions: [unowned] }]);
-    const free = question('650e8400-e29b-41d4-a716-446655440004', { body: 'ゴールなしの相談' });
+    const free = StandaloneInquirySchema.parse(question('650e8400-e29b-41d4-a716-446655440004', { body: 'ゴールなしの相談' }));
     standalone = [free];
 
     const result = await listPendingInquiries(config, workspace);
@@ -74,7 +81,7 @@ describe('pending inquiry collection', () => {
     const outside = question(secondId, {});
     savedGoals.set('/repos/a', [{ ...goalRecord(), questions: [local] }]);
     savedGoals.set('/repos/b', [{ ...goalRecord(), id: secondGoalId, questions: [outside] }]);
-    const free = question(thirdId, {});
+    const free = StandaloneInquirySchema.parse(question(thirdId, {}));
     standalone = [free];
     const result = await listPendingInquiries(config, repository);
     expect(result.inquiries.map((entry: { question: GoalQuestion }) => entry.question.id).sort()).toEqual([local.id, free.id].sort());
@@ -83,7 +90,7 @@ describe('pending inquiry collection', () => {
 
   it('filters answered and withdrawn inquiries at the shared entry for both origins', async () => {
     const pending = question(firstId, {});
-    const answered = question(secondId, { status: 'answered', answer: { text: 'JSON', source: 'tui', answeredAt: now } });
+    const answered = question(secondId, { status: 'answered', answer: { answeredBy: 'human' as const, text: 'JSON', source: 'tui', answeredAt: now } });
     const withdrawn = question(thirdId, { status: 'withdrawn', withdrawalReason: '不要です', withdrawnAt: now });
     savedGoals.set('/repos/a', [{ ...goalRecord(), questions: [answered, pending, withdrawn] }]);
     standalone = [withdrawn, answered, pending];

@@ -445,11 +445,14 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 director:
+  slackGoalRegistered: "ゴール登録完了: {id}"
   slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
   patrolFailed: "director の見回りに失敗しました"
   projectUnreadable: "director が project を読み取れませんでした"
   description: "実験的な director 会話 TUI を開きます"
   experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
+  pendingQuestions: "未回答の質問: {count}"
+  inputHint: "Enter: 送信 / Ctrl+R: 質問に回答 / Ctrl+C: 終了"
   costNotice: "director は AI を動かすため、provider API の費用がかかります。"
   placeholder: "manager の状況や指示を相談してください"
   managerReply: "manager {managerId} の返事（操作ID: {operationId}）: {message}"
@@ -550,6 +553,7 @@ manager:
   goSummaryUnavailable: "材料が不足しているため、ゴールの登録案を作れませんでした。会話を続けてください。"
   summaryWorking: "ゴールの登録案を作っています"
   summary:
+    manager: "担当 manager"
     title: "ゴールの登録案"
     repository: "リポジトリ"
     objective: "目的"

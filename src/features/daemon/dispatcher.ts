@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { assertDirectorManagerHumanMessage } from '../../core/daemon/directorAuthorization.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
 import type { AcceptedEvent, Admission, ControlEvent, ControlReceipt, EventInput } from '../../core/daemon/events.js';
 import type { ConversationSnapshot, RuntimeMessage, TurnIdentity, TurnOutcome, TurnResult } from '../../core/daemon/messages.js';
 import type {
@@ -456,6 +458,18 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       return;
     }
     if (signal.aborted) { response.reject(signal.reason); return; }
+    const event = active.event.event;
+    if (request.kind === 'add_director_manager') {
+      try { assertDirectorManagerHumanMessage(event); }
+      catch (error) {
+        response.resolve({ kind: 'error', code: 'forbidden', message: getErrorMessage(error) });
+        return;
+      }
+    }
+    if (request.kind === 'fire_director_manager' && (event.kind !== 'human_command' || event.command.kind !== 'message')) {
+      response.resolve({ kind: 'error', code: 'forbidden', message: 'Manager changes require a human message turn' });
+      return;
+    }
     const id = ++this.nextId;
     active.requests.set(id, response);
     const requestSignal = AbortSignal.any([signal, active.abort.signal, active.requestAbort.signal]);
