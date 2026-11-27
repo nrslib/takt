@@ -286,7 +286,9 @@ describe('ParallelRunner live intervention integration', () => {
       await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('1\n2\n'));
       await store.issue(secondInstruction);
       writeFileSync(join(projectCwd, 'release-gate-2'), 'ready');
-      expect((await execution).status).toBe('completed');
+      const result = await execution;
+      expect(result.status).toBe('completed');
+      expect(result.stepOutputs.get(step.name)?.parallelBeforeReportGateFailures).toBeUndefined();
       expect(readFileSync(attempts, 'utf8')).toBe('1\n2\n3\n');
 
       const calls = vi.mocked(runAgent).mock.calls;
@@ -308,7 +310,8 @@ describe('ParallelRunner live intervention integration', () => {
         expect(prompt).not.toMatch(/fixture-check|Exit code: 7|Output log:|Inspect the generated fixture/);
       }
       expect(workerPrompts[2]).toContain(secondInstruction);
-      expect(workerPrompts[2]).not.toMatch(/Quality gate failed:|Exit code: 7|Output log:|Guidance for the failed check/);
+      expect(workerPrompts[2]).toContain('Quality gate failed: fixture-check');
+      expect(workerPrompts[2]).toContain('Exit code: 7');
     } finally {
       firstSiblingTurn.resolve(undefined);
       for (const attempt of [1, 2]) {

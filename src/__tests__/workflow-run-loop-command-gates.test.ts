@@ -454,7 +454,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     }
   });
 
-  it('restores the replace selection for aggregate evaluation when a live intervention overlaps a gate failure', async () => {
+  it.each([1, 2])('retains the failed replace selection when live intervention overlaps gate run %d', async (interruptedRun) => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-dynamic-parallel-live-gate-failure-'));
     const reportDirName = 'retry-live-gate';
     const store = new LiveInterventionFileStore(cwd, reportDirName);
@@ -462,9 +462,11 @@ describe('WorkflowRunLoop command quality gates', () => {
     const release = join(cwd, 'release-gate');
     const liveInstruction = 'Adjust the selected work';
     writeFileSync(join(cwd, 'check.mjs'), [
-      "import { appendFileSync, existsSync } from 'node:fs';",
+      "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
       'appendFileSync("gate-attempts", ".");',
-      'while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+      `if (readFileSync("gate-attempts", "utf8").length === ${interruptedRun}) {`,
+      '  while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+      '}',
       'process.exitCode = existsSync("repaired") ? 0 : 7;',
     ].join('\n'));
     const child = makeStep('selected', {
@@ -512,7 +514,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const execution = engine.run();
     try {
-      await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('.'), { timeout: 5_000 });
+      await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('.'.repeat(interruptedRun)), { timeout: 5_000 });
       await store.issue(liveInstruction);
       writeFileSync(release, 'ready');
 
@@ -520,10 +522,11 @@ describe('WorkflowRunLoop command quality gates', () => {
       expect(result.status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
       expect(result.stepOutputs.get(parent.name)?.matchedRuleMethod).toBe('aggregate');
       expect(selectorCalls).toBe(1);
-      expect(workerPrompts).toHaveLength(2);
-      expect(workerPrompts[1]).toContain(liveInstruction);
-      expect(workerPrompts[1]).toContain('Exit code: 7');
-      expect(readFileSync(attempts, 'utf8')).toBe('..');
+      expect(workerPrompts).toHaveLength(interruptedRun + 1);
+      expect(workerPrompts[interruptedRun]).toContain(liveInstruction);
+      expect(workerPrompts[interruptedRun]).toContain('Exit code: 7');
+      expect(readFileSync(attempts, 'utf8')).toBe('.'.repeat(interruptedRun + 1));
+      expect(result.stepOutputs.get(parent.name)?.parallelBeforeReportGateFailures).toBeUndefined();
     } finally {
       if (!existsSync(release)) writeFileSync(release, 'cleanup');
       await execution.catch(() => undefined);
@@ -2078,7 +2081,7 @@ describe('WorkflowRunLoop step deadline', () => {
     }
   });
 
-  it('starts a fresh dynamic selector after a live correction during a long gate', async () => {
+  it('starts fresh selector and routing deadlines after a live correction during a long gate', async () => {
     vi.useFakeTimers();
     const cwd = mkdtempSync(join(tmpdir(), 'takt-dynamic-selector-gate-'));
     const reportDirName = 'dynamic-selector-gate';
@@ -2101,8 +2104,29 @@ describe('WorkflowRunLoop step deadline', () => {
       },
       rules: [makeRule('all("complete")', 'COMPLETE')],
     });
+    const routingSignals: AbortSignal[] = [];
     const engine = new WorkflowEngine(makeConfig(step), cwd, 'Run the long gate', {
-      projectCwd: cwd, reportDirName, provider: 'mock', liveIntervention: store,
+      projectCwd: cwd, reportDirName, liveIntervention: store,
+      autoRouting: {
+        strategy: 'balanced',
+        router: {
+          provider: 'opencode', model: 'opencode/router-model',
+          providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
+        },
+        candidates: [{ name: 'worker', provider: 'mock', model: 'worker-model', routingTier: 'medium' }],
+        defaultPool: 'default',
+        candidatePools: { default: { candidates: ['worker'], fallback: 'worker' } },
+        poolRules: { steps: { work: 'default' } },
+      },
+      autoRoutingEstimator: {
+        estimate: async (_input, options) => {
+          expect(options?.abortSignal).toBeDefined();
+          expect(options?.abortSignal?.aborted).toBe(false);
+          routingSignals.push(options!.abortSignal!);
+          options?.onActivity?.({ kind: 'attempt_started' });
+          return { requiredTier: 'medium', reasonCodes: ['local-change'] };
+        },
+      },
       selectorGitCommandRunner: emptySelectorGitCommandRunner,
       selectorProvider: {
         provider: 'codex', model: 'test-selector',
@@ -2134,7 +2158,10 @@ describe('WorkflowRunLoop step deadline', () => {
       await store.issue('Adjust the work');
       writeFileSync(release, 'ready');
 
-      expect((await execution).status).toBe('completed');
+      const result = await execution;
+      expect(result.status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
+      expect(routingSignals).toHaveLength(2);
+      expect(routingSignals[0]).not.toBe(routingSignals[1]);
       expect(selectorSignals).toHaveLength(2);
       expect(selectorSignals[0]).not.toBe(selectorSignals[1]);
       expect(readFileSync(began, 'utf8')).toBe('..');
@@ -2148,25 +2175,38 @@ describe('WorkflowRunLoop step deadline', () => {
     }
   });
 
-  it('runs and reports the team gate after the leader becomes idle during part execution', async () => {
+  it.each([false, true])('runs and reports the team gate after the leader becomes idle (live correction: %s)', async (withLiveCorrection) => {
     vi.useFakeTimers();
     const cwd = mkdtempSync(join(tmpdir(), 'takt-team-report-gate-deadline-'));
-    const gate = createCommandGate(cwd, 'check', 0);
+    const reportDirName = 'team-report-gate-deadline';
+    const store = withLiveCorrection ? new LiveInterventionFileStore(cwd, reportDirName) : undefined;
+    const attempts = join(cwd, 'gate-attempts');
+    const release = join(cwd, 'release-gate');
+    const correction = 'Correct the team output';
+    writeFileSync(join(cwd, 'check.mjs'), [
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      'const revision = existsSync("corrected") ? "corrected" : "initial";',
+      'appendFileSync("gate-attempts", revision + "\\n");',
+      'while (!existsSync("release-gate")) await new Promise((resolve) => setTimeout(resolve, 20));',
+      'process.stdout.write(revision);',
+    ].join('\n'));
+    if (!withLiveCorrection) writeFileSync(release, 'ready');
     const step = makeStep('work', {
       teamLeader: {
         persona: '../personas/team-leader.md', maxConcurrency: 1, timeoutMs: 5 * MINUTE,
         partPersona: '../personas/part.md',
       },
       outputContracts: [{ name: 'work.md', format: 'Changes' }],
-      qualityGates: [{ type: 'command', runAt: 'before_report', command: gate.command }],
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: 'node check.mjs' }],
       rules: [makeRule('complete', 'COMPLETE')],
     });
     let leaderSignal: AbortSignal | undefined;
     let partOptions: Parameters<typeof runAgent>[2] | undefined;
+    const correctionFeedback: Array<{ sessionId?: string; signal?: AbortSignal }> = [];
     let finishPart!: () => void;
     const partFinished = new Promise<void>((resolve) => { finishPart = resolve; });
     const engine = new WorkflowEngine(makeConfig(step), cwd, 'Check the team work', {
-      projectCwd: cwd, reportDirName: 'team-report-gate-deadline', provider: 'codex', model: 'test-model',
+      projectCwd: cwd, reportDirName, provider: 'codex', model: 'test-model', liveIntervention: store,
       providerOptions: {
         codex: { guards: { callTimeoutMs: MINUTE } },
         opencode: { guards: { callTimeoutMs: 5 * MINUTE } },
@@ -2179,9 +2219,21 @@ describe('WorkflowRunLoop step deadline', () => {
           leaderSignal = options.abortSignal;
           options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
           options.onDispatch?.(undefined);
-          return { parts: [{ id: 'part', title: 'Part', instruction: 'Complete the work' }] };
+          return {
+            parts: [{ id: 'part', title: 'Part', instruction: 'Complete the work' }],
+            sessionId: 'leader-session',
+          };
         },
-        requestMoreParts: async (_instruction, _results, _existingIds, options) => {
+        requestMoreParts: async (instruction, _results, existingIds, options) => {
+          if (instruction.includes(correction) && !existingIds.includes('correction')) {
+            correctionFeedback.push({ sessionId: options.sessionId, signal: options.abortSignal });
+            options.abortSignal?.throwIfAborted();
+            options.onDispatch?.(undefined);
+            return {
+              done: false, reasoning: 'Apply the correction', cancelPartIds: [],
+              parts: [{ id: 'correction', title: 'Correction', instruction: 'Apply the correction part' }],
+            };
+          }
           options.abortSignal?.throwIfAborted();
           return { done: true, reasoning: 'Work complete', cancelPartIds: [], parts: [] };
         },
@@ -2190,8 +2242,12 @@ describe('WorkflowRunLoop step deadline', () => {
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
       options.onDispatch?.(undefined);
-      partOptions = options;
-      await partFinished;
+      if (instruction.includes('Apply the correction part')) {
+        writeFileSync(join(cwd, 'corrected'), 'yes');
+      } else {
+        partOptions = options;
+        await partFinished;
+      }
       return makeResponse({ content: 'complete' });
     });
     mockRuleEvaluation.mockReturnValue({ index: 0, method: 'auto_select' });
@@ -2201,6 +2257,8 @@ describe('WorkflowRunLoop step deadline', () => {
       writePhaseReportFixture(context, 'work.md', 'Gate evidence recorded');
       onReportWritten?.('work.md');
     });
+    const aborted = vi.fn();
+    engine.on('workflow:abort', aborted);
     const execution = engine.run();
     try {
       await vi.waitFor(() => expect(partOptions).toBeDefined());
@@ -2209,14 +2267,27 @@ describe('WorkflowRunLoop step deadline', () => {
       expect(partOptions?.resolvedProvider).toBe('opencode');
       expect(partOptions?.abortSignal?.aborted).toBe(false);
       finishPart();
+      if (store !== undefined) {
+        await vi.waitFor(() => expect(readFileSync(attempts, 'utf8')).toBe('initial\n'));
+        await store.issue(correction);
+        writeFileSync(release, 'ready');
+      }
 
-      expect((await execution).status).toBe('completed');
-      expect(existsSync(gate.markerPath)).toBe(true);
+      expect((await execution).status, JSON.stringify(aborted.mock.lastCall?.slice(1))).toBe('completed');
+      expect(readFileSync(attempts, 'utf8')).toBe(withLiveCorrection ? 'initial\ncorrected\n' : 'initial\n');
+      if (withLiveCorrection) {
+        expect(correctionFeedback).toEqual([{ sessionId: 'leader-session', signal: expect.any(AbortSignal) }]);
+        expect(correctionFeedback[0]?.signal?.aborted).toBe(false);
+        expect(store?.read().deliveredSameSession).toBe(1);
+      }
       expect(runReportPhase).toHaveBeenCalledOnce();
       const context = vi.mocked(runReportPhase).mock.calls[0]![2];
       expect(context.beforeReportGateEvidence).toEqual([expect.objectContaining({ exitCode: 0 })]);
+      const log = readFileSync(join(cwd, context.beforeReportGateEvidence![0]!.outputLogPath), 'utf8');
+      expect(log).toContain(withLiveCorrection ? 'corrected' : 'initial');
       expect(readFileSync(join(context.reportDir, 'work.md'), 'utf8')).toBe('Gate evidence recorded');
     } finally {
+      if (!existsSync(release)) writeFileSync(release, 'cleanup');
       finishPart();
       await execution.catch(() => undefined);
       mockRuleEvaluation.mockReset();

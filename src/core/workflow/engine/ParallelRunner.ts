@@ -26,7 +26,7 @@ import { buildSessionKey } from '../session-key.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry, StepRunResult } from '../types.js';
-import type { RuntimeStepResolution } from '../types.js';
+import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import type {
   WorkflowStepInactivityDeadline,
   WorkflowStepExecutionDeadlineContext,
@@ -375,7 +375,7 @@ export class ParallelRunner {
     const previousFailures = state.currentStep === step.name && lastOutput?.persona === step.name
       ? lastOutput.parallelBeforeReportGateFailures
       : undefined;
-    // Keep the diagnostic through provider retries and live restarts until the check runs again.
+    // Keep the diagnostic until a successful check is accepted with its attempt.
     const pendingGateFailures = new Map(previousFailures?.map((failure) => [failure.persona, failure]));
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
@@ -573,14 +573,15 @@ export class ParallelRunner {
       return [subStep.name, providerInfo];
     }));
     const autoRouting = this.deps.engineOptions.autoRouting;
-    const routingDeadline = autoRouting === undefined
-      ? undefined
-      : executionDeadlineContext?.begin(`parallel:auto-routing:${step.name}`, {
-          provider: autoRouting.router.provider,
-          providerOptions: autoRouting.router.providerOptions,
-        });
-    const routedProviderInfoByStep = autoRouting
-      ? await runWithExecutionDeadline(executionDeadlineContext, routingDeadline, () => resolveAutoRoutingBatch({
+    let routedProviderInfoByStep = new Map<string, StepProviderInfo>();
+    if (autoRouting !== undefined) {
+      const routingKey = `parallel:auto-routing:${step.name}`;
+      const routingDeadline = executionDeadlineContext?.begin(routingKey, {
+        provider: autoRouting.router.provider,
+        providerOptions: autoRouting.router.providerOptions,
+      });
+      try {
+        routedProviderInfoByStep = await runWithExecutionDeadline(executionDeadlineContext, routingDeadline, () => resolveAutoRoutingBatch({
           autoRouting,
           concurrency: step.concurrency,
           items: agentSubSteps.map((subStep) => ({
@@ -622,11 +623,14 @@ export class ParallelRunner {
           logger: log,
           abortSignal: this.resolveAbortSignal(),
           ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
-            `parallel:auto-routing:${step.name}`,
+            routingKey,
             routingDeadline?.recordActivity,
           ),
-        }))
-      : new Map();
+        }));
+      } finally {
+        executionDeadlineContext?.finish(routingKey);
+      }
+    }
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)
       : undefined;
@@ -666,6 +670,7 @@ export class ParallelRunner {
       }
     };
 
+    const passedBeforeReportGates = new Set<string>();
     const subStepStartedAtByName = new Map<string, number>();
     const subStepInstructionByName = new Map<string, string>();
     const dynamicFacetIdentityPath = this.deps.getCurrentWorkflowStack?.() ?? [];
@@ -1196,7 +1201,7 @@ export class ParallelRunner {
           };
         }
         if (beforeReportGates.evidence !== undefined) {
-          pendingGateFailures.delete(subStep.name);
+          passedBeforeReportGates.add(subStep.name);
         }
         restartIfLiveInterventionPending();
 
@@ -1502,7 +1507,7 @@ export class ParallelRunner {
     }
 
     const gateFailures = subResults.flatMap(({ subStep }) => {
-      const failure = pendingGateFailures.get(subStep.name);
+      const failure = passedBeforeReportGates.has(subStep.name) ? undefined : pendingGateFailures.get(subStep.name);
       return failure === undefined ? [] : [failure];
     });
     const gateDiagnostics = gateFailures.length > 0 ? { parallelBeforeReportGateFailures: gateFailures } : {};

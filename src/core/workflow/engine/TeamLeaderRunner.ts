@@ -946,6 +946,7 @@ export class TeamLeaderRunner {
     };
 
     const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
+    let beforeReportGateSucceeded = false;
     const runBeforeReportGates: TeamLeaderExecutionOptions['runBeforeReportGates'] = executableStep.qualityGates
       ?.some((gate) => typeof gate !== 'string' && gate.runAt === 'before_report')
       ? async (terminalPartResults) => {
@@ -957,7 +958,7 @@ export class TeamLeaderRunner {
             || classifyTeamLeaderPartFailures(results, teamLeaderConfig.failOnPartError === true).terminal) {
             return undefined;
           }
-          return runQualityGates({
+          const result = await runQualityGates({
             qualityGates: executableStep.qualityGates,
             runAt: 'before_report',
             projectRoot: this.deps.getCwd(),
@@ -971,6 +972,8 @@ export class TeamLeaderRunner {
             runId: this.deps.observabilityRunId,
             workflowName: this.deps.getWorkflowName(),
           });
+          beforeReportGateSucceeded = result.ok;
+          return result;
         }
       : undefined;
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
@@ -1096,9 +1099,15 @@ export class TeamLeaderRunner {
         const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
         const feedbackResults = buildFeedbackResults(currentResultsCopy);
-        const feedbackSignal = leaderDeadline?.signal === undefined
+        // A live instruction can reopen Phase 1 after the gate, even if the original leader call expired.
+        const feedbackKey = 'team-leader:report-gate-feedback';
+        const resumedDeadline = beforeReportGateSucceeded && leaderDeadline?.signal.aborted === true
+          ? executionDeadlineContext?.begin(feedbackKey, leaderProviderInfo)
+          : undefined;
+        const feedbackDeadline = resumedDeadline ?? leaderDeadline;
+        const feedbackSignal = feedbackDeadline === undefined
           ? feedbackAbortSignal
-          : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
+          : AbortSignal.any([feedbackAbortSignal, feedbackDeadline.signal]);
         try {
           if (companionFindings !== undefined && companionFindings.length > 0) {
             if (activeTeamCompanionRuntime === undefined) {
@@ -1110,21 +1119,23 @@ export class TeamLeaderRunner {
             );
             teamCompanionFollowUpRound += 1;
           }
-          const moreParts = await requestLeaderFeedback({
-            instruction,
-            results: feedbackResults,
-            existingIds: scheduledIdsCopy,
-            abortSignal: feedbackSignal,
-            cancellablePartIds: cancellablePartIdsCopy,
-            companionFindings,
+          return await runWithExecutionDeadline(executionDeadlineContext, resumedDeadline, async () => {
+            const moreParts = await requestLeaderFeedback({
+              instruction,
+              results: feedbackResults,
+              existingIds: scheduledIdsCopy,
+              abortSignal: feedbackSignal,
+              cancellablePartIds: cancellablePartIdsCopy,
+              companionFindings,
+            });
+            await this.addPartAutoRouting(
+              routedProviderInfoByPart,
+              executableStep,
+              moreParts.parts,
+              runtime,
+            );
+            return moreParts;
           });
-          await this.addPartAutoRouting(
-            routedProviderInfoByPart,
-            executableStep,
-            moreParts.parts,
-            runtime,
-          );
-          return moreParts;
         } catch (error) {
           if (feedbackSignal.aborted) {
             throw error;
@@ -1159,10 +1170,15 @@ export class TeamLeaderRunner {
               detail: getErrorMessage(error),
               parts: summarizeParts(timeoutFallback.parts),
             });
-            await this.addPartAutoRouting(routedProviderInfoByPart, executableStep, timeoutFallback.parts, runtime);
+            await runWithExecutionDeadline(executionDeadlineContext, resumedDeadline, () =>
+              this.addPartAutoRouting(routedProviderInfoByPart, executableStep, timeoutFallback.parts, runtime));
             return timeoutFallback;
           }
           throw error;
+        } finally {
+          if (resumedDeadline !== undefined) {
+            executionDeadlineContext?.finish(feedbackKey);
+          }
         }
       },
         runPart: async (part, partIndex, publicationFence, partAbortSignal) => {
