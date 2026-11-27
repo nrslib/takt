@@ -162,7 +162,7 @@ describe('OpenCode Skill execution contract', () => {
         expect(payload.tools.skill).toBe(false);
         const context = { session: { hook, get: async () => ({ metadata: {
           [TAKT_V2_METADATA_KEY]: { system: plan.systemPrompt, tools: payload.tools },
-        } }) }, tool: { hook }, rpc: { register: async () => ({ dispose }) } };
+        } }) }, tool: { hook }, permission: { hook }, rpc: { register: async () => ({ dispose }) } };
         const cleanup = await plugin.setup(context as unknown as Parameters<typeof plugin.setup>[0]);
         try {
           const request = { sessionID: payload.sessionID, system: [], tools: Object.fromEntries(

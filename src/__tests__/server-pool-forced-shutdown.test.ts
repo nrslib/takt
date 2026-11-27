@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { cleanupPendingSessionsMock, startServerMock } = vi.hoisted(() => ({
@@ -46,7 +47,7 @@ async function expectPromisePending(promise: Promise<unknown>): Promise<void> {
     () => { settled = true; },
     () => { settled = true; },
   );
-  await Promise.resolve();
+  await setImmediate();
   expect(settled).toBe(false);
 }
 
