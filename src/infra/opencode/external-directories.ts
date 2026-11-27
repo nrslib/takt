@@ -1,20 +1,78 @@
 import { realpathSync } from 'node:fs';
-import { isAbsolute, join, parse } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, relative, sep } from 'node:path';
+
+export function normalizeOpenCodeWorkspaceDirectories(directories: readonly string[]): string[] {
+  return normalizeDirectories(directories, false);
+}
+
+function resolveRequestedDirectory(directory: string): string {
+  const missing: string[] = [];
+  let ancestor = directory;
+  while (true) {
+    try { return join(realpathSync(ancestor), ...missing); }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      missing.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+
+export function isOpenCodeExternalDirectoryRequestAllowed(resources: readonly string[], directories: readonly string[]): boolean {
+  if (resources.length === 0) return false;
+  return resources.every((resource) => {
+    if (!resource.endsWith('/*')) return false;
+    const directory = resource.slice(0, -1);
+    if (!isAbsolute(directory)) return false;
+    let canonical: string;
+    try {
+      canonical = resolveRequestedDirectory(directory);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOTDIR') return false;
+      throw error;
+    }
+    return directories.some((root) => {
+      if (!isAbsolute(root)) return false;
+      const child = relative(root, canonical);
+      return child === '' || child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+    });
+  });
+}
+
+export function isOpenCodePathWithinReadonlyDirectories(
+  pathname: string,
+  directories: readonly string[],
+): boolean {
+  if (!isAbsolute(pathname)) {
+    throw new Error(`OpenCode write path must be absolute: ${pathname}`);
+  }
+  const canonicalPath = resolveRequestedDirectory(pathname);
+  return normalizeOpenCodeExternalDirectories(directories).some((root) => {
+    const child = relative(root, canonicalPath);
+    return child === '' || child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+  });
+}
 
 export function normalizeOpenCodeExternalDirectories(
   directories: readonly string[] | undefined,
 ): string[] {
+  return normalizeDirectories(directories ?? [], true);
+}
+
+function normalizeDirectories(directories: readonly string[], forPatterns: boolean): string[] {
   const normalized = new Set<string>();
-  for (const directory of directories ?? []) {
+  for (const directory of directories) {
     if (!isAbsolute(directory)) {
       throw new Error(`OpenCode external directory must be absolute: ${directory}`);
     }
-    if (directory.includes('*') || directory.includes('?')) {
+    if (forPatterns && (directory.includes('*') || directory.includes('?'))) {
       throw new Error(`OpenCode external directory cannot contain wildcard characters: ${directory}`);
     }
     // V2 resolves external paths before matching permission patterns.
     const canonical = realpathSync(directory);
-    if (canonical === parse(canonical).root) {
+    if (forPatterns && canonical === parse(canonical).root) {
       throw new Error('OpenCode external directory cannot be a filesystem root');
     }
     normalized.add(canonical);
@@ -29,13 +87,17 @@ export function openCodeExternalDirectoryPattern(directory: string): string {
 
 export function buildOpenCodeV1ExternalDirectoryPermissions(
   directories: readonly string[] | undefined,
+  workspaceDirectories?: readonly string[],
+  readonlyDirectories?: readonly string[],
 ): {
-  external_directory: 'deny' | Record<string, 'allow' | 'deny'>;
+  external_directory: 'deny' | 'ask' | Record<string, 'allow' | 'deny'>;
 } {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
-  if (normalized.length === 0) return { external_directory: 'deny' };
+  const readonly = normalizeOpenCodeExternalDirectories(readonlyDirectories);
+  if (workspaceDirectories !== undefined) return { external_directory: 'ask' };
+  if (normalized.length === 0 && readonly.length === 0) return { external_directory: 'deny' };
   const externalDirectory: Record<string, 'allow' | 'deny'> = { '*': 'deny' };
-  for (const directory of normalized) {
+  for (const directory of new Set([...normalized, ...readonly])) {
     externalDirectory[openCodeExternalDirectoryPattern(directory)] = 'allow';
   }
   return {
@@ -45,18 +107,21 @@ export function buildOpenCodeV1ExternalDirectoryPermissions(
 
 export function buildOpenCodeV2ExternalDirectoryRules(
   directories: readonly string[] | undefined,
-): Array<{ action: string; resource: string; effect: 'allow' | 'deny' }> {
+  workspaceDirectories?: readonly string[],
+  readonlyDirectories?: readonly string[],
+): Array<{ action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }> {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
-  // Keep broad external access denied. Explicit exceptions only expose this run's
-  // context, and direct edit operations remain denied inside that context.
+  const readonly = normalizeOpenCodeExternalDirectories(readonlyDirectories);
+  const allowedDirectories = [...new Set([...normalized, ...readonly])];
+  // Workspace access must not override the context's edit restriction.
   return [
-    { action: 'external_directory', resource: '*', effect: 'deny' },
-    ...normalized.map((directory) => ({
+    { action: 'external_directory', resource: '*', effect: workspaceDirectories === undefined ? 'deny' : 'ask' },
+    ...(workspaceDirectories === undefined ? allowedDirectories : []).map((directory) => ({
       action: 'external_directory',
       resource: openCodeExternalDirectoryPattern(directory),
       effect: 'allow' as const,
     })),
-    ...normalized.map((directory) => ({
+    ...allowedDirectories.map((directory) => ({
       action: 'edit',
       resource: openCodeExternalDirectoryPattern(directory),
       effect: 'deny' as const,

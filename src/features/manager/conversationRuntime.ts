@@ -12,6 +12,7 @@ import type { ProviderType } from '../../infra/providers/types.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ConversationDisplayAssignment } from './conversationPort.js';
 import { CODEX_SESSION_CONTRACT } from '../../shared/codex-session-contract.js';
+import { closeOpenCodeWorkspaceServers } from '../../infra/opencode/server-pool.js';
 
 export interface PreparedConversationRuntime {
   provider: ProviderType;
@@ -74,7 +75,14 @@ export function createConversationRuntime(configDirectory: string): Conversation
             activeTurn = { patrol: turn.patrol === true, signal: turn.abortSignal, requestDaemon: turn.requestDaemon };
             try { return await executor.execute(turn); }
             finally { await turnScope.end(); activeTurn = undefined; }
-          } }, dispose: mcp.dispose };
+          } }, async dispose() {
+            const results = await Promise.allSettled([
+              mcp.dispose(),
+              ...(plan.ctx.providerType === 'opencode' ? [closeOpenCodeWorkspaceServers(id)] : []),
+            ]);
+            const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+            if (errors.length > 0) throw new AggregateError(errors, 'Manager runtime cleanup failed');
+          } };
         entries.set(id, entry);
         return entry;
       } catch (error) { await mcp.dispose(); throw error; }

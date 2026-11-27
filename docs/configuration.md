@@ -996,6 +996,19 @@ These variables select the runtime for the entire TAKT process. Preserve both va
 
 In v2, the bundled plugin applies tool permissions. If the plugin is unavailable, TAKT errors before running. The tool list and permitted MCP settings you configure are used for execution. Structured output is validated against a schema after the response.
 
+#### Read-only external directories
+
+Set `provider_options.opencode.readonly_directories` in the global `~/.takt/config.yaml` or project `.takt/config.yaml` to allow OpenCode to read selected external directories in manager and workflow calls. Values must be absolute paths to existing directories. Other external directories remain denied, and the listed directories stay read-only even when the call can edit its workspace. OpenCode's shell tool is disabled for calls with this setting so shell commands cannot write through an allowed external-directory path; file editing in the workspace remains available.
+
+```yaml
+provider_options:
+  opencode:
+    readonly_directories:
+      - /path/to/reference
+```
+
+OpenCode v1 stores directory permissions when it creates a session and cannot update them on a resumed session. If TAKT cannot verify that a resumed session was created with the same workspace access and read-only-directory policy, it returns an error and asks you to start a new workflow session or manager conversation. The existing session and its history are preserved.
+
 #### OpenCode Skills
 
 Environment Skills are disabled by default in v2. Set the boolean `provider_options.opencode.skills.enabled: true` in legacy global/project configuration, a routing entry, or a workflow/step capability file to enable native Skill discovery and permissions in Phase 1. `Read` permission alone does not enable Skills. TAKT does not force native `allow`, `deny`, or `ask` to `allow`, and does not modify OpenCode configuration or Skill files.

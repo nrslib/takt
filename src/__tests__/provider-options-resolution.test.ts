@@ -595,6 +595,16 @@ describe('resolveEffectiveProviderOptions', () => {
     )).toBe('env');
   });
 
+  it('resolves OpenCode read-only external directories from the effective provider options', () => {
+    const options: StepProviderOptions = { opencode: { readonlyDirectories: ['/refs/api'] } };
+    expect(resolveEffectiveProviderOptions('project', undefined, options, undefined)).toEqual({
+      opencode: { readonlyDirectories: ['/refs/api'] },
+    });
+    expect(resolveProviderOptionSource(
+      'opencode.readonlyDirectories', undefined, [], options, undefined, 'project',
+    )).toBe('project');
+  });
+
   it('kiro.agent は step > persona > config の優先で解決される', () => {
     expect(resolveEffectiveProviderOptions(
       'project',
@@ -1307,6 +1317,7 @@ describe('providerOptionsContract', () => {
       'provider_options.opencode.skills.enabled',
       'provider_options.opencode.variant',
       'provider_options.opencode.allowed_tools',
+      'provider_options.opencode.readonly_directories',
       'provider_options.opencode.guards.profile',
       'provider_options.opencode.guards.model_profiles',
       'provider_options.opencode.guards.call_timeout_ms',
@@ -1362,6 +1373,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.allowed_tools');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.readonly_directories');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.model_profiles');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.event_limit');
@@ -1430,6 +1442,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.opencode.variant');
     expect(toProviderOptionsTracePath('opencode.allowedTools'))
       .toBe('provider_options.opencode.allowed_tools');
+    expect(toProviderOptionsTracePath('opencode.readonlyDirectories'))
+      .toBe('provider_options.opencode.readonly_directories');
     expect(toProviderOptionsTracePath('opencode.guards.modelProfiles'))
       .toBe('provider_options.opencode.guards.model_profiles');
     expect(toProviderOptionsTracePath('opencode.guards.eventLimit'))

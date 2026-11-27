@@ -124,6 +124,7 @@ const OpenCodeProviderOptionShape = {
   skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   variant: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
+  readonly_directories: z.array(z.string().min(1)).optional(),
   guards: z.object(OpenCodeGuardOptionShape).optional(),
 };
 
@@ -673,6 +674,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
     variant: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
+    readonlyDirectories: z.array(z.string().min(1)).optional(),
     guards: z.object({
       profile: z.enum(OPENCODE_GUARD_PROFILES).optional(),
       modelProfiles: z.record(

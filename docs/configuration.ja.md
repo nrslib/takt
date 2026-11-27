@@ -986,6 +986,19 @@ TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 
 v2 のツール権限は同梱 plugin で適用します。plugin を利用できない場合は実行前にエラーになります。TAKT が指定したツール一覧と MCP の許可設定が実行に使われます。構造化出力は応答を schema で検証します。
 
+#### 読み取り専用の外部ディレクトリ
+
+`~/.takt/config.yaml` または project の `.takt/config.yaml` の `provider_options.opencode.readonly_directories` に読み取りを許可する外部ディレクトリを指定すると、manager と workflow の OpenCode 呼び出しで参照できます。値には存在するディレクトリの絶対パスを指定します。それ以外の外部ディレクトリは引き続き拒否され、指定先への書き込みも許可しません。編集可能な workspace と同じパスを指定した場合も、この設定の読み取り専用制限が優先されます。この設定を使う呼び出しでは、許可された外部パスへ shell コマンドで書き込めないよう OpenCode の shell ツールを無効にし、workspace 内のファイル編集は維持します。
+
+```yaml
+provider_options:
+  opencode:
+    readonly_directories:
+      - /path/to/reference
+```
+
+OpenCode v1 はセッション作成時にディレクトリ権限を保存し、再開時に更新できません。TAKT が再開セッションの workspace access と読み取り専用ディレクトリの設定が現在と一致すると確認できない場合はエラーにし、新しい workflow session または manager conversation の開始を案内します。既存セッションと会話履歴は保持します。
+
 #### OpenCode の Skill
 
 v2 では環境由来の Skill を既定で無効にします。legacy の global/project 設定、routing の設定、workflow/step の capability ファイルで boolean の `provider_options.opencode.skills.enabled: true` を指定すると、Phase 1 で標準の Skill 探索と permission を使えます。`Read` の許可だけでは有効になりません。native の `allow`・`deny`・`ask` を強制的に `allow` に変更せず、OpenCode の設定や Skill ファイルも変更しません。

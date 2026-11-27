@@ -985,7 +985,10 @@ isolatedWorkerTest.each(['requeue', 'retry'] as const)('resumes a failed clone o
     expect(current.executionId).not.toBe(failed.assignment.executionId);
     expect(current.assignmentGeneration).toBe(failed.assignment.assignmentGeneration + 1);
     worker.releaseAll();
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.status, worker.output()).toBe('completed'), { timeout: 20_000 });
+    await vi.waitFor(() => {
+      const task = f.store.read().tasks[0]!;
+      expect(task.status, JSON.stringify({ operation, failure: task.failure, workerOutput: worker.output() })).toBe('completed');
+    }, { timeout: 20_000 });
   } finally { worker.releaseAll(); await f.close(); }
 });
 

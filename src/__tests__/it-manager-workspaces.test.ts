@@ -25,6 +25,8 @@ import { MockProvider } from '../infra/providers/mock.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalInput,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { makeProvider } from './test-helpers.js';
+import type { ProviderAgent, ProviderCallOptions } from '../infra/providers/types.js';
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
@@ -92,6 +94,100 @@ describe('manager workspace storage and repository boundaries', () => {
         const result = await call(client, 'takt_list_workflows', { cwd });
         expect(result.workflows.map((entry: { name: string }) => entry.name)).toEqual([expected]);
       }
+    });
+  });
+
+  it.each(['opencode', 'mock'] as const)('refreshes workspace access in the same manager conversation and notifies only OpenCode (provider=%s)', async (providerType) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '担当', repositoryDirectories: [repositoryA] });
+    type WorkspaceOptions = ProviderCallOptions & { openCodeWorkspaceAccess?: { ownerId: string; directories: readonly string[] } };
+    const callProvider = vi.fn<(prompt: string, options: WorkspaceOptions) => ReturnType<ProviderAgent['call']>>();
+    await withClient({ managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (mcp) => {
+      callProvider.mockImplementation(async () => ({ persona: 'manager', status: 'done', timestamp: new Date(),
+        content: JSON.stringify({ message: '処理しました。', summary: null }), sessionId: 'same-provider-session' }));
+      const client = new ManagerServiceClient({ cwd: repositoryA, assignment: { kind: 'workspace', workspaceId: workspace.id },
+        plan: { ctx: { provider: makeProvider({ setup: () => ({ call: callProvider }) }), providerType, model: 'probe/model', lang: 'ja' },
+          strategy: { systemPrompt: 'manager fixture' } } });
+      const turn = (text: string) => submitAndWait(client, { kind: 'message', text });
+      const additions: string[] = [];
+      try {
+        expect(await turn('追加前を確認')).toMatchObject({ kind: 'reply', message: '処理しました。' });
+        const initialConversation = client.getSnapshot().state!.conversationId;
+        callProvider.mockImplementationOnce(async () => {
+          for (const repositoryDirectory of [repositoryB, repositoryC]) {
+            await call(mcp, 'takt_add_workspace_repository', { repositoryDirectory });
+            additions.push(repositoryDirectory);
+          }
+          return { persona: 'manager', status: 'done', timestamp: new Date(),
+            content: JSON.stringify({ message: '処理しました。', summary: null }), sessionId: 'same-provider-session' };
+        });
+        const added = await turn('担当を追加');
+        expect(added.kind).toBe('reply');
+        if (added.kind !== 'reply') throw new Error('Expected manager reply');
+        if (providerType === 'opencode') {
+          for (const directory of [repositoryB, repositoryC]) expect(added.message).toContain(directory);
+          expect(added.message).toMatch(/追加|登録/u);
+          expect(added.message).toMatch(/次のターン/u);
+        } else expect(added.message).toBe('処理しました。');
+
+        const next = await turn('追加した担当を参照');
+        expect(next).toMatchObject({ kind: 'reply', message: '処理しました。' });
+        await call(mcp, 'takt_remove_workspace_repository', { repositoryDirectory: repositoryB });
+        expect(await turn('削除後を確認')).toMatchObject({ kind: 'reply', message: '処理しました。' });
+        expect(client.getSnapshot().state!.conversationId).toBe(initialConversation);
+        expect(additions).toEqual([repositoryB, repositoryC]);
+        expect(callProvider).toHaveBeenCalledTimes(4);
+        if (providerType === 'opencode') {
+          const access = callProvider.mock.calls.map(([, options]) => options.openCodeWorkspaceAccess);
+          expect(access.every((value) => typeof value?.ownerId === 'string' && value.ownerId.length > 0)).toBe(true);
+          expect(new Set(access.map((value) => value?.ownerId)).size).toBe(1);
+          expect(access.map((value) => value?.directories.filter((directory) => directory !== repositoryA).sort()))
+            .toEqual([[], [], [repositoryB, repositoryC].sort(), [repositoryC]]);
+        } else for (const [, options] of callProvider.mock.calls) expect(options).not.toHaveProperty('openCodeWorkspaceAccess');
+      } finally { await client.dispose(); }
+    });
+  });
+
+  it('excludes a missing registered repository for one turn and rechecks it in the same manager conversation', async () => {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '担当', repositoryDirectories: [repositoryA, repositoryB, repositoryC] });
+    rmSync(repositoryB, { recursive: true });
+    type WorkspaceOptions = ProviderCallOptions & { openCodeWorkspaceAccess?: { directories: readonly string[] } };
+    const callProvider = vi.fn<(prompt: string, options: WorkspaceOptions) => ReturnType<ProviderAgent['call']>>()
+      .mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date(), content: '確認しました。', sessionId: 'same-provider-session' });
+    const client = new ManagerServiceClient({ cwd: repositoryA, assignment: { kind: 'workspace', workspaceId: workspace.id },
+      plan: { ctx: { provider: makeProvider({ setup: () => ({ call: callProvider }) }), providerType: 'opencode', model: 'probe/model', lang: 'ja' },
+        strategy: { systemPrompt: 'manager fixture' } } });
+    try {
+      const first = await submitAndWait(client, { kind: 'message', text: '担当を確認' });
+      expect(first.kind).toBe('reply');
+      if (first.kind !== 'reply') throw new Error('Expected manager reply');
+      expect(first.message).toContain(repositoryB);
+      expect(first.message).toMatch(/存在|見つか/u);
+      expect(callProvider.mock.calls[0]![1].openCodeWorkspaceAccess?.directories.filter((directory) => directory !== repositoryA)).toEqual([repositoryC]);
+      expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([repositoryA, repositoryB, repositoryC]);
+
+      execFileSync('git', ['init', '-b', 'main', repositoryB], { stdio: 'pipe' });
+      expect(await submitAndWait(client, { kind: 'message', text: '復旧後を確認' })).toMatchObject({ kind: 'reply', message: '確認しました。' });
+      expect(callProvider.mock.calls[1]![1].openCodeWorkspaceAccess?.directories.filter((directory) => directory !== repositoryA).sort())
+        .toEqual([repositoryB, repositoryC].sort());
+    } finally { await client.dispose(); }
+  });
+
+  it('does not announce next-turn access after a failed or redundant workspace addition', async () => {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '担当', repositoryDirectories: [repositoryA, repositoryB] });
+    await withClient({ managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (mcp) => {
+      const callProvider = vi.fn<ProviderAgent['call']>().mockImplementation(async () => {
+        const failed = await mcp.callTool({ name: 'takt_add_workspace_repository', arguments: { repositoryDirectory: join(root, 'missing') } });
+        expect(failed.isError).toBe(true);
+        await call(mcp, 'takt_add_workspace_repository', { repositoryDirectory: repositoryB });
+        return { persona: 'manager', status: 'done', timestamp: new Date(), content: '変更はありません。' };
+      });
+      const client = new ManagerServiceClient({ cwd: repositoryA, assignment: { kind: 'workspace', workspaceId: workspace.id },
+        plan: { ctx: { provider: makeProvider({ setup: () => ({ call: callProvider }) }), providerType: 'opencode', model: 'probe/model', lang: 'ja' },
+          strategy: { systemPrompt: 'manager fixture' } } });
+      try {
+        expect(await submitAndWait(client, { kind: 'message', text: '担当を追加' })).toMatchObject({ kind: 'reply', message: '変更はありません。' });
+        expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([repositoryA, repositoryB]);
+      } finally { await client.dispose(); }
     });
   });
 
