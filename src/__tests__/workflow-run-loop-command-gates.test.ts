@@ -252,6 +252,41 @@ describe('WorkflowRunLoop command quality gates', () => {
     }
   });
 
+  it('reports Phase 1 token usage when the before-report gate fails', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-before-report-gate-usage-'));
+    const gate = createCommandGate(cwd, 'verify', 7);
+    const step = makeStep('fix', {
+      qualityGates: [{ type: 'command', runAt: 'before_report', command: gate.command }],
+      rules: [makeRule('complete', 'COMPLETE')],
+    });
+    const engine = new WorkflowEngine({ ...makeConfig(step), maxSteps: 1 }, cwd, 'Fix the implementation', {
+      projectCwd: cwd,
+      reportDirName: 'before-report-gate-usage',
+      provider: 'mock',
+    });
+    const providerUsage = { usageMissing: false, inputTokens: 41, outputTokens: 9, totalTokens: 50 };
+    const completed = vi.fn();
+    engine.on('step:complete', completed);
+    vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return makeResponse({ persona: 'fix', content: 'complete', providerUsage });
+    });
+
+    try {
+      const state = await engine.run();
+      expect(existsSync(gate.markerPath)).toBe(true);
+      expect(completed).toHaveBeenCalledOnce();
+      expect(completed.mock.calls[0]?.[1]).toMatchObject({
+        beforeReportGateFailed: true,
+        providerUsage,
+      });
+      expect(state.lastOutput?.providerUsage).toEqual(providerUsage);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('passes each silent command failure only to its own parallel sub-step on retry', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-parallel-before-report-gates-'));
     const subSteps = [7, 8, 0].map((exitCode) => {

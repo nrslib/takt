@@ -2541,11 +2541,15 @@ export class StepExecutor {
       beforeReportGates = await runBeforeReportGates();
     }
     if (!beforeReportGates.ok) {
+      const failureResponse: AgentResponse = {
+        ...beforeReportGates.response,
+        ...(response.providerUsage === undefined ? {} : { providerUsage: response.providerUsage }),
+      };
       return {
-        response: beforeReportGates.response,
+        response: failureResponse,
         instruction: phase1Instruction,
         providerInfo,
-        qualityGateFailure: { response: beforeReportGates.response, stepIteration },
+        qualityGateFailure: { response: failureResponse, stepIteration },
       };
     }
     const writtenReportNames: string[] = [];
