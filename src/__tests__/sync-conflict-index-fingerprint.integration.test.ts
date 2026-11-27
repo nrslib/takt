@@ -19,6 +19,9 @@ describe('sync conflict index fingerprint and submodule ignore settings', () => 
     vi.stubEnv('GIT_CONFIG_GLOBAL', join(root, 'global'));
     vi.stubEnv('GIT_CONFIG_SYSTEM', join(root, 'system'));
     vi.stubEnv('GIT_CONFIG_NOSYSTEM', '0');
+    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CONFIG']) {
+      vi.stubEnv(key, undefined);
+    }
   });
   afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 

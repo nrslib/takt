@@ -43,6 +43,9 @@ describe('PR custom merge drivers and conflict recovery', () => {
     vi.stubEnv('GIT_CONFIG_GLOBAL', join(root, 'global'));
     vi.stubEnv('GIT_CONFIG_SYSTEM', join(root, 'system'));
     vi.stubEnv('GIT_CONFIG_NOSYSTEM', '0');
+    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CONFIG']) {
+      vi.stubEnv(key, undefined);
+    }
     vi.stubEnv('PI_CODING_AGENT_DIR', join(root, 'agent'));
     execFileSync('git', ['init', '-b', 'main', join(root, 'project')], { cwd: root, stdio: 'pipe' });
     execFileSync('git', ['remote', 'add', 'origin', cwd], { cwd: join(root, 'project'), stdio: 'pipe' });
@@ -265,8 +268,10 @@ describe('PR custom merge drivers and conflict recovery', () => {
     writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
     expect(() => conflictFiles.validateAndStage()).toThrow('AI changed the Git index before runtime validation');
     expect(git(['ls-files', '-u'])).not.toBe('');
+    const oldObjectId = git(['rev-parse', 'HEAD:notes.txt']);
+    const deletedObjectId = '0'.repeat(oldObjectId.length);
     expect(git(['diff-index', '--cached', '--raw', '--ita-invisible-in-index', 'HEAD', '--', 'notes.txt']))
-      .toMatch(/^:100644 000000 \S+ 0{40} D\tnotes\.txt$/u);
+      .toBe(`:100644 000000 ${oldObjectId} ${deletedObjectId} D\tnotes.txt`);
   });
 
   it('AIの作業前からintent-to-addのパスがあっても解決をstageする', () => {
@@ -340,8 +345,13 @@ describe('PR custom merge drivers and conflict recovery', () => {
       cwd, input: content, encoding: 'utf8', stdio: 'pipe',
     }).trim();
     const emptyBlob = hashBlob('');
-    const rootIndexInfo = Array.from({ length: 17_000 }, (_, index) =>
-      `100644 blob ${emptyBlob}\tf${String(index).padStart(8, '0')}`);
+    const pathAt = (index: number) => `f${String(index).padStart(8, '0')}`;
+    const oneMiB = 1024 * 1024;
+    // The -v tag adds two bytes per entry. Use the midpoint to put the limit between the two outputs.
+    const entryBytes = Buffer.byteLength(`100644 ${emptyBlob} 0\t${pathAt(0)}\0`);
+    const entryCount = Math.floor(oneMiB / (entryBytes + 1));
+    const rootIndexInfo = Array.from({ length: entryCount }, (_, index) =>
+      `100644 blob ${emptyBlob}\t${pathAt(index)}`);
     rootIndexInfo.push(`100644 blob ${hashBlob('original\n')}\tcode.txt`);
     execFileSync('git', ['update-index', '--index-info'], {
       cwd, input: `${rootIndexInfo.join('\n')}\n`, stdio: 'pipe',
@@ -361,8 +371,8 @@ describe('PR custom merge drivers and conflict recovery', () => {
     const lsFiles = (flags: string[]) => execFileSync('git', ['ls-files', ...flags, '-z'], {
       cwd, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024,
     });
-    expect(lsFiles(['-s']).length).toBeLessThan(1024 * 1024);
-    expect(lsFiles(['-s', '-v']).length).toBeGreaterThan(1024 * 1024);
+    expect(lsFiles(['-s']).length).toBeLessThan(oneMiB);
+    expect(lsFiles(['-s', '-v']).length).toBeGreaterThan(oneMiB);
 
     const conflictFiles = captureSyncConflictFiles(cwd);
     writeFileSync(join(cwd, 'code.txt'), 'resolved\n');
