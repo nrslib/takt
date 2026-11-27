@@ -468,6 +468,7 @@
     "src/__tests__/it-task-store-process-lock.test.ts",
     "src/__tests__/it-tell-command-file-store.test.ts",
     "src/__tests__/it-test-notification-silence.test.ts",
+    "src/__tests__/it-test-user-isolation.test.ts",
     "src/__tests__/it-tui-esc-menu-routes.test.ts",
     "src/__tests__/it-update-notifier-sigint.test.ts",
     "src/__tests__/it-web-ui-chat-tell.test.ts",
