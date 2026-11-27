@@ -36,8 +36,9 @@ vi.mock('../infra/claude/mcp-config.js', async (importOriginal) => {
   };
 });
 
-vi.mock('node:crypto', () => ({
-  randomUUID: vi.fn(),
+vi.mock('node:crypto', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:crypto')>(),
+  randomUUID: vi.fn<typeof import('node:crypto').randomUUID>(),
 }));
 
 vi.mock('node:fs/promises', async () => {

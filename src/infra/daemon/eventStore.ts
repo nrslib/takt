@@ -198,24 +198,25 @@ export class FileEventStore implements EventStore, ConversationTurns {
 
   private async directorReplyPaths(notifications: DaemonNotifications): Promise<string[]> {
     const candidates: Array<{ path: string; sequence: number; publishedAt: bigint }> = [];
-    let clearedAt = await notifications.directorContextClearedAt();
+    const clear = await notifications.directorContextClear();
+    let legacyClearedAt: bigint | undefined;
     for (const [sequence, candidate] of [...this.directorContext].sort(([left], [right]) => right - left)) {
       const { path } = candidate;
       if (candidate.kind === 'clear') {
-        if (clearedAt !== undefined) continue;
+        if (clear !== undefined || legacyClearedAt !== undefined) continue;
         // Older clears have only the durable event timestamp.
         const record = await this.readStored(path);
         if (record === undefined) this.forget(path);
         else if (record.state === 'settled' && record.result.outcome.kind === 'completed' && record.result.outcome.result.kind === 'notice') {
-          clearedAt = (await lstat(path, { bigint: true })).mtimeNs;
+          legacyClearedAt = (await lstat(path, { bigint: true })).mtimeNs;
         }
         continue;
       }
       // The reply can become visible in a different order from request admission or event settlement.
-      const publishedAt = await notifications.managerResultPublishedAt(candidate.operationId);
+      const publishedAt = await notifications.managerResultPublishedAt(candidate.operationId, clear);
       if (publishedAt !== undefined) candidates.push({ path, sequence, publishedAt });
     }
-    return candidates.filter(({ publishedAt }) => clearedAt === undefined || publishedAt > clearedAt)
+    return candidates.filter(({ publishedAt }) => legacyClearedAt === undefined || publishedAt > legacyClearedAt)
       .sort((left, right) => Number(right.publishedAt - left.publishedAt) || right.sequence - left.sequence).map(({ path }) => path);
   }
 

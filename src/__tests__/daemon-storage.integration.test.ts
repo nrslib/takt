@@ -270,7 +270,7 @@ describe('durable daemon event storage', () => {
     expect((await new FileEventStore(directory).readDirectorManagerReplies(new DaemonNotifications(directory))).map(({ operationId }) => operationId)).toEqual(expected);
   });
 
-  it('keeps a reply published after clear even when the manager request was made before clear', async () => {
+  it.each(['event', 'boundary file'])('compares legacy reply timestamps to a clear saved in the %s', async (boundary) => {
     const directory = await root();
     const store = new FileEventStore(directory); const notices = new DaemonNotifications(directory);
     const early = directorRequest('answered before clear', 1);
@@ -280,14 +280,48 @@ describe('durable daemon event storage', () => {
       await store.accept(request);
       await settle(store, request, { kind: 'completed', result: { kind: 'reply', message: 'done' } });
     }
-    const earlyId = await publishManagerResult(notices, early, 'done');
-    await setStoredTime(directory, 'director-notifications', earlyId, 1);
     await store.accept(clear);
     await settle(store, clear, { kind: 'completed', result: { kind: 'notice', message: 'cleared' } });
     await setStoredTime(directory, 'daemon-events', clear.eventId, 2);
-    const lateId = await publishManagerResult(notices, late, 'done');
-    await setStoredTime(directory, 'director-notifications', lateId, 3);
+    if (boundary === 'boundary file') {
+      await notices.recordDirectorContextClear(clear.operationId);
+      const modified = new Date(Date.UTC(2026, 10, 3, 0, 0, 2));
+      await utimes(join(directory, 'director-notifications', 'director-clear-boundary'), modified, modified);
+    }
+    for (const [request, seconds] of [[early, 1], [late, 3]] as const) {
+      const id = managerResultNotificationId(request.operationId);
+      const key = createHash('sha256').update(id).digest('hex');
+      const saved = { id, message: `${request.conversationId} (${request.operationId}): done` };
+      await writePrivateFile(join(directory, 'director-notifications', `${key}.json`), JSON.stringify(saved));
+      await setStoredTime(directory, 'director-notifications', id, seconds);
+    }
     expect((await store.readDirectorManagerReplies(notices)).map(({ operationId }) => operationId)).toEqual([late.operationId]);
+  });
+
+  it('distinguishes replies before and after clear at the same stored time, including after replay and restart', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory); const notices = new DaemonNotifications(directory);
+    const early = directorRequest('before clear', 1);
+    const late = directorRequest('after clear', 2);
+    for (const request of [early, late]) {
+      await store.accept(request);
+      await settle(store, request, { kind: 'completed', result: { kind: 'reply', message: 'done' } });
+    }
+    const earlyId = await publishManagerResult(notices, early, 'done');
+    const clearId = 'clear-operation';
+    await notices.recordDirectorContextClear(clearId);
+    const lateId = await publishManagerResult(notices, late, 'done');
+    const sameTime = new Date(Date.UTC(2026, 10, 3));
+    await utimes(join(directory, 'director-notifications', 'director-clear-boundary'), sameTime, sameTime);
+    for (const id of [earlyId, lateId]) await setStoredTime(directory, 'director-notifications', id, 0);
+    await publishManagerResult(notices, early, 'done');
+    await notices.recordDirectorContextClear(clearId);
+
+    const earlyKey = createHash('sha256').update(earlyId).digest('hex');
+    expect((await stat(join(directory, 'director-notifications', `${earlyKey}.json`))).mtimeMs).toBe(sameTime.getTime());
+    expect((await store.readDirectorManagerReplies(notices)).map(({ operationId }) => operationId)).toEqual([late.operationId]);
+    expect((await new FileEventStore(directory).readDirectorManagerReplies(new DaemonNotifications(directory)))
+      .map(({ operationId }) => operationId)).toEqual([late.operationId]);
   });
 
   it('uses the available serialized bytes for a long multiline Unicode reply', async () => {
