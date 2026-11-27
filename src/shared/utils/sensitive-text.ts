@@ -55,7 +55,14 @@ const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
   'gi',
 );
 const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
-const URL_USERINFO_CREDENTIALS_REGEX = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@]+:[^/?#\s@]+)@/g;
+// `user:password@` after a URL scheme. The match starts at `://` and the lookbehind then
+// checks that a scheme (`\b[A-Za-z][A-Za-z0-9+.-]*`) ends there, so each scheme-like run is
+// read once, from its own `://`. Starting at the scheme instead rescans the rest of a run of
+// letters and hyphens from every letter after a `-` (quadratic), and a plain "not preceded by
+// a scheme character" lookbehind would miss `1-http://user:pass@host`.
+// The userinfo is split at its first colon past the first character: trying each colon as the
+// separator finds the same matches but rescans the rest of a colon-separated run every time.
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@][^/?#\s@:]*:[^/?#\s@]+)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,

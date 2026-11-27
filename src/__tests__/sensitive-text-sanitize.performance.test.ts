@@ -19,4 +19,44 @@ describe('sanitizeSensitiveText performance', () => {
     expect(sanitized).toBe(input);
     expect(elapsedMs).toBeLessThan(200);
   });
+
+  // Each unit starts a URL scheme-like run or a `user:password` run and never completes it.
+  // A pattern that restarts at every letter after a `-`, or at every colon, rescans the rest
+  // of the run each time (8s and 18s at 256KiB before the URL userinfo pattern was anchored
+  // to `://` and the user/password separator was fixed to the first colon).
+  it.each([
+    ['a scheme-like run of letters and hyphens', 'abc-'],
+    ['an OpenAI key prefix in a hyphenated run', 'sk-'],
+    ['a JSON web token prefix in a hyphenated run', 'eyJ-'],
+    ['an AWS access key prefix in a hyphenated run', 'AKIA-'],
+  ])('stays linear on %s without a ://', (_name, unit) => {
+    const elapsed = (bytes: number): number => {
+      const input = unit.repeat(Math.ceil(bytes / unit.length));
+      const start = performance.now();
+      sanitizeSensitiveText(input);
+      return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
+
+  // One URL whose userinfo is a long run of colons and never reaches an `@`. Trying every
+  // colon as the user/password separator rescans the rest of the run each time.
+  it.each([
+    ['colon-separated words', 'a:'],
+    ['colons only', ':'],
+  ])('stays linear on a URL followed by %s without an @', (_name, unit) => {
+    const elapsed = (bytes: number): number => {
+      const input = 'https://' + unit.repeat(Math.ceil(bytes / unit.length));
+      const start = performance.now();
+      sanitizeSensitiveText(input);
+      return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
 });
