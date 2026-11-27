@@ -445,11 +445,14 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 director:
+  slackGoalRegistered: "Goal registered: {id}"
   slackNotifications: "Director updates: completed work and decisions for the human"
   patrolFailed: "Director patrol failed"
   projectUnreadable: "Director could not read a project"
   description: "Open the experimental director conversation TUI"
   experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
+  pendingQuestions: "Pending questions: {count}"
+  inputHint: "Enter: send / Ctrl+R: answer questions / Ctrl+C: exit"
   costNotice: "director runs AI turns, which incur provider API costs."
   placeholder: "Discuss manager status or instructions"
   managerReply: "Reply from manager {managerId} (operation ID: {operationId}): {message}"
@@ -458,6 +461,9 @@ director:
 manager:
   verifyRepositoryRequired: "Which repository should be verified? Specify the repository, create a proposal with /make-goal, and run /verify again."
   verifyInterpretationFailed: "Could not interpret the verification result. The checker result is shown below. Cause: {error}"
+  workspaceAddedNextTurn: "Added to the workspace: {repositories}. Read and write access is available from the next turn."
+  workspaceMissing: "Registered directories do not exist and were excluded from access for this turn: {repositories}. Their registrations are retained and will be checked again next turn."
+  workspaceAccessTiming: "Workspace read and write access is fixed to the registered repositories at the start of this turn. Repositories added during this turn become available next turn."
   goalPr:
     preparationFailed: "PR preparation failed. Inspect the cause and decide the next operation. Reason: {reason}"
     objective: "Objective"
@@ -547,6 +553,7 @@ manager:
   goSummaryUnavailable: "There is not enough information to prepare a goal proposal. Please continue the conversation."
   summaryWorking: "Preparing a goal proposal"
   summary:
+    manager: "Manager"
     title: "Proposed goal"
     repository: "Repository"
     objective: "Objective"

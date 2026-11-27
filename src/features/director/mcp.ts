@@ -1,13 +1,20 @@
 import type { TurnToolScope } from '../daemonTurn/toolScope.js';
+import { isAbsolute } from 'node:path';
+import { resolveGitRepositoryDirectory } from '../../infra/task/gitRepositoryDirectory.js';
+import { acquireRepositoryAssignmentLocks } from '../../infra/conversations/assignmentLock.js';
+import type { McpResponseResources } from '../mcp/responseResources.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, RequestId } from '@modelcontextprotocol/sdk/types.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { listPendingInquiries } from '../../infra/goals/pending-inquiries.js';
 import type { DirectorNotificationSubject } from '../../infra/daemon/notifications.js';
 import { listTaktGoals, getTaktGoal, errorResult } from '../mcp/operations.js';
-import { getGoalInputSchema, listGoalsInputSchema } from '../mcp/schemas.js';
+import { getGoalInputSchema, listGoalsInputSchema, listGoalQuestionsInputSchema, getGoalQuestionInputSchema, answerGoalQuestionInputSchema } from '../mcp/schemas.js';
+import { GoalQuestionRouteSchema } from '../../infra/goals/schema.js';
+import { getTaktGoalQuestion, listTaktGoalQuestions } from '../mcp/goalQuestionOperations.js';
+import { answerDirectorGoalQuestion, assertDirectorGoalTarget, escalateDirectorGoalQuestion, type DirectorGoalTarget } from './goalQuestions.js';
 import { jsonResult, pagedResult } from '../mcp/response.js';
 import { listDirectorManagers, resolveDirectorManager } from './managers.js';
 import { directorNotificationTargetSchema, resolveDirectorNotificationSubject } from './notificationTarget.js';
@@ -15,26 +22,71 @@ import { DirectorMessageOriginSchema, type DirectorMessageOrigin } from '../../i
 
 export const DIRECTOR_MCP_SERVER_NAME = 'takt_director';
 export const DIRECTOR_TOOL_NAMES = [
+  'takt_add_manager', 'takt_fire_manager',
   'takt_list_managers', 'takt_list_goals', 'takt_get_goal', 'takt_list_manager_inquiries', 'takt_tell_manager', 'takt_notify_human',
+  'takt_list_goal_questions', 'takt_get_goal_question', 'takt_answer_goal_question', 'takt_set_goal_question_route', 'takt_escalate_goal_question',
 ] as const;
 export const DIRECTOR_TOOL_ALLOWLIST = DIRECTOR_TOOL_NAMES.map((name) => `mcp__${DIRECTOR_MCP_SERVER_NAME}__${name}`);
 
 export interface DirectorStateActions {
+  setQuestionRoute(target: DirectorGoalTarget, route: 'human' | 'director', origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
+  authorizeAddManager(): void;
+  addManager(repositoryDirectory: string, signal: AbortSignal): Promise<{ managerId: string }>;
+  fireManager(managerId: string, signal: AbortSignal): Promise<{ managerId: string }>;
   tellManager(managerId: string, text: string, origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
   notifyHuman(message: string, subject?: DirectorNotificationSubject): Promise<{ id: string; message: string }>;
 }
 
-export function createDirectorMcpServer(configDirectory: string, actions: DirectorStateActions, signal: AbortSignal, turnScope?: TurnToolScope): McpServer {
+export function createDirectorMcpServer(configDirectory: string, actions: DirectorStateActions, signal: AbortSignal,
+  responses: McpResponseResources, turnScope?: TurnToolScope): McpServer {
   const server = new McpServer({ name: 'takt-director', version: packageVersion });
+  const addInput = z.object({ repositoryDirectory: z.string().min(1) }).strict();
+  type PreparedRepository = { suppliedDirectory: string; directory: string } | { error: unknown };
+  const repositories = new Map<RequestId, PreparedRepository>();
+  const requests = responses.bind(server, signal, async (messages, active, retain) => {
+    const prepared: Array<[RequestId, PreparedRepository]> = [];
+    await retain('director-prepared-requests', async () => async () => {
+      for (const [id, value] of prepared) if (repositories.get(id) === value) repositories.delete(id);
+    });
+    for (const message of messages) {
+      if (message.method !== 'tools/call' || message.params?.name !== 'takt_add_manager') continue;
+      let value: PreparedRepository;
+      try {
+        const input = addInput.parse(message.params.arguments);
+        if (!isAbsolute(input.repositoryDirectory)) throw new Error('Repository directory must be an absolute path');
+        actions.authorizeAddManager();
+        value = { suppliedDirectory: input.repositoryDirectory, directory: await resolveGitRepositoryDirectory(input.repositoryDirectory) };
+      } catch (error) { value = { error }; }
+      prepared.push([message.id, value]); repositories.set(message.id, value);
+    }
+    const directories = prepared.flatMap(([, value]) => 'directory' in value ? [value.directory] : []);
+    if (directories.length === 0) return;
+    try { await retain('director-assignment-locks', () => acquireRepositoryAssignmentLocks(configDirectory, directories, active)); }
+    catch (error) {
+      for (const entry of prepared) if ('directory' in entry[1]) { entry[1] = { error }; repositories.set(entry[0], entry[1]); }
+    }
+  });
   const managerId = z.string().regex(/^manager-[a-f0-9]{64}$/);
   const page = { offset: z.number().int().safe().nonnegative().optional(), limit: z.number().int().min(1).max(50).optional() };
-  const guarded = <T>(action: (value: T) => Promise<CallToolResult>) => async (value: T): Promise<CallToolResult> => {
+  const guarded = <T>(action: (value: T, requestSignal: AbortSignal, requestId: RequestId) => Promise<CallToolResult>) => async (value: T, extra: { requestId: RequestId }): Promise<CallToolResult> => {
     try {
-      const execute = async () => { signal.throwIfAborted(); return action(value); };
+      const execute = async () => { signal.throwIfAborted(); return requests.run(extra.requestId, (active) => action(value, active, extra.requestId)); };
       return await (turnScope === undefined ? execute() : turnScope.run(execute));
     }
     catch (error) { return errorResult('Director operation failed', error); }
   };
+  server.registerTool('takt_add_manager', { description: 'Prepare or restore a manager for the Git repository at the absolute path supplied by the human. Return its managerId without creating a goal.',
+    inputSchema: addInput },
+  guarded(async (_value: { repositoryDirectory: string }, active, requestId) => {
+    const prepared = repositories.get(requestId);
+    if (prepared === undefined) throw new Error('Manager request was not prepared');
+    if ('error' in prepared) throw prepared.error;
+    active.throwIfAborted();
+    return jsonResult(await actions.addManager(prepared.suppliedDirectory, active));
+  }));
+  server.registerTool('takt_fire_manager', { description: 'Remove a manager from the director list only on a human request. Refuse when any assigned goal is unfinished. Preserve repositories, goals, branches, and conversations.',
+    inputSchema: z.object({ managerId }).strict() },
+  guarded(async (value: { managerId: string }, active) => jsonResult(await actions.fireManager(value.managerId, active))));
   server.registerTool('takt_list_managers', { description: 'List every manager assigned to this daemon.', inputSchema: z.object(page).strict() },
     guarded(async (value: { offset?: number; limit?: number }) => {
       const offset = value.offset ?? 0;
@@ -80,5 +132,26 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
     const notification = await actions.notifyHuman(message, subject);
     return jsonResult(notification);
   }));
+  server.registerTool('takt_list_goal_questions', { description: 'Read pending and historical questions and answers of an assigned goal.',
+    inputSchema: listGoalQuestionsInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.input<typeof listGoalQuestionsInputSchema> & { managerId: string }) => {
+    await assertDirectorGoalTarget(configDirectory, value);
+    return listTaktGoalQuestions(value, { readOnly: true, allowedProjectRoot: value.cwd });
+  }));
+  server.registerTool('takt_get_goal_question', { description: 'Read a saved question and its answer, including human answers.',
+    inputSchema: getGoalQuestionInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.input<typeof getGoalQuestionInputSchema> & { managerId: string }) => {
+    await assertDirectorGoalTarget(configDirectory, value);
+    return getTaktGoalQuestion(value, { readOnly: true, allowedProjectRoot: value.cwd });
+  }));
+  server.registerTool('takt_answer_goal_question', { description: 'Answer a pending question addressed to the director. Never answer a human question.',
+    inputSchema: answerGoalQuestionInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.input<typeof answerGoalQuestionInputSchema> & { managerId: string }) => {
+    const answer = await answerDirectorGoalQuestion(configDirectory, value, value.questionId, value.answer, signal);
+    return jsonResult({ questionId: value.questionId, answer });
+  }));
+  const routeInput = listGoalQuestionsInputSchema.pick({ cwd: true, goalId: true }).extend({ managerId, questionRoute: GoalQuestionRouteSchema, origin: DirectorMessageOriginSchema }).strict();
+  server.registerTool('takt_set_goal_question_route', { description: 'Change the goal question route only to relay a current human instruction. Autonomous director decisions are rejected.', inputSchema: routeInput },
+    guarded(async (value: z.infer<typeof routeInput>) => jsonResult(await actions.setQuestionRoute(value, value.questionRoute, value.origin))));
+  const escalateInput = getGoalQuestionInputSchema.pick({ cwd: true, goalId: true, questionId: true }).extend({ managerId }).strict();
+  server.registerTool('takt_escalate_goal_question', { description: 'Hand an uncertain director question directly to a human without changing the goal route.', inputSchema: escalateInput },
+    guarded(async (value: z.infer<typeof escalateInput>) => jsonResult(await escalateDirectorGoalQuestion(configDirectory, value, value.questionId, signal))));
   return server;
 }

@@ -35,6 +35,22 @@ const interruptedEvents: TurnEvent[] = [
 ];
 
 describe('event driven daemon dispatcher', () => {
+  it.each([
+    { kind: 'fire_director_manager' as const, managerId: `manager-${'a'.repeat(64)}` },
+    { kind: 'add_director_manager' as const, repositoryDirectory: '/work/blog' },
+  ])('rejects $kind from a human command that is not a message without blocking other state requests', async (request) => {
+    const h = await harness();
+    await h.dispatcher.accept({ ...input('summary'), event: { kind: 'human_command',
+      command: { kind: 'dismiss_summary', revision: 1, conversationId: input('summary').conversationId }, speaker: { namespace: 'test', id: 'operator' } } });
+    const active = await h.runner.started(1);
+    try {
+      expect(await h.dispatcher.request(active.turn, request, active.signal))
+        .toMatchObject({ kind: 'error', code: 'forbidden' });
+      expect(h.stateRequests.handle).not.toHaveBeenCalled();
+      expect(await h.dispatcher.request(active.turn, { kind: 'get_delivery', conversationId: 'conversation' }, active.signal))
+        .toMatchObject({ kind: 'delivery' });
+    } finally { await h.dispatcher.control({ kind: 'stop' }); }
+  });
   it('restores queued image messages in order with their own attachment IDs and does not replay them again', async () => {
     const h = await harness();
     const directory = getGlobalConfigDir();
@@ -100,7 +116,6 @@ describe('event driven daemon dispatcher', () => {
       expect(h.failures).not.toHaveBeenCalled();
     } finally { await dispatcher.control({ kind: 'stop' }); }
   });
-
   it('delivers a pending progress backlog in FIFO order', async () => {
     const h = await harness(); await h.dispatcher.accept(input('fifo-progress'));
     const active = await h.runner.started(1);

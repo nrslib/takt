@@ -45,7 +45,7 @@ export function goalSummary(goal: Goal, pullRequestState?: GoalPullRequestState)
   const questions = goal.questions ?? [];
   const pending = questions.filter((question) => question.status === 'pending');
   return {
-    id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
+    id: goal.id, creationOrigin: goal.creationOrigin, questionRoute: goal.questionRoute, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
     ...(goal.pullRequest === undefined ? {} : { pullRequest: {
       ...goal.pullRequest, ...(pullRequestState === undefined ? {} : { state: pullRequestState }) } }),
@@ -69,7 +69,7 @@ export function goalSummary(goal: Goal, pullRequestState?: GoalPullRequestState)
 }
 
 export function goalWriteSummary(goal: Goal) {
-  return { id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
+  return { id: goal.id, creationOrigin: goal.creationOrigin, questionRoute: goal.questionRoute, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
     ...(goal.pullRequest === undefined ? {} : { pullRequest: goal.pullRequest }),
     ...(goal.completion === undefined ? {} : { completion: completionSummary(goal.completion) }) };

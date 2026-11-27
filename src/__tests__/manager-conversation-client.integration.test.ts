@@ -2194,10 +2194,10 @@ it('removes the same standalone approval after withdrawal and refresh on the sam
   const inquiry = await new StandaloneInquiryStore(directory, { kind: 'repository', repositoryDirectory: repository }).create({ body: 'Please confirm the operation' });
   await client.connect(); await complete();
   const inquiries = () => client.getSnapshot().items.flatMap((item) => item.kind === 'inquiry' ? [item.inquiry] : []);
-  expect(inquiries()).toEqual([{ target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: repository } }, question: inquiry }]);
+  expect(inquiries()).toEqual([{ target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: repository } }, question: expect.objectContaining(inquiry) }]);
   const { selection, frame } = await displayedSelection('\x12', 'answer');
   if (selection.kind !== 'answer') throw new Error('Expected inquiry selection');
-  expect(selection.candidates).toEqual([{ goalId: null, owner: { kind: 'repository', repositoryDirectory: repository }, question: inquiry }]);
+  expect(selection.candidates).toEqual([{ goalId: null, owner: { kind: 'repository', repositoryDirectory: repository }, question: expect.objectContaining(inquiry) }]);
   await waitFor(() => expect(frame()).toContain(inquiry.body));
   await vi.waitFor(() => expect(connections[0]!.snapshots.at(-1)!.complete).toBe(true), { timeout: 10_000 });
   await new StandaloneInquiryStore(directory, assignment).withdraw(inquiry.id);
@@ -2414,7 +2414,7 @@ it('[SCN-SNAP-DELTA-P2] updates a paused goal and removes its answered inquiry w
   await vi.waitFor(() => expect(app.lastFrame()).toContain('Snapshot goal 1'));
   const unchangedGoal = displayedGoals(client).find((row) => row.id === other!.id);
   const unchangedInquiry = displayedInquiries(client).find((row) => row.target.goalId === other!.id);
-  saveGoal({ ...goal!, executionStatus: 'paused', questions: [answerInquiry(goal!.questions![0]!, 'CSV')] });
+  saveGoal({ ...goal!, executionStatus: 'paused', questions: [answerInquiry(goal!.questions![0]!, 'CSV', 'tui', 'human')] });
 
   await refreshSnapshot(client, connections[0]!);
 
@@ -2588,7 +2588,7 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
   const record = { id: randomUUID(), recordedAt: new Date().toISOString(), summary: 'Work retained after failed transfer' };
   const notification = { id: randomUUID(), recordedAt: record.recordedAt, kind: 'progress' as const, body: 'Progress retained after failed transfer' };
   const updated = { ...goal!, executionStatus: 'paused' as const,
-    questions: [answerInquiry(goal!.questions![0]!, 'CSV')], workLog: [record], notifications: [notification] };
+    questions: [answerInquiry(goal!.questions![0]!, 'CSV', 'tui', 'human')], workLog: [record], notifications: [notification] };
   saveGoal(updated);
   const released = vi.fn();
   const snapshot = service.snapshot.bind(service);

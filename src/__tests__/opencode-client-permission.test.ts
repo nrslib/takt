@@ -2,6 +2,9 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildFormalSpecGenerationPrompt } from '../features/interactive/formalSpecPrompts.js';
 import {
   MockEventStream,
@@ -41,6 +44,128 @@ vi.mock('../infra/opencode/server-process.js', () => ({
 }));
 
 describe('OpenCodeClient permissions', () => {
+  it('allows V1 read-only references while disabling shell writes', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    const runtime = await import('../infra/opencode/runtime.js');
+    const resolveRuntime = vi.spyOn(runtime, 'resolveOpenCodeRuntime').mockResolvedValue({
+      generation: 'v1', command: 'opencode', version: '1.18.28',
+    });
+    vi.stubEnv('TAKT_OPENCODE_VERSION', 'v1');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-v1-readonly-reference-')));
+    const referenceDirectory = join(root, 'reference');
+    mkdirSync(referenceDirectory);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'readonly-reference-session' } });
+    const promptAsync = vi.fn(async (_input: { tools: Record<string, boolean> }) => {});
+    createOpencodeMock.mockResolvedValue({ client: {
+      session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+      event: { subscribe: vi.fn(async () => ({
+        stream: new MockEventStream([sessionIdle('readonly-reference-session')], 'readonly-reference-session'),
+      })) },
+      permission: { reply: vi.fn().mockResolvedValue({ data: {} }) },
+    }, server: { close: vi.fn() } });
+
+    try {
+      const client = new OpenCodeClient();
+      const options = {
+        cwd: root, model: 'probe/model', permissionMode: 'full', readonlyDirectories: [referenceDirectory],
+      } as const;
+      const result = await client.call('coder', 'inspect reference', options);
+      const resumed = await client.call('coder', 'continue inspecting', { ...options, sessionId: result.sessionId });
+
+      expect(resumed.status).toBe('done');
+      expect(sessionCreate).toHaveBeenCalledOnce();
+
+      expect(result.status).toBe('done');
+      expect(promptAsync.mock.calls[0]![0].tools.bash).toBe(false);
+      expect(promptAsync.mock.calls[0]![0].tools.read).toBe(true);
+      expect(promptAsync.mock.calls[0]![0].tools.edit).toBe(true);
+      expect(promptAsync.mock.calls[0]![0].tools.write).toBe(true);
+      const serverConfig = createOpencodeMock.mock.calls[0]![0].config as { plugin: unknown[] };
+      expect(serverConfig.plugin).toEqual(expect.arrayContaining([
+        [expect.stringMatching(/readonly-directory-guard\.js$/), { readonlyDirectories: [referenceDirectory] }],
+      ]));
+      expect(sessionCreate.mock.calls[0]![0].permission).toContainEqual({
+        permission: 'edit', pattern: join(referenceDirectory, '*'), action: 'deny',
+      });
+      expect(sessionCreate.mock.calls[0]![0].permission).toContainEqual({
+        permission: 'write', pattern: join(referenceDirectory, '*'), action: 'deny',
+      });
+    } finally {
+      resetSharedServer();
+      rmSync(root, { recursive: true, force: true });
+      resolveRuntime.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('explains when v1 cannot apply workspace access to a previously denied session', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    const runtime = await import('../infra/opencode/runtime.js');
+    const resolveRuntime = vi.spyOn(runtime, 'resolveOpenCodeRuntime').mockResolvedValue({
+      generation: 'v1', command: 'opencode', version: '1.18.28',
+    });
+    vi.stubEnv('TAKT_OPENCODE_VERSION', 'v1');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-v1-resumed-workspace-')));
+    const referenceDirectory = join(root, 'reference');
+    mkdirSync(referenceDirectory);
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'legacy-session' } });
+    createOpencodeMock.mockResolvedValue({ client: {
+      session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+      event: { subscribe: vi.fn(async () => ({ stream: new MockEventStream([sessionIdle('legacy-session')], 'legacy-session') })) },
+      permission: { reply: vi.fn().mockResolvedValue({ data: {} }) },
+    }, server: { close: vi.fn() } });
+
+    try {
+      const client = new OpenCodeClient();
+      const initial = await client.call('manager', 'first turn', {
+        cwd: root, model: 'probe/model', permissionMode: 'full',
+      });
+      expect(initial.status).toBe('done');
+
+      const resumed = await client.call('manager', 'resume with workspace access', {
+        cwd: root, model: 'probe/model', permissionMode: 'full', sessionId: initial.sessionId,
+        workspaceAccess: { ownerId: 'manager', directories: [referenceDirectory] },
+      });
+
+      expect(resumed.status).toBe('error');
+      expect(resumed.error).toContain('cannot update external-directory permissions');
+      expect(resumed.error).toContain('conversation history is preserved');
+      expect(sessionCreate).toHaveBeenCalledOnce();
+      expect(promptAsync).toHaveBeenCalledOnce();
+    } finally {
+      resetSharedServer();
+      rmSync(root, { recursive: true, force: true });
+      resolveRuntime.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['full', 'readonly'] as const)('checks every external request against literal workspace roots without persistent approval (%s)', async (permissionMode) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-permission-workspace-')));
+    const repository = join(root, 'api*'); const outside = join(root, 'api?');
+    mkdirSync(repository); mkdirSync(outside);
+    const requests = [[join(repository, '*')], [join(outside, '*')], [join(repository, '*'), join(outside, '*')], []];
+    const stream = new MockEventStream([
+      ...requests.map((patterns, index) => ({ type: 'permission.asked', properties: {
+        id: `external-${index}`, sessionID: 'workspace-session', permission: 'external_directory', patterns, always: patterns,
+      } })), sessionIdle('workspace-session'),
+    ], 'workspace-session');
+    const reply = vi.fn().mockResolvedValue({ data: {} });
+    createOpencodeMock.mockResolvedValue({ client: {
+      session: { create: vi.fn(async () => ({ data: { id: 'workspace-session' } })), promptAsync: vi.fn(async () => {}), abort: successfulSessionAbort() },
+      event: { subscribe: vi.fn(async () => ({ stream })) }, permission: { reply },
+    }, server: { close: vi.fn() } });
+    try {
+      const result = await new OpenCodeClient().call('manager', 'inspect', {
+        cwd: root, model: 'probe/model', permissionMode, workspaceAccess: { ownerId: 'manager', directories: [repository] },
+      });
+      expect(result.status).toBe('done');
+      expect(reply.mock.calls.map(([input]) => input.reply)).toEqual(['once', 'reject', 'reject', 'reject']);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('enforces strict tools and permission replies across the SDK boundary', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const permissions = ['read', 'takt_takt_get_run', 'write', 'takt_takt_create_goal'];

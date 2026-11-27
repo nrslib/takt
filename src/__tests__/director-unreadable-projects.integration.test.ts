@@ -3,10 +3,10 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { listDirectorManagers, resolveDirectorManager } from '../features/director/managers.js';
 import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME } from '../features/director/mcp.js';
+import { startLocalMcpConnection } from '../features/mcp/localConnection.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
@@ -89,15 +89,15 @@ async function projectsWithNonGitDirectory() {
 }
 
 async function withMcp(action: (client: Client) => Promise<void>): Promise<void> {
-  const server = createDirectorMcpServer(directory, { tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal);
+  const connection = await startLocalMcpConnection((_request, _connection, resources) => createDirectorMcpServer(directory,
+    { setQuestionRoute: vi.fn(async () => ({})), authorizeAddManager: vi.fn<() => void>(), addManager: vi.fn(), fireManager: vi.fn(), tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal, resources));
   const client = new Client({ name: 'unreadable-project-test', version: '1' });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
-    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    await client.connect(new StreamableHTTPClientTransport(new URL(connection.config.url), { requestInit: { headers: connection.config.headers } }));
     await action(client);
   } finally {
     await client.close();
-    await server.close();
+    await connection.dispose();
   }
 }
 

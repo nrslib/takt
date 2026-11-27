@@ -6,7 +6,7 @@ import type { ChildProcess } from 'node:child_process';
 import * as spawnModule from '../shared/utils/spawn.js';
 import { createTurnProcessHost } from '../features/daemon/turnProcessHost.js';
 import type { DaemonProcessMessage } from '../core/daemon/processProtocol.js';
-import type { ConversationChange, RuntimeMessage, TurnStart } from '../core/daemon/messages.js';
+import type { ConversationChange, InquiryNotice, RuntimeMessage, TurnStart } from '../core/daemon/messages.js';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -435,7 +435,7 @@ it.each([
   }
 });
 
-const savedGoalAnswer = (text: string) => ({ text, source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' });
+const savedGoalAnswer = (text: string) => ({ answeredBy: 'human' as const, text, source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' });
 const goalWithQuestion = (questionId: string, body: string, answerText: string): Goal => ({ ...goalRecord(),
   questions: [{ id: questionId, recipient: 'human' as const, body, status: 'answered' as const, answer: savedGoalAnswer(answerText) }] });
 
@@ -1905,10 +1905,12 @@ it.each([
   expect(notices[0]?.message).toContain(operationId);
 });
 
-it('seeds existing goal and standalone inquiries without publishing and publishes only subsequent changes', async () => {
+it('seeds manager inquiries without publishing, delivers saved goal questions to director and publishes later changes', async () => {
   const f = await fixture();
   const question = { id: randomUUID(), body: 'existing', status: 'pending', recipient: 'human' };
-  const goal = { ...goalRecord(), questions: [question] };
+  const history = { ...question, id: randomUUID(), status: 'answered',
+    answer: { text: 'Earlier answer', answeredBy: 'human', source: 'tui', answeredAt: new Date().toISOString() } };
+  const goal = { ...goalRecord(), questions: [question, history] };
   const goalPath = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
   await mkdir(join(goalPath, '..'), { recursive: true });
   await writeFile(goalPath, JSON.stringify(goal));
@@ -1916,18 +1918,26 @@ it('seeds existing goal and standalone inquiries without publishing and publishe
   await mkdir(inquiryDirectory, { recursive: true });
   const standalone = { ...question, id: randomUUID() };
   await writeFile(join(inquiryDirectory, `${standalone.id}.json`), JSON.stringify(standalone));
-  const publish = vi.fn(async () => {});
+  const publish = vi.fn(async (_notice: InquiryNotice) => {});
   const source = createWatchSource(f.conversations, publish, (error) => { throw error; });
   await source.inquiries();
   await source.inquiries();
-  expect(publish).not.toHaveBeenCalled();
+  const directorId = conversationId({ kind: 'daemon' });
+  expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ conversationId: directorId,
+    question: expect.objectContaining({ id: question.id }) }));
+  publish.mockClear();
   const next = { ...question, id: randomUUID(), body: 'new' };
-  await writeFile(goalPath, JSON.stringify({ ...goal, questions: [question, next] }));
+  await writeFile(goalPath, JSON.stringify({ ...goal, questions: [question, history, next] }));
   await source.inquiries();
-  expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ question: expect.objectContaining({ id: next.id }) }));
+  expect(publish).toHaveBeenCalledTimes(2);
+  expect(publish.mock.calls.map(([notice]) => notice.conversationId).sort()).toEqual([f.id, directorId].sort());
+  for (const [notice] of publish.mock.calls) expect(notice.question.id).toBe(next.id);
+  publish.mockClear();
   await source.inquiries();
+  expect(publish).not.toHaveBeenCalled();
   await createWatchSource(f.conversations, publish, (error) => { throw error; }).inquiries();
-  expect(publish).toHaveBeenCalledOnce();
+  expect(publish).toHaveBeenCalledTimes(2);
+  for (const [notice] of publish.mock.calls) expect(notice.conversationId).toBe(directorId);
 });
 
 it('observes tasks and goals above 256 KiB without excluding runs, PRs or inquiries', async () => {

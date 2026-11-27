@@ -11,6 +11,10 @@ import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
 import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
 import { hasCode } from '../../infra/daemon/privateFile.js';
+import { DirectorManagerStateStore } from '../../infra/director/managerState.js';
+import { addDirectorManager, fireDirectorManager } from '../director/managerLifecycle.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 export function createDaemonStateRequests(options: {
   conversations: DaemonConversations;
@@ -19,6 +23,12 @@ export function createDaemonStateRequests(options: {
   connectedPorts(id: string): readonly string[];
 }): DaemonStateOwner {
   const { conversations } = options;
+  let directorOperation = Promise.resolve();
+  const ordered = <T>(action: () => Promise<T>): Promise<T> => {
+    const result = directorOperation.then(action);
+    directorOperation = result.then(() => {}, () => {});
+    return result;
+  };
   const forbidden = (): DaemonStateReply => ({ kind: 'error', code: 'forbidden', message: 'Conversation is outside the current assignment' });
   return { async handle(turn, request, signal) {
     signal.throwIfAborted();
@@ -76,14 +86,29 @@ export function createDaemonStateRequests(options: {
       await conversations.notification(turn.conversationId, { id: request.notificationId, message: request.message, subject: request.subject, turnOperationId: turn.operationId }, signal);
       return { kind: 'notification_saved', notificationId: request.notificationId };
     }
-    const target = await conversations.store.read(request.conversationId);
-    if (target === undefined || target.state.assignment.kind === 'daemon'
-      || !await conversations.routing.permits(target.state.assignment, request.conversationId)) return forbidden();
-    signal.throwIfAborted();
-    if (request.kind === 'get_delivery') return { kind: 'delivery', conversationId: request.conversationId,
-      assignment: target.state.assignment, connectedPorts: [...options.connectedPorts(request.conversationId)] };
-    const admission = await options.ingress.accept({ eventId: request.eventId, requestId: request.requestId, conversationId: request.conversationId,
-      occurredAt: request.occurredAt, source: 'director', event: { kind: 'director_message', directorConversationId: turn.conversationId, text: request.text, origin: request.origin } });
-    return { kind: 'event_accepted', admission };
+    return ordered(async (): Promise<DaemonStateReply> => {
+      signal.throwIfAborted();
+      if (request.kind === 'add_director_manager' || request.kind === 'fire_director_manager') {
+        try {
+          if (request.kind === 'add_director_manager') {
+            return { kind: 'director_manager_added', ...await addDirectorManager(conversations, request.repositoryDirectory, signal) };
+          }
+          return { kind: 'director_manager_fired', ...await fireDirectorManager(conversations.routing, request.managerId, signal) };
+        } catch (error) {
+          signal.throwIfAborted();
+          return { kind: 'error', code: 'forbidden', message: sanitizeSensitiveText(getErrorMessage(error)) };
+        }
+      }
+      const target = await conversations.store.read(request.conversationId);
+      if (target === undefined || target.state.assignment.kind === 'daemon'
+        || !await conversations.routing.permits(target.state.assignment, request.conversationId)) return forbidden();
+      if (await new DirectorManagerStateStore(conversations.routing.directory).isFired(request.conversationId)) return forbidden();
+      signal.throwIfAborted();
+      if (request.kind === 'get_delivery') return { kind: 'delivery', conversationId: request.conversationId,
+        assignment: target.state.assignment, connectedPorts: [...options.connectedPorts(request.conversationId)] };
+      const admission = await options.ingress.accept({ eventId: request.eventId, requestId: request.requestId, conversationId: request.conversationId,
+        occurredAt: request.occurredAt, source: 'director', event: { kind: 'director_message', directorConversationId: turn.conversationId, text: request.text, origin: request.origin } });
+      return { kind: 'event_accepted', admission };
+    });
   } };
 }

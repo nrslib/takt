@@ -42,10 +42,12 @@ export const PortBindingSchema = z.object({
 }).strict();
 export const PendingSummarySchema = z.object({
   revision: revision.refine((value) => value > 0),
+  managerId: z.string().regex(/^manager-[a-f0-9]{64}$/).optional(),
   repositoryDirectory: repository, summary: GoalSummarySchema,
 }).strict();
 export const ApprovalSchema = z.object({
   revision: revision.refine((value) => value > 0), goalId: z.uuid(),
+  managerId: z.string().regex(/^manager-[a-f0-9]{64}$/).optional(),
   repositoryDirectory: repository, state: z.enum(['reserved', 'registered']),
 }).strict();
 export const RunningOperationSchema = z.object({
@@ -76,8 +78,14 @@ export const ConversationRecordSchema = z.object({
 }).strict().superRefine((record, ctx) => {
   const issue = (path: string, message: string): void => { ctx.addIssue({ code: 'custom', path: [path], message }); };
   if (record.agent !== (record.assignment.kind === 'daemon' ? 'director' : 'manager')) issue('agent', 'Agent does not match assignment');
-  if (record.assignment.kind === 'daemon' && (record.pending !== null || record.approval !== null
-    || record.running !== null && record.running.kind !== 'message')) issue('assignment', 'Director cannot hold manager operations');
+  if (record.assignment.kind === 'daemon') {
+    for (const field of ['pending', 'approval'] as const) {
+      if (record[field] !== null && record[field].managerId === undefined) issue(field, 'Director proposal requires its manager');
+    }
+    if (record.running !== null && !['message', 'approve_summary', 'dismiss_summary', 'answer_question'].includes(record.running.kind)) {
+      issue('running', 'Director cannot hold manager goal operations');
+    }
+  }
   if (record.id !== conversationId(record.assignment)) issue('id', 'Conversation identity does not match assignment');
   if (record.assignment.kind === 'daemon' && (record.directorMessages?.some((message) => message.directorConversationId !== undefined)
     || record.running?.directorConversationId !== undefined)) {
@@ -100,6 +108,7 @@ export const ConversationRecordSchema = z.object({
   if (record.approval !== null) {
     if (record.approval.state === 'reserved') {
       if (record.pending === null || record.approval.revision !== record.pending.revision
+        || record.approval.managerId !== record.pending.managerId
         || record.approval.repositoryDirectory !== record.pending.repositoryDirectory) issue('approval', 'Reservation requires its original pending proposal');
     } else if (record.approval.revision >= record.revision) issue('approval', 'Registered receipt must precede current revision');
   }

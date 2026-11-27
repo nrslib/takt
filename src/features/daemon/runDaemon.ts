@@ -82,14 +82,22 @@ export async function startDaemon(options: {
   const stopped = new Promise<void>((resolve) => { markStopped = resolve; });
   const conversations = new DaemonConversations(store, routing, notifications, async (id, output, version, signal) => {
     await input.deliver(id, output, version, signal);
-    if (output.kind === 'inquiry') await (await slackReady)?.delivery.deliver(id, output, version);
-    if (output.kind === 'result' && id === conversationId({ kind: 'daemon' })) {
-      const batch = [];
-      for await (const notice of notifications.iterate()) if (notice.turnOperationId === output.operationId) batch.push(notice);
-      await (await slackReady)?.notifications.deliver(batch);
-    }
-    if (output.kind === 'notice' && id === conversationId({ kind: 'daemon' }) && (version.operationId === null || output.id.startsWith('result-'))) {
-      await (await slackReady)?.notifications.deliver([{ id: output.id, message: output.message }]);
+    const director = id === conversationId({ kind: 'daemon' });
+    try {
+      if (output.kind === 'inquiry' || director && (output.kind === 'pending'
+        || output.kind === 'result' && output.result.kind === 'goal_registered')) {
+        const result = await (await slackReady)?.delivery.deliver(id, output, version);
+        if (result?.kind === 'unavailable') throw new Error(result.reason);
+      }
+    } finally {
+      if (output.kind === 'result' && director) {
+        const batch = [];
+        for await (const notice of notifications.iterate()) if (notice.turnOperationId === output.operationId) batch.push(notice);
+        await (await slackReady)?.notifications.deliver(batch);
+      }
+      if (output.kind === 'notice' && director && (version.operationId === null || output.id.startsWith('result-'))) {
+        await (await slackReady)?.notifications.deliver([{ id: output.id, message: output.message }]);
+      }
     }
   }, reportDaemonError, eventStore);
   const bus: DaemonBus = { post: (message) => dispatcher.post(message), request: (turn, request, signal) => dispatcher.request(turn, request, signal) };

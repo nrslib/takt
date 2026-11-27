@@ -38,6 +38,8 @@ export async function verifyManagerConversation(
     sessionId: input.sessionId, abortSignal: input.abortSignal,
     permissionMode: 'readonly' as const, internalAgentIsolation: 'strict-readonly' as const,
     callerManagedSession: true as const,
+    ...(ctx.providerType === 'opencode' && input.openCodeWorkspaceAccess !== undefined
+      ? { openCodeWorkspaceAccess: input.openCodeWorkspaceAccess } : {}),
     onStream: (raw: Parameters<typeof reporter.onStream>[0]) => { reportManagerStream(raw, identify, reporter, input); },
   };
   const generator = ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance([

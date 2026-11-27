@@ -8,6 +8,7 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
 import { openCodeRuntimeSelection } from './runtime.js';
+import { isOpenCodeExternalDirectoryRequestAllowed, normalizeOpenCodeExternalDirectories, normalizeOpenCodeWorkspaceDirectories } from './external-directories.js';
 import { mapsToOpenCodeEditPermission, toOpenCodeMcpServerPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
@@ -206,6 +207,16 @@ function resolveOpenCodeAbortFailureCategory(
     default:
       return undefined;
   }
+}
+
+function getV1ExternalDirectoryPolicyIdentity(options: OpenCodeCallOptions): string {
+  return JSON.stringify({
+    workspaceAccess: options.workspaceAccess !== undefined,
+    externalDirectories: options.workspaceAccess === undefined
+      ? normalizeOpenCodeExternalDirectories(options.externalDirectoryAllowlist)
+      : [],
+    readonlyDirectories: normalizeOpenCodeExternalDirectories(options.readonlyDirectories),
+  });
 }
 
 function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): string {
@@ -731,6 +742,8 @@ interface OpenCodeCallState {
 const RETRY_ATTEMPT = Symbol('retry-open-code-attempt');
 
 export class OpenCodeAttemptRunner {
+  private readonly v1SessionDirectoryPolicies = new Map<string, string>();
+
   private isRetriableError(message: string, abortCause?: OpenCodeAbortCause): boolean {
     if (abortCause === 'timeout') {
       return true;
@@ -839,6 +852,7 @@ export class OpenCodeAttemptRunner {
               options.skillsEnabled,
               executionContext,
               options.externalDirectoryAllowlist,
+              undefined, options.cwd, options.workspaceAccess, options.readonlyDirectories,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -1194,6 +1208,8 @@ export class OpenCodeAttemptRunner {
       options.externalDirectoryAllowlist,
       options.contextWindow,
       options.cwd,
+      options.workspaceAccess,
+      options.readonlyDirectories,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1245,7 +1261,22 @@ export class OpenCodeAttemptRunner {
       allowedMcpPermissions,
       options.strictToolAllowlist,
       options.externalDirectoryAllowlist,
+      options.workspaceAccess?.directories,
+      options.readonlyDirectories,
     );
+    const isV1 = openCodeRuntimeSelection().generation === 'v1';
+    const hasWorkspaceDirectoryPolicy = options.workspaceAccess !== undefined
+      || (options.readonlyDirectories?.length ?? 0) > 0;
+    const v1DirectoryPolicyIdentity = isV1 && hasWorkspaceDirectoryPolicy
+      ? getV1ExternalDirectoryPolicyIdentity(options)
+      : undefined;
+    if (v1DirectoryPolicyIdentity !== undefined && sessionId !== undefined
+      && this.v1SessionDirectoryPolicies.get(sessionId) !== v1DirectoryPolicyIdentity) {
+      throw new Error(
+        'OpenCode v1 cannot update external-directory permissions on a resumed session. '
+        + 'Start a new workflow session or manager conversation to apply the current workspace access settings; the existing conversation history is preserved.',
+      );
+    }
     if (sessionId === undefined) {
       throwIfCallAborted();
       const sessionResult = await opencodeApiClient.session.create({
@@ -1257,6 +1288,9 @@ export class OpenCodeAttemptRunner {
       sessionId = sessionResult.data?.id;
       if (!sessionId) {
         throw new Error('Failed to create OpenCode session');
+      }
+      if (v1DirectoryPolicyIdentity !== undefined) {
+        this.v1SessionDirectoryPolicies.set(sessionId, v1DirectoryPolicyIdentity);
       }
       throwIfServerInvalidated();
 
@@ -1312,6 +1346,7 @@ export class OpenCodeAttemptRunner {
       options.allowedTools,
       opencodeApiClient.requiresExplicitMcpTools ? options.allowedMcpTools : allowedMcpPermissions,
       options.strictToolAllowlist,
+      options.readonlyDirectories,
     );
     if (options.disableSkills === true) {
       promptTools.skill = false;
@@ -1344,10 +1379,14 @@ export class OpenCodeAttemptRunner {
         ? buildToolGuardRetryPrompt(basePromptText, callState.toolGuardRecovery.freshReason)
         : basePromptText;
     const promptPayload: Record<string, unknown> = {
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.workspaceAccess !== undefined ? { workspaceAccess: options.workspaceAccess } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools && options.externalDirectoryAllowlist !== undefined
         ? { externalDirectoryAllowlist: options.externalDirectoryAllowlist }
+        : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.readonlyDirectories !== undefined
+        ? { readonlyDirectories: options.readonlyDirectories }
         : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
@@ -1634,6 +1673,13 @@ export class OpenCodeAttemptRunner {
               permProps.permission,
               options.allowedTools !== undefined ? permissionRuleset : undefined,
             );
+            if (permProps.permission === 'external_directory' && options.workspaceAccess !== undefined) {
+              reply = isOpenCodeExternalDirectoryRequestAllowed(permProps.patterns ?? [], [
+                ...normalizeOpenCodeWorkspaceDirectories(options.workspaceAccess.directories),
+                ...normalizeOpenCodeExternalDirectories(options.externalDirectoryAllowlist),
+                ...normalizeOpenCodeExternalDirectories(options.readonlyDirectories),
+              ]) ? 'once' : 'reject';
+            }
             if (openCodeRuntimeSelection().generation === 'v2' && permProps.permission === 'skill') {
               reply = 'reject';
               if (promptTools.skill === true

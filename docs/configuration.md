@@ -193,7 +193,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `director.slack.channel_id` | string | - | Director Slack channel. Global-only; see [Slack conversations with director](#slack-conversations-with-director). |
-| `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director from Slack. Required when `director.slack` is configured; an empty list accepts no users. |
+| `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director and use its registration and inquiry buttons on Slack. Required when `director.slack` is configured; an empty list accepts no users' messages or actions. |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
@@ -796,6 +796,8 @@ Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` envir
 
 Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons use `manager.slack.allowed_user_ids`.
 
+Director registration and inquiry buttons also use `director.slack.allowed_user_ids`. Clicking “Register goal” outside that list does not register a goal. See [Using director](./director.md) for one-confirmation registration, question routing, and the Slack features outside this scope.
+
 Director groups new notices from one turn into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
 
 ## Manager sensitive read targets
@@ -995,6 +997,19 @@ TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 These variables select the runtime for the entire TAKT process. Preserve both values in CI or your launcher. `TAKT_OPENCODE_PATH` accepts a CLI command name or path; when unset, TAKT uses `opencode` from `PATH`. Start a new run after switching generations.
 
 In v2, the bundled plugin applies tool permissions. If the plugin is unavailable, TAKT errors before running. The tool list and permitted MCP settings you configure are used for execution. Structured output is validated against a schema after the response.
+
+#### Read-only external directories
+
+Set `provider_options.opencode.readonly_directories` in the global `~/.takt/config.yaml` or project `.takt/config.yaml` to allow OpenCode to read selected external directories in manager and workflow calls. Values must be absolute paths to existing directories. Other external directories remain denied, and the listed directories stay read-only even when the call can edit its workspace. OpenCode's shell tool is disabled for calls with this setting so shell commands cannot write through an allowed external-directory path; file editing in the workspace remains available.
+
+```yaml
+provider_options:
+  opencode:
+    readonly_directories:
+      - /path/to/reference
+```
+
+OpenCode v1 stores directory permissions when it creates a session and cannot update them on a resumed session. If TAKT cannot verify that a resumed session was created with the same workspace access and read-only-directory policy, it returns an error and asks you to start a new workflow session or manager conversation. The existing session and its history are preserved.
 
 #### OpenCode Skills
 

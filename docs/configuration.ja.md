@@ -193,7 +193,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `director.slack.channel_id` | string | - | director の Slack チャンネル。グローバル設定のみ。[Slack で director と会話する](#slack-で-director-と会話する)を参照。 |
-| `director.slack.allowed_user_ids` | string[] | - | Slack から director への発言を許可するユーザー。`director.slack` を設定するときは必須。空配列では誰の発言も受け付けない。 |
+| `director.slack.allowed_user_ids` | string[] | - | Slack から director への発言と、director の登録・問い合わせボタンの操作を許可するユーザー。`director.slack` を設定するときは必須。空配列では誰の発言や操作も受け付けない。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
@@ -789,6 +789,8 @@ manager と同じ Slack App と環境変数 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK
 
 director のチャンネルに許可された人が書いた発言は、manager ではなく director の会話に渡ります。director の返事は元の投稿のスレッドに届きます。`director.slack.allowed_user_ids` にない人の発言は無視します。manager と同じチャンネルを使う場合も、通常の発言は director に渡り、manager の問い合わせボタンの操作には `manager.slack.allowed_user_ids` が適用されます。
 
+director の登録・問い合わせボタンにも `director.slack.allowed_user_ids` が適用されます。リストにない人が「登録する」を押しても登録されません。1回の確認による登録、質問の宛先、今回対応しない Slack の機能は[director の使い方](./director.ja.md)を参照してください。
+
 director は1回のターンで出た新しい知らせを、このチャンネルへの1件の投稿にまとめます。終わった仕事と、マージ承認や未回答の問い合わせなど人に決めてほしいことを知らせます。既存の重複抑止で除かれた知らせは再投稿しません。`director.slack` がなければ、director は Slack に投稿せず、発言も受け付けません。接続には両方のトークン環境変数が必要です。既存の `TAKT_NOTIFY_WEBHOOK` による通知経路は変わりません。
 
 ## manager の秘密ファイル設定
@@ -985,6 +987,19 @@ TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run
 この 2 変数は TAKT プロセス全体の実行環境を選びます。CI やランチャーにも同じ値を保存してください。`TAKT_OPENCODE_PATH` には CLI のコマンド名またはパスを指定でき、未指定時は `PATH` の `opencode` を使います。世代を切り替えた後は新しい実行を開始してください。
 
 v2 のツール権限は同梱 plugin で適用します。plugin を利用できない場合は実行前にエラーになります。TAKT が指定したツール一覧と MCP の許可設定が実行に使われます。構造化出力は応答を schema で検証します。
+
+#### 読み取り専用の外部ディレクトリ
+
+`~/.takt/config.yaml` または project の `.takt/config.yaml` の `provider_options.opencode.readonly_directories` に読み取りを許可する外部ディレクトリを指定すると、manager と workflow の OpenCode 呼び出しで参照できます。値には存在するディレクトリの絶対パスを指定します。それ以外の外部ディレクトリは引き続き拒否され、指定先への書き込みも許可しません。編集可能な workspace と同じパスを指定した場合も、この設定の読み取り専用制限が優先されます。この設定を使う呼び出しでは、許可された外部パスへ shell コマンドで書き込めないよう OpenCode の shell ツールを無効にし、workspace 内のファイル編集は維持します。
+
+```yaml
+provider_options:
+  opencode:
+    readonly_directories:
+      - /path/to/reference
+```
+
+OpenCode v1 はセッション作成時にディレクトリ権限を保存し、再開時に更新できません。TAKT が再開セッションの workspace access と読み取り専用ディレクトリの設定が現在と一致すると確認できない場合はエラーにし、新しい workflow session または manager conversation の開始を案内します。既存セッションと会話履歴は保持します。
 
 #### OpenCode の Skill
 

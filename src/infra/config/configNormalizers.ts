@@ -806,6 +806,7 @@ export function denormalizeProviderOptions(
     || providerOptions.opencode?.skills?.enabled !== undefined
     || providerOptions.opencode?.variant !== undefined
     || providerOptions.opencode?.allowedTools !== undefined
+    || providerOptions.opencode?.readonlyDirectories !== undefined
     || providerOptions.opencode?.guards !== undefined
   ) {
     raw.opencode = {
@@ -820,6 +821,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.opencode.allowedTools !== undefined
         ? { allowed_tools: providerOptions.opencode.allowedTools }
+        : {}),
+      ...(providerOptions.opencode.readonlyDirectories !== undefined
+        ? { readonly_directories: providerOptions.opencode.readonlyDirectories }
         : {}),
       ...(providerOptions.opencode.guards !== undefined
         ? {

@@ -1,5 +1,6 @@
 import { createGoalBranch, prepareGoalBranch, removeGoalBranch } from './git.js';
-import { GoalCreateInputSchema, GoalIdSchema, GoalSchema, type Goal, type GoalCreateInput } from './schema.js';
+import { z } from 'zod/v4';
+import { GoalCreateInputSchema, GoalIdSchema, GoalRecordObjectSchema, GoalSchema, type Goal, type GoalCreateInput } from './schema.js';
 import { GoalStore } from './store.js';
 import { readManagerEvents, saveManagerEvent } from './events.js';
 import { runGoalGit } from './git-command.js';
@@ -7,10 +8,23 @@ import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
 import { FileEventStore } from '../daemon/eventStore.js';
+import { initialQuestionRoute } from './question-routing.js';
+
+const reservedGoalInputSchema = z.union([
+  GoalCreateInputSchema,
+  GoalCreateInputSchema.extend({
+    creationOrigin: z.literal('director'),
+    directorProposal: GoalRecordObjectSchema.shape.directorProposal.unwrap(),
+  }),
+]);
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
-  input = GoalCreateInputSchema.parse(input);
+  return createRegisteredGoal(GoalCreateInputSchema.parse(input), signal);
+}
+
+async function createRegisteredGoal(input: z.output<typeof reservedGoalInputSchema>, signal: AbortSignal | undefined): Promise<Goal> {
+  signal?.throwIfAborted();
   const store = new GoalStore(input.cwd);
   store.assertAbsent(input.id);
   await registerProject({ globalConfigDirectory: getGlobalConfigDir(), projectDirectory: input.cwd, command: 'manager', managerUsed: true });
@@ -18,6 +32,8 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   const { commit, ...branches } = await prepareGoalBranch(input.cwd, input.id, input.startBranch, input.integrationBranch, signal);
   signal?.throwIfAborted();
   const goal = GoalSchema.parse({
+    ...(input.creationOrigin === 'director' ? { directorProposal: input.directorProposal } : {}),
+    creationOrigin: input.creationOrigin, questionRoute: initialQuestionRoute(input.creationOrigin),
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
     ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
@@ -49,12 +65,13 @@ export async function hasGoalRegistrationArtifacts(cwd: string, id: string): Pro
   return hasGoalRegistrationBranch(cwd, id, undefined);
 }
 
-export async function registerReservedGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
+export async function registerReservedGoal(request: z.input<typeof reservedGoalInputSchema>, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
-  input = GoalCreateInputSchema.parse(input);
+  const input = reservedGoalInputSchema.parse(request);
   const existing = new GoalStore(input.cwd).find(input.id);
   if (existing !== undefined) {
-    if (existing.objective !== input.objective
+    if (existing.creationOrigin !== input.creationOrigin || existing.objective !== input.objective
+      || JSON.stringify(existing.directorProposal) !== JSON.stringify(input.creationOrigin === 'director' ? input.directorProposal : undefined)
       || JSON.stringify(existing.outOfScope) !== JSON.stringify(input.outOfScope)
       || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(input.acceptanceCriteria)
       || JSON.stringify(existing.specifications) !== JSON.stringify(input.specifications)
@@ -75,5 +92,5 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
   if (await hasGoalRegistrationBranch(input.cwd, input.id, signal)) {
     throw new GoalRegistrationRecoveryError('A branch for this reservation requires explicit reconciliation');
   }
-  return createGoal(input, signal);
+  return createRegisteredGoal(input, signal);
 }

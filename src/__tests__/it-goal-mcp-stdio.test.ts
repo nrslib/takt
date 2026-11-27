@@ -604,7 +604,7 @@ describe('manager goal execution tools through MCP', () => {
       expect(readManagerEvents(cwd).map(({ event }) => event)).toContainEqual(expect.objectContaining({ kind: 'resumed', goalId }));
       expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith();
       expect(autoRun.ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
-      expect((await store.get(goalId)).questions).toEqual([question]);
+      expect((await store.get(goalId)).questions).toEqual([{ ...question, questionType: 'routine' }]);
       controller = new AbortController();
       monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
       monitor.check();
@@ -1234,7 +1234,7 @@ describe('manager questions, answers and notifications through production bounda
       expect(ensureDaemon).not.toHaveBeenCalled();
       expect(app!.lastFrame()).not.toContain('Answer saved');
       expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([expect.objectContaining({
-        kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredAt: expect.any(String) },
+        kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredBy: 'human', answeredAt: expect.any(String) },
       })]);
     } finally { finishAutoRun(); }
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'));

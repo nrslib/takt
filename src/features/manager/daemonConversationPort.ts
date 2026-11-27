@@ -143,7 +143,7 @@ export function createDaemonConversationInput(options: {
             return { kind: 'accepted', operationId: command.operationId };
           } finally { snapshot.cancel(); }
         }
-        if (attachment.input.assignment.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
+        if (attachment.input.assignment.kind === 'daemon' && !['message', 'answer_question', 'approve_summary', 'dismiss_summary'].includes(command.kind)) throw new ConversationError('invalid_input');
         if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary')
           && command.conversationId !== id) {
           return { kind: 'error', code: 'invalid_assignment', message: 'Conversation assignment changed' };
@@ -201,6 +201,7 @@ export function createDaemonConversationInput(options: {
     },
     async deliver(id: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal): Promise<void> {
       if (signal?.aborted) return;
+      if (output.kind === 'inquiry' && (output.question.status !== 'pending' || output.question.recipient !== 'human')) return;
       if (output.kind === 'activity') {
         const previous = activities.get(id);
         if (previous !== undefined && previous.version.stateSequence > version.stateSequence) return;

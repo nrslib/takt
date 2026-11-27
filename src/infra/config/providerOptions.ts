@@ -50,6 +50,7 @@ type RawProviderOptions = {
     skills?: { enabled?: boolean };
     variant?: string;
     allowed_tools?: string[];
+    readonly_directories?: string[];
     guards?: {
       profile?: OpenCodeGuardProfile;
       model_profiles?: Record<string, OpenCodeGuardProfile>;
@@ -343,6 +344,7 @@ export function normalizeProviderOptions(
     || options.opencode?.skills?.enabled !== undefined
     || options.opencode?.variant !== undefined
     || options.opencode?.allowed_tools !== undefined
+    || options.opencode?.readonly_directories !== undefined
     || options.opencode?.guards !== undefined
   ) {
     result.opencode = {
@@ -357,6 +359,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.opencode.allowed_tools !== undefined
         ? { allowedTools: options.opencode.allowed_tools }
+        : {}),
+      ...(options.opencode.readonly_directories !== undefined
+        ? { readonlyDirectories: options.opencode.readonly_directories }
         : {}),
       ...(options.opencode.guards !== undefined
         ? {
@@ -657,6 +662,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.opencode.allowedTools !== undefined
           ? { allowedTools: layer.opencode.allowedTools }
+          : {}),
+        ...(layer.opencode.readonlyDirectories !== undefined
+          ? { readonlyDirectories: [...layer.opencode.readonlyDirectories] }
           : {}),
         ...(guards !== undefined ? { guards } : {}),
       };
@@ -1169,6 +1177,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.allowedTools,
     resolveProviderOptionOrigin(originResolver, 'opencode.allowedTools', source),
   );
+  const opencodeReadonlyDirectories = selectProviderValue(
+    resolvedConfigOptions.opencode?.readonlyDirectories,
+    personaOptions?.opencode?.readonlyDirectories,
+    stepOptions?.opencode?.readonlyDirectories,
+    resolveProviderOptionOrigin(originResolver, 'opencode.readonlyDirectories', source),
+  );
   const opencodeGuardProfile = selectProviderValue(
     resolvedConfigOptions.opencode?.guards?.profile,
     personaOptions?.opencode?.guards?.profile,
@@ -1409,6 +1423,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeSkillsEnabled !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
+      || opencodeReadonlyDirectories !== undefined
       || opencodeGuardProfile !== undefined
       || opencodeGuardModelProfiles !== undefined
       || opencodeGuardCallTimeoutMs !== undefined
@@ -1422,6 +1437,7 @@ export function resolveEffectiveProviderOptions(
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
             ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
+            ...(opencodeReadonlyDirectories !== undefined ? { readonlyDirectories: opencodeReadonlyDirectories } : {}),
             ...(opencodeGuardProfile !== undefined
               || opencodeGuardModelProfiles !== undefined
               || opencodeGuardCallTimeoutMs !== undefined

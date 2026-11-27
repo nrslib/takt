@@ -38,6 +38,18 @@ function fixture() {
 beforeEach(() => { vi.resetAllMocks(); });
 
 describe('daemon answer persistence', () => {
+  it.each(['tui', 'slack'] as const)('records a human respondent independently of the %s conversation transport', async (source) => {
+    const { goals, answer } = fixture();
+
+    expect(await answer({ ...command, source })).toMatchObject({ kind: 'answer_saved', answerSaved: true });
+
+    const saved = goals.get(cwd)!.questions![0]!;
+    expect(saved).toMatchObject({ status: 'answered', answer: { text: 'CSV', source, answeredBy: 'human' } });
+    expect(doubles.event).toHaveBeenCalledExactlyOnceWith(cwd, expect.objectContaining({
+      kind: 'answer', goalId: command.target.goalId, questionId, answer: saved.answer,
+    }));
+  });
+
   it('keeps the selected repository when another assigned repository has the same goal ID', async () => {
     const { goals, answer } = fixture();
     const untouched = structuredClone(goals.get(other));

@@ -50,12 +50,39 @@ describe('inquiry creation', () => {
   });
 });
 
+describe('goal question routing', () => {
+  const questionTypes = ['routine', 'permission', 'irreversible', 'agreement', 'humanTask', 'humanFact', 'unsure'] as const;
+  const routes = [
+    { creationOrigin: 'manager', questionRoute: 'human' },
+    { creationOrigin: 'director', questionRoute: 'director' },
+    { creationOrigin: 'manager', questionRoute: 'director' },
+    { creationOrigin: 'director', questionRoute: 'human' },
+  ] as const;
+
+  describe.each(routes)('$creationOrigin origin with current route $questionRoute', (routing) => {
+    it.each(questionTypes)('routes %s using the current route and preserves the question type', (questionType) => {
+      const goal = { ...goalRecord(), ...routing };
+      const input = { body: 'A と B のどちらを使いますか', questionType };
+      const before = structuredClone(goal);
+
+      const created = addGoalQuestion(goal, input);
+
+      expect(inquiry(created.goal, created.questionId)).toMatchObject({
+        questionType, recipient: questionType === 'routine' ? routing.questionRoute : 'human', status: 'pending',
+      });
+      expect(created.goal).toMatchObject(routing);
+      expect(goal).toEqual(before);
+    });
+  });
+
+});
+
 describe('structured inquiry answers', () => {
   it.each(['allow', 'deny'] as const)('records %s without a comment while keeping answer text a string', (decision) => {
     const created = approval();
-    const answered = answerGoalQuestion(created.goal, created.questionId, { decision });
+    const answered = answerGoalQuestion(created.goal, created.questionId, { decision }, 'tui', 'human');
     expect(inquiry(answered, created.questionId)).toMatchObject({
-      status: 'answered', answer: { text: '', decision, source: 'tui', answeredAt: now },
+      status: 'answered', answer: { answeredBy: 'human' as const, text: '', decision, source: 'tui', answeredAt: now },
     });
     expect(inquiry(answered, created.questionId).answer?.scope).toBe(decision === 'allow' ? 'once' : undefined);
     expect(inquiry(created.goal, created.questionId).status).toBe('pending');
@@ -64,13 +91,13 @@ describe('structured inquiry answers', () => {
   it.each(['OK', { text: 'OK' }])('rejects approval comments without an explicit decision: %j', (answer) => {
     const created = approval();
     const before = structuredClone(created.goal);
-    expect(() => answerGoalQuestion(created.goal, created.questionId, answer)).toThrow();
+    expect(() => answerGoalQuestion(created.goal, created.questionId, answer, 'tui', 'human')).toThrow();
     expect(created.goal).toEqual(before);
   });
 
   it('keeps an explicit approval scope and comment', () => {
     const created = approval();
-    const answered = answerGoalQuestion(created.goal, created.questionId, { decision: 'allow', scope: 'project', text: '確認済みです' });
+    const answered = answerGoalQuestion(created.goal, created.questionId, { decision: 'allow', scope: 'project', text: '確認済みです' }, 'tui', 'human');
     expect(inquiry(answered, created.questionId).answer).toMatchObject({ decision: 'allow', scope: 'project', text: '確認済みです' });
   });
 
@@ -86,27 +113,27 @@ describe('structured inquiry answers', () => {
 
   it.each(['completed', 'unable'] as const)('records an operation report of %s without a comment', (report) => {
     const created = addGoalQuestion(goalRecord(), { kind: 'operation_request', body: '認証を更新してください' });
-    const answered = answerGoalQuestion(created.goal, created.questionId, { report });
+    const answered = answerGoalQuestion(created.goal, created.questionId, { report }, 'tui', 'human');
     expect(inquiry(answered, created.questionId)).toMatchObject({ status: 'answered', answer: { text: '', report } });
   });
 
   it('does not infer an operation report from free text', () => {
     const created = addGoalQuestion(goalRecord(), { kind: 'operation_request', body: '認証を更新してください' });
-    expect(() => answerGoalQuestion(created.goal, created.questionId, '実施しました')).toThrow();
+    expect(() => answerGoalQuestion(created.goal, created.questionId, '実施しました', 'tui', 'human')).toThrow();
   });
 
   it('rejects an unknown report in a saved operation request', () => {
     const created = addGoalQuestion(goalRecord(), { kind: 'operation_request', body: '認証を更新してください' });
     expect(GoalQuestionSchema.safeParse({
       ...inquiry(created.goal, created.questionId), status: 'answered',
-      answer: { text: '', report: 'unknown', source: 'tui', answeredAt: now },
+      answer: { answeredBy: 'human' as const, text: '', report: 'unknown', source: 'tui', answeredAt: now },
     }).success).toBe(false);
   });
 
   it.each(['自由文の回答', 'JSON'])('preserves the legacy question answer %s without granting a scope', (text) => {
     const created = addGoalQuestion(goalRecord(), { body: '形式はどれですか', options: ['CSV', 'JSON'] });
-    const answered = answerGoalQuestion(created.goal, created.questionId, text);
-    expect(inquiry(answered, created.questionId).answer).toEqual({ text, source: 'tui', answeredAt: now });
+    const answered = answerGoalQuestion(created.goal, created.questionId, text, 'tui', 'human');
+    expect(inquiry(answered, created.questionId).answer).toEqual({ text, source: 'tui', answeredBy: 'human', answeredAt: now });
   });
 });
 
@@ -138,7 +165,7 @@ describe('inquiry withdrawal', () => {
       pendingIds.push(created.questionId);
     }
     const answered = addGoalQuestion(goal, { body: '回答済みの質問' });
-    goal = answerGoalQuestion(answered.goal, answered.questionId, 'JSON');
+    goal = answerGoalQuestion(answered.goal, answered.questionId, 'JSON', 'tui', 'human');
     const withdrawn = addGoalQuestion(goal, { body: '取り下げ済みの質問' });
     goal = withdrawGoalQuestion(withdrawn.goal, withdrawn.questionId, '元の理由');
     const before = structuredClone(goal);

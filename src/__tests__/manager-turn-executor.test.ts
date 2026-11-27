@@ -24,6 +24,46 @@ function fixture() {
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
 
+it.each(['opencode', 'mock'] as const)('forwards resolved workspace access only to OpenCode (provider=%s)', async (providerType) => {
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(success);
+  const executor = createManagerTurnExecutor('/repository', {
+    ctx: { providerType, lang: 'en', model: 'probe/model', provider: makeProvider({ setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const openCodeWorkspaceAccess = { ownerId: 'workspace-conversation', directories: ['/repository', '/repo-b', '/repo-c'] };
+  const input = { ...fixture().input, openCodeWorkspaceAccess };
+
+  await executor.execute(input);
+
+  expect(call).toHaveBeenCalledOnce();
+  const options = call.mock.calls[0]![1];
+  expect(options.permissionMode).toBe('full');
+  if (providerType === 'opencode') {
+    expect(options).toMatchObject({ openCodeWorkspaceAccess });
+    expect(call.mock.calls[0]![0]).toMatch(/next turn/i);
+  } else {
+    expect(options).not.toHaveProperty('openCodeWorkspaceAccess');
+    expect(call.mock.calls[0]![0]).toBe(input.prompt);
+  }
+});
+
+it('retains resolved workspace access when OpenCode recovers an overflowing session', async () => {
+  const call = vi.fn<ProviderAgent['call']>()
+    .mockRejectedValueOnce(new Error('Prompt is too long')).mockResolvedValueOnce(success);
+  const executor = createManagerTurnExecutor('/repository', {
+    ctx: { providerType: 'opencode', lang: 'en', model: 'probe/model', provider: makeProvider({ setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const openCodeWorkspaceAccess = { ownerId: 'workspace-conversation', directories: ['/repo-b', '/repo-c'] };
+  const input = { ...fixture().input, openCodeWorkspaceAccess };
+
+  await executor.execute(input);
+
+  expect(call.mock.calls.map(([, options]) => options.sessionId)).toEqual(['prior-session', undefined]);
+  for (const [, options] of call.mock.calls) expect(options).toMatchObject({ openCodeWorkspaceAccess });
+  expect(input.recovery!.invalidateSession).toHaveBeenCalledOnce();
+});
+
 it.each([true, false])('delivers manager images according to native capability %s', async (supportsNativeImageInput) => {
   const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(success);
   const executor = createManagerTurnExecutor('/repository', {

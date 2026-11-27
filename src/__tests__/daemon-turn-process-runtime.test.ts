@@ -34,6 +34,98 @@ function sentRequests(messages: readonly TurnProcessMessage[]) {
   return messages.flatMap((message) => message.kind === 'daemon_request' ? [message] : []);
 }
 
+it('does not send a state request with an already aborted request signal', async () => {
+  const controller = new AbortController(); controller.abort();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    await expect(async () => io.request({ kind: 'get_delivery', conversationId: 'manager' }, controller.signal)).rejects.toThrow();
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+  }));
+  await f.initialize(); const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() }); await done;
+  expect(sentRequests(f.messages)).toEqual([]);
+  await f.runtime.disconnect();
+});
+
+it('waits for scoped state processing to end during graceful shutdown and releases it on transport loss', async () => {
+  const controller = new AbortController();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    await io.request({ kind: 'get_delivery', conversationId: 'manager' }, controller.signal);
+    return { kind: 'interrupted' };
+  }));
+  await f.initialize(); const active = turnStart(); const requested = f.wait('daemon_request');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: active });
+  const request = await requested;
+  if (request.kind !== 'daemon_request') throw new Error('Expected request');
+  const closing = f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
+  await vi.waitFor(() => expect(f.messages.some(({ kind }) => kind === 'cancel_daemon_request')).toBe(true));
+  expect(f.messages.some(({ kind }) => kind === 'shutdown_complete')).toBe(false);
+  await f.runtime.receive({ ...f.envelope, kind: 'daemon_reply', turn: active.turn, requestId: request.requestId,
+    reply: { kind: 'error', code: 'stale_turn', message: 'processing ended' } });
+  await closing;
+  expect(f.messages.at(-1)?.kind).toBe('shutdown_complete');
+});
+
+it('rejects scoped requests when the IPC transport is lost during shutdown', async () => {
+  const controller = new AbortController();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    await expect(io.request({ kind: 'get_delivery', conversationId: 'manager' }, controller.signal)).rejects.toThrow();
+    return { kind: 'interrupted' };
+  }));
+  await f.initialize(); const requested = f.wait('daemon_request');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() }); await requested;
+  const closing = f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
+  const outcomes = await Promise.allSettled([closing, f.runtime.transportClosed()]);
+  expect(outcomes.map(({ status }) => status)).toEqual(['rejected', 'rejected']);
+  const cancellations = f.messages.filter(({ kind }) => kind === 'cancel_daemon_request').length;
+  controller.abort();
+  expect(f.messages.filter(({ kind }) => kind === 'cancel_daemon_request')).toHaveLength(cancellations);
+});
+
+it.each(['daemon_request', 'cancel_daemon_request'])('cleans up a scoped request after %s send failure', async (failedKind) => {
+  const controller = new AbortController();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    await expect(io.request({ kind: 'get_delivery', conversationId: 'manager' }, controller.signal)).rejects.toThrow();
+    return { kind: 'completed', result: { kind: 'reply', message: 'failed send observed' } };
+  }));
+  await f.initialize(); const send = f.transport.send.getMockImplementation()!;
+  const requested = f.wait('daemon_request'); const done = f.wait('turn_finished');
+  f.transport.send.mockImplementation(async (message) => {
+    if (message.kind === failedKind) throw new Error('transport failure');
+    await send(message);
+  });
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
+  if (failedKind === 'cancel_daemon_request') { await requested; controller.abort(); }
+  await done; controller.abort();
+  expect(f.messages.filter(({ kind }) => kind === 'cancel_daemon_request')).toHaveLength(0);
+  expect(f.onFatal).toHaveBeenCalledOnce(); await f.runtime.disconnect();
+});
+
+it('sends a per-request cancellation in order and waits for the matching daemon reply', async () => {
+  const one = new AbortController(); const two = new AbortController();
+  const replies: unknown[] = [];
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    replies.push(...await Promise.all([
+      io.request({ kind: 'get_delivery', conversationId: 'one' }, one.signal),
+      io.request({ kind: 'get_delivery', conversationId: 'two' }, two.signal),
+    ]));
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+  }));
+  await f.initialize(); const active = turnStart(); const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: active });
+  await vi.waitFor(() => expect(sentRequests(f.messages)).toHaveLength(2));
+  const requests = sentRequests(f.messages); one.abort();
+  await vi.waitFor(() => expect(f.messages.filter(({ kind }) => kind === 'cancel_daemon_request')).toHaveLength(1));
+  expect(f.messages.find(({ kind }) => kind === 'cancel_daemon_request')).toMatchObject({ turn: active.turn, requestId: requests[0]!.requestId });
+  expect(f.messages.findIndex(({ kind }) => kind === 'cancel_daemon_request')).toBeGreaterThan(f.messages.indexOf(requests[0]!));
+  expect(f.messages.some(({ kind }) => kind === 'turn_finished')).toBe(false);
+  for (const request of requests) await f.runtime.receive({ ...f.envelope, kind: 'daemon_reply', turn: active.turn, requestId: request.requestId,
+    reply: { kind: 'error', code: 'forbidden', message: 'finished processing' } });
+  await done; expect(replies).toHaveLength(2);
+  two.abort();
+  expect(f.messages.filter(({ kind }) => kind === 'cancel_daemon_request')).toHaveLength(1);
+  expect(f.onFatal).not.toHaveBeenCalled(); await f.runtime.disconnect();
+});
+
 function blockFirstProgress(f: ReturnType<typeof fixture>, release: Promise<void>): Promise<void> {
   const entered = deferred<void>();
   const send = f.transport.send.getMockImplementation()!;

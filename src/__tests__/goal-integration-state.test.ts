@@ -63,7 +63,7 @@ it.each(['Goal was not completed', 'Goal was never completed', 'Goal was aborted
 );
 
 function pendingInquiry(id: string, kind: NonNullable<GoalQuestion['kind']>): GoalQuestion {
-  return { id, kind, recipient: 'human', body: '確認してください', status: 'pending', createdAt: earlier,
+  return { id, kind, questionType: 'routine', recipient: 'human', body: '確認してください', status: 'pending', createdAt: earlier,
     options: ['続行', '中止'], recommendation: '続行', targetSha: sourceSha,
     ...(kind === 'approval' ? { operation: {
       toolName: 'Bash', args: '{"command":"git status"}', cwd: '/project', argsDigest: 'c'.repeat(64),
@@ -76,7 +76,7 @@ function completionInquiries(): GoalQuestion[] {
     pendingInquiry('650e8400-e29b-41d4-a716-446655440002', 'approval'),
     pendingInquiry('650e8400-e29b-41d4-a716-446655440003', 'operation_request'),
     { ...pendingInquiry('650e8400-e29b-41d4-a716-446655440004', 'approval'), status: 'answered',
-      answer: { text: '確認済み', decision: 'allow', scope: 'goal', source: 'slack', answeredAt: earlier }, consumedAt: earlier },
+      answer: { answeredBy: 'human' as const, text: '確認済み', decision: 'allow', scope: 'goal', source: 'slack', answeredAt: earlier }, consumedAt: earlier },
     { ...pendingInquiry('650e8400-e29b-41d4-a716-446655440005', 'question'), status: 'withdrawn',
       withdrawalReason: 'No longer needed', withdrawnAt: earlier },
   ];
@@ -757,7 +757,7 @@ it.each(['completeGoal', 'checkGoalCompletion'] as const)(
     if (path === 'checkGoalCompletion') await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
     doubles.contentIncluded.mockResolvedValue(true); doubles.update.mockClear();
     const answered: GoalQuestion = { ...goal.questions![0]!, status: 'answered',
-      answer: { text: '続行', source: 'tui', answeredAt: now } };
+      answer: { answeredBy: 'human' as const, text: '続行', source: 'tui', answeredAt: now } };
     const added = pendingInquiry('650e8400-e29b-41d4-a716-446655440006', 'operation_request');
     const update = doubles.update.getMockImplementation()!;
     doubles.update.mockImplementationOnce(async (id: string, transform: (current: Goal) => Goal) => {

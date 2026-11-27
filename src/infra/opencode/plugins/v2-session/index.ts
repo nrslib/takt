@@ -1,9 +1,26 @@
 import type { Plugin } from '@opencode/plugin';
 import { TAKT_V2_METADATA_KEY, TAKT_V2_PLUGIN_ID } from '../../v2-contract.js';
+import { isOpenCodeExternalDirectoryRequestAllowed } from '../../external-directories.js';
 
 const plugin: Plugin.Plugin = {
   id: TAKT_V2_PLUGIN_ID,
   async setup(context) {
+    const permission = await context.permission.hook('evaluate', async (request) => {
+      if (request.action !== 'external_directory') return;
+      const session = await context.session.get({ sessionID: request.sessionID });
+      const settings = session.metadata?.[TAKT_V2_METADATA_KEY];
+      if (typeof settings !== 'object' || settings === null || Array.isArray(settings)
+        || !('workspaceDirectories' in settings)) return;
+      const workspace = settings.workspaceDirectories;
+      const directories = settings.contextDirectories;
+      const readonly = 'readonlyDirectories' in settings ? settings.readonlyDirectories : [];
+      if (!Array.isArray(workspace) || !workspace.every((directory) => typeof directory === 'string')
+        || !Array.isArray(directories) || !directories.every((directory) => typeof directory === 'string')
+        || !Array.isArray(readonly) || !readonly.every((directory) => typeof directory === 'string')) {
+        throw new Error('TAKT workspace policy is invalid');
+      }
+      request.effect = isOpenCodeExternalDirectoryRequestAllowed(request.resources, [...workspace, ...directories, ...readonly]) ? 'allow' : 'deny';
+    });
     const registration = await context.session.hook('context', async (request) => {
       const session = await context.session.get({ sessionID: request.sessionID });
       const settings = session.metadata?.[TAKT_V2_METADATA_KEY];
@@ -42,6 +59,7 @@ const plugin: Plugin.Plugin = {
       id: tool.id, ...(tool.options?.namespace === undefined ? {} : { namespace: tool.options.namespace }),
     })) });
     return async () => {
+      await permission.dispose();
       await registration.dispose();
       await coercion.dispose();
       await inventory.dispose();

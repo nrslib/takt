@@ -22,8 +22,8 @@ const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment:
   running: RunningOperationSchema.omit({ owner: true }).extend({ kind: z.string().min(1), generation: sequence.optional(), startedAt: sequence.optional() }).nullable(), interrupted: z.boolean(),
   queuedMessageCount: sequence.optional() }).strict()
   .superRefine((state, ctx) => {
-    if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null)) {
-      ctx.addIssue({ code: 'custom', message: 'Director state contains manager operations' });
+    if (state.assignment.kind === 'daemon' && [state.pending, state.approval].some((value) => value !== null && value.managerId === undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'Director proposal requires its manager' });
     }
     if (conversationId(state.assignment) !== state.conversationId || state.pending !== null && state.pending.revision !== state.revision) {
       ctx.addIssue({ code: 'custom', message: 'Inconsistent conversation state' });
@@ -235,7 +235,8 @@ export class ConversationTransferReceiver {
           }
           const directory = parsed.kind === 'goal' ? parsed.goal.repositoryDirectory
             : parsed.kind === 'inquiry' && parsed.inquiry.target.goalId !== null ? parsed.inquiry.target.repositoryDirectory : undefined;
-          if (directory !== undefined && (transfer.assignment === undefined || !transfer.assignment.repositoryDirectories.includes(directory))) {
+          const directorInquiry = transfer.assignment?.kind === 'daemon' && parsed.kind === 'inquiry' && parsed.inquiry.target.goalId !== null;
+          if (directory !== undefined && !directorInquiry && (transfer.assignment === undefined || !transfer.assignment.repositoryDirectories.includes(directory))) {
             throw new Error('Display repository outside assignment');
           }
           if (parsed.kind === 'epic' && (transfer.assignment?.kind !== 'workspace' || parsed.epic.workspaceId !== transfer.assignment.workspaceId

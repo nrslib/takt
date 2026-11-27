@@ -18,6 +18,7 @@ import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
+import { getLabel } from '../../shared/i18n/index.js';
 
 const managerToolNames = [
   ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
@@ -31,6 +32,7 @@ const addRepositoryTools = new Set([
 ]);
 
 export interface ManagerTurnInput {
+  openCodeWorkspaceAccess?: import('../../infra/providers/types.js').OpenCodeWorkspaceAccess;
   requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
   operationId?: string;
   prompt: string;
@@ -91,7 +93,9 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           signal.throwIfAborted();
           const additions = new Set<string>();
           const native = plan.ctx.provider.supportsNativeImageInput;
-          const prompt = native ? input.prompt : expandImageAttachmentPlaceholders(input.prompt, input.imageAttachments);
+          const basePrompt = native ? input.prompt : expandImageAttachmentPlaceholders(input.prompt, input.imageAttachments);
+          const prompt = plan.ctx.providerType === 'opencode' && input.openCodeWorkspaceAccess !== undefined
+            ? `${basePrompt}\n\n${getLabel('manager.workspaceAccessTiming', plan.ctx.lang)}` : basePrompt;
           if (!native && input.imageAttachments?.length) input.onText?.(`Provider "${plan.ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
           const response = await callWithManagerSessionRecovery(agent, {
             resume: prompt,
@@ -100,6 +104,8 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           }, {
             cwd, model: plan.ctx.model, sessionId: input.patrol ? undefined : input.sessionId, abortSignal: signal,
             providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
+            ...(plan.ctx.providerType === 'opencode' && input.openCodeWorkspaceAccess !== undefined
+              ? { openCodeWorkspaceAccess: input.openCodeWorkspaceAccess } : {}),
             aiReviewPermissions: plan.ctx.aiReviewPermissions,
             ...(native && input.imageAttachments?.length ? { imageAttachments: input.imageAttachments } : {}),
             ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined

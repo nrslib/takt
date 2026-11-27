@@ -65,6 +65,8 @@ describe('E2E: Goal specification file', () => {
       outOfScope: [],
       acceptanceCriteria: ['AC-2'],
       constraints: [],
+      creationOrigin: 'manager',
+      questionRoute: 'human',
       specifications: {
         gherkin: [
           'Feature: Answer file',

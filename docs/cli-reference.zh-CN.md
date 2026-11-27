@@ -153,6 +153,8 @@ takt director --help
 
 director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话会产生 provider 费用；事件处理也会调用 provider 并产生费用。
 
+manager 选择与准备、一次确认注册、Slack 按钮、问题接收方、提升与交回、fire 和 Slack 限制，参阅 [director 使用指南](./director.zh-CN.md)。
+
 ### 与 manager 的分工和人工决定
 
 manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，对需要人工处理的事项保存通知，包括等待合并、已暂停的目标、已保存的 `blocked` 通知和未回答的询问。向 manager 提问或传达信息时，通过 manager 对话发送，并将 `director` 记录为发言者。同一对象的保存状态不变时，不会重复通知。
@@ -163,7 +165,7 @@ manager 推进其负责的仓库或 workspace 的目标，提交任务、整合�
 
 daemon 重启后，尚未开始的消息即使没有客户端连接也会执行。因 daemon 停止而中断的消息，以及启动时仍为 `running` 的消息，会按原始接收顺序重新投递。用户明确中断的消息不会重新投递。
 
-director 不能执行 shell 命令、写入文件或修改配置。run 阶段、裁定、日志等任务内部信息由各 manager 检查。合并决策、规格决策以及删除等不可逆操作仍由人决定；director 不代替人回答询问。
+director 不能执行 shell 命令、写入文件或修改配置。run 阶段、裁定、日志等任务内部信息由各 manager 检查。director 回答受托目标在约定范围内的普通问题；授予权限、不可逆操作、更改约定、只有人能完成的工作、只有人知道的事实以及 director 拿不准的问题都交给人。director 不代替人回答这些问题，合并决定也由人作出。
 
 只有人明确指示“合并目标 G”时，director 才会请 G 的 manager 使用 `takt merge` 合并其 PR。转发前，director 会唯一确定仓库、目标和 manager，确认当前目标为 `awaiting_merge`，并读取已保存的 PR 编号和 URL。如果对象不明确、状态不同、没有保存 PR 或读取失败，会向人说明原因而不转发。director 自己不执行合并；manager 通过 `takt_merge_goal_pr` 调用 `takt merge`。转发或接受指令本身不代表合并成功；director 会根据稍后收到的同一操作 ID 的结果报告成败。执行时仍会通过现有检查：如果目标已暂停、已中止、不再是 `awaiting_merge`，或 PR 编号与保存的编号不符，则不会合并。
 
@@ -178,7 +180,7 @@ manager 列表（`takt_list_managers`）会列出无法读取的 project 及原�
 | 配置项 | 含义 |
 |--------|------|
 | `director.slack.channel_id` | 用于 director 对话和汇总通知的 Slack 频道。 |
-| `director.slack.allowed_user_ids` | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
+| `director.slack.allowed_user_ids` | 允许从 Slack 向 director 发言及操作其注册、询问按钮的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言或操作。 |
 
 参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
 

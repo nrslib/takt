@@ -221,13 +221,13 @@ export type OpenCodeAllowedTools = readonly string[];
  * restriction is enforced by the explicit per-prompt tools map instead
  * (see buildOpenCodePromptTools).
  *
- * `external_directory` is denied except for explicitly supplied TAKT context
- * directories. This session-scoped rule only holds until the first prompt: a prompt-level tools map is
- * materialized into `session.permission` by OpenCode and replaces this
- * ruleset. The external-directory deny and its narrow exceptions live in
- * the server config passed to `createOpencode` in `server-pool.ts`, which the
- * rewrite does not touch; the rule here covers the window before the first
- * prompt.
+ * Without workspace access, `external_directory` is denied except for TAKT
+ * context directories. With workspace access, requests are checked against
+ * literal workspace and context roots and approved once, never persisted as
+ * wildcard grants. OpenCode materializes each prompt's tools map into session
+ * permissions, replacing these initial rules. The server config in
+ * `server-pool.ts` retains the same external policy across that rewrite;
+ * the initial rules also protect the window before the first prompt.
  */
 export function buildOpenCodeSessionPermission(
   mode?: PermissionMode,
@@ -236,12 +236,22 @@ export function buildOpenCodeSessionPermission(
   allowedMcpTools?: readonly string[],
   strictToolAllowlist?: OpenCodeAllowedTools,
   externalDirectoryAllowlist?: readonly string[],
+  workspaceDirectories?: readonly string[],
+  readonlyDirectories?: readonly string[],
 ): OpenCodePermissionRule[] {
-  const externalDirectoryRules = buildExternalDirectorySessionRules(externalDirectoryAllowlist);
+  const externalDirectoryRules = buildExternalDirectorySessionRules(externalDirectoryAllowlist, workspaceDirectories, readonlyDirectories);
+  const readonlyDirectoryRules = normalizeOpenCodeExternalDirectories(readonlyDirectories).flatMap((directory) => (
+    (['edit', 'write'] as const).map((permission) => ({
+      permission,
+      pattern: openCodeExternalDirectoryPattern(directory),
+      action: 'deny' as const,
+    }))
+  ));
   if (strictToolAllowlist !== undefined) {
     return [
       ...buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools),
       ...externalDirectoryRules,
+      ...readonlyDirectoryRules,
     ];
   }
   const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools)
@@ -256,16 +266,21 @@ export function buildOpenCodeSessionPermission(
     }
   }
   rules.push(...externalDirectoryRules);
+  rules.push(...readonlyDirectoryRules);
   return rules;
 }
 
 function buildExternalDirectorySessionRules(
   directories: readonly string[] | undefined,
+  workspaceDirectories: readonly string[] | undefined,
+  readonlyDirectories: readonly string[] | undefined,
 ): OpenCodePermissionRule[] {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
+  const readonly = normalizeOpenCodeExternalDirectories(readonlyDirectories);
+  if (workspaceDirectories !== undefined) return [{ permission: 'external_directory', pattern: '*', action: 'ask' }];
   return [
     { permission: 'external_directory', pattern: '*', action: 'deny' },
-    ...normalized.map((directory) => ({
+    ...[...new Set([...normalized, ...readonly])].map((directory) => ({
       permission: 'external_directory',
       pattern: openCodeExternalDirectoryPattern(directory),
       action: 'allow' as const,
@@ -343,6 +358,7 @@ export function buildOpenCodePromptTools(
   allowedTools?: OpenCodeAllowedTools,
   allowedMcpTools?: readonly string[],
   strictToolAllowlist?: OpenCodeAllowedTools,
+  readonlyDirectories?: readonly string[],
 ): Record<string, boolean> {
   const enabledPermissions = new Set<string>();
   if (allowedTools !== undefined) {
@@ -377,6 +393,7 @@ export function buildOpenCodePromptTools(
   for (const permission of allowedMcpTools ?? []) {
     tools[permission] = enabledPermissions.has(permission);
   }
+  if ((readonlyDirectories?.length ?? 0) > 0) tools.bash = false;
   return tools;
 }
 
@@ -484,6 +501,9 @@ export interface OpenCodeCallOptions {
   cwd: string;
   /** Exact TAKT-owned context directories approved for external reads. */
   externalDirectoryAllowlist?: readonly string[];
+  /** User-configured external directories with read-only access. */
+  readonlyDirectories?: readonly string[];
+  workspaceAccess?: import('../providers/types.js').OpenCodeWorkspaceAccess;
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;

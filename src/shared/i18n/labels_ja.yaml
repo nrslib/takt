@@ -445,11 +445,14 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 director:
+  slackGoalRegistered: "ゴール登録完了: {id}"
   slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
   patrolFailed: "director の見回りに失敗しました"
   projectUnreadable: "director が project を読み取れませんでした"
   description: "実験的な director 会話 TUI を開きます"
   experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
+  pendingQuestions: "未回答の質問: {count}"
+  inputHint: "Enter: 送信 / Ctrl+R: 質問に回答 / Ctrl+C: 終了"
   costNotice: "director は AI を動かすため、provider API の費用がかかります。"
   placeholder: "manager の状況や指示を相談してください"
   managerReply: "manager {managerId} の返事（操作ID: {operationId}）: {message}"
@@ -458,6 +461,9 @@ director:
 manager:
   verifyRepositoryRequired: "どのリポジトリの仕様を検証しますか？対象を伝えて /make-goal で登録案を作成し、もう一度 /verify を実行してください。"
   verifyInterpretationFailed: "検証結果の説明に失敗しました。検査器の結果を表示します。原因: {error}"
+  workspaceAddedNextTurn: "workspace に追加しました: {repositories}。次のターンから読み取りと書き込みができます。"
+  workspaceMissing: "登録先が存在しないため、このターンの許可対象から除外しました: {repositories}。登録は保持し、次のターンで再確認します。"
+  workspaceAccessTiming: "workspace の読み書き権限はターン開始時の登録一覧に固定されています。このターンで追加したリポジトリは次のターンから使えます。"
   goalPr:
     preparationFailed: "PR の準備に失敗しました。原因を確認し、次の操作を判断してください。原因: {reason}"
     objective: "目的"
@@ -547,6 +553,7 @@ manager:
   goSummaryUnavailable: "材料が不足しているため、ゴールの登録案を作れませんでした。会話を続けてください。"
   summaryWorking: "ゴールの登録案を作っています"
   summary:
+    manager: "担当 manager"
     title: "ゴールの登録案"
     repository: "リポジトリ"
     objective: "目的"

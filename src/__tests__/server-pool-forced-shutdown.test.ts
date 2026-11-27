@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { cleanupPendingSessionsMock, startServerMock } = vi.hoisted(() => ({
@@ -46,7 +47,7 @@ async function expectPromisePending(promise: Promise<unknown>): Promise<void> {
     () => { settled = true; },
     () => { settled = true; },
   );
-  await Promise.resolve();
+  await setImmediate();
   expect(settled).toBe(false);
 }
 
@@ -67,6 +68,32 @@ describe('OpenCode server pool forced shutdown', () => {
     vi.resetModules();
     cleanupPendingSessionsMock.mockReset().mockResolvedValue(undefined);
     startServerMock.mockReset();
+  });
+
+  it('waits for a workspace acquisition probing model metadata before completing owner cleanup', async () => {
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await loadServerPool();
+    const outputLimit = deferred<number>();
+    const probing = deferred<void>();
+    const probeClose = vi.fn(async () => undefined);
+    const workspaceClose = vi.fn(async () => undefined);
+    startServerMock.mockResolvedValueOnce({ ...serverStartResult(probeClose), client: {
+      sdkState: { directory: '/test/managed/opencode', stale: false },
+      getModelOutputLimit: async () => { probing.resolve(); return outputLimit.promise; },
+    } }).mockResolvedValueOnce(serverStartResult(workspaceClose));
+    const acquisition = acquireOpenCodeClient('probe/model', undefined, undefined, undefined,
+      'workspace-session', undefined, false, undefined, undefined, 32000, '/tmp',
+      { ownerId: 'probing-manager', directories: ['/tmp'] });
+    await probing.promise;
+    const closing = closeOpenCodeWorkspaceServers('probing-manager');
+    await expectPromisePending(closing);
+    outputLimit.resolve(4096);
+    const acquired = await acquisition;
+    expect(probeClose).toHaveBeenCalledOnce();
+    expect(workspaceClose).not.toHaveBeenCalled();
+    await expectPromisePending(closing);
+    acquired.release();
+    await closing;
+    expect(workspaceClose).toHaveBeenCalledOnce();
   });
 
   it('waits for temporary-session cleanup and child exit and shares overlapping shutdown requests', async () => {
@@ -210,6 +237,48 @@ describe('OpenCode server pool forced shutdown', () => {
     childExit.resolve();
     await shutdown;
 
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('waits for an invalidated workspace server when its owner closes', async () => {
+    const childExit = deferred<void>();
+    const closeStarted = deferred<void>();
+    const close = vi.fn(() => {
+      closeStarted.resolve();
+      return childExit.promise;
+    });
+    startServerMock.mockResolvedValue(serverStartResult(close));
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await loadServerPool();
+
+    const acquired = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined,
+      undefined, false, undefined, undefined, undefined, '/tmp',
+      { ownerId: 'invalidated-workspace-owner', directories: ['/tmp'] });
+    acquired.invalidate(new Error('server invalidated'));
+    await closeStarted.promise;
+    const closing = closeOpenCodeWorkspaceServers('invalidated-workspace-owner');
+
+    await expectPromisePending(closing);
+    childExit.resolve();
+    await closing;
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('reports an invalidated workspace server stop failure when its owner closes', async () => {
+    const stopFailure = new Error('invalidated workspace server did not stop');
+    const close = vi.fn().mockRejectedValue(stopFailure);
+    startServerMock.mockResolvedValue(serverStartResult(close));
+    const { acquireOpenCodeClient, closeOpenCodeWorkspaceServers } = await loadServerPool();
+
+    const acquired = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined,
+      undefined, false, undefined, undefined, undefined, '/tmp',
+      { ownerId: 'failed-invalidated-workspace-owner', directories: ['/tmp'] });
+    acquired.invalidate(new Error('server invalidated'));
+    const closeError = await closeOpenCodeWorkspaceServers('failed-invalidated-workspace-owner')
+      .catch((error: unknown) => error);
+
+    expect(closeError).toBeInstanceOf(AggregateError);
+    expect((closeError as AggregateError).errors).toContain(stopFailure);
     expect(close).toHaveBeenCalledOnce();
   });
 

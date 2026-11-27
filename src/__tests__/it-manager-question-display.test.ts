@@ -148,7 +148,8 @@ function expectGoalMemory(memory: string, goal: Goal): void {
     repositories: [{
       repositoryDirectory: cwd, goalCount: 1, finishedGoalCount: 0, diagnosticCount: 0, diagnostics: [],
       goals: [{
-        id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
+        id: goal.id, creationOrigin: goal.creationOrigin, questionRoute: goal.questionRoute,
+        objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
         branch: goal.branch, integrationBranch: goal.integrationBranch,
         taskCount: 0, taskStates: {}, workUnitCount: 0,
         pendingQuestionCount: 0, questions: [], workLogCount: 0, workLog: [],
@@ -1336,7 +1337,7 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
   expect(withdrawn.questions).toEqual([{
-    ...question, kind: 'question', status: 'withdrawn', withdrawnAt: expect.any(String),
+    ...question, kind: 'question', questionType: 'routine', status: 'withdrawn', withdrawnAt: expect.any(String),
   }]);
   expect(withdrawn.notifications).toEqual(saved.notifications);
   const display = await readManagerTestDisplay(cwd, lang);

@@ -4,7 +4,7 @@ import { epicVerificationRecovery } from '../../infra/epics/state.js';
 import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { SnapshotItem } from '../manager/conversationPort.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
-import { GoalQuestionSchema } from '../../infra/goals/schema.js';
+import { StandaloneInquirySchema } from '../../infra/goals/schema.js';
 import { DaemonDisplayFiles, readDisplayFile } from '../../infra/daemon/displayFiles.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
@@ -67,7 +67,7 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
         yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
           repositoryDirectory: directory, awaitingHumanMerge: isGoalAwaitingHumanMerge(goal, tasks) } };
         for (const question of goal.questions ?? []) {
-          if (question.status === 'pending') yield { kind: 'inquiry', inquiry: { target: { goalId: goal.id, repositoryDirectory: directory }, question, objective: goal.objective } };
+          if (question.status === 'pending' && question.recipient === 'human') yield { kind: 'inquiry', inquiry: { target: { goalId: goal.id, repositoryDirectory: directory }, question, objective: goal.objective } };
         }
         const dates = new Map((goal.notifications ?? []).map((notice) => [JSON.stringify([directory, goal.id, 'notification', notice.id]), notice.recordedAt]));
         for (const event of projectManagerDisplayEvents(goal, directory, configuration.language ?? global.language ?? 'en', -Infinity, policy)) {
@@ -81,7 +81,7 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
     for (const entry of await listWatchEntries(root)) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
       reading = join(root, entry.name);
-      const question = GoalQuestionSchema.parse(await readDisplayFile(reading));
+      const question = StandaloneInquirySchema.parse(await readDisplayFile(reading));
       if (`${question.id}.json` !== entry.name) throw new Error('Display inquiry identity mismatch');
       if (question.status === 'pending') yield { kind: 'inquiry', inquiry: { target: { goalId: null, owner: identity }, question } };
     }
@@ -89,4 +89,23 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
     yield readDiagnostic(reading, error);
     throw error;
   }
+}
+
+export async function* directorInquiryProjection(routing: DaemonRouting, files: DaemonDisplayFiles): AsyncGenerator<SnapshotItem> {
+  const seen = new Set<string>();
+  const errors: unknown[] = [];
+  for (const route of await routing.routes()) {
+    const directory = route.repositoryDirectory;
+    if (seen.has(directory)) continue;
+    seen.add(directory);
+    try {
+      for await (const item of conversationProjection(routing, files, { kind: 'repository', repositoryDirectory: directory })) {
+        if (item.kind === 'inquiry' && item.inquiry.target.goalId !== null) yield item;
+      }
+    } catch (error) {
+      errors.push(error);
+      yield readDiagnostic(directory, error);
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'Cannot read all director inquiries');
 }

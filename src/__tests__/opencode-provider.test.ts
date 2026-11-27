@@ -93,6 +93,34 @@ import { ProviderRegistry } from '../infra/providers/index.js';
 import { runAgent } from '../agents/runner.js';
 
 describe('OpenCodeProvider tool naming addendum', () => {
+  it('passes configured read-only external directories without treating them as a writable workspace', async () => {
+    const options = {
+      cwd: '/repos/a', model: 'probe/model', permissionMode: 'full' as const,
+      providerOptions: { opencode: { readonlyDirectories: ['/refs/api'] } },
+    };
+
+    await new OpenCodeProvider().setup({ name: 'coder' }).call('inspect reference', options);
+
+    expect(openCodeMocks.callOpenCode.mock.calls[0]![2]).toMatchObject({ readonlyDirectories: ['/refs/api'] });
+    expect(openCodeMocks.callOpenCode.mock.calls[0]![2]).not.toHaveProperty('workspaceAccess');
+  });
+
+  it.each([undefined, 'manager persona'])('transfers workspace access separately from run context (system=%s)', async (systemPrompt) => {
+    const openCodeWorkspaceAccess = { ownerId: 'workspace-conversation', directories: ['/repos/b', '/repos/c'] };
+    const options = {
+      cwd: '/repos/a', model: 'probe/model', permissionMode: 'full' as const,
+      openCodeExternalDirectories: ['/run/context'], openCodeWorkspaceAccess,
+    };
+
+    await new OpenCodeProvider().setup({ name: 'manager', systemPrompt }).call('inspect workspace', options);
+
+    const forwarded = systemPrompt === undefined
+      ? openCodeMocks.callOpenCode.mock.calls[0]![2]
+      : openCodeMocks.callOpenCodeCustom.mock.calls[0]![3];
+    expect(forwarded).toMatchObject({
+      workspaceAccess: openCodeWorkspaceAccess, externalDirectoryAllowlist: ['/run/context'], permissionMode: 'full',
+    });
+  });
   it.each([{ allowedTools: ['Read'] }, { allowedTools: [] }])('includes explicitly enabled Skill in Phase 1 instructions with tools %j', ({ allowedTools }) => {
     const provider = new OpenCodeProvider();
     const options = { cwd: '/work', executionPhase: 1 as const, providerOptions: { opencode: { skills: { enabled: true } } } };

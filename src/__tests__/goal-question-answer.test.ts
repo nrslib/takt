@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { answerTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import type { AnswerGoalQuestionInput } from '../features/mcp/schemas.js';
-import type { Goal } from '../infra/goals/schema.js';
+import { GoalQuestionSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
@@ -44,7 +44,7 @@ it('saves a human answer with source mcp and records the manager event', async (
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
   const saved = goal.questions![0]!;
   expect(saved.status).toBe('answered');
-  expect(saved.answer).toMatchObject({ text: 'CSV', source: 'mcp', answeredAt: expect.any(String) });
+  expect(saved.answer).toMatchObject({ text: 'CSV', source: 'mcp', answeredBy: 'human', answeredAt: expect.any(String) });
   expect(Date.parse(saved.answer!.answeredAt)).toBeGreaterThanOrEqual(before);
   expect(Date.parse(saved.answer!.answeredAt)).toBeLessThanOrEqual(Date.now());
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(cwd, expect.objectContaining({
@@ -61,7 +61,7 @@ it('saves a structured report answer for an operation request with source mcp', 
 
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
   const saved = goal.questions![0]!;
-  expect(saved.answer).toMatchObject({ text: '', report: 'completed', source: 'mcp', answeredAt: expect.any(String) });
+  expect(saved.answer).toMatchObject({ answeredBy: 'human' as const, text: '', report: 'completed', source: 'mcp', answeredAt: expect.any(String) });
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(cwd, expect.objectContaining({
     kind: 'answer', goalId, questionId, answer: saved.answer,
   }));
@@ -70,7 +70,7 @@ it('saves a structured report answer for an operation request with source mcp', 
 it.each(['answered', 'withdrawn'] as const)('rejects answering a %s question without saving an event', async (status) => {
   goal.questions = [{
     id: questionId, body: '出力形式はどれですか', recipient: 'human', status,
-    ...(status === 'answered' ? { answer: { text: 'CSV', source: 'tui', answeredAt: '2026-10-19T01:00:00.000Z' } } : {}),
+    ...(status === 'answered' ? { answer: { answeredBy: 'human' as const, text: 'CSV', source: 'tui', answeredAt: '2026-10-19T01:00:00.000Z' } } : {}),
   }];
   const before = structuredClone(goal);
 
@@ -129,6 +129,18 @@ it('rejects a root outside the MCP scope before reading or answering', async () 
   expect(doubles.event).not.toHaveBeenCalled();
 });
 
+it('does not let the human answer tool claim a director respondent', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  const answer = { text: 'CSV', answeredBy: 'director' };
+  const before = structuredClone(goal);
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(goal).toEqual(before);
+  expect(doubles.event).not.toHaveBeenCalled();
+});
+
 it('reports a persistence failure without saving a manager event', async () => {
   goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
   doubles.update.mockRejectedValueOnce(new Error('publication failed'));
@@ -161,6 +173,27 @@ it('reports that the answer was saved when recording the manager event fails', a
   expect(firstTextContent(result.content)).toMatch(/delivery to the manager is pending.*do not answer again/iu);
   expect(goal.questions![0]!.status).toBe('answered');
   expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+  expect(goal.questions![0]!.answer).toMatchObject({ text: 'CSV', source: 'mcp', answeredBy: 'human' });
+});
+
+it('rejects a stale human answer when the pending question moves to the director before the locked update', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  const lockedStateReached = vi.fn();
+  doubles.update.mockImplementationOnce(async (_directory: string, _id: string, transform: (current: Goal) => Goal) => {
+    const moved = GoalQuestionSchema.parse({ ...goal.questions![0], questionType: 'routine', recipient: 'director' });
+    goal = { ...goal, questionRoute: 'director', questions: [moved] };
+    lockedStateReached();
+    goal = transform(structuredClone(goal));
+    return structuredClone(goal);
+  });
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(lockedStateReached).toHaveBeenCalledOnce();
+  expect(result.isError).toBe(true);
+  expect(goal.questions![0]).toMatchObject({ status: 'pending', recipient: 'director' });
+  expect(goal.questions![0]!.answer).toBeUndefined();
+  expect(doubles.event).not.toHaveBeenCalled();
 });
 
 it('keeps the saved-and-pending explanation when the event failure is a permission error', async () => {
