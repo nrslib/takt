@@ -10,6 +10,7 @@ import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTy
 import { isDeletableTaskStatus, type DeletableTaskStatus } from '../../features/tasks/list/taskDeleteSelection.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
 import { program } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 
@@ -58,13 +59,25 @@ function parseMergeArgument(value: string): number | string {
 }
 
 const workerCommand = program.command('worker')
-  .description('Connect a remote worker to a daemon using --url and --token; manage registrations with add, list and remove')
+  .description('Connect a remote worker to a daemon using --url and TAKT_WORKER_TOKEN or --token-file; manage registrations with add, list and remove')
   .option('--url <url>', 'Daemon URL (HTTPS is required outside localhost)')
-  .option('--token <token>', 'Worker registration token')
-  .action(async (options: { url?: string; token?: string }) => {
-    if (options.url === undefined || options.token === undefined) throw new Error('Worker startup requires --url and --token');
+  .option('--token <token>', 'Worker registration token (deprecated: visible to ps; use TAKT_WORKER_TOKEN or --token-file)')
+  .option('--token-file <path>', 'Read the worker registration token from a file only the owner can read (mode 600)')
+  .action(async (options: { url?: string; token?: string; tokenFile?: string }) => {
+    if (options.url === undefined) throw new Error('Worker startup requires --url');
+    const { resolveWorkerToken } = await import('../../features/workerPool/workerToken.js');
+    let resolved: ReturnType<typeof resolveWorkerToken>;
+    try {
+      resolved = resolveWorkerToken({ token: options.token, tokenFile: options.tokenFile }, process.env);
+    } catch (error) {
+      process.stderr.write(`${sanitizeTerminalText(getErrorMessage(error))}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const { token, warnings } = resolved;
+    for (const warning of warnings) process.stderr.write(`${warning}\n`);
     const { startWorker } = await import('../../features/workerPool/workerCommands.js');
-    await startWorker(options.url, options.token);
+    await startWorker(options.url, token);
   });
 workerCommand.command('add').description('Register a worker and print its token once')
   .argument('<name>', 'Worker name').option('--concurrency <number>', 'Maximum concurrent tasks', (value: string) => {

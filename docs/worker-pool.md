@@ -67,17 +67,18 @@ Registration writes the connection token to standard output once. You cannot ret
 
 Prepare a worker image with the same TAKT version as the daemon, Node.js, Git, a Git commit name and email, the SDKs or CLIs for the providers in use, and the project's build and test tools. Include `gh` when PR operations or workflows need it. Use `takt install <provider>` for SDKs and prepare additional tools such as the external OpenCode CLI separately. Executable paths specified by daemon configuration must also be available on workers. Tool binaries are not transferred automatically.
 
-Configure the following script as a cloud startup script or service. The only worker-specific connection settings supplied at startup are the URL and registration token. These variables belong to this script; they are not TAKT environment settings.
+Configure the following script as a cloud startup script or service. The only worker-specific connection settings supplied at startup are the URL and registration token.
 
 ```sh
 #!/bin/sh
 set -eu
 : "${WORKER_DAEMON_URL:?Set the daemon HTTPS URL}"
-: "${WORKER_REGISTRATION_TOKEN:?Inject the worker registration token}"
-exec takt worker --url "$WORKER_DAEMON_URL" --token "$WORKER_REGISTRATION_TOKEN"
+: "${TAKT_WORKER_TOKEN:?Inject the worker registration token}"
+export TAKT_WORKER_TOKEN
+exec takt worker --url "$WORKER_DAEMON_URL"
 ```
 
-For example, set the URL to `https://daemon.example.test` and inject the issued token through secret management. If a document or template must show a value, use an obvious fake such as `EXAMPLE_NOT_A_VALID_TOKEN`. Keep real values out of images, Git, startup logs, and shell command tracing. The token is passed as a process argument, so restrict access to the worker environment to trusted users. With the image and startup settings prepared, no login to the worker server is needed after boot.
+For example, set the URL to `https://daemon.example.test` and inject the issued token through secret management. If a document or template must show a value, use an obvious fake such as `EXAMPLE_NOT_A_VALID_TOKEN`. Keep real values out of images, Git, startup logs, and shell command tracing. The token can also be read from a file with `--token-file <path>`; the file must not be accessible by group or others (mode 600; this permission check does not apply on Windows, where you must restrict the file's ACL yourself). Passing the token with `--token <token>` still works, but the token then sits in the process arguments where other users of the machine can read it with ps, so startup prints a warning. Give the token in exactly one of these ways; giving it in more than one way stops startup. With the image and startup settings prepared, no login to the worker server is needed after boot.
 
 ## Verification and operational limits
 

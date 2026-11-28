@@ -67,17 +67,18 @@ takt worker list
 
 worker 镜像应包含与 daemon 相同版本的 TAKT、Node.js、Git、Git 提交姓名和邮箱、所用 provider 的 SDK 或 CLI，以及项目的构建和测试工具。PR 操作或 workflow 需要时，还应安装 `gh`。使用 `takt install <provider>` 安装 SDK，并单独准备外部 OpenCode CLI 等工具。daemon 配置指定的可执行路径也必须在 worker 上可用。工具二进制文件不会自动传输。
 
-将以下脚本配置为云端启动脚本或服务。启动时传入的 worker 专用连接配置只有 URL 和注册令牌。这两个变量属于示例脚本，并非 TAKT 自身的环境变量配置。
+将以下脚本配置为云端启动脚本或服务。启动时传入的 worker 专用连接配置只有 URL 和注册令牌。
 
 ```sh
 #!/bin/sh
 set -eu
 : "${WORKER_DAEMON_URL:?Set the daemon HTTPS URL}"
-: "${WORKER_REGISTRATION_TOKEN:?Inject the worker registration token}"
-exec takt worker --url "$WORKER_DAEMON_URL" --token "$WORKER_REGISTRATION_TOKEN"
+: "${TAKT_WORKER_TOKEN:?Inject the worker registration token}"
+export TAKT_WORKER_TOKEN
+exec takt worker --url "$WORKER_DAEMON_URL"
 ```
 
-例如将 URL 设为 `https://daemon.example.test`，通过秘密管理注入注册时取得的令牌。如需在文档或模板中显示值，请使用 `EXAMPLE_NOT_A_VALID_TOKEN` 等明显的假值。不要把真实值保存到镜像、Git 或启动日志，也不要启用 shell 命令跟踪。令牌通过进程参数传递，因此仅允许可信用户访问 worker 执行环境。通过镜像和启动配置完成准备后，无需在启动后登录 worker 服务器。
+例如将 URL 设为 `https://daemon.example.test`，通过秘密管理注入注册时取得的令牌。如需在文档或模板中显示值，请使用 `EXAMPLE_NOT_A_VALID_TOKEN` 等明显的假值。不要把真实值保存到镜像、Git 或启动日志，也不要启用 shell 命令跟踪。也可以用 `--token-file <path>` 从文件读取令牌；文件权限必须不允许组和其他用户访问（600；此权限检查在 Windows 上不生效，请自行收紧文件的 ACL）。用 `--token <token>` 传递仍然可用，但令牌会出现在进程参数中，同机用户可用 ps 读取，启动时会打印警告。令牌只能用其中一种方式传递；同时用两种以上方式会停止启动。通过镜像和启动配置完成准备后，无需在启动后登录 worker 服务器。
 
 ## 验证与运行限制
 
