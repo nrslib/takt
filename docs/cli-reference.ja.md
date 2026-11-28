@@ -129,7 +129,7 @@ daemon がすでに動いている場合、このコマンドは既存 daemon �
 
 | コマンド | 動作 |
 |----------|------|
-| `takt worker --url <url> --token <token>` | daemon に接続し、割り当てられたタスクを実行し続ける。両オプションが必須 |
+| `takt worker --url <url>` | daemon に接続し、割り当てられたタスクを実行し続ける。`--url` が必須で、トークンは `TAKT_WORKER_TOKEN`、`--token-file <path>`、`--token <token>`（非推奨。ps から読め、警告が出る）のどれか1つで渡す |
 | `takt worker add <name> --concurrency <number>` | worker を登録し、接続トークンを一度だけ標準出力へ表示する |
 | `takt worker list` | 登録名と concurrency をタブ区切りで表示する |
 | `takt worker remove <name>` | 登録を削除し、接続を切る |

@@ -127,7 +127,7 @@ daemon 会等待项目检查完成，再次确认上述条件。无法读取目�
 
 | 命令 | 行为 |
 |------|------|
-| `takt worker --url <url> --token <token>` | 连接 daemon 并持续执行分配的任务；两个选项都必填 |
+| `takt worker --url <url>` | 连接 daemon 并持续执行分配的任务；`--url` 必填，令牌用 `TAKT_WORKER_TOKEN`、`--token-file <path>`、`--token <token>`（已弃用：ps 可读，会打印警告）中的恰好一种方式传递 |
 | `takt worker add <name> --concurrency <number>` | 注册 worker，并向标准输出显示一次连接令牌 |
 | `takt worker list` | 以制表符分隔显示注册名称和 concurrency |
 | `takt worker remove <name>` | 删除注册并断开连接 |

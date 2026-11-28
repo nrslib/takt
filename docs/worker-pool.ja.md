@@ -67,17 +67,18 @@ takt worker list
 
 worker 用のイメージには daemon と同じバージョンの TAKT、Node.js、Git、コミット名・メールアドレス、利用する provider の SDK・CLI、プロジェクトが使うビルド・テスト用の道具を含めます。PR 操作や workflow が使う場合は `gh` も必要です。SDK の導入には `takt install <provider>` を使い、OpenCode の外部 CLI など別途必要な道具も事前に用意します。daemon の設定が指定する実行パスを worker 側でも利用できるようにしてください。道具のバイナリまで転送されるわけではありません。
 
-クラウドの起動スクリプトやサービスへ、次のスクリプトを設定します。起動時に渡す worker 固有の接続設定は URL と登録トークンだけです。両変数はこのスクリプト用で、TAKT 自体の環境変数設定ではありません。
+クラウドの起動スクリプトやサービスへ、次のスクリプトを設定します。起動時に渡す worker 固有の接続設定は URL と登録トークンだけです。
 
 ```sh
 #!/bin/sh
 set -eu
 : "${WORKER_DAEMON_URL:?Set the daemon HTTPS URL}"
-: "${WORKER_REGISTRATION_TOKEN:?Inject the worker registration token}"
-exec takt worker --url "$WORKER_DAEMON_URL" --token "$WORKER_REGISTRATION_TOKEN"
+: "${TAKT_WORKER_TOKEN:?Inject the worker registration token}"
+export TAKT_WORKER_TOKEN
+exec takt worker --url "$WORKER_DAEMON_URL"
 ```
 
-たとえば URL は `https://daemon.example.test` とし、トークンは登録時の値を秘密情報管理から注入します。文書やテンプレートで値を示す必要がある場合は `EXAMPLE_NOT_A_VALID_TOKEN` のような偽物を使ってください。実値をイメージ、Git、起動ログへ保存せず、シェルのコマンド追跡も有効にしません。トークンはプロセス引数で渡すため、worker の実行環境を信頼する利用者に限定します。この準備をイメージと起動設定で済ませれば、起動後に worker サーバーへログインする必要はありません。
+たとえば URL は `https://daemon.example.test` とし、トークンは登録時の値を秘密情報管理から注入します。文書やテンプレートで値を示す必要がある場合は `EXAMPLE_NOT_A_VALID_TOKEN` のような偽物を使ってください。実値をイメージ、Git、起動ログへ保存せず、シェルのコマンド追跡も有効にしません。トークンはファイルから `--token-file <path>` で渡すこともできます。ファイルはグループと他人がアクセスできない権限（600）にしてください（この権限の確認は Windows では効かないため、ファイルの ACL を自分で絞ってください）。`--token <token>` で渡す形も残りますが、トークンがプロセス引数に載り、同じマシンの利用者が ps で読めるため、起動時に警告が出ます。トークンの渡し方はどれか1つだけにしてください。2つ以上で渡すと起動を止めます。この準備をイメージと起動設定で済ませれば、起動後に worker サーバーへログインする必要はありません。
 
 ## 動作確認と運用上の制約
 

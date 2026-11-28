@@ -128,7 +128,7 @@ If `takt manager` has a different version or CLI path from a resident daemon, it
 
 | Command | Behavior |
 |---------|----------|
-| `takt worker --url <url> --token <token>` | Connects to the daemon and keeps executing assigned tasks; both options are required |
+| `takt worker --url <url>` | Connects to the daemon and keeps executing assigned tasks; `--url` is required, and the token comes from exactly one of `TAKT_WORKER_TOKEN`, `--token-file <path>`, or `--token <token>` (deprecated: visible to ps, prints a warning) |
 | `takt worker add <name> --concurrency <number>` | Registers a worker and prints its connection token to standard output once |
 | `takt worker list` | Prints registered names and concurrency separated by a tab |
 | `takt worker remove <name>` | Removes a registration and disconnects it |
