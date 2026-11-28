@@ -163,6 +163,30 @@ it('preserves idle shutdown after an ordinary ensure without retaining an attach
   await f.stopWhenIdle();
 });
 
+it('starts when a registered project reuses a workflow quality gate through a YAML alias', async () => {
+  const directory = getGlobalConfigDir();
+  const repository = join(directory, 'repository');
+  await mkdir(join(repository, '.takt'), { recursive: true });
+  await writeFile(join(repository, '.takt', 'config.yaml'), `workflow_overrides:
+  steps:
+    implement:
+      quality_gates:
+        - &build
+          type: command
+          run_at: before_report
+          command: npm run build
+    fix:
+      quality_gates:
+        - *build
+`);
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+
+  const f = await fixture(false);
+  const socket = await lifecycle.ensureDaemon({ retainConnection: true });
+  cleanups.push(async () => { socket.destroy(); });
+  expect(await readDaemonIpcState(f.directory)).toBeDefined();
+});
+
 it.each([true, false])('keeps saved work when the idle scan starts before saving: %s', async (scanBeforeSave) => {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'repository');
