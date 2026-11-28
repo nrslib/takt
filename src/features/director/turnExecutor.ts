@@ -28,7 +28,7 @@ export function createDirectorTurnExecutor(plan: DirectorConversationPlan, confi
         const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
         const response = await agent.call(input.prompt, {
           cwd: plan.cwd, model: plan.ctx.model, language: plan.ctx.lang, sessionId,
-          outputSchema: getDirectorOutputSchema(plan.ctx.providerType),
+          outputSchema: getDirectorOutputSchema(plan.ctx.providerType, input.eventTurn),
           permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,
           providerOptions: plan.ctx.providerOptions, abortSignal: input.abortSignal,
           callerManagedSession: true, callerManagedMcp: true, mcpServers: servers, preparedMcp: prepared,
