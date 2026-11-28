@@ -39,6 +39,7 @@ export interface ManagerTurnInput {
   sessionId: string | undefined;
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
+  eventTurn?: true;
   patrol?: boolean;
   verify?: ResolvedFormalSpecConfiguration & { repositoryDirectory: string };
   onProviderOutput?: () => void;

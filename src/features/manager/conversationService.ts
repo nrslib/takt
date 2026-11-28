@@ -285,6 +285,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
+              ...(!human && assignment.kind === 'daemon' ? { eventTurn: true } : {}),
               ...(workspaceAccess === undefined ? {} : { openCodeWorkspaceAccess: workspaceAccess.access }),
               ...(imageAttachments.length === 0 ? {} : { imageAttachments }),
               requestDaemon: io.request,

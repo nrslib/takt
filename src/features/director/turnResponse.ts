@@ -16,9 +16,10 @@ interface OutputSchema {
   pattern?: string;
 }
 
-export function getDirectorOutputSchema(provider: ProviderType): Record<string, unknown> {
+export function getDirectorOutputSchema(provider: ProviderType, eventTurn?: true): Record<string, unknown> {
   const schema = structuredClone(getManagerOutputSchema(provider));
   const root = schema as OutputSchema;
+  if (eventTurn) return { ...schema, properties: { ...root.properties, summary: { type: 'null' } } };
   const summary = root.properties?.summary?.anyOf?.find((branch) => branch.type === 'object');
   if (summary?.properties === undefined || summary.required === undefined) throw new Error('Missing goal summary output schema');
   summary.properties.managerId = { type: 'string', pattern: '^manager-[a-f0-9]{64}$' };

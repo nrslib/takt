@@ -7,6 +7,7 @@ import { makeProvider } from './test-helpers.js';
 import * as adapters from '../infra/providers/mcp/index.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
+import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
 afterEach(() => vi.restoreAllMocks());
 const success = { persona: 'director', status: 'done' as const, content: 'reply', timestamp: new Date(), sessionId: 'next-session' };
@@ -35,7 +36,7 @@ it.each(['structuredOutput', 'content'] as const)('returns the selected manager 
     ? { content: JSON.stringify(output) } : { structuredOutput: output }) });
 
   expect(await f.executor.execute(f.input)).toMatchObject(output);
-  expect(f.call.mock.calls[0]![1].outputSchema).toEqual(expect.any(Object));
+  expect(() => validateStructuredOutputAgainstSchema(output, f.call.mock.calls[0]![1].outputSchema!)).not.toThrow();
   expect(f.dispose).toHaveBeenCalledOnce();
 });
 
@@ -44,6 +45,20 @@ it('returns the candidate question without a proposal when the manager is undeci
   const output = { message: 'ブログ A とブログ B のどちらに任せますか？', summary: null };
   f.call.mockResolvedValueOnce({ ...success, content: JSON.stringify(output) });
   expect(await f.executor.execute(f.input)).toMatchObject(output);
+});
+
+it('allows only a reply in the provider output for a director event turn', async () => {
+  const f = fixture();
+  const output = { message: 'The manager started work.', summary: null };
+  const proposal = { managerId: `manager-${'b'.repeat(64)}`, repositoryDirectory: '/blog',
+    objective: 'Publish articles', outOfScope: [], acceptanceCriteria: ['List articles'], constraints: [] };
+  f.call.mockResolvedValueOnce({ ...success, structuredOutput: output });
+
+  expect(await f.executor.execute({ ...f.input, eventTurn: true })).toMatchObject(output);
+  const schema = f.call.mock.calls[0]![1].outputSchema!;
+  expect(() => validateStructuredOutputAgainstSchema(output, schema)).not.toThrow();
+  expect(() => validateStructuredOutputAgainstSchema({ ...output, summary: proposal }, schema)).toThrow();
+  expect(() => validateStructuredOutputAgainstSchema({ ...output, message: '' }, schema)).toThrow();
 });
 
 it('rejects a registration proposal without its selected manager', async () => {
