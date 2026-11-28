@@ -518,7 +518,10 @@ for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution'
       const output = buildExecutionOutput(root, evidence);
       assert.equal(output.workflowDetailsRead, caseId === 'two-goal-pr-execution');
       assert.ok(output.commands.length > 0);
-      assert.equal(output.externalObservations.length, 1);
+      const conditionObservations = caseId === 'two-goal-pr-execution'
+        ? output.externalObservations.filter(({ args }) => args.includes('statusCheckRollup'))
+        : output.externalObservations;
+      assert.equal(conditionObservations.length, 1);
       assert.equal(trial.turns.length, 2);
       assert.equal(process.env.PATH, priorPath);
       assert.equal(assertExecution(JSON.stringify(output), { vars: { case: caseId, lang: 'ja' } }).pass, true);

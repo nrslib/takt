@@ -12,6 +12,7 @@ import {
   selectPromptEvalSuites,
 } from './suite-registry.mjs';
 import { PREPARE_TARGET_IDS } from './scripts/prepare.mjs';
+import { assertManagerInputPartition } from './manager-work-split-test-helpers.mjs';
 
 test('registry classifies every promptfoo config exactly once', () => {
   const configs = discoverPromptEvalConfigs();
@@ -202,14 +203,16 @@ test('manager work split is active, explicit, costly and has no prepare targets'
       reasoning_effort: undefined,
     },
   });
-  assert.equal(config.tests.length, 174);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 87);
   const executionTests = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
-  assert.equal(executionTests.length, 8);
-  assert.equal(new Set(executionTests.map(({ vars }) => vars.case)).size, 4);
   const replayTests = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
-  assert.equal(replayTests.length, 166);
-  assert.equal(new Set(replayTests.map(({ vars }) => vars.case)).size, 83);
+  assertManagerInputPartition({
+    replay: replayTests.map(({ vars }) => vars),
+    execution: executionTests.map(({ vars }) => vars),
+  });
+  for (const row of executionTests) assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
+  for (const row of replayTests) {
+    assert.deepEqual(new Set(row.providers), new Set(['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']));
+  }
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
@@ -217,6 +220,7 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'spec-review-investigation',
     'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
     'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+    'date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth', 'independent-causal-repairs', 'review-outside-acceptance',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
     'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication', 'existing-invoice-format',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',

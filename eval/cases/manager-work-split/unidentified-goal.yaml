@@ -27,7 +27,6 @@ ja:
             notificationCount: 0
             truncated: true
             omissions:
-              specifications: {}
               objective:
                 totalBytes: 48
               questions:
@@ -37,6 +36,7 @@ ja:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
@@ -62,7 +62,6 @@ ja:
             notificationCount: 0
             truncated: true
             omissions:
-              specifications: {}
               objective:
                 totalBytes: 48
               questions:
@@ -72,6 +71,7 @@ ja:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
@@ -154,7 +154,6 @@ en:
             notificationCount: 0
             truncated: true
             omissions:
-              specifications: {}
               objective:
                 totalBytes: 44
               questions:
@@ -164,6 +163,7 @@ en:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
@@ -189,7 +189,6 @@ en:
             notificationCount: 0
             truncated: true
             omissions:
-              specifications: {}
               objective:
                 totalBytes: 38
               questions:
@@ -199,6 +198,7 @@ en:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
