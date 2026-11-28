@@ -411,6 +411,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
+  'src/__tests__/daemon-configuration.integration.test.ts',
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/daemon-retired-watch-events.integration.test.ts',

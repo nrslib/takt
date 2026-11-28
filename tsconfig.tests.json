@@ -152,6 +152,8 @@
     "src/__tests__/cursor-mcp-settings.test.ts",
     "src/__tests__/cursor-native-config.test.ts",
     "src/__tests__/cycle-detector.test.ts",
+    "src/__tests__/daemon-configuration-fifo.integration.test.ts",
+    "src/__tests__/daemon-configuration.integration.test.ts",
     "src/__tests__/daemon-conversation-delivery.integration.test.ts",
     "src/__tests__/daemon-conversation-events.integration.test.ts",
     "src/__tests__/daemon-conversation-ipc.integration.test.ts",
