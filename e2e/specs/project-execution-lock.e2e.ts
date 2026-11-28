@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
@@ -94,9 +94,26 @@ describe('E2E: プロジェクト単位の実行ロック', () => {
     return child;
   }
 
+  function startObserver(): ChildProcess {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
+      { cwd: repo.path, env, stdio: 'ignore' });
+    children.push(child);
+    output.set(child, '');
+    return child;
+  }
+
+  function ownerDuringPolling(): Owner | undefined {
+    try {
+      return owner();
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }
+
   async function ready(child: ChildProcess, requireTask: boolean): Promise<Owner> {
     const observed = await waitFor(() => {
-      const current = owner();
+      const current = ownerDuringPolling();
       return current !== undefined && current.pid === child.pid && current.state === 'running'
         && (!requireTask || (tasks().some((task) => task.status === 'running') && coderStarted()));
     }, 10_000, 20);
@@ -145,6 +162,39 @@ describe('E2E: プロジェクト単位の実行ロック', () => {
     expect(current.pid).toBe(next.pid);
     expect(current.processIdentity.startTime.length).toBeGreaterThan(0);
   }, 30_000);
+
+  it('所有者のポーリング中は一時的な ENOENT を再試行する', async () => {
+    const observer = startObserver();
+    const pid = observer.pid;
+    if (pid === undefined) throw new Error('Observer process did not start');
+
+    const lock = join(repo.path, '.takt', 'execution.lock');
+    mkdirSync(lock, { recursive: true });
+    const ownerPath = join(lock, 'owner-polling.json');
+    symlinkSync(join(lock, 'not-created-yet.json'), ownerPath);
+    const replacement = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        unlinkSync(ownerPath);
+        writeFileSync(ownerPath, JSON.stringify({
+          ownerId: 'polling-test', pid, processIdentity: { startTime: 'test' }, kind: 'watch', state: 'running',
+        } satisfies Owner));
+        resolve();
+      }, 100);
+    });
+
+    const observed = await ready(observer, false);
+    await replacement;
+    expect(observed.pid).toBe(pid);
+  });
+
+  it('所有者のポーリング中は ENOENT 以外の読み取りエラーを維持する', async () => {
+    const observer = startObserver();
+    const lock = join(repo.path, '.takt', 'execution.lock');
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, 'owner-invalid.json'), '{');
+
+    await expect(ready(observer, false)).rejects.toThrow(SyntaxError);
+  });
 
   it('保持中の watch を生かしたまま CLI add で投入してキューを読み取れる', async () => {
     const watcher = start('watch');
