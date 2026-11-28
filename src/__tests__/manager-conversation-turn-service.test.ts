@@ -196,6 +196,26 @@ it('saves a director-selected manager from an ordinary request without registeri
   expect(doubles.register).not.toHaveBeenCalled();
 });
 
+it('marks a director watcher turn as an event and keeps the existing registration proposal', async () => {
+  const f = conversationFixture('daemon');
+  const summary = directorSummary();
+  f.execute.mockResolvedValueOnce({ message: '登録案', summary, sessionId: 'first-session', assignment: undefined });
+  await f.run(humanMessage('ブログに記事一覧を足して'));
+  const pending = f.state().pending;
+  expect(pending).not.toBeNull();
+
+  const outcome = await f.run({ kind: 'watch_observation', observation: {
+    kind: 'director_state_changed', managerConversationId: summary.managerId, repositoryDirectory: summary.repositoryDirectory,
+    goalId: goalRecord().id, state: '{}', targetId: 'goal', generation: 'changed', observedAt: '2026-11-03T00:00:00Z',
+  } });
+
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'reply' } });
+  expect(f.execute.mock.calls[0]![0].eventTurn).toBeUndefined();
+  expect(f.execute.mock.calls[1]![0].eventTurn).toBe(true);
+  expect(f.state().pending).toEqual(pending);
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
 it('keeps an ambiguous director request as a candidate question without creating a goal', async () => {
   const f = conversationFixture('daemon');
   const message = 'ブログ A とブログ B のどちらに任せますか？';

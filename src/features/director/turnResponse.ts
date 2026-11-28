@@ -3,10 +3,12 @@ import { z } from 'zod/v4';
 import type { AgentResponse } from '../../core/models/response.js';
 import type { ProviderType } from '../../infra/providers/types.js';
 import { getManagerOutputSchema, parseManagerResponse } from '../manager/turnResponse.js';
+import { toStrictManagerOutputSchema } from '../manager/outputSchema.js';
 
 const managerIdSchema = z.string().regex(/^manager-[a-f0-9]{64}$/);
 const repositorySchema = z.string().min(1).refine(isAbsolute);
 const envelopeSchema = z.object({ message: z.string().min(1), summary: z.unknown() }).strict();
+const eventOutputSchema = toStrictManagerOutputSchema(z.object({ message: z.string(), summary: z.null() }).strict());
 
 interface OutputSchema {
   type?: string;
@@ -16,7 +18,8 @@ interface OutputSchema {
   pattern?: string;
 }
 
-export function getDirectorOutputSchema(provider: ProviderType): Record<string, unknown> {
+export function getDirectorOutputSchema(provider: ProviderType, eventTurn?: true): Record<string, unknown> {
+  if (eventTurn) return eventOutputSchema;
   const schema = structuredClone(getManagerOutputSchema(provider));
   const root = schema as OutputSchema;
   const summary = root.properties?.summary?.anyOf?.find((branch) => branch.type === 'object');
