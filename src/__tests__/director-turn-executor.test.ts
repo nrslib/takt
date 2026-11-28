@@ -58,6 +58,7 @@ it('allows only a reply in the provider output for a director event turn', async
   const schema = f.call.mock.calls[0]![1].outputSchema!;
   expect(() => validateStructuredOutputAgainstSchema(output, schema)).not.toThrow();
   expect(() => validateStructuredOutputAgainstSchema({ ...output, summary: proposal }, schema)).toThrow();
+  expect(() => validateStructuredOutputAgainstSchema({ ...output, message: '' }, schema)).toThrow();
 });
 
 it('rejects a registration proposal without its selected manager', async () => {
