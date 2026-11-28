@@ -7,9 +7,12 @@ import { readEntirePrivateFile, readPrivateFile } from '../infra/daemon/privateF
 
 const resolution = vi.hoisted(() => ({
   path: undefined as string | undefined,
+  statPath: undefined as string | undefined,
   before: undefined as (() => Promise<void>) | undefined,
   afterFailure: undefined as (() => Promise<void>) | undefined,
   beforeLstat: undefined as (() => Promise<void>) | undefined,
+  beforeStat: undefined as (() => Promise<void>) | undefined,
+  afterStat: undefined as (() => Promise<void>) | undefined,
   events: [] as string[],
   errors: [] as unknown[],
 }));
@@ -35,13 +38,22 @@ vi.mock('node:fs/promises', async (original) => {
         throw error;
       }
     },
+    stat: async (...args: Parameters<typeof fs.stat>) => {
+      if (args[0] === resolution.statPath) await resolution.beforeStat?.();
+      const result = await fs.stat(...args);
+      if (args[0] === resolution.statPath) await resolution.afterStat?.();
+      return result;
+    },
   };
 });
 afterEach(() => {
   resolution.path = undefined;
+  resolution.statPath = undefined;
   resolution.before = undefined;
   resolution.afterFailure = undefined;
   resolution.beforeLstat = undefined;
+  resolution.beforeStat = undefined;
+  resolution.afterStat = undefined;
   resolution.events.length = 0;
   resolution.errors.length = 0;
 });
@@ -130,6 +142,32 @@ describe.each(['global', 'project'] as const)('%s daemon configuration', (scope)
     expect(await readFile(targetPath, 'utf8')).toBe(yaml);
     await expect(lstat(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(result).toEqual({ value: {} });
+  });
+
+  it.each([
+    { phase: 'before stat', removeSource: false },
+    { phase: 'after stat', removeSource: false },
+    { phase: 'before stat', removeSource: true },
+    { phase: 'after stat', removeSource: true },
+  ])('distinguishes a missing symlink target during $phase from a missing configuration path (source removed: $removeSource)', async ({ phase, removeSource }) => {
+    await writeFile(targetPath, yaml);
+    await symlink(targetPath, configPath, 'file');
+    resolution.path = configPath;
+    resolution.statPath = targetPath;
+    const removeFiles = async () => {
+      await unlink(targetPath);
+      if (removeSource) await unlink(configPath);
+    };
+    if (phase === 'before stat') resolution.beforeStat = removeFiles;
+    else resolution.afterStat = removeFiles;
+
+    const result = await read().then(value => ({ value }), (error: unknown) => ({ error }));
+
+    if (removeSource) {
+      expect(result).toEqual({ value: {} });
+    } else {
+      expect(result).toMatchObject({ error: { message: expect.stringContaining(`Broken daemon configuration symlink: ${configPath}`) } });
+    }
   });
 
   it('propagates a non-missing error when rechecking a symlink after realpath fails', async () => {
@@ -272,7 +310,7 @@ describe.each(['global', 'project'] as const)('%s daemon configuration', (scope)
   });
 });
 
-describe('private readers outside daemon configuration', () => {
+describe.skipIf(process.platform === 'win32')('private readers outside daemon configuration', () => {
   it.each(['bounded', 'entire'] as const)('keeps the %s private reader from following symlinks', async (kind) => {
     const directory = getGlobalConfigDir();
     const target = join(directory, 'private-data');

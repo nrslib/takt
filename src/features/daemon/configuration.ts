@@ -15,6 +15,19 @@ const config = z.object({
   director: z.object({ slack: slack.optional(), patrol_interval: z.unknown().optional() }).strict().optional(),
 });
 
+async function throwIfBrokenDaemonConfigurationSymlink(path: string, wasSymlink: boolean, cause?: unknown): Promise<void> {
+  if (!wasSymlink) return;
+  const currentEntry = await lstat(path).catch((error: unknown) => {
+    if (hasCode(error, 'ENOENT')) return undefined;
+    throw error;
+  });
+  if (!currentEntry?.isSymbolicLink()) return;
+
+  const message = `Broken daemon configuration symlink: ${path}`;
+  if (cause === undefined) throw new Error(message);
+  throw new Error(message, { cause });
+}
+
 /** 通信・観測に使う列だけを読む。実行用の設定解決はターン子が所有する。 */
 export async function readDaemonConfiguration(path: string) {
   const entry = await lstat(path).catch((error: unknown) => {
@@ -24,15 +37,7 @@ export async function readDaemonConfiguration(path: string) {
   if (entry === undefined) return config.parse({});
   const resolvedPath = await realpath(path).catch(async (error: unknown) => {
     if (hasCode(error, 'ENOENT')) {
-      if (entry.isSymbolicLink()) {
-        const currentEntry = await lstat(path).catch((inspectionError: unknown) => {
-          if (hasCode(inspectionError, 'ENOENT')) return undefined;
-          throw inspectionError;
-        });
-        if (currentEntry?.isSymbolicLink()) {
-          throw new Error(`Broken daemon configuration symlink: ${path}`, { cause: error });
-        }
-      }
+      await throwIfBrokenDaemonConfigurationSymlink(path, entry.isSymbolicLink(), error);
       return undefined;
     }
     throw error;
@@ -45,14 +50,20 @@ export async function readDaemonConfiguration(path: string) {
     }
     bytes = await readPrivateFile(resolvedPath, maxConfigBytes);
   } catch (error) {
-    if (hasCode(error, 'ENOENT')) return config.parse({});
+    if (hasCode(error, 'ENOENT')) {
+      await throwIfBrokenDaemonConfigurationSymlink(path, entry.isSymbolicLink(), error);
+      return config.parse({});
+    }
     if (!entry.isSymbolicLink()) throw error;
     throw new Error(
       `Cannot read daemon configuration symlink ${path} -> ${resolvedPath} as a regular file of at most ${maxConfigBytes} bytes: ${getErrorMessage(error)}`,
       { cause: error },
     );
   }
-  if (bytes === undefined) return config.parse({});
+  if (bytes === undefined) {
+    await throwIfBrokenDaemonConfigurationSymlink(path, entry.isSymbolicLink());
+    return config.parse({});
+  }
   const document = parseDocument(bytes.toString('utf8'));
   if (document.errors.length > 0) throw document.errors[0];
   return config.parse(document.toJS() as unknown);
