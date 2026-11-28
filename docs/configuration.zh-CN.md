@@ -8,6 +8,8 @@
 
 在 `~/.takt/config.yaml` 中配置 TAKT 默认值。首次运行时会自动创建该文件，所有字段均可省略。
 
+daemon 支持全局 `config.yaml` 和项目 `.takt/config.yaml` 指向普通文件的符号链接，包括由 home-manager 或 GNU Stow 管理的配置。目标必须是大小不超过 256 KiB 的普通文件。断开的链接和无效目标会导致错误；配置文件本身不存在时使用默认值。此支持仅限配置文件，不适用于 daemon 的其他私有文件。
+
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 语言：'en' 或 'ja'

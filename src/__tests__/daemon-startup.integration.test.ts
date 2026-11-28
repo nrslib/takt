@@ -15,7 +15,7 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import { Client } from './helpers/conversation-ipc-client.js';
 import { ControlledTurnRunner } from './helpers/controlledDaemon.js';
 import { deferred } from './helpers/daemon-turn.js';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
@@ -185,6 +185,29 @@ it('starts when a registered project reuses a workflow quality gate through a YA
   const socket = await lifecycle.ensureDaemon({ retainConnection: true });
   cleanups.push(async () => { socket.destroy(); });
   expect(await readDaemonIpcState(f.directory)).toBeDefined();
+});
+
+it.each(['global', 'project'] as const)('starts and completes a manager conversation read with a %s configuration symlink', async (scope) => {
+  const directory = getGlobalConfigDir();
+  const repository = join(directory, 'repository');
+  const projectConfigDirectory = join(repository, '.takt');
+  await mkdir(projectConfigDirectory, { recursive: true });
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  const target = join(directory, 'dotfiles-config.yaml');
+  await writeFile(target, 'language: ja\nmanager:\n  auto_run: false\n');
+  await symlink(target, join(scope === 'global' ? directory : projectConfigDirectory, 'config.yaml'), 'file');
+
+  const f = await fixture(false);
+  const client = new ConversationIpcClient({ kind: 'repository', repositoryDirectory: repository }, undefined, {
+    port: createTuiConversationPort(f.directory, { async deliver() { return { kind: 'delivered' }; } }), reconnect: false,
+  });
+  cleanups.push(async () => { client.close(); });
+
+  await client.connect();
+  await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'));
+  expect(client.getSnapshot().state?.assignment).toEqual({ kind: 'repository', repositoryDirectory: repository });
+  expect(await readDaemonIpcState(f.directory)).toBeDefined();
+  expect(doubles.spawn).toHaveBeenCalledTimes(1);
 });
 
 it.each([true, false])('keeps saved work when the idle scan starts before saving: %s', async (scanBeforeSave) => {

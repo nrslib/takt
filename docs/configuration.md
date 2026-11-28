@@ -9,6 +9,8 @@ For phase-level usage events and analysis, see the [Observability Guide](./obser
 
 Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatically on first run. All fields are optional.
 
+The daemon accepts symbolic links to regular files for both the global `config.yaml` and the project's `.takt/config.yaml`, including files managed by home-manager or GNU Stow. The target must be a regular file no larger than 256 KiB. Broken links and invalid targets cause an error; an absent configuration file uses the defaults. This support is limited to configuration files and does not apply to other private daemon files.
+
 If the global configuration directory and the current project's `.takt/` point to the same place, TAKT exits with an error at startup. If they overlap in your home directory or through a symbolic link, set `TAKT_CONFIG_DIR` to a different directory.
 
 ```yaml
